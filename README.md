@@ -65,8 +65,26 @@ Protegido por HTTP Basic Auth (`ADMIN_USER`/`ADMIN_PASSWORD`) — suficiente pra
 
 Mensagens de voz também funcionam: a Alice usa a transcrição embutida da UazAPI (que chama o Whisper da OpenAI com a mesma `OPENAI_API_KEY`) — só paga quando alguém realmente manda áudio, custo zero em silêncio. Imagem/vídeo/documento ainda são ignorados (não tem transcrição pra eles).
 
-## Rodando em produção (pm2)
-Pra não depender do terminal aberto (`npm run dev`), o projeto já vem com `pm2` como dependência de desenvolvimento e um `ecosystem.config.js` configurado:
+## Rodando em produção
+
+### Opção A — VPS com EasyPanel (recomendado se você já tem uma)
+1. **Código no GitHub**: o projeto já é um repo git local. Crie um repositório vazio no GitHub e rode:
+   ```
+   git remote add origin https://github.com/SEU-USUARIO/SEU-REPO.git
+   git push -u origin master
+   ```
+2. **Criar o App no EasyPanel**: Novo serviço → App → Source = GitHub (aponte pro repo/branch) → Builder = Railpack (detecta Node.js sozinho, não precisa de Dockerfile).
+3. **Banco persistente (importante!)**: na aba **Storage/Mounts**, adicione um **Volume** montado em `/app/data`. Sem isso, o SQLite é apagado a cada deploy. Aponte `DATABASE_URL` pra dentro dele: `file:/app/data/prod.db`.
+4. **Variáveis de ambiente**: aba Environment, cole o conteúdo do `.env` (com os valores reais, não os de exemplo) — incluindo o `DATABASE_URL` do passo anterior.
+5. **Domínio**: aba Domains, adicione o domínio/subdomínio (DNS já apontando pro IP da VPS antes disso), ative HTTPS — o EasyPanel emite o certificado Let's Encrypt sozinho.
+6. **Réplicas**: deixe em **1** na aba Advanced — SQLite não aguenta mais de um processo escrevendo ao mesmo tempo.
+7. Deploy. O `npm start` já roda `prisma migrate deploy` antes de subir o servidor, então o banco no volume é migrado automaticamente a cada deploy.
+8. Configure o webhook da UazAPI apontando pra `https://SEU-DOMINIO/webhook/uazapi`.
+
+Dentro do EasyPanel **não precisa do pm2** — o próprio Docker/EasyPanel reinicia o container se o processo cair.
+
+### Opção B — VPS "crua" (sem painel), com pm2
+Pra um servidor Ubuntu simples sem EasyPanel/Docker, o projeto já vem com `pm2` como dependência de desenvolvimento e um `ecosystem.config.js` configurado:
 ```
 npm run pm2:start    # builda e sobe com reinicio automatico se cair
 npm run pm2:status   # ve se esta rodando, quantos restarts, uso de memoria
