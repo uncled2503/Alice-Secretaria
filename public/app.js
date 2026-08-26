@@ -894,17 +894,43 @@ async function loadFollowUpRules() {
       setTimeout(() => (saveBtn.textContent = "Salvar"), 1500);
     });
 
+    const deleteBtn = el("button", { type: "button", class: "btn-icon-danger", title: "Excluir etapa" }, [
+      el("span", { class: "nav-icon", "data-icon": "trash" }, []),
+    ]);
+    deleteBtn.addEventListener("click", async () => {
+      if (!confirm(`Excluir a etapa de recontato ${rule.order}?`)) return;
+      await api(`/followup-rules/${rule.id}`, { method: "DELETE" });
+      await loadFollowUpRules();
+    });
+
     body.appendChild(
       el("tr", {}, [
         el("td", {}, [`Follow-up ${rule.order}`]),
         el("td", {}, [daysInput]),
         el("td", {}, [messageArea]),
         el("td", {}, [activeCheckbox]),
-        el("td", {}, [saveBtn]),
+        el("td", { class: "actions" }, [saveBtn, deleteBtn]),
       ])
     );
   }
+  paintIcons(body);
 }
+
+document.getElementById("followup-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const afterDays = Number(document.getElementById("fu-days").value);
+  const message = document.getElementById("fu-message").value.trim();
+  if (!afterDays || !message) return;
+
+  await api("/followup-rules", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ afterDays, message }),
+  });
+
+  e.target.reset();
+  await loadFollowUpRules();
+});
 
 // --- Mensagens programadas ---
 async function loadBroadcastTargetOptions() {

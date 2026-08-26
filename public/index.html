@@ -407,6 +407,17 @@
 
         <div id="sub-followup" class="settings-subpanel">
           <p class="hint">A Alice manda essas mensagens automaticamente quando o paciente fica sem responder pelo número de dias indicado. Edite o texto ou desative uma etapa a qualquer momento.</p>
+          <form id="followup-form" class="broadcast-form card">
+            <div class="broadcast-form-row">
+              <label>Dias de silêncio
+                <input id="fu-days" type="number" min="1" required style="width:6rem" />
+              </label>
+              <label style="flex:1">Mensagem (use {nome} como placeholder)
+                <input id="fu-message" type="text" required />
+              </label>
+              <button type="submit">Adicionar etapa</button>
+            </div>
+          </form>
           <div class="card">
             <table>
               <thead><tr><th>Etapa</th><th>Dias de silêncio</th><th>Mensagem</th><th>Ativo</th><th></th></tr></thead>

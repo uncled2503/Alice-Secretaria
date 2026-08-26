@@ -627,6 +627,28 @@ apiRouter.get(
   })
 );
 
+apiRouter.post(
+  "/followup-rules",
+  asyncRoute(async (req, res) => {
+    const { afterDays, message } = req.body as { afterDays?: number; message?: string };
+    if (!afterDays || !message) {
+      res.status(400).json({ error: "afterDays e message sao obrigatorios" });
+      return;
+    }
+
+    const clinic = await getClinic(req);
+    const last = await prisma.followUpRule.findFirst({
+      where: { clinicId: clinic.id },
+      orderBy: { order: "desc" },
+    });
+
+    const rule = await prisma.followUpRule.create({
+      data: { clinicId: clinic.id, order: (last?.order ?? 0) + 1, afterDays, message },
+    });
+    res.json(rule);
+  })
+);
+
 apiRouter.put(
   "/followup-rules/:id",
   asyncRoute(async (req, res) => {
@@ -645,6 +667,14 @@ apiRouter.put(
       },
     });
     res.json(rule);
+  })
+);
+
+apiRouter.delete(
+  "/followup-rules/:id",
+  asyncRoute(async (req, res) => {
+    await prisma.followUpRule.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
   })
 );
 
