@@ -1,0 +1,1031 @@
+const state = { activeConversationId: null, pollHandle: null, clinicId: null };
+
+function el(tag, props = {}, children = []) {
+  const node = document.createElement(tag);
+  Object.entries(props).forEach(([k, v]) => {
+    if (k === "class") node.className = v;
+    else node.setAttribute(k, v);
+  });
+  children.forEach((c) => node.appendChild(typeof c === "string" ? document.createTextNode(c) : c));
+  return node;
+}
+
+// Injeta o clinicId automaticamente (query string no GET, campo no body do
+// POST/PUT) pra nao precisar repetir isso em toda chamada individual.
+async function api(path, options = {}) {
+  const opts = { ...options };
+  const method = (opts.method || "GET").toUpperCase();
+  let finalPath = path;
+
+  if (state.clinicId) {
+    if (method === "GET") {
+      finalPath += (path.includes("?") ? "&" : "?") + `clinicId=${encodeURIComponent(state.clinicId)}`;
+    } else if (typeof opts.body === "string") {
+      try {
+        const parsed = JSON.parse(opts.body);
+        parsed.clinicId = state.clinicId;
+        opts.body = JSON.stringify(parsed);
+      } catch {
+        // body nao e JSON (raro nas nossas chamadas) - segue sem injetar
+      }
+    }
+  }
+
+  const res = await fetch(`/api${finalPath}`, opts);
+  if (!res.ok) throw new Error(`API ${path} -> ${res.status}`);
+  return res.json();
+}
+
+// --- Icones (inline SVG, sem biblioteca externa) ---
+const ICONS = {
+  home: '<path d="M3 11l9-8 9 8" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 10v10h5v-6h4v6h5V10" stroke-linecap="round" stroke-linejoin="round"/>',
+  users: '<circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6" stroke-linecap="round"/><circle cx="17" cy="8.5" r="2.4"/><path d="M15.5 14.2c2.4.4 4 2.3 4.5 5.3" stroke-linecap="round"/>',
+  grid: '<rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/>',
+  chat: '<path d="M4 5h16v11H9l-4 4V5z" stroke-linejoin="round"/>',
+  calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18" /><path d="M8 3v4M16 3v4" stroke-linecap="round"/>',
+  send: '<path d="M4 11l16-7-6.5 16-3-6.5L4 11z" stroke-linejoin="round"/>',
+  repeat: '<path d="M4 7h11a4 4 0 0 1 4 4v1" stroke-linecap="round"/><path d="M9 4L4 7l5 3" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 17H9a4 4 0 0 1-4-4v-1" stroke-linecap="round"/><path d="M15 20l5-3-5-3" stroke-linecap="round" stroke-linejoin="round"/>',
+  box: '<path d="M3 8l9-5 9 5-9 5-9-5z" stroke-linejoin="round"/><path d="M3 8v8l9 5 9-5V8" stroke-linejoin="round"/><path d="M12 13v8" />',
+  sparkles: '<path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3z" stroke-linejoin="round"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15z" stroke-linejoin="round"/>',
+  building: '<rect x="4" y="3" width="16" height="18" rx="1.5"/><path d="M8 8h1M8 12h1M8 16h1M12 8h1M12 12h1M12 16h1M16 8h1M16 12h1M16 16h1" stroke-linecap="round"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2.5M12 19.5V22M4.2 4.2l1.8 1.8M18 18l1.8 1.8M2 12h2.5M19.5 12H22M4.2 19.8L6 18M18 6l1.8-1.8" stroke-linecap="round"/>',
+  moon: '<path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z" stroke-linejoin="round"/>',
+  check: '<path d="M4 12l6 6L20 6" stroke-linecap="round" stroke-linejoin="round"/>',
+};
+
+function renderIcon(name) {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${ICONS[name] || ""}</svg>`;
+}
+
+function paintIcons(root = document) {
+  root.querySelectorAll("[data-icon]").forEach((elm) => {
+    elm.innerHTML = renderIcon(elm.dataset.icon);
+  });
+}
+
+paintIcons();
+
+// --- Tema (claro/escuro) ---
+function applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+  const btn = document.getElementById("theme-toggle");
+  btn.innerHTML = `<span class="nav-icon" data-icon="${theme === "dark" ? "moon" : "sun"}"></span> Tema`;
+  paintIcons(btn);
+}
+
+(function initTheme() {
+  let saved = "light";
+  try {
+    saved = localStorage.getItem("alice_theme") || "light";
+  } catch {
+    // ignora se localStorage indisponivel
+  }
+  applyTheme(saved);
+})();
+
+document.getElementById("theme-toggle").addEventListener("click", () => {
+  const current = document.documentElement.getAttribute("data-theme") || "light";
+  const next = current === "dark" ? "light" : "dark";
+  applyTheme(next);
+  try {
+    localStorage.setItem("alice_theme", next);
+  } catch {
+    // ignora
+  }
+});
+
+// --- Navegacao (sidebar) ---
+document.querySelectorAll(".nav-item").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".nav-item").forEach((b) => b.classList.remove("active"));
+    document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
+    btn.classList.add("active");
+    document.getElementById(`tab-${btn.dataset.tab}`).classList.add("active");
+  });
+});
+
+// --- Contatos ---
+async function loadContacts() {
+  const contacts = await api("/contacts");
+  state.contacts = contacts;
+  document.getElementById("contacts-count").textContent = `${contacts.length} contato(s)`;
+  renderContactsTable(contacts);
+}
+
+function renderContactsTable(contacts) {
+  const body = document.getElementById("contacts-body");
+  body.innerHTML = "";
+  for (const c of contacts) {
+    body.appendChild(
+      el("tr", {}, [
+        el("td", {}, [
+          el("div", { class: "contact-name-cell" }, [
+            el("div", { class: "crm-avatar" }, [initials(c.name)]),
+            el("span", {}, [c.name ?? "(sem nome)"]),
+          ]),
+        ]),
+        el("td", {}, [c.phone]),
+        el("td", {}, [el("span", { class: "badge badge-neutral" }, ["WhatsApp"])]),
+        el("td", {}, [new Date(c.createdAt).toLocaleDateString("pt-BR")]),
+      ])
+    );
+  }
+}
+
+document.getElementById("contacts-search").addEventListener("input", (e) => {
+  const q = e.target.value.trim().toLowerCase();
+  const filtered = (state.contacts || []).filter(
+    (c) => (c.name ?? "").toLowerCase().includes(q) || c.phone.includes(q)
+  );
+  renderContactsTable(filtered);
+});
+
+document.getElementById("btn-toggle-contact-form").addEventListener("click", () => {
+  const form = document.getElementById("contact-form");
+  form.style.display = form.style.display === "none" ? "flex" : "none";
+});
+
+document.getElementById("contact-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = document.getElementById("ct-name").value.trim();
+  const phone = document.getElementById("ct-phone").value.trim();
+  if (!phone) return;
+
+  await api("/contacts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, phone }),
+  });
+
+  e.target.reset();
+  document.getElementById("contact-form").style.display = "none";
+  await loadContacts();
+});
+
+function initials(name) {
+  if (!name) return "?";
+  const parts = name.trim().split(/\s+/);
+  return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase() || "?";
+}
+
+// --- CRM ---
+async function loadCrmBoard() {
+  const columns = await api("/crm/board");
+  state.crmColumns = columns;
+  renderCrmBoard(columns, document.getElementById("crm-search").value);
+}
+
+function renderCrmBoard(columns, query) {
+  const q = (query || "").trim().toLowerCase();
+  const stageOptions = columns.map((c) => ({ id: c.id, label: c.label }));
+  const board = document.getElementById("crm-board");
+  board.innerHTML = "";
+
+  for (const col of columns) {
+    const patients = q
+      ? col.patients.filter((p) => (p.name ?? "").toLowerCase().includes(q) || p.phone.includes(q))
+      : col.patients;
+
+    const cardsBox = el("div", {});
+    for (const p of patients) {
+      const select = el(
+        "select",
+        {},
+        stageOptions.map((opt) => el("option", { value: opt.id }, [opt.label]))
+      );
+      select.value = col.id;
+      select.addEventListener("change", () => moveStage(p.id, select.value));
+
+      cardsBox.appendChild(
+        el("div", { class: "crm-card" }, [
+          el("div", { class: "crm-card-top" }, [
+            el("div", { class: "crm-avatar" }, [initials(p.name)]),
+            el("div", { class: "name" }, [p.name ?? "(sem nome)"]),
+          ]),
+          el("div", { class: "phone" }, [p.phone]),
+          select,
+        ])
+      );
+    }
+
+    board.appendChild(
+      el("div", { class: "crm-column" }, [
+        el("div", { class: "crm-column-header" }, [
+          el("span", { class: "crm-column-dot", style: `background:${col.color}` }, []),
+          el("span", {}, [col.label]),
+          el("span", { class: "crm-column-count" }, [`(${patients.length})`]),
+        ]),
+        cardsBox,
+      ])
+    );
+  }
+}
+
+document.getElementById("crm-search").addEventListener("input", (e) => {
+  if (state.crmColumns) renderCrmBoard(state.crmColumns, e.target.value);
+});
+
+const STAGE_KIND_LABELS = {
+  aberta: "Aberta",
+  avaliacao_agendada: "Avaliação agendada",
+  ganho: "Ganho",
+  pos_procedimento: "Pós-procedimento",
+  perdido: "Perdido",
+};
+
+async function loadStagesConfig() {
+  const stages = await api("/funnel-stages");
+  const body = document.getElementById("stages-body");
+  body.innerHTML = "";
+
+  for (const stage of stages) {
+    const orderInput = el("input", { type: "number" });
+    orderInput.value = stage.order;
+    const labelInput = el("input", { type: "text" });
+    labelInput.value = stage.label;
+    const colorInput = el("input", { type: "color" });
+    colorInput.value = stage.color;
+    const kindSelect = el(
+      "select",
+      {},
+      Object.entries(STAGE_KIND_LABELS).map(([id, label]) => el("option", { value: id }, [label]))
+    );
+    kindSelect.value = stage.kind;
+
+    const saveBtn = el("button", { class: "btn-save" }, ["Salvar"]);
+    saveBtn.addEventListener("click", async () => {
+      saveBtn.textContent = "Salvando...";
+      await api(`/funnel-stages/${stage.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          order: Number(orderInput.value),
+          label: labelInput.value,
+          color: colorInput.value,
+          kind: kindSelect.value,
+        }),
+      });
+      saveBtn.textContent = "Salvo!";
+      setTimeout(() => (saveBtn.textContent = "Salvar"), 1500);
+      await loadCrmBoard();
+    });
+
+    const deleteBtn = el("button", { class: "btn-discard" }, ["Remover"]);
+    deleteBtn.addEventListener("click", async () => {
+      if (!confirm(`Remover a etapa "${stage.label}"? Pacientes nela vão pra primeira etapa restante.`)) return;
+      await api(`/funnel-stages/${stage.id}`, { method: "DELETE" });
+      await loadStagesConfig();
+      await loadCrmBoard();
+    });
+
+    body.appendChild(
+      el("tr", {}, [
+        el("td", {}, [orderInput]),
+        el("td", {}, [labelInput]),
+        el("td", {}, [colorInput]),
+        el("td", {}, [kindSelect]),
+        el("td", { class: "actions" }, [saveBtn, deleteBtn]),
+      ])
+    );
+  }
+}
+
+document.getElementById("stage-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const label = document.getElementById("st-label").value.trim();
+  const color = document.getElementById("st-color").value;
+  const kind = document.getElementById("st-kind").value;
+  if (!label) return;
+
+  await api("/funnel-stages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label, color, kind }),
+  });
+
+  e.target.reset();
+  await loadStagesConfig();
+  await loadCrmBoard();
+});
+
+document.querySelector(".funnel-config").addEventListener("toggle", (e) => {
+  if (e.target.open) loadStagesConfig();
+});
+
+async function moveStage(patientId, stage) {
+  await api(`/patients/${patientId}/stage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ stage }),
+  });
+  await loadCrmBoard();
+}
+
+// --- Chat ---
+state.chatFilter = "all";
+
+async function loadConversations() {
+  const conversations = await api("/conversations");
+  state.conversations = conversations;
+  renderConversationsList();
+}
+
+function renderConversationsList() {
+  const conversations = state.conversations || [];
+  const aliceCount = conversations.filter((c) => !c.humanTakeover).length;
+  const humanCount = conversations.filter((c) => c.humanTakeover).length;
+  const tabs = document.getElementById("chat-filter-tabs");
+  tabs.children[0].textContent = `Todos (${conversations.length})`;
+  tabs.children[1].textContent = `Alice (${aliceCount})`;
+  tabs.children[2].textContent = `Humano (${humanCount})`;
+
+  const filtered = conversations.filter((c) => {
+    if (state.chatFilter === "alice") return !c.humanTakeover;
+    if (state.chatFilter === "human") return c.humanTakeover;
+    return true;
+  });
+
+  const list = document.getElementById("conversations-list");
+  list.innerHTML = "";
+  for (const c of filtered) {
+    const li = el("li", { "data-id": c.id }, [
+      el("div", { class: "avatar" }, [initials(c.patient.name)]),
+      el("div", { class: "conv-text" }, [
+        el("div", { class: "name" }, [c.patient.name ?? c.patient.phone]),
+        el("div", { class: "preview" }, [c.lastMessage ?? ""]),
+      ]),
+    ]);
+    if (c.id === state.activeConversationId) li.classList.add("active");
+    li.addEventListener("click", () => openConversation(c.id));
+    list.appendChild(li);
+  }
+}
+
+document.getElementById("chat-filter-tabs").addEventListener("click", (e) => {
+  const btn = e.target.closest("button");
+  if (!btn) return;
+  document.querySelectorAll("#chat-filter-tabs button").forEach((b) => b.classList.remove("active"));
+  btn.classList.add("active");
+  state.chatFilter = btn.dataset.filter;
+  renderConversationsList();
+});
+
+async function loadMessages(conversationId) {
+  const messages = await api(`/conversations/${conversationId}/messages`);
+  const box = document.getElementById("chat-messages");
+  box.innerHTML = "";
+  for (const m of messages) {
+    box.appendChild(el("div", { class: `msg ${m.role}` }, [m.content]));
+  }
+  box.scrollTop = box.scrollHeight;
+}
+
+async function openConversation(id) {
+  state.activeConversationId = id;
+  document.querySelectorAll("#conversations-list li").forEach((li) => {
+    li.classList.toggle("active", li.dataset.id === id);
+  });
+
+  const conv = (state.conversations || []).find((c) => c.id === id);
+  const header = document.getElementById("chat-header");
+  if (conv) {
+    header.style.display = "flex";
+    header.innerHTML = "";
+    header.appendChild(el("div", { class: "crm-avatar" }, [initials(conv.patient.name)]));
+    header.appendChild(
+      el("div", {}, [
+        el("div", { class: "name" }, [conv.patient.name ?? "(sem nome)"]),
+        el("div", { class: "phone" }, [conv.patient.phone]),
+      ])
+    );
+    header.appendChild(
+      el("span", { class: `badge ${conv.humanTakeover ? "badge-neutral" : "badge-green"}` }, [
+        conv.humanTakeover ? "Humano" : "Alice",
+      ])
+    );
+  }
+
+  document.getElementById("chat-controls").style.display = "flex";
+  updateToggleButton(conv?.humanTakeover ?? false);
+  await loadMessages(id);
+}
+
+function updateToggleButton(humanTakeover) {
+  const btn = document.getElementById("btn-toggle-human");
+  btn.textContent = humanTakeover ? "Devolver conversa para a Alice" : "Assumir conversa manualmente";
+  btn.dataset.humanTakeover = String(humanTakeover);
+}
+
+document.getElementById("btn-toggle-human").addEventListener("click", async () => {
+  if (!state.activeConversationId) return;
+  const isHuman = document.getElementById("btn-toggle-human").dataset.humanTakeover === "true";
+  if (isHuman) {
+    await api(`/conversations/${state.activeConversationId}/resume`, { method: "POST" });
+    updateToggleButton(false);
+  } else {
+    updateToggleButton(true);
+  }
+});
+
+document.getElementById("chat-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const input = document.getElementById("chat-input");
+  const text = input.value.trim();
+  if (!text || !state.activeConversationId) return;
+  input.value = "";
+  await api(`/conversations/${state.activeConversationId}/send`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  updateToggleButton(true);
+  await loadMessages(state.activeConversationId);
+});
+
+// --- Agenda ---
+state.agendaRangeDays = 1;
+
+const AGENDA_HOUR_START = 7;
+const AGENDA_HOUR_END = 20; // exclusivo - ultima linha e 19:00-20:00
+const AGENDA_DOW = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+
+function sameDay(a, b) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+function renderAgendaGrid(appointments, days) {
+  const grid = document.getElementById("agenda-grid");
+  grid.innerHTML = "";
+  const hours = [];
+  for (let h = AGENDA_HOUR_START; h < AGENDA_HOUR_END; h++) hours.push(h);
+
+  grid.style.gridTemplateColumns = `56px repeat(${days.length}, 1fr)`;
+  grid.style.gridTemplateRows = `auto repeat(${hours.length}, 46px)`;
+
+  grid.appendChild(el("div", { class: "agenda-grid-header", style: "grid-column:1;grid-row:1" }, []));
+
+  const today = new Date();
+  days.forEach((day, di) => {
+    const header = el("div", { class: `agenda-grid-header${sameDay(day, today) ? " today" : ""}`, style: `grid-column:${di + 2};grid-row:1` }, [
+      el("div", {}, [AGENDA_DOW[day.getDay()]]),
+      el("div", { class: "day-date" }, [String(day.getDate())]),
+    ]);
+    grid.appendChild(header);
+  });
+
+  const cellByKey = new Map();
+  hours.forEach((h, hi) => {
+    grid.appendChild(
+      el("div", { class: "agenda-hour-label", style: `grid-column:1;grid-row:${hi + 2}` }, [`${h}:00`])
+    );
+    days.forEach((day, di) => {
+      const cell = el("div", { class: "agenda-cell", style: `grid-column:${di + 2};grid-row:${hi + 2}` }, []);
+      grid.appendChild(cell);
+      cellByKey.set(`${di}-${h}`, cell);
+    });
+  });
+
+  for (const a of appointments) {
+    const when = new Date(a.scheduledAt);
+    const di = days.findIndex((d) => sameDay(d, when));
+    if (di === -1) continue;
+    const hour = Math.min(Math.max(when.getHours(), AGENDA_HOUR_START), AGENDA_HOUR_END - 1);
+    const cell = cellByKey.get(`${di}-${hour}`);
+    if (!cell) continue;
+
+    const topPct = (when.getMinutes() / 60) * 100;
+    const heightPx = Math.max((a.procedure.durationMin / 60) * 46, 18);
+    cell.appendChild(
+      el(
+        "div",
+        { class: "agenda-appt", style: `top:${topPct}%;height:${heightPx}px` },
+        [
+          el("div", { class: "t" }, [when.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })]),
+          el("div", {}, [a.patient.name ?? a.patient.phone]),
+          el("div", {}, [a.procedure.name]),
+        ]
+      )
+    );
+  }
+
+  if (appointments.length === 0) {
+    grid.appendChild(
+      el("div", { class: "agenda-empty-msg", style: `grid-column:1 / span ${days.length + 1};grid-row:2` }, [
+        "Nenhum agendamento neste período.",
+      ])
+    );
+  }
+}
+
+async function loadAgenda() {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start.getTime() + state.agendaRangeDays * 24 * 60 * 60_000);
+  const appointments = await api(`/appointments?start=${start.toISOString()}&end=${end.toISOString()}`);
+
+  const useGrid = state.agendaRangeDays <= 7;
+  document.getElementById("agenda-grid-wrap").style.display = useGrid ? "block" : "none";
+  document.getElementById("agenda-list-wrap").style.display = useGrid ? "none" : "block";
+
+  if (useGrid) {
+    const days = [];
+    for (let i = 0; i < state.agendaRangeDays; i++) days.push(new Date(start.getTime() + i * 24 * 60 * 60_000));
+    renderAgendaGrid(appointments, days);
+    return;
+  }
+
+  const body = document.getElementById("agenda-body");
+  body.innerHTML = "";
+  for (const a of appointments) {
+    body.appendChild(
+      el("tr", {}, [
+        el("td", {}, [new Date(a.scheduledAt).toLocaleString("pt-BR")]),
+        el("td", {}, [a.patient.name ?? a.patient.phone]),
+        el("td", {}, [a.procedure.name]),
+        el("td", {}, [a.status]),
+      ])
+    );
+  }
+}
+
+document.getElementById("agenda-view-toggle").addEventListener("click", (e) => {
+  const btn = e.target.closest("button");
+  if (!btn) return;
+  document.querySelectorAll("#agenda-view-toggle button").forEach((b) => b.classList.remove("active"));
+  btn.classList.add("active");
+  state.agendaRangeDays = Number(btn.dataset.range);
+  loadAgenda();
+});
+
+document.getElementById("btn-toggle-appt-form").addEventListener("click", async () => {
+  const form = document.getElementById("appointment-form");
+  const opening = form.style.display === "none";
+  form.style.display = opening ? "flex" : "none";
+  if (opening) {
+    const select = document.getElementById("ap-procedure");
+    const procedures = await api("/procedures");
+    select.innerHTML = "";
+    for (const p of procedures) {
+      select.appendChild(el("option", { value: p.id }, [`${p.name} (${p.durationMin}min)`]));
+    }
+  }
+});
+
+document.getElementById("appointment-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const patientName = document.getElementById("ap-name").value.trim();
+  const patientPhone = document.getElementById("ap-phone").value.trim();
+  const procedureId = document.getElementById("ap-procedure").value;
+  const when = document.getElementById("ap-when").value;
+  if (!patientPhone || !procedureId || !when) return;
+
+  await api("/appointments", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ patientName, patientPhone, procedureId, scheduledAt: new Date(when).toISOString() }),
+  });
+
+  e.target.reset();
+  document.getElementById("appointment-form").style.display = "none";
+  await loadAgenda();
+});
+
+// --- Recontato ---
+async function loadFollowUpRules() {
+  const rules = await api("/followup-rules");
+  const body = document.getElementById("followup-body");
+  body.innerHTML = "";
+
+  for (const rule of rules) {
+    const daysInput = el("input", { type: "number", min: "1" });
+    daysInput.value = rule.afterDays;
+
+    const messageArea = el("textarea", {});
+    messageArea.value = rule.message;
+
+    const activeCheckbox = el("input", { type: "checkbox" });
+    activeCheckbox.checked = rule.active;
+
+    const saveBtn = el("button", { class: "btn-save" }, ["Salvar"]);
+    saveBtn.addEventListener("click", async () => {
+      saveBtn.textContent = "Salvando...";
+      await api(`/followup-rules/${rule.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          afterDays: Number(daysInput.value),
+          message: messageArea.value,
+          active: activeCheckbox.checked,
+        }),
+      });
+      saveBtn.textContent = "Salvo!";
+      setTimeout(() => (saveBtn.textContent = "Salvar"), 1500);
+    });
+
+    body.appendChild(
+      el("tr", {}, [
+        el("td", {}, [`Follow-up ${rule.order}`]),
+        el("td", {}, [daysInput]),
+        el("td", {}, [messageArea]),
+        el("td", {}, [activeCheckbox]),
+        el("td", {}, [saveBtn]),
+      ])
+    );
+  }
+}
+
+document.querySelector('.tab[data-tab="followup"]').addEventListener("click", loadFollowUpRules);
+
+// --- Mensagens programadas ---
+async function loadBroadcastTargetOptions() {
+  const columns = await api("/crm/board");
+  const select = document.getElementById("bc-target");
+  select.innerHTML = "";
+  select.appendChild(el("option", { value: "" }, ["Todos os contatos"]));
+  for (const col of columns) {
+    select.appendChild(el("option", { value: col.id }, [col.label]));
+  }
+}
+
+const STATUS_LABELS = {
+  scheduled: "Agendada",
+  sending: "Enviando",
+  completed: "Concluída",
+  cancelled: "Cancelada",
+};
+
+async function loadBroadcasts() {
+  const campaigns = await api("/broadcasts");
+  const body = document.getElementById("broadcasts-body");
+  body.innerHTML = "";
+
+  for (const c of campaigns) {
+    const progress = c.total > 0 ? `${c.sent}/${c.total} enviados` : "—";
+    const actionCell = el("td", {}, []);
+    if (c.status === "scheduled") {
+      const cancelBtn = el("button", { class: "btn-cancel" }, ["Cancelar"]);
+      cancelBtn.addEventListener("click", async () => {
+        await api(`/broadcasts/${c.id}/cancel`, { method: "POST" });
+        await loadBroadcasts();
+      });
+      actionCell.appendChild(cancelBtn);
+    }
+
+    body.appendChild(
+      el("tr", {}, [
+        el("td", {}, [c.title]),
+        el("td", {}, [c.targetStage ?? "Todos"]),
+        el("td", {}, [new Date(c.scheduledFor).toLocaleString("pt-BR")]),
+        el("td", {}, [STATUS_LABELS[c.status] ?? c.status]),
+        el("td", {}, [progress]),
+        actionCell,
+      ])
+    );
+  }
+}
+
+document.getElementById("broadcast-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const title = document.getElementById("bc-title").value.trim();
+  const message = document.getElementById("bc-message").value.trim();
+  const targetStage = document.getElementById("bc-target").value || null;
+  const when = document.getElementById("bc-when").value;
+  if (!title || !message || !when) return;
+
+  await api("/broadcasts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title, message, targetStage, scheduledFor: new Date(when).toISOString() }),
+  });
+
+  e.target.reset();
+  await loadBroadcasts();
+});
+
+document.querySelector('.tab[data-tab="broadcasts"]').addEventListener("click", () => {
+  loadBroadcastTargetOptions();
+  loadBroadcasts();
+});
+
+// --- Personalizar Alice (regras em linguagem natural) ---
+let RULE_CATEGORY_LABELS = {};
+
+async function loadRules() {
+  if (Object.keys(RULE_CATEGORY_LABELS).length === 0) {
+    const categories = await api("/rules/categories");
+    RULE_CATEGORY_LABELS = Object.fromEntries(categories.map((c) => [c.id, c.label]));
+  }
+
+  const rules = await api("/rules");
+  const pendingBox = document.getElementById("rules-pending");
+  const activeBox = document.getElementById("rules-active");
+  pendingBox.innerHTML = "";
+  activeBox.innerHTML = "";
+
+  for (const rule of rules) {
+    if (rule.status === "active") {
+      const discardBtn = el("button", { class: "btn-discard" }, ["Remover"]);
+      discardBtn.addEventListener("click", async () => {
+        await api(`/rules/${rule.id}`, { method: "DELETE" });
+        await loadRules();
+      });
+      activeBox.appendChild(
+        el("div", { class: "rule-card" }, [
+          el("div", { class: "category" }, [RULE_CATEGORY_LABELS[rule.category] ?? rule.category]),
+          el("div", { class: "instruction" }, [rule.instruction ?? ""]),
+          el("div", { class: "actions" }, [discardBtn]),
+        ])
+      );
+    } else {
+      const isQuestion = rule.status === "needs_clarification";
+      const discardBtn = el("button", { class: "btn-discard" }, ["Descartar"]);
+      discardBtn.addEventListener("click", async () => {
+        await api(`/rules/${rule.id}`, { method: "DELETE" });
+        await loadRules();
+      });
+
+      const children = [
+        el("div", { class: "category" }, [isQuestion ? "Precisa da sua atenção" : "Sugestão pendente"]),
+        el("div", { class: "raw" }, [`Você disse: "${rule.rawInput}"`]),
+      ];
+
+      if (isQuestion) {
+        children.push(el("div", { class: "question" }, [rule.clarifyingQuestion]));
+        children.push(
+          el("div", { class: "hint" }, ["Descreva de novo lá em cima, já respondendo essa pergunta."])
+        );
+      } else {
+        const approveBtn = el("button", { class: "btn-approve" }, ["Aprovar"]);
+        approveBtn.addEventListener("click", async () => {
+          await api(`/rules/${rule.id}/approve`, { method: "POST" });
+          await loadRules();
+        });
+        children.push(el("div", { class: "instruction" }, [`${RULE_CATEGORY_LABELS[rule.category] ?? rule.category}: ${rule.instruction}`]));
+        children.push(el("div", { class: "actions" }, [approveBtn, discardBtn]));
+      }
+      if (isQuestion) children.push(el("div", { class: "actions" }, [discardBtn]));
+
+      pendingBox.appendChild(el("div", { class: "rule-card pending" }, children));
+    }
+  }
+}
+
+document.getElementById("rule-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const textArea = document.getElementById("rule-text");
+  const text = textArea.value.trim();
+  if (!text) return;
+
+  const submitBtn = e.target.querySelector("button[type=submit]");
+  submitBtn.textContent = "Pensando...";
+  submitBtn.disabled = true;
+  try {
+    await api("/rules", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    textArea.value = "";
+    await loadRules();
+  } finally {
+    submitBtn.textContent = "Gerar sugestão";
+    submitBtn.disabled = false;
+  }
+});
+
+document.querySelector('.tab[data-tab="rules"]').addEventListener("click", loadRules);
+
+async function refreshAll() {
+  await Promise.all([
+    loadDashboard(),
+    loadContacts(),
+    loadCrmBoard(),
+    loadConversations(),
+    loadAgenda(),
+    state.activeConversationId ? loadMessages(state.activeConversationId) : Promise.resolve(),
+  ]);
+}
+
+// --- Dashboard (Inicio) ---
+state.periodDays = 30;
+
+function updateBrandName() {
+  const clinic = (state.clinics || []).find((c) => c.id === state.clinicId);
+  const name = clinic?.name ?? "—";
+  document.getElementById("brand-clinic-name").textContent = name;
+  document.getElementById("dash-greeting").textContent = `Olá, ${name}!`;
+}
+
+async function loadDashboard() {
+  const end = new Date();
+  const start = new Date(end.getTime() - state.periodDays * 24 * 60 * 60_000);
+  const stats = await api(`/dashboard/stats?start=${start.toISOString()}&end=${end.toISOString()}`);
+
+  document.getElementById("stat-attended").textContent = stats.attended;
+  document.getElementById("stat-appointments").textContent = stats.appointmentsTotal;
+  document.getElementById("stat-appointments-hint").textContent =
+    stats.appointmentsTotal > 0 ? `${stats.appointmentsCompleted} concluídos` : "Nenhum no período";
+  document.getElementById("stat-completed").textContent = stats.appointmentsCompleted;
+  const pctDone = stats.appointmentsTotal > 0 ? Math.round((stats.appointmentsCompleted / stats.appointmentsTotal) * 100) : 0;
+  const pctCancel = stats.appointmentsTotal > 0 ? Math.round((stats.appointmentsCancelled / stats.appointmentsTotal) * 100) : 0;
+  document.getElementById("stat-completed-hint").textContent = `${pctDone}% de conclusão · ${pctCancel}% cancelados`;
+
+  const totalAppts = stats.daily.reduce((sum, d) => sum + d.count, 0);
+  document.getElementById("chart-total").textContent = `${totalAppts} no período`;
+
+  const chart = document.getElementById("dash-chart");
+  chart.innerHTML = "";
+  const maxCount = Math.max(1, ...stats.daily.map((d) => d.count));
+  const shown = stats.daily.slice(-30);
+  for (const d of shown) {
+    const heightPct = Math.round((d.count / maxCount) * 100);
+    const bar = el("div", { class: `dash-bar${d.count > 0 ? " has-value" : ""}`, style: `height:${Math.max(heightPct, 3)}%` }, []);
+    const day = new Date(d.date + "T00:00:00");
+    chart.appendChild(
+      el("div", { class: "dash-bar-wrap" }, [bar, el("div", { class: "dash-bar-label" }, [String(day.getDate())])])
+    );
+  }
+
+  renderMiniCalendar(stats.daily);
+}
+
+function renderMiniCalendar(daily) {
+  const cal = document.getElementById("mini-calendar");
+  cal.innerHTML = "";
+  const byDate = new Map(daily.map((d) => [d.date, d.count]));
+
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  document.getElementById("dash-calendar-title").textContent = now.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+
+  ["D", "S", "T", "Q", "Q", "S", "S"].forEach((d) => cal.appendChild(el("div", { class: "dow" }, [d])));
+
+  const firstDay = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const todayKey = now.toISOString().slice(0, 10);
+
+  for (let i = 0; i < firstDay; i++) cal.appendChild(el("div", { class: "day empty" }, []));
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    const key = new Date(year, month, day).toISOString().slice(0, 10);
+    const classes = ["day"];
+    if (key === todayKey) classes.push("today");
+    if ((byDate.get(key) ?? 0) > 0) classes.push("has-appt");
+    cal.appendChild(el("div", { class: classes.join(" ") }, [String(day)]));
+  }
+}
+
+document.getElementById("period-row").addEventListener("click", (e) => {
+  const btn = e.target.closest(".period-btn");
+  if (!btn) return;
+  document.querySelectorAll(".period-btn").forEach((b) => b.classList.remove("active"));
+  btn.classList.add("active");
+  state.periodDays = Number(btn.dataset.days) || 30;
+  loadDashboard();
+});
+
+// --- Selecao de clinica (multi-clinica) ---
+async function loadClinics() {
+  const clinics = await api("/clinics");
+  state.clinics = clinics;
+  const select = document.getElementById("clinic-select");
+  select.innerHTML = "";
+  for (const c of clinics) {
+    select.appendChild(el("option", { value: c.id }, [c.name]));
+  }
+
+  let saved = null;
+  try {
+    saved = localStorage.getItem("alice_clinic_id");
+  } catch {
+    // localStorage indisponivel (raro) - segue sem lembrar a escolha
+  }
+  const initial = clinics.some((c) => c.id === saved) ? saved : clinics[0]?.id ?? null;
+  state.clinicId = initial;
+  select.value = initial ?? "";
+  updateBrandName();
+
+  select.addEventListener("change", () => {
+    state.clinicId = select.value;
+    try {
+      localStorage.setItem("alice_clinic_id", state.clinicId);
+    } catch {
+      // ignora se nao puder salvar
+    }
+    state.activeConversationId = null;
+    updateBrandName();
+    refreshAll();
+  });
+}
+
+// --- Procedimentos ---
+async function loadProcedures() {
+  const procedures = await api("/procedures");
+  const body = document.getElementById("procedures-body");
+  body.innerHTML = "";
+
+  for (const proc of procedures) {
+    const nameInput = el("input", { type: "text" });
+    nameInput.value = proc.name;
+    const durationInput = el("input", { type: "number", min: "5" });
+    durationInput.value = proc.durationMin;
+    const descInput = el("input", { type: "text" });
+    descInput.value = proc.description ?? "";
+
+    const saveBtn = el("button", { class: "btn-save" }, ["Salvar"]);
+    saveBtn.addEventListener("click", async () => {
+      saveBtn.textContent = "Salvando...";
+      await api(`/procedures/${proc.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: nameInput.value,
+          durationMin: Number(durationInput.value),
+          description: descInput.value,
+        }),
+      });
+      saveBtn.textContent = "Salvo!";
+      setTimeout(() => (saveBtn.textContent = "Salvar"), 1500);
+    });
+
+    const deleteBtn = el("button", { class: "btn-discard" }, ["Remover"]);
+    deleteBtn.addEventListener("click", async () => {
+      await api(`/procedures/${proc.id}`, { method: "DELETE" });
+      await loadProcedures();
+    });
+
+    body.appendChild(
+      el("tr", {}, [
+        el("td", {}, [nameInput]),
+        el("td", {}, [durationInput]),
+        el("td", {}, [descInput]),
+        el("td", { class: "actions" }, [saveBtn, deleteBtn]),
+      ])
+    );
+  }
+}
+
+document.getElementById("procedure-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = document.getElementById("pr-name").value.trim();
+  const durationMin = Number(document.getElementById("pr-duration").value) || 60;
+  const description = document.getElementById("pr-description").value.trim();
+  if (!name) return;
+
+  await api("/procedures", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, durationMin, description }),
+  });
+
+  e.target.reset();
+  document.getElementById("pr-duration").value = 60;
+  await loadProcedures();
+});
+
+document.querySelector('.tab[data-tab="procedures"]').addEventListener("click", loadProcedures);
+
+async function loadClinicsList() {
+  const clinics = await api("/clinics");
+  const body = document.getElementById("clinics-body");
+  body.innerHTML = "";
+  for (const c of clinics) {
+    body.appendChild(
+      el("tr", {}, [
+        el("td", {}, [c.name]),
+        el("td", {}, [c.whatsappPhone]),
+        el("td", {}, [c.uazapiConfigured ? "Sim (própria)" : "Não (usa .env)"]),
+      ])
+    );
+  }
+}
+
+document.getElementById("clinic-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = document.getElementById("cl-name").value.trim();
+  const whatsappPhone = document.getElementById("cl-phone").value.trim();
+  const uazapiToken = document.getElementById("cl-token").value.trim();
+  const uazapiBaseUrl = document.getElementById("cl-baseurl").value.trim();
+  if (!name || !whatsappPhone) return;
+
+  await api("/clinics", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, whatsappPhone, uazapiToken, uazapiBaseUrl }),
+  });
+
+  e.target.reset();
+  await loadClinicsList();
+  await loadClinics(); // atualiza o seletor no topo com a clinica nova
+});
+
+document.querySelector('.tab[data-tab="clinics"]').addEventListener("click", loadClinicsList);
+
+async function init() {
+  await loadClinics();
+  await refreshAll();
+  setInterval(refreshAll, 5000);
+}
+
+init();

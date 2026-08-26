@@ -1,0 +1,174 @@
+// SQLite: banco em arquivo, sem custo de hospedagem de DB.
+// Quando o volume crescer, troca "provider" para "postgresql" e o schema
+// continua funcionando quase sem alteracoes.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Clinic {
+  id            String    @id @default(cuid())
+  name          String
+  whatsappPhone String    @unique // numero conectado na UazAPI (formato 55DDDNUMERO)
+  timezone      String    @default("America/Sao_Paulo")
+  workStartHour Int       @default(9)
+  workEndHour   Int       @default(19)
+  // Credenciais UazAPI proprias desta clinica. Nulo = usa UAZAPI_BASE_URL/
+  // UAZAPI_TOKEN do .env (modo legado, clinica unica). Cada clinica com
+  // WhatsApp proprio precisa do seu token de instancia aqui.
+  uazapiToken   String?   @unique
+  uazapiBaseUrl String?
+  createdAt     DateTime  @default(now())
+
+  procedures    Procedure[]
+  patients      Patient[]
+  appointments  Appointment[]
+  followUpRules FollowUpRule[]
+  broadcasts    BroadcastCampaign[]
+  customRules   CustomRule[]
+  funnelStages  FunnelStage[]
+}
+
+model Procedure {
+  id            String    @id @default(cuid())
+  clinicId      String
+  clinic        Clinic    @relation(fields: [clinicId], references: [id])
+  name          String
+  durationMin   Int       @default(60)
+  description   String?
+
+  appointments  Appointment[]
+}
+
+model Patient {
+  id            String    @id @default(cuid())
+  clinicId      String
+  clinic        Clinic    @relation(fields: [clinicId], references: [id])
+  phone         String    // numero do paciente no WhatsApp
+  name          String?
+  funnelStage   String    @default("novo_lead") // ver src/crm/stages.ts para a lista de etapas
+  createdAt     DateTime  @default(now())
+
+  conversations Conversation[]
+  appointments  Appointment[]
+  broadcastRecipients BroadcastRecipient[]
+
+  @@unique([clinicId, phone])
+}
+
+model Conversation {
+  id                String    @id @default(cuid())
+  patientId         String
+  patient           Patient   @relation(fields: [patientId], references: [id])
+  status            String    @default("active") // active | qualified | scheduled | closed
+  humanTakeover     Boolean   @default(false) // true = Alice para de responder, atendente assumiu
+  lastFollowUpOrder Int       @default(0) // ultima etapa de recontato ja enviada (0 = nenhuma)
+  lastMessageAt     DateTime  @default(now())
+  createdAt         DateTime  @default(now())
+
+  messages          Message[]
+}
+
+// Cascata de recontato: dispara mensagens automaticas quando o paciente fica
+// X dias sem responder. Config fixa por clinica (nao editavel por conversa).
+model FollowUpRule {
+  id         String  @id @default(cuid())
+  clinicId   String
+  clinic     Clinic  @relation(fields: [clinicId], references: [id])
+  order      Int     // 1, 2, 3... define a sequencia da cascata
+  afterDays  Int     // dias de silencio (sem mensagem do paciente) pra disparar
+  message    String  // suporta {nome} como placeholder
+  active     Boolean @default(true)
+
+  @@unique([clinicId, order])
+}
+
+// Mensagem agendada em massa para a base de contatos (ou um estagio do funil).
+// O envio real acontece aos poucos (ver src/crm/broadcast.ts) pra nao estourar
+// limite de taxa do WhatsApp e respeitar o horario comercial da clinica.
+model BroadcastCampaign {
+  id           String   @id @default(cuid())
+  clinicId     String
+  clinic       Clinic   @relation(fields: [clinicId], references: [id])
+  title        String
+  message      String   // suporta {nome} como placeholder
+  targetStage  String?  // null = todos os contatos; ou um id de src/crm/stages.ts
+  scheduledFor DateTime
+  status       String   @default("scheduled") // scheduled | sending | completed | cancelled
+  createdAt    DateTime @default(now())
+
+  recipients   BroadcastRecipient[]
+}
+
+model BroadcastRecipient {
+  id         String            @id @default(cuid())
+  campaignId String
+  campaign   BroadcastCampaign @relation(fields: [campaignId], references: [id])
+  patientId  String
+  patient    Patient           @relation(fields: [patientId], references: [id])
+  status     String            @default("pending") // pending | sent | failed
+  sentAt     DateTime?
+
+  @@unique([campaignId, patientId])
+}
+
+// Regra de atendimento gerada a partir de um texto livre do admin ("descreva
+// a mudanca"). A IA classifica numa categoria e escreve a instrucao final, ou
+// devolve uma pergunta se faltar informacao. So entra no prompt da Alice
+// depois que o admin aprova (status=active).
+model CustomRule {
+  id                 String   @id @default(cuid())
+  clinicId           String
+  clinic             Clinic   @relation(fields: [clinicId], references: [id])
+  category           String   // agendamento | pagamento | tom_de_voz | chamar_equipe | procedimentos
+  rawInput           String   // o que o admin digitou originalmente
+  instruction        String?  // regra final pronta pra entrar no prompt (null se ainda precisa esclarecer)
+  clarifyingQuestion String?  // pergunta da IA quando falta informacao
+  status             String   @default("draft") // needs_clarification | draft | active
+  createdAt          DateTime @default(now())
+}
+
+// Etapas do funil kanban, editaveis por clinica. Quando uma clinica ainda
+// nao tem nenhuma, o app cria as 10 padrao automaticamente na primeira
+// consulta (ver src/crm/stages.ts). stageId e o slug estavel guardado em
+// Patient.funnelStage - editar label/color/kind nao quebra os pacientes ja
+// nessa etapa, so renomear/apagar o stageId em si exigiria migrar os dados.
+model FunnelStage {
+  id       String @id @default(cuid())
+  clinicId String
+  clinic   Clinic @relation(fields: [clinicId], references: [id])
+  stageId  String // slug usado em Patient.funnelStage
+  label    String
+  color    String
+  kind     String // aberta | avaliacao_agendada | ganho | pos_procedimento | perdido
+  order    Int
+
+  @@unique([clinicId, stageId])
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  role           String       // user | assistant | human
+  content        String
+  createdAt      DateTime     @default(now())
+}
+
+model Appointment {
+  id             String    @id @default(cuid())
+  clinicId       String
+  clinic         Clinic    @relation(fields: [clinicId], references: [id])
+  patientId      String
+  patient        Patient   @relation(fields: [patientId], references: [id])
+  procedureId    String
+  procedure      Procedure @relation(fields: [procedureId], references: [id])
+  scheduledAt    DateTime
+  status         String    @default("confirmed") // confirmed | cancelled | completed
+  reminderSentAt DateTime?
+  createdAt      DateTime  @default(now())
+}
