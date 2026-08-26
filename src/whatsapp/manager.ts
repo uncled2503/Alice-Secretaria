@@ -97,6 +97,29 @@ export async function getQrDataUrl(clinicId: string): Promise<string | null> {
   return QRCode.toDataURL(conn.qr);
 }
 
+// Cache da foto de perfil - evita bater no WhatsApp a cada poll do painel (a
+// cada 5s); foto de perfil muda raramente, TTL de horas e mais que suficiente.
+const AVATAR_TTL_MS = 6 * 60 * 60 * 1000;
+const avatarCache = new Map<string, { url: string | null; fetchedAt: number }>();
+
+export async function getProfilePicUrl(clinicId: string, phone: string): Promise<string | null> {
+  const conn = connections.get(clinicId);
+  if (!conn || conn.status !== "open") return null;
+
+  const cacheKey = `${clinicId}:${phone}`;
+  const cached = avatarCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < AVATAR_TTL_MS) return cached.url;
+
+  let url: string | null = null;
+  try {
+    url = (await conn.sock.profilePictureUrl(toJid(phone), "image")) ?? null;
+  } catch {
+    url = null; // sem foto ou privacidade restrita a "so meus contatos"
+  }
+  avatarCache.set(cacheKey, { url, fetchedAt: Date.now() });
+  return url;
+}
+
 async function handleIncomingWAMessage(clinicId: string, msg: WAMessage): Promise<void> {
   if (!msg.message) return;
   if (msg.key.fromMe) return; // eco do que a propria Alice mandou

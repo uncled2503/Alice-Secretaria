@@ -1,8 +1,10 @@
 import { Router, type Request, type Response, type RequestHandler } from "express";
 import { prisma } from "../db/client.js";
-import { sendText, connectClinic, disconnectClinic, getStatus, getQrDataUrl } from "../whatsapp/manager.js";
+import { sendText, connectClinic, disconnectClinic, getStatus, getQrDataUrl, getProfilePicUrl } from "../whatsapp/manager.js";
 import { getFunnelStages, generateStageId } from "../crm/stages.js";
 import { createRuleDraft, RULE_CATEGORIES } from "../ai/rules.js";
+import { hashPassword, verifyPassword } from "./passwords.js";
+import { createSessionCookie, clearSessionCookie } from "./staffSession.js";
 
 export const apiRouter = Router();
 
@@ -266,6 +268,24 @@ apiRouter.post(
   })
 );
 
+// Apaga o contato e tudo que depende dele (mensagens, conversas, agendamentos,
+// destinatarios de campanha) - as chaves estrangeiras sao RESTRICT no banco,
+// entao sem apagar essas dependencias primeiro o delete do paciente falharia.
+apiRouter.delete(
+  "/contacts/:id",
+  asyncRoute(async (req, res) => {
+    const { id } = req.params;
+    await prisma.$transaction([
+      prisma.message.deleteMany({ where: { conversation: { patientId: id } } }),
+      prisma.conversation.deleteMany({ where: { patientId: id } }),
+      prisma.appointment.deleteMany({ where: { patientId: id } }),
+      prisma.broadcastRecipient.deleteMany({ where: { patientId: id } }),
+      prisma.patient.delete({ where: { id } }),
+    ]);
+    res.json({ ok: true });
+  })
+);
+
 apiRouter.get(
   "/conversations",
   asyncRoute(async (req, res) => {
@@ -279,16 +299,23 @@ apiRouter.get(
       },
     });
 
-    res.json(
-      conversations.map((c) => ({
+    const withAvatars = await Promise.all(
+      conversations.map(async (c) => ({
         id: c.id,
         status: c.status,
         humanTakeover: c.humanTakeover,
         lastMessageAt: c.lastMessageAt,
-        patient: { id: c.patient.id, name: c.patient.name, phone: c.patient.phone },
+        patient: {
+          id: c.patient.id,
+          name: c.patient.name,
+          phone: c.patient.phone,
+          avatarUrl: await getProfilePicUrl(clinic.id, c.patient.phone),
+        },
         lastMessage: c.messages[0]?.content ?? null,
       }))
     );
+
+    res.json(withAvatars);
   })
 );
 
@@ -319,8 +346,18 @@ apiRouter.post(
       include: { patient: true },
     });
 
+    const authorName = req.staff?.name ?? null;
+
+    // So loga o evento de transferencia na PRIMEIRA mensagem manual - nao a
+    // cada mensagem, senao vira um evento por linha de texto.
+    if (!conversation.humanTakeover) {
+      await prisma.message.create({
+        data: { conversationId: conversation.id, role: "system", content: "Atendimento transferido para o atendente", authorName },
+      });
+    }
+
     await prisma.message.create({
-      data: { conversationId: conversation.id, role: "human", content: text },
+      data: { conversationId: conversation.id, role: "human", content: text, authorName },
     });
     await prisma.conversation.update({
       where: { id: conversation.id },
@@ -342,6 +379,14 @@ apiRouter.post(
 apiRouter.post(
   "/conversations/:id/resume",
   asyncRoute(async (req, res) => {
+    await prisma.message.create({
+      data: {
+        conversationId: req.params.id,
+        role: "system",
+        content: "Atendimento transferido para a Alice",
+        authorName: req.staff?.name ?? null,
+      },
+    });
     await prisma.conversation.update({
       where: { id: req.params.id },
       data: { humanTakeover: false },
@@ -499,7 +544,7 @@ apiRouter.get(
         scheduledAt: a.scheduledAt,
         status: a.status,
         patient: { name: a.patient.name, phone: a.patient.phone },
-        procedure: { name: a.procedure.name, durationMin: a.procedure.durationMin },
+        procedure: { id: a.procedureId, name: a.procedure.name, durationMin: a.procedure.durationMin },
       }))
     );
   })
@@ -534,6 +579,36 @@ apiRouter.post(
       data: { clinicId: clinic.id, patientId: patient.id, procedureId, scheduledAt: new Date(scheduledAt) },
     });
     res.json(appointment);
+  })
+);
+
+// Editar/transferir um agendamento existente (procedimento, data/hora e/ou status).
+apiRouter.put(
+  "/appointments/:id",
+  asyncRoute(async (req, res) => {
+    const { procedureId, scheduledAt, status } = req.body as {
+      procedureId?: string;
+      scheduledAt?: string;
+      status?: string;
+    };
+
+    const appointment = await prisma.appointment.update({
+      where: { id: req.params.id },
+      data: {
+        ...(procedureId !== undefined ? { procedureId } : {}),
+        ...(scheduledAt !== undefined ? { scheduledAt: new Date(scheduledAt) } : {}),
+        ...(status !== undefined ? { status } : {}),
+      },
+    });
+    res.json(appointment);
+  })
+);
+
+apiRouter.delete(
+  "/appointments/:id",
+  asyncRoute(async (req, res) => {
+    await prisma.appointment.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
   })
 );
 
@@ -700,6 +775,88 @@ apiRouter.delete(
   "/rules/:id",
   asyncRoute(async (req, res) => {
     await prisma.customRule.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  })
+);
+
+// --- Contas de atendente (identifica quem da equipe esta usando o painel,
+// pra atribuir transferencias de atendimento - nao substitui o Basic Auth
+// que ja protege o painel inteiro, so identifica quem esta por tras dele) ---
+
+apiRouter.get("/staff/me", (req, res) => {
+  res.json(req.staff ? { id: req.staff.id, name: req.staff.name } : null);
+});
+
+apiRouter.post(
+  "/staff/login",
+  asyncRoute(async (req, res) => {
+    const { username, password } = req.body as { username?: string; password?: string };
+    if (!username || !password) {
+      res.status(400).json({ error: "username e password obrigatorios" });
+      return;
+    }
+
+    const staff = await prisma.staffUser.findUnique({ where: { username } });
+    if (!staff || !verifyPassword(password, staff.passwordHash)) {
+      res.status(401).json({ error: "Usuario ou senha invalidos" });
+      return;
+    }
+
+    res.setHeader("Set-Cookie", createSessionCookie({ id: staff.id, name: staff.name, clinicId: staff.clinicId }));
+    res.json({ id: staff.id, name: staff.name });
+  })
+);
+
+apiRouter.post("/staff/logout", (_req, res) => {
+  res.setHeader("Set-Cookie", clearSessionCookie());
+  res.json({ ok: true });
+});
+
+apiRouter.get(
+  "/staff",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const staff = await prisma.staffUser.findMany({
+      where: { clinicId: clinic.id },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, name: true, username: true, createdAt: true },
+    });
+    res.json(staff);
+  })
+);
+
+apiRouter.post(
+  "/staff",
+  asyncRoute(async (req, res) => {
+    const { name, username, password } = req.body as { name?: string; username?: string; password?: string };
+    if (!name || !username || !password) {
+      res.status(400).json({ error: "name, username e password sao obrigatorios" });
+      return;
+    }
+    if (password.length < 6) {
+      res.status(400).json({ error: "a senha precisa ter pelo menos 6 caracteres" });
+      return;
+    }
+
+    const clinic = await getClinic(req);
+    const existing = await prisma.staffUser.findUnique({ where: { username } });
+    if (existing) {
+      res.status(409).json({ error: "esse nome de usuario ja esta em uso" });
+      return;
+    }
+
+    const staff = await prisma.staffUser.create({
+      data: { clinicId: clinic.id, name, username, passwordHash: hashPassword(password) },
+      select: { id: true, name: true, username: true, createdAt: true },
+    });
+    res.json(staff);
+  })
+);
+
+apiRouter.delete(
+  "/staff/:id",
+  asyncRoute(async (req, res) => {
+    await prisma.staffUser.delete({ where: { id: req.params.id } });
     res.json({ ok: true });
   })
 );

@@ -26,6 +26,21 @@ model Clinic {
   broadcasts    BroadcastCampaign[]
   customRules   CustomRule[]
   funnelStages  FunnelStage[]
+  staffUsers    StaffUser[]
+}
+
+// Conta individual de atendente (nao confundir com o login unico do painel
+// em ADMIN_USER/ADMIN_PASSWORD - aquele continua sendo o portao de entrada;
+// isso aqui identifica QUEM da equipe esta usando, pra atribuir transferencias
+// de atendimento a uma pessoa (ver Message.authorName).
+model StaffUser {
+  id           String   @id @default(cuid())
+  clinicId     String
+  clinic       Clinic   @relation(fields: [clinicId], references: [id])
+  name         String
+  username     String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
 }
 
 model Procedure {
@@ -149,8 +164,9 @@ model Message {
   id             String       @id @default(cuid())
   conversationId String
   conversation   Conversation @relation(fields: [conversationId], references: [id])
-  role           String       // user | assistant | human
+  role           String       // user | assistant | human | system (system = evento de transferencia, nao e mensagem de chat)
   content        String
+  authorName     String?      // nome do atendente logado que enviou/transferiu (null = Alice, ou ninguem logado)
   createdAt      DateTime     @default(now())
 }
 

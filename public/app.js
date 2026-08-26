@@ -93,6 +93,9 @@ const ICONS = {
   moon: '<path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z" stroke-linejoin="round"/>',
   check: '<path d="M4 12l6 6L20 6" stroke-linecap="round" stroke-linejoin="round"/>',
   guide: '<circle cx="12" cy="12" r="9"/><path d="M12 16v-1c0-1 .6-1.5 1.3-2 .7-.5 1.2-1 1.2-2a2.5 2.5 0 0 0-5 0" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="17.2" r="0.6" fill="currentColor" stroke="none"/>',
+  trash: '<path d="M4 7h16M9 7V4.5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1V7M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13" stroke-linecap="round" stroke-linejoin="round"/>',
+  user: '<circle cx="12" cy="8" r="3.5"/><path d="M4.5 20c0-4.1 3.4-7 7.5-7s7.5 2.9 7.5 7" stroke-linecap="round"/>',
+  swap: '<path d="M7 4v13M7 17l-3-3M7 17l3-3" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 20V7M17 7l-3 3M17 7l3 3" stroke-linecap="round" stroke-linejoin="round"/>',
 };
 
 function renderIcon(name) {
@@ -136,6 +139,63 @@ document.getElementById("theme-toggle").addEventListener("click", () => {
   }
 });
 
+// --- Conta de atendente (identifica quem da equipe esta usando o painel,
+// pra atribuir transferencias de atendimento no Chat - nao substitui a senha
+// do painel, so identifica quem esta por tras dela) ---
+async function loadStaffSession() {
+  state.staff = await api("/staff/me");
+  const label = document.getElementById("staff-session-label");
+  label.textContent = state.staff ? state.staff.name : "Fazer login";
+}
+
+function openStaffLoginModal() {
+  document.getElementById("staff-login-error").style.display = "none";
+  document.getElementById("staff-login-form").reset();
+  document.getElementById("staff-login-overlay").style.display = "flex";
+  document.getElementById("staff-login-username").focus();
+}
+
+function closeStaffLoginModal() {
+  document.getElementById("staff-login-overlay").style.display = "none";
+}
+
+document.getElementById("btn-staff-session").addEventListener("click", async () => {
+  if (state.staff) {
+    if (!confirm(`Sair da conta de ${state.staff.name}?`)) return;
+    await api("/staff/logout", { method: "POST" });
+    await loadStaffSession();
+  } else {
+    openStaffLoginModal();
+  }
+});
+
+document.getElementById("staff-login-close").addEventListener("click", closeStaffLoginModal);
+document.getElementById("staff-login-overlay").addEventListener("click", (e) => {
+  if (e.target.id === "staff-login-overlay") closeStaffLoginModal();
+});
+
+document.getElementById("staff-login-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const username = document.getElementById("staff-login-username").value.trim();
+  const password = document.getElementById("staff-login-password").value;
+  const errorEl = document.getElementById("staff-login-error");
+  errorEl.style.display = "none";
+
+  const res = await fetch("/api/staff/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    errorEl.textContent = body.error || "Nao foi possivel entrar.";
+    errorEl.style.display = "block";
+    return;
+  }
+  closeStaffLoginModal();
+  await loadStaffSession();
+});
+
 // --- Navegacao (sidebar) ---
 document.querySelectorAll(".nav-item").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -164,6 +224,11 @@ function renderContactsTable(contacts) {
   const body = document.getElementById("contacts-body");
   body.innerHTML = "";
   for (const c of contacts) {
+    const deleteBtn = el("button", { type: "button", class: "btn-icon-danger", title: "Excluir contato" }, [
+      el("span", { class: "nav-icon", "data-icon": "trash" }, []),
+    ]);
+    deleteBtn.addEventListener("click", () => deleteContact(c));
+
     body.appendChild(
       el("tr", {}, [
         el("td", {}, [
@@ -175,9 +240,18 @@ function renderContactsTable(contacts) {
         el("td", {}, [c.phone]),
         el("td", {}, [el("span", { class: "badge badge-neutral" }, ["WhatsApp"])]),
         el("td", {}, [new Date(c.createdAt).toLocaleDateString("pt-BR")]),
+        el("td", {}, [deleteBtn]),
       ])
     );
   }
+  paintIcons(body);
+}
+
+async function deleteContact(contact) {
+  const label = contact.name ? `${contact.name} (${contact.phone})` : contact.phone;
+  if (!confirm(`Excluir o contato ${label}? Isso apaga o histórico de conversas e agendamentos dele. Não pode ser desfeito.`)) return;
+  await api(`/contacts/${contact.id}`, { method: "DELETE" });
+  await loadContacts();
 }
 
 document.getElementById("contacts-search").addEventListener("input", (e) => {
@@ -214,6 +288,48 @@ function initials(name) {
   if (!name) return "?";
   const parts = name.trim().split(/\s+/);
   return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase() || "?";
+}
+
+// Avatar com a foto de perfil do WhatsApp quando disponivel; cai pras iniciais
+// (mesmo comportamento de antes) se nao tiver foto ou se a URL falhar ao carregar.
+function avatarNode(name, url, className) {
+  const wrap = el("div", { class: className }, url ? [] : [initials(name)]);
+  if (url) {
+    const img = el("img", { class: "avatar-img", src: url, alt: "" });
+    img.addEventListener("error", () => {
+      wrap.innerHTML = "";
+      wrap.appendChild(document.createTextNode(initials(name)));
+    });
+    wrap.appendChild(img);
+  }
+  return wrap;
+}
+
+function formatConvTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) {
+    return d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  }
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return "Ontem";
+  return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
+}
+
+function formatMsgTime(iso) {
+  return new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatDateSep(iso) {
+  const d = new Date(iso);
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) return "Hoje";
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return "Ontem";
+  return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
 // --- CRM ---
@@ -414,9 +530,12 @@ function renderConversationsList() {
   list.innerHTML = "";
   for (const c of filtered) {
     const li = el("li", { "data-id": c.id }, [
-      el("div", { class: "avatar" }, [initials(c.patient.name)]),
+      avatarNode(c.patient.name, c.patient.avatarUrl, "avatar"),
       el("div", { class: "conv-text" }, [
-        el("div", { class: "name" }, [c.patient.name ?? c.patient.phone]),
+        el("div", { class: "conv-top-row" }, [
+          el("div", { class: "name" }, [c.patient.name ?? c.patient.phone]),
+          el("div", { class: "conv-time" }, [formatConvTime(c.lastMessageAt)]),
+        ]),
         el("div", { class: "preview" }, [c.lastMessage ?? ""]),
       ]),
     ]);
@@ -439,9 +558,36 @@ async function loadMessages(conversationId) {
   const messages = await api(`/conversations/${conversationId}/messages`);
   const box = document.getElementById("chat-messages");
   box.innerHTML = "";
+  let lastDay = null;
   for (const m of messages) {
-    box.appendChild(el("div", { class: `msg ${m.role}` }, [m.content]));
+    const day = new Date(m.createdAt).toDateString();
+    if (day !== lastDay) {
+      box.appendChild(el("div", { class: "chat-date-sep" }, [formatDateSep(m.createdAt)]));
+      lastDay = day;
+    }
+    if (m.role === "system") {
+      box.appendChild(
+        el("div", { class: "chat-event" }, [
+          el("span", { class: "nav-icon", "data-icon": "swap" }, []),
+          el("div", {}, [
+            el("div", { class: "chat-event-text" }, [m.content]),
+            el("div", { class: "chat-event-meta" }, [
+              m.authorName ? `${m.authorName} · ${formatMsgTime(m.createdAt)}` : formatMsgTime(m.createdAt),
+            ]),
+          ]),
+        ])
+      );
+      continue;
+    }
+
+    const bubble = el("div", { class: `msg ${m.role}` }, [
+      el("span", { class: "msg-text" }, [m.content]),
+      el("span", { class: "msg-time" }, [formatMsgTime(m.createdAt)]),
+    ]);
+    if (m.authorName) bubble.prepend(el("div", { class: "msg-author" }, [m.authorName]));
+    box.appendChild(bubble);
   }
+  paintIcons(box);
   box.scrollTop = box.scrollHeight;
 }
 
@@ -453,10 +599,12 @@ async function openConversation(id) {
 
   const conv = (state.conversations || []).find((c) => c.id === id);
   const header = document.getElementById("chat-header");
+  document.getElementById("chat-empty").style.display = "none";
+  document.getElementById("chat-messages").style.display = "flex";
   if (conv) {
     header.style.display = "flex";
     header.innerHTML = "";
-    header.appendChild(el("div", { class: "crm-avatar" }, [initials(conv.patient.name)]));
+    header.appendChild(avatarNode(conv.patient.name, conv.patient.avatarUrl, "chat-avatar"));
     header.appendChild(
       el("div", {}, [
         el("div", { class: "name" }, [conv.patient.name ?? "(sem nome)"]),
@@ -560,17 +708,17 @@ function renderAgendaGrid(appointments, days) {
 
     const topPct = (when.getMinutes() / 60) * 100;
     const heightPx = Math.max((a.procedure.durationMin / 60) * 46, 18);
-    cell.appendChild(
-      el(
-        "div",
-        { class: "agenda-appt", style: `top:${topPct}%;height:${heightPx}px` },
-        [
-          el("div", { class: "t" }, [when.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })]),
-          el("div", {}, [a.patient.name ?? a.patient.phone]),
-          el("div", {}, [a.procedure.name]),
-        ]
-      )
+    const apptEl = el(
+      "div",
+      { class: "agenda-appt", style: `top:${topPct}%;height:${heightPx}px` },
+      [
+        el("div", { class: "t" }, [when.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })]),
+        el("div", {}, [a.patient.name ?? a.patient.phone]),
+        el("div", {}, [a.procedure.name]),
+      ]
     );
+    apptEl.addEventListener("click", () => openApptEditModal(a));
+    cell.appendChild(apptEl);
   }
 
   if (appointments.length === 0) {
@@ -602,16 +750,75 @@ async function loadAgenda() {
   const body = document.getElementById("agenda-body");
   body.innerHTML = "";
   for (const a of appointments) {
-    body.appendChild(
-      el("tr", {}, [
-        el("td", {}, [new Date(a.scheduledAt).toLocaleString("pt-BR")]),
-        el("td", {}, [a.patient.name ?? a.patient.phone]),
-        el("td", {}, [a.procedure.name]),
-        el("td", {}, [a.status]),
-      ])
-    );
+    const row = el("tr", { style: "cursor:pointer" }, [
+      el("td", {}, [new Date(a.scheduledAt).toLocaleString("pt-BR")]),
+      el("td", {}, [a.patient.name ?? a.patient.phone]),
+      el("td", {}, [a.procedure.name]),
+      el("td", {}, [a.status]),
+    ]);
+    row.addEventListener("click", () => openApptEditModal(a));
+    body.appendChild(row);
   }
 }
+
+// --- Editar/excluir/transferir agendamento ---
+function openApptEditModal(appt) {
+  state.editingAppointmentId = appt.id;
+  document.getElementById("appt-edit-patient").textContent = `${appt.patient.name ?? appt.patient.phone} · ${appt.patient.phone}`;
+
+  const when = new Date(appt.scheduledAt);
+  const pad = (n) => String(n).padStart(2, "0");
+  document.getElementById("appt-edit-when").value =
+    `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}T${pad(when.getHours())}:${pad(when.getMinutes())}`;
+  document.getElementById("appt-edit-status").value = appt.status;
+
+  const select = document.getElementById("appt-edit-procedure");
+  select.innerHTML = "";
+  api("/procedures").then((procedures) => {
+    for (const p of procedures) {
+      const opt = el("option", { value: p.id }, [`${p.name} (${p.durationMin}min)`]);
+      if (p.id === appt.procedure.id) opt.selected = true;
+      select.appendChild(opt);
+    }
+  });
+
+  document.getElementById("appt-edit-overlay").style.display = "flex";
+}
+
+function closeApptEditModal() {
+  document.getElementById("appt-edit-overlay").style.display = "none";
+  state.editingAppointmentId = null;
+}
+
+document.getElementById("appt-edit-close").addEventListener("click", closeApptEditModal);
+document.getElementById("appt-edit-overlay").addEventListener("click", (e) => {
+  if (e.target.id === "appt-edit-overlay") closeApptEditModal();
+});
+
+document.getElementById("appt-edit-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const id = state.editingAppointmentId;
+  if (!id) return;
+  const procedureId = document.getElementById("appt-edit-procedure").value;
+  const when = document.getElementById("appt-edit-when").value;
+  const status = document.getElementById("appt-edit-status").value;
+  await api(`/appointments/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ procedureId, scheduledAt: new Date(when).toISOString(), status }),
+  });
+  closeApptEditModal();
+  await loadAgenda();
+});
+
+document.getElementById("appt-edit-delete").addEventListener("click", async () => {
+  const id = state.editingAppointmentId;
+  if (!id) return;
+  if (!confirm("Excluir este agendamento? Não pode ser desfeito.")) return;
+  await api(`/appointments/${id}`, { method: "DELETE" });
+  closeApptEditModal();
+  await loadAgenda();
+});
 
 document.getElementById("agenda-view-toggle").addEventListener("click", (e) => {
   const btn = e.target.closest("button");
@@ -1051,7 +1258,11 @@ async function loadClinicsList() {
       el("tr", {}, [
         el("td", {}, [c.name]),
         el("td", {}, [c.whatsappPhone]),
-        el("td", {}, [c.uazapiConfigured ? "Sim (própria)" : "Não (usa .env)"]),
+        el("td", {}, [
+          el("span", { class: `badge ${c.connected ? "badge-green" : "badge-neutral"}` }, [
+            c.connected ? "Conectado" : c.connecting ? "Conectando…" : "Desconectado",
+          ]),
+        ]),
       ])
     );
   }
@@ -1061,19 +1272,61 @@ document.getElementById("clinic-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const name = document.getElementById("cl-name").value.trim();
   const whatsappPhone = document.getElementById("cl-phone").value.trim();
-  const uazapiToken = document.getElementById("cl-token").value.trim();
-  const uazapiBaseUrl = document.getElementById("cl-baseurl").value.trim();
   if (!name || !whatsappPhone) return;
 
   await api("/clinics", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, whatsappPhone, uazapiToken, uazapiBaseUrl }),
+    body: JSON.stringify({ name, whatsappPhone }),
   });
 
   e.target.reset();
   await loadClinicsList();
   await loadClinics(); // atualiza o seletor no topo com a clinica nova
+});
+
+// --- Equipe (contas de atendente) ---
+async function loadTeam() {
+  const team = await api("/staff");
+  const body = document.getElementById("team-body");
+  body.innerHTML = "";
+  for (const t of team) {
+    const deleteBtn = el("button", { type: "button", class: "btn-icon-danger", title: "Remover conta" }, [
+      el("span", { class: "nav-icon", "data-icon": "trash" }, []),
+    ]);
+    deleteBtn.addEventListener("click", async () => {
+      if (!confirm(`Remover a conta de ${t.name}?`)) return;
+      await api(`/staff/${t.id}`, { method: "DELETE" });
+      await loadTeam();
+    });
+
+    body.appendChild(
+      el("tr", {}, [
+        el("td", {}, [t.name]),
+        el("td", {}, [t.username]),
+        el("td", {}, [new Date(t.createdAt).toLocaleDateString("pt-BR")]),
+        el("td", {}, [deleteBtn]),
+      ])
+    );
+  }
+  paintIcons(body);
+}
+
+document.getElementById("team-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = document.getElementById("tm-name").value.trim();
+  const username = document.getElementById("tm-username").value.trim();
+  const password = document.getElementById("tm-password").value;
+  if (!name || !username || !password) return;
+
+  await api("/staff", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, username, password }),
+  });
+
+  e.target.reset();
+  await loadTeam();
 });
 
 // --- Dados da clinica ---
@@ -1177,6 +1430,7 @@ const SETTINGS_SUB_LOADERS = {
   rules: loadRules,
   clinics: loadClinicsList,
   channels: startChannelPolling,
+  team: loadTeam,
 };
 
 function openSettingsSub(sub) {
@@ -1219,7 +1473,7 @@ const TOUR_STEPS = [
   { tab: "settings", sub: "broadcasts", target: "#sub-broadcasts", title: "Mensagens Programadas", desc: "Campanhas avulsas pra base de contatos ou um estágio específico do funil, enviadas aos poucos dentro do horário comercial." },
   { tab: "settings", sub: "followup", target: "#sub-followup", title: "Recontato", desc: "Cascata de mensagens automáticas quando um lead fica dias sem responder — reinicia sozinha se ele voltar a falar." },
   { tab: "settings", sub: "funnel", target: "#sub-funnel", title: "Funil", desc: "Configure as etapas do CRM: adicione, renomeie, recolorir ou remova." },
-  { tab: "settings", sub: "channels", target: "#sub-channels", title: "Canais", desc: "Status da conexão do WhatsApp. A conexão em si é feita no painel da UazAPI por enquanto." },
+  { tab: "settings", sub: "channels", target: "#sub-channels", title: "Canais", desc: "Status da conexão do WhatsApp dessa clínica. Gere o QR Code aqui mesmo e escaneie com o celular pra conectar." },
   { tab: "settings", sub: "clinics", target: "#sub-clinics", title: "Clínicas", desc: "Cadastre mais clínicas, cada uma com seu próprio WhatsApp — o seletor no topo da sidebar troca entre elas." },
   { tab: "dashboard", target: "#theme-toggle", title: "Tour concluído", desc: "É só isso! Clique em \"Guia\" a qualquer momento pra rever esse tour." },
 ];
@@ -1311,6 +1565,11 @@ async function init() {
     await loadClinics();
   } catch (err) {
     console.error("Falha ao carregar clinicas:", err);
+  }
+  try {
+    await loadStaffSession();
+  } catch (err) {
+    console.error("Falha ao carregar sessao de atendente:", err);
   }
   await refreshAll();
   setInterval(refreshAll, 5000);

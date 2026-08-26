@@ -8,6 +8,7 @@ import { startBroadcastJob } from "./crm/broadcast.js";
 import { restoreAllConnections } from "./whatsapp/manager.js";
 import { apiRouter } from "./api/routes.js";
 import { basicAuth } from "./api/auth.js";
+import { readStaffSession } from "./api/staffSession.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -27,7 +28,15 @@ app.use(
     setHeaders: (res) => res.set("Cache-Control", "no-store"),
   })
 );
-app.use("/api", basicAuth, apiRouter);
+app.use(
+  "/api",
+  basicAuth,
+  (req, _res, next) => {
+    req.staff = readStaffSession(req.headers.cookie);
+    next();
+  },
+  apiRouter
+);
 
 // Error handler generico: garante que uma falha numa rota (ex: paciente/
 // conversa inexistente, WhatsApp desconectado) responda 500 em vez de
