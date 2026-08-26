@@ -404,6 +404,9 @@ tbody tr:hover { background: var(--accent-50); }
 .broadcast-form-row select, .broadcast-form-row input[type="datetime-local"], .broadcast-form-row input[type="text"] {
   padding: 0.45rem 0.6rem; border: 1px solid var(--border); border-radius: 8px; background: var(--card-bg); color: var(--text);
 }
+.weekday-picker { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+.weekday-picker label { flex-direction: row !important; align-items: center; gap: 0.3rem !important; font-size: 0.8rem; }
+.weekday-picker input { width: auto; }
 
 button { font-family: inherit; }
 button[type="submit"], .broadcast-form-row button {

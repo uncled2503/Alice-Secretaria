@@ -1339,6 +1339,11 @@ function loadClinicDataForm() {
   document.getElementById("cd-timezone").value = clinic.timezone ?? "America/Sao_Paulo";
   document.getElementById("cd-start-hour").value = clinic.workStartHour ?? 9;
   document.getElementById("cd-end-hour").value = clinic.workEndHour ?? 19;
+
+  const workDays = (clinic.workDays ?? "1,2,3,4,5,6").split(",");
+  document.querySelectorAll("#cd-workdays input[type=checkbox]").forEach((box) => {
+    box.checked = workDays.includes(box.value);
+  });
 }
 
 document.getElementById("clinic-data-form").addEventListener("submit", async (e) => {
@@ -1348,12 +1353,15 @@ document.getElementById("clinic-data-form").addEventListener("submit", async (e)
   const timezone = document.getElementById("cd-timezone").value.trim();
   const workStartHour = Number(document.getElementById("cd-start-hour").value);
   const workEndHour = Number(document.getElementById("cd-end-hour").value);
+  const workDays = Array.from(document.querySelectorAll("#cd-workdays input[type=checkbox]:checked"))
+    .map((box) => box.value)
+    .join(",");
   if (!id || !name) return;
 
   await api(`/clinics/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, timezone, workStartHour, workEndHour }),
+    body: JSON.stringify({ name, timezone, workStartHour, workEndHour, workDays }),
   });
 
   await loadClinics();

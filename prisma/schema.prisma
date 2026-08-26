@@ -17,6 +17,7 @@ model Clinic {
   timezone      String    @default("America/Sao_Paulo")
   workStartHour Int       @default(9)
   workEndHour   Int       @default(19)
+  workDays      String    @default("1,2,3,4,5,6") // dias da semana com expediente (0=domingo..6=sabado), separados por virgula
   createdAt     DateTime  @default(now())
 
   procedures    Procedure[]

@@ -38,6 +38,7 @@ apiRouter.get(
         timezone: true,
         workStartHour: true,
         workEndHour: true,
+        workDays: true,
       },
     });
     res.json(clinics.map((c) => ({ ...c, ...getStatus(c.id) })));
@@ -47,11 +48,12 @@ apiRouter.get(
 apiRouter.put(
   "/clinics/:id",
   asyncRoute(async (req, res) => {
-    const { name, timezone, workStartHour, workEndHour } = req.body as {
+    const { name, timezone, workStartHour, workEndHour, workDays } = req.body as {
       name?: string;
       timezone?: string;
       workStartHour?: number;
       workEndHour?: number;
+      workDays?: string;
     };
 
     const clinic = await prisma.clinic.update({
@@ -61,6 +63,7 @@ apiRouter.put(
         ...(timezone !== undefined ? { timezone } : {}),
         ...(workStartHour !== undefined ? { workStartHour } : {}),
         ...(workEndHour !== undefined ? { workEndHour } : {}),
+        ...(workDays !== undefined ? { workDays } : {}),
       },
     });
     res.json(clinic);

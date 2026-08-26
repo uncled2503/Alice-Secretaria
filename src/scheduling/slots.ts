@@ -19,13 +19,15 @@ export async function findAvailableSlots(
     select: { scheduledAt: true, procedure: { select: { durationMin: true } } },
   });
 
+  const workDays = new Set(clinic.workDays.split(",").map(Number));
+
   const slots: Slot[] = [];
   const now = new Date();
 
   for (let d = 0; d < daysAhead && slots.length < 10; d++) {
     const day = new Date(now);
     day.setDate(day.getDate() + d);
-    if (day.getDay() === 0) continue; // pula domingo
+    if (!workDays.has(day.getDay())) continue; // clinica nao atende nesse dia da semana
 
     for (let hour = clinic.workStartHour; hour < clinic.workEndHour; hour++) {
       const start = new Date(day);
