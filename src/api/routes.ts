@@ -1,13 +1,13 @@
 import { Router, type Request, type Response, type RequestHandler } from "express";
-import { prisma } from "../db/client";
-import { sendText, creds } from "../uazapi/client";
-import { getFunnelStages, generateStageId } from "../crm/stages";
-import { createRuleDraft, RULE_CATEGORIES } from "../ai/rules";
+import { prisma } from "../db/client.js";
+import { sendText, connectClinic, disconnectClinic, getStatus, getQrDataUrl } from "../whatsapp/manager.js";
+import { getFunnelStages, generateStageId } from "../crm/stages.js";
+import { createRuleDraft, RULE_CATEGORIES } from "../ai/rules.js";
 
 export const apiRouter = Router();
 
 // Express 4 nao encaminha rejeicoes de handlers async para o error handler
-// sozinho; sem isso, uma falha (ex: UazAPI fora do ar) derruba o processo
+// sozinho; sem isso, uma falha (ex: WhatsApp desconectado) derruba o processo
 // inteiro e para o atendimento de todos os pacientes.
 function asyncRoute(handler: (req: Request, res: Response) => Promise<unknown>): RequestHandler {
   return (req, res, next) => {
@@ -29,21 +29,46 @@ apiRouter.get(
   asyncRoute(async (_req, res) => {
     const clinics = await prisma.clinic.findMany({
       orderBy: { createdAt: "asc" },
-      select: { id: true, name: true, whatsappPhone: true, uazapiToken: true },
+      select: {
+        id: true,
+        name: true,
+        whatsappPhone: true,
+        timezone: true,
+        workStartHour: true,
+        workEndHour: true,
+      },
     });
-    res.json(clinics.map((c) => ({ ...c, uazapiConfigured: !!c.uazapiToken, uazapiToken: undefined })));
+    res.json(clinics.map((c) => ({ ...c, ...getStatus(c.id) })));
+  })
+);
+
+apiRouter.put(
+  "/clinics/:id",
+  asyncRoute(async (req, res) => {
+    const { name, timezone, workStartHour, workEndHour } = req.body as {
+      name?: string;
+      timezone?: string;
+      workStartHour?: number;
+      workEndHour?: number;
+    };
+
+    const clinic = await prisma.clinic.update({
+      where: { id: req.params.id },
+      data: {
+        ...(name !== undefined ? { name } : {}),
+        ...(timezone !== undefined ? { timezone } : {}),
+        ...(workStartHour !== undefined ? { workStartHour } : {}),
+        ...(workEndHour !== undefined ? { workEndHour } : {}),
+      },
+    });
+    res.json(clinic);
   })
 );
 
 apiRouter.post(
   "/clinics",
   asyncRoute(async (req, res) => {
-    const { name, whatsappPhone, uazapiToken, uazapiBaseUrl } = req.body as {
-      name?: string;
-      whatsappPhone?: string;
-      uazapiToken?: string;
-      uazapiBaseUrl?: string;
-    };
+    const { name, whatsappPhone } = req.body as { name?: string; whatsappPhone?: string };
 
     if (!name || !whatsappPhone) {
       res.status(400).json({ error: "name e whatsappPhone sao obrigatorios" });
@@ -51,14 +76,38 @@ apiRouter.post(
     }
 
     const clinic = await prisma.clinic.create({
-      data: {
-        name,
-        whatsappPhone: whatsappPhone.replace(/\D/g, ""),
-        uazapiToken: uazapiToken?.trim() || null,
-        uazapiBaseUrl: uazapiBaseUrl?.trim() || null,
-      },
+      data: { name, whatsappPhone: whatsappPhone.replace(/\D/g, "") },
     });
     res.json(clinic);
+  })
+);
+
+// Conexao do WhatsApp direto pelo painel (sem depender de gateway externo).
+apiRouter.get(
+  "/whatsapp/status",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const status = getStatus(clinic.id);
+    const qr = status.connecting ? await getQrDataUrl(clinic.id) : null;
+    res.json({ ...status, qr });
+  })
+);
+
+apiRouter.post(
+  "/whatsapp/connect",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    await connectClinic(clinic.id);
+    res.json({ ok: true });
+  })
+);
+
+apiRouter.post(
+  "/whatsapp/disconnect",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    await disconnectClinic(clinic.id);
+    res.json({ ok: true });
   })
 );
 
@@ -267,7 +316,7 @@ apiRouter.post(
 
     const conversation = await prisma.conversation.findUniqueOrThrow({
       where: { id: req.params.id },
-      include: { patient: { include: { clinic: true } } },
+      include: { patient: true },
     });
 
     await prisma.message.create({
@@ -279,9 +328,9 @@ apiRouter.post(
     });
 
     try {
-      await sendText(conversation.patient.phone, text, creds(conversation.patient.clinic));
+      await sendText(conversation.patient.clinicId, conversation.patient.phone, text);
     } catch (err) {
-      console.error("Falha ao enviar mensagem via UazAPI:", err);
+      console.error("Falha ao enviar mensagem via WhatsApp:", err);
       res.status(502).json({ ok: false, error: "Mensagem salva, mas falhou ao enviar pelo WhatsApp" });
       return;
     }

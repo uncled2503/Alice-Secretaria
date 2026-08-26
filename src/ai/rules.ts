@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
-import { prisma } from "../db/client";
+import { prisma } from "../db/client.js";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";

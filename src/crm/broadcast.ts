@@ -1,9 +1,9 @@
 import cron from "node-cron";
-import { prisma } from "../db/client";
-import { sendText, creds } from "../uazapi/client";
+import { prisma } from "../db/client.js";
+import { sendText } from "../whatsapp/manager.js";
 
-// Envia aos poucos pra nao estourar limite de taxa do WhatsApp/UazAPI e nao
-// disparar centenas de mensagens de uma vez so.
+// Envia aos poucos pra nao estourar limite de taxa do WhatsApp e nao
+// disparar centenas de mensagens de uma vez so (risco real de banimento).
 const BATCH_SIZE = 20;
 
 function renderTemplate(template: string, patientName: string | null): string {
@@ -57,7 +57,7 @@ async function sendNextBatch(): Promise<void> {
     for (const recipient of pending) {
       const text = renderTemplate(campaign.message, recipient.patient.name);
       try {
-        await sendText(recipient.patient.phone, text, creds(clinic));
+        await sendText(clinic.id, recipient.patient.phone, text);
         await prisma.broadcastRecipient.update({
           where: { id: recipient.id },
           data: { status: "sent", sentAt: new Date() },

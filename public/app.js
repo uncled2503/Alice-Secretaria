@@ -10,6 +10,32 @@ function el(tag, props = {}, children = []) {
   return node;
 }
 
+// Banner de erro visivel no topo - sem isso, uma chamada que falha so aparece
+// no console (que ninguem olha) e o resto da tela fica silenciosamente vazio.
+function showError(message) {
+  console.error(message);
+  let banner = document.getElementById("error-banner");
+  if (!banner) {
+    banner = el("div", { id: "error-banner", class: "error-banner" }, []);
+    document.body.prepend(banner);
+  }
+  const line = el("div", {}, [message]);
+  banner.appendChild(line);
+  banner.style.display = "block";
+  setTimeout(() => line.remove(), 12000);
+}
+
+// Captura QUALQUER erro de JS (nao so falha de fetch) e mostra no banner.
+// Sem isso, um bug num pedaco do script trava tudo que vem depois em silencio
+// (nenhum listener registrado apos o ponto do erro chega a existir) e a unica
+// pista fica escondida no console do DevTools, que ninguem abre.
+window.addEventListener("error", (e) => {
+  showError(`Erro de JS: ${e.message} (${e.filename?.split("/").pop()}:${e.lineno})`);
+});
+window.addEventListener("unhandledrejection", (e) => {
+  showError(`Promise rejeitada sem tratamento: ${e.reason?.message ?? e.reason}`);
+});
+
 // Injeta o clinicId automaticamente (query string no GET, campo no body do
 // POST/PUT) pra nao precisar repetir isso em toda chamada individual.
 async function api(path, options = {}) {
@@ -31,8 +57,23 @@ async function api(path, options = {}) {
     }
   }
 
-  const res = await fetch(`/api${finalPath}`, opts);
-  if (!res.ok) throw new Error(`API ${path} -> ${res.status}`);
+  let res;
+  try {
+    res = await fetch(`/api${finalPath}`, opts);
+  } catch (err) {
+    showError(`Falha de rede chamando ${path}: ${err.message}`);
+    throw err;
+  }
+  if (!res.ok) {
+    let detail = "";
+    try {
+      detail = (await res.clone().json())?.error ?? "";
+    } catch {
+      // resposta nao e JSON, ignora
+    }
+    showError(`API ${path} -> HTTP ${res.status}${detail ? " (" + detail + ")" : ""}`);
+    throw new Error(`API ${path} -> ${res.status}`);
+  }
   return res.json();
 }
 
@@ -51,6 +92,7 @@ const ICONS = {
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2.5M12 19.5V22M4.2 4.2l1.8 1.8M18 18l1.8 1.8M2 12h2.5M19.5 12H22M4.2 19.8L6 18M18 6l1.8-1.8" stroke-linecap="round"/>',
   moon: '<path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z" stroke-linejoin="round"/>',
   check: '<path d="M4 12l6 6L20 6" stroke-linecap="round" stroke-linejoin="round"/>',
+  guide: '<circle cx="12" cy="12" r="9"/><path d="M12 16v-1c0-1 .6-1.5 1.3-2 .7-.5 1.2-1 1.2-2a2.5 2.5 0 0 0-5 0" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="17.2" r="0.6" fill="currentColor" stroke="none"/>',
 };
 
 function renderIcon(name) {
@@ -101,6 +143,12 @@ document.querySelectorAll(".nav-item").forEach((btn) => {
     document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
     btn.classList.add("active");
     document.getElementById(`tab-${btn.dataset.tab}`).classList.add("active");
+    if (btn.dataset.tab === "settings") {
+      const activeSub = document.querySelector("#settings-tabs button.active");
+      openSettingsSub(activeSub ? activeSub.dataset.sub : "clinic-data");
+    } else {
+      stopChannelPolling();
+    }
   });
 });
 
@@ -186,7 +234,7 @@ function renderCrmBoard(columns, query) {
       ? col.patients.filter((p) => (p.name ?? "").toLowerCase().includes(q) || p.phone.includes(q))
       : col.patients;
 
-    const cardsBox = el("div", {});
+    const cardsBox = el("div", { class: "crm-cards-drop" });
     for (const p of patients) {
       const select = el(
         "select",
@@ -195,18 +243,39 @@ function renderCrmBoard(columns, query) {
       );
       select.value = col.id;
       select.addEventListener("change", () => moveStage(p.id, select.value));
+      select.addEventListener("mousedown", (e) => e.stopPropagation()); // nao inicia drag ao abrir o select
 
-      cardsBox.appendChild(
-        el("div", { class: "crm-card" }, [
-          el("div", { class: "crm-card-top" }, [
-            el("div", { class: "crm-avatar" }, [initials(p.name)]),
-            el("div", { class: "name" }, [p.name ?? "(sem nome)"]),
-          ]),
-          el("div", { class: "phone" }, [p.phone]),
-          select,
-        ])
-      );
+      const card = el("div", { class: "crm-card", draggable: "true" }, [
+        el("div", { class: "crm-card-top" }, [
+          el("div", { class: "crm-avatar" }, [initials(p.name)]),
+          el("div", { class: "name" }, [p.name ?? "(sem nome)"]),
+        ]),
+        el("div", { class: "phone" }, [p.phone]),
+        select,
+      ]);
+
+      card.addEventListener("dragstart", (e) => {
+        e.dataTransfer.setData("text/plain", p.id);
+        e.dataTransfer.effectAllowed = "move";
+        card.classList.add("dragging");
+      });
+      card.addEventListener("dragend", () => card.classList.remove("dragging"));
+
+      cardsBox.appendChild(card);
     }
+
+    cardsBox.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      cardsBox.classList.add("drag-over");
+    });
+    cardsBox.addEventListener("dragleave", () => cardsBox.classList.remove("drag-over"));
+    cardsBox.addEventListener("drop", (e) => {
+      e.preventDefault();
+      cardsBox.classList.remove("drag-over");
+      const patientId = e.dataTransfer.getData("text/plain");
+      if (patientId) moveStage(patientId, col.id);
+    });
 
     board.appendChild(
       el("div", { class: "crm-column" }, [
@@ -306,10 +375,6 @@ document.getElementById("stage-form").addEventListener("submit", async (e) => {
   e.target.reset();
   await loadStagesConfig();
   await loadCrmBoard();
-});
-
-document.querySelector(".funnel-config").addEventListener("toggle", (e) => {
-  if (e.target.open) loadStagesConfig();
 });
 
 async function moveStage(patientId, stage) {
@@ -634,8 +699,6 @@ async function loadFollowUpRules() {
   }
 }
 
-document.querySelector('.tab[data-tab="followup"]').addEventListener("click", loadFollowUpRules);
-
 // --- Mensagens programadas ---
 async function loadBroadcastTargetOptions() {
   const columns = await api("/crm/board");
@@ -700,11 +763,6 @@ document.getElementById("broadcast-form").addEventListener("submit", async (e) =
 
   e.target.reset();
   await loadBroadcasts();
-});
-
-document.querySelector('.tab[data-tab="broadcasts"]').addEventListener("click", () => {
-  loadBroadcastTargetOptions();
-  loadBroadcasts();
 });
 
 // --- Personalizar Alice (regras em linguagem natural) ---
@@ -793,10 +851,10 @@ document.getElementById("rule-form").addEventListener("submit", async (e) => {
   }
 });
 
-document.querySelector('.tab[data-tab="rules"]').addEventListener("click", loadRules);
 
 async function refreshAll() {
-  await Promise.all([
+  // allSettled: uma aba com erro nao pode travar as outras de carregar.
+  await Promise.allSettled([
     loadDashboard(),
     loadContacts(),
     loadCrmBoard(),
@@ -984,8 +1042,6 @@ document.getElementById("procedure-form").addEventListener("submit", async (e) =
   await loadProcedures();
 });
 
-document.querySelector('.tab[data-tab="procedures"]').addEventListener("click", loadProcedures);
-
 async function loadClinicsList() {
   const clinics = await api("/clinics");
   const body = document.getElementById("clinics-body");
@@ -1020,10 +1076,242 @@ document.getElementById("clinic-form").addEventListener("submit", async (e) => {
   await loadClinics(); // atualiza o seletor no topo com a clinica nova
 });
 
-document.querySelector('.tab[data-tab="clinics"]').addEventListener("click", loadClinicsList);
+// --- Dados da clinica ---
+function loadClinicDataForm() {
+  const clinic = (state.clinics || []).find((c) => c.id === state.clinicId);
+  if (!clinic) return;
+  document.getElementById("cd-id").value = clinic.id;
+  document.getElementById("cd-name").value = clinic.name;
+  document.getElementById("cd-phone").value = clinic.whatsappPhone;
+  document.getElementById("cd-timezone").value = clinic.timezone ?? "America/Sao_Paulo";
+  document.getElementById("cd-start-hour").value = clinic.workStartHour ?? 9;
+  document.getElementById("cd-end-hour").value = clinic.workEndHour ?? 19;
+}
+
+document.getElementById("clinic-data-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const id = document.getElementById("cd-id").value;
+  const name = document.getElementById("cd-name").value.trim();
+  const timezone = document.getElementById("cd-timezone").value.trim();
+  const workStartHour = Number(document.getElementById("cd-start-hour").value);
+  const workEndHour = Number(document.getElementById("cd-end-hour").value);
+  if (!id || !name) return;
+
+  await api(`/clinics/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, timezone, workStartHour, workEndHour }),
+  });
+
+  await loadClinics();
+  loadClinicDataForm();
+});
+
+// --- Canais (conexao WhatsApp direta, sem gateway externo) ---
+async function loadChannelStatus() {
+  const status = await api("/whatsapp/status");
+  const badge = document.getElementById("channel-status-badge");
+  const qrWrap = document.getElementById("channel-qr-wrap");
+  const qrImg = document.getElementById("channel-qr-img");
+  const connectBtn = document.getElementById("btn-channel-connect");
+  const disconnectBtn = document.getElementById("btn-channel-disconnect");
+
+  if (status.connected) {
+    badge.textContent = "Conectado";
+    badge.className = "badge badge-green";
+    qrWrap.style.display = "none";
+    connectBtn.style.display = "none";
+    disconnectBtn.style.display = "inline-block";
+  } else if (status.qr) {
+    badge.textContent = "Aguardando leitura do QR Code";
+    badge.className = "badge badge-neutral";
+    qrImg.src = status.qr;
+    qrWrap.style.display = "block";
+    connectBtn.textContent = "Gerar novo QR Code";
+    connectBtn.style.display = "inline-block";
+    disconnectBtn.style.display = "none";
+  } else {
+    badge.textContent = status.connecting ? "Conectando…" : "Desconectado";
+    badge.className = "badge badge-neutral";
+    qrWrap.style.display = "none";
+    connectBtn.textContent = "Gerar QR Code";
+    connectBtn.style.display = "inline-block";
+    disconnectBtn.style.display = "none";
+  }
+}
+
+function startChannelPolling() {
+  stopChannelPolling();
+  loadChannelStatus();
+  state.channelPollHandle = setInterval(loadChannelStatus, 2500);
+}
+
+function stopChannelPolling() {
+  if (state.channelPollHandle) {
+    clearInterval(state.channelPollHandle);
+    state.channelPollHandle = null;
+  }
+}
+
+document.getElementById("btn-channel-connect").addEventListener("click", async () => {
+  await api("/whatsapp/connect", { method: "POST" });
+  await loadChannelStatus();
+});
+
+document.getElementById("btn-channel-disconnect").addEventListener("click", async () => {
+  if (!confirm("Desconectar o WhatsApp dessa clínica? Vai precisar escanear o QR Code de novo pra reconectar.")) return;
+  await api("/whatsapp/disconnect", { method: "POST" });
+  await loadChannelStatus();
+});
+
+// --- Navegacao das sub-abas de "Personalizar Alice" ---
+const SETTINGS_SUB_LOADERS = {
+  "clinic-data": loadClinicDataForm,
+  procedures: loadProcedures,
+  broadcasts: () => {
+    loadBroadcastTargetOptions();
+    loadBroadcasts();
+  },
+  followup: loadFollowUpRules,
+  funnel: loadStagesConfig,
+  rules: loadRules,
+  clinics: loadClinicsList,
+  channels: startChannelPolling,
+};
+
+function openSettingsSub(sub) {
+  document.querySelectorAll("#settings-tabs button").forEach((b) => b.classList.toggle("active", b.dataset.sub === sub));
+  document.querySelectorAll(".settings-subpanel").forEach((p) => p.classList.remove("active"));
+  document.getElementById(`sub-${sub}`).classList.add("active");
+  if (sub !== "channels") stopChannelPolling();
+  SETTINGS_SUB_LOADERS[sub]?.();
+}
+
+document.getElementById("settings-tabs").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-sub]");
+  if (!btn) return;
+  openSettingsSub(btn.dataset.sub);
+});
+
+function goToTab(tab) {
+  document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
+  document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
+  document.getElementById(`tab-${tab}`).classList.add("active");
+}
+
+document.getElementById("btn-goto-funnel-config").addEventListener("click", () => {
+  goToTab("settings");
+  openSettingsSub("funnel");
+});
+
+// --- Tour guiado ---
+const TOUR_STEPS = [
+  { tab: "dashboard", target: ".brand", title: "Bem-vindo(a) à Alice", desc: "Esse tour mostra rapidinho onde fica cada função do painel. Dá pra sair a qualquer momento em \"Encerrar tour\"." },
+  { tab: "dashboard", target: "#period-row", title: "Filtro de período", desc: "Escolha o intervalo (hoje, 7 dias, 30 dias...) pra recalcular os indicadores abaixo." },
+  { tab: "dashboard", target: ".stat-grid", title: "Métricas rápidas", desc: "Quantos contatos a Alice atendeu, quantos agendamentos e quantos atendimentos concluídos no período escolhido." },
+  { tab: "dashboard", target: ".dash-columns", title: "Gráfico e calendário", desc: "Volume de atendimentos por dia, e um calendário do mês com os dias que têm agendamento marcado." },
+  { tab: "contacts", target: "#tab-contacts .toolbar", title: "Contatos", desc: "Base de pacientes/leads. Busque por nome ou telefone, ou adicione um contato manualmente (ex: alguém que ligou)." },
+  { tab: "crm", target: "#crm-board", title: "CRM", desc: "Funil kanban do paciente. Arraste o card entre as colunas pra mudar a etapa, ou use o dropdown dentro do card." },
+  { tab: "chat", target: "#chat-window", title: "Chat", desc: "Veja as conversas em andamento. Dá pra assumir uma conversa manualmente e a Alice para de responder ali até você devolver o controle." },
+  { tab: "agenda", target: "#agenda-grid-wrap", title: "Agenda", desc: "Calendário com os agendamentos por horário. Use Hoje/Semana/Mês pra mudar a visão, ou agende manualmente pelo botão no topo." },
+  { tab: "settings", sub: "clinic-data", target: "#sub-clinic-data", title: "Personalizar Alice", desc: "Essa área reúne toda a configuração da clínica. Aqui em \"Dados da clínica\" ficam nome e horário de funcionamento — usado pelas mensagens automáticas." },
+  { tab: "settings", sub: "procedures", target: "#sub-procedures", title: "Procedimentos", desc: "O catálogo que a Alice usa pra saber o que oferecer e agendar." },
+  { tab: "settings", sub: "broadcasts", target: "#sub-broadcasts", title: "Mensagens Programadas", desc: "Campanhas avulsas pra base de contatos ou um estágio específico do funil, enviadas aos poucos dentro do horário comercial." },
+  { tab: "settings", sub: "followup", target: "#sub-followup", title: "Recontato", desc: "Cascata de mensagens automáticas quando um lead fica dias sem responder — reinicia sozinha se ele voltar a falar." },
+  { tab: "settings", sub: "funnel", target: "#sub-funnel", title: "Funil", desc: "Configure as etapas do CRM: adicione, renomeie, recolorir ou remova." },
+  { tab: "settings", sub: "channels", target: "#sub-channels", title: "Canais", desc: "Status da conexão do WhatsApp. A conexão em si é feita no painel da UazAPI por enquanto." },
+  { tab: "settings", sub: "clinics", target: "#sub-clinics", title: "Clínicas", desc: "Cadastre mais clínicas, cada uma com seu próprio WhatsApp — o seletor no topo da sidebar troca entre elas." },
+  { tab: "dashboard", target: "#theme-toggle", title: "Tour concluído", desc: "É só isso! Clique em \"Guia\" a qualquer momento pra rever esse tour." },
+];
+
+let tourIndex = 0;
+
+function positionTour(target) {
+  const rect = target.getBoundingClientRect();
+  const pad = 6;
+  const spot = document.getElementById("tour-spotlight");
+  spot.style.top = `${rect.top - pad}px`;
+  spot.style.left = `${rect.left - pad}px`;
+  spot.style.width = `${rect.width + pad * 2}px`;
+  spot.style.height = `${rect.height + pad * 2}px`;
+
+  const pop = document.getElementById("tour-popover");
+  const popWidth = 300;
+  let top = rect.bottom + 14;
+  if (top + 160 > window.innerHeight) top = Math.max(12, rect.top - 174);
+  let left = Math.min(rect.left, window.innerWidth - popWidth - 16);
+  left = Math.max(12, left);
+  pop.style.top = `${top}px`;
+  pop.style.left = `${left}px`;
+}
+
+function showTourStep(i) {
+  const step = TOUR_STEPS[i];
+  if (!step) {
+    endTour();
+    return;
+  }
+
+  goToTab(step.tab);
+  if (step.sub) openSettingsSub(step.sub);
+
+  requestAnimationFrame(() => {
+    const target = document.querySelector(step.target);
+    if (!target) {
+      tourIndex = i + 1;
+      showTourStep(tourIndex);
+      return;
+    }
+    target.scrollIntoView({ block: "center" });
+    positionTour(target);
+
+    document.getElementById("tour-step-label").textContent = `PASSO ${i + 1}/${TOUR_STEPS.length}`;
+    document.getElementById("tour-title").textContent = step.title;
+    document.getElementById("tour-desc").textContent = step.desc;
+    document.getElementById("tour-prev").style.visibility = i === 0 ? "hidden" : "visible";
+    document.getElementById("tour-next").textContent = i === TOUR_STEPS.length - 1 ? "Concluir" : "Próximo";
+  });
+}
+
+function startTour() {
+  tourIndex = 0;
+  document.getElementById("tour-overlay").style.display = "block";
+  showTourStep(0);
+}
+
+function endTour() {
+  document.getElementById("tour-overlay").style.display = "none";
+}
+
+document.getElementById("btn-guide").addEventListener("click", startTour);
+document.getElementById("tour-next").addEventListener("click", () => {
+  if (tourIndex >= TOUR_STEPS.length - 1) {
+    endTour();
+    return;
+  }
+  tourIndex++;
+  showTourStep(tourIndex);
+});
+document.getElementById("tour-prev").addEventListener("click", () => {
+  if (tourIndex <= 0) return;
+  tourIndex--;
+  showTourStep(tourIndex);
+});
+document.getElementById("tour-end").addEventListener("click", endTour);
+window.addEventListener("resize", () => {
+  if (document.getElementById("tour-overlay").style.display === "block") {
+    const step = TOUR_STEPS[tourIndex];
+    const target = step && document.querySelector(step.target);
+    if (target) positionTour(target);
+  }
+});
 
 async function init() {
-  await loadClinics();
+  try {
+    await loadClinics();
+  } catch (err) {
+    console.error("Falha ao carregar clinicas:", err);
+  }
   await refreshAll();
   setInterval(refreshAll, 5000);
 }

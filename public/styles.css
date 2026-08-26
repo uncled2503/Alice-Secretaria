@@ -39,6 +39,13 @@ body {
   color: var(--text);
 }
 
+.error-banner {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
+  background: #7f1d1d; color: white; font-size: 0.8rem;
+  padding: 0.3rem 1rem; display: none; max-height: 40vh; overflow-y: auto;
+}
+.error-banner div { padding: 0.15rem 0; border-bottom: 1px solid rgba(255,255,255,0.15); }
+
 /* --- Shell / Sidebar --- */
 .app-shell { display: flex; min-height: 100vh; }
 
@@ -149,6 +156,51 @@ main { flex: 1; padding: 1.6rem 2rem 3rem; max-width: 1200px; }
 .agenda-appt .t { font-weight: 700; }
 .agenda-empty-msg { padding: 1.5rem; text-align: center; color: var(--text-faint); font-size: 0.85rem; }
 
+/* --- Personalizar Alice: abas horizontais --- */
+.settings-tabs {
+  display: flex; gap: 0.3rem; overflow-x: auto; border-bottom: 1px solid var(--border);
+  margin-bottom: 1.2rem; padding-bottom: 1px;
+}
+.settings-tabs button {
+  background: transparent; border: none; padding: 0.6rem 0.9rem; cursor: pointer;
+  font-size: 0.82rem; color: var(--text-muted); font-family: inherit; white-space: nowrap;
+  border-bottom: 2px solid transparent; flex-shrink: 0;
+}
+.settings-tabs button.active { color: var(--accent-dark); border-bottom-color: var(--accent); font-weight: 600; }
+.settings-subpanel { display: none; }
+.settings-subpanel.active { display: block; }
+.channel-card { max-width: 360px; }
+#channel-qr-img { width: 220px; height: 220px; border: 1px solid var(--border); border-radius: 8px; margin-top: 0.8rem; display: block; }
+
+.coming-soon {
+  background: var(--card-bg); border: 1px dashed var(--border); border-radius: 10px;
+  padding: 1.5rem; text-align: center; color: var(--text-faint); font-size: 0.85rem;
+}
+
+/* --- Tour guiado --- */
+.tour-overlay { position: fixed; inset: 0; z-index: 2000; pointer-events: none; }
+.tour-spotlight {
+  position: fixed; border-radius: 10px; border: 2px solid var(--accent);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+  transition: top 0.2s ease, left 0.2s ease, width 0.2s ease, height 0.2s ease;
+  pointer-events: none;
+}
+.tour-popover {
+  position: fixed; z-index: 2001; background: var(--card-bg); color: var(--text);
+  border-radius: 10px; padding: 1rem 1.1rem; width: 300px; box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+  pointer-events: auto;
+}
+.tour-step-label { font-size: 0.7rem; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: 0.04em; }
+.tour-popover h4 { margin: 0.3rem 0 0.4rem; font-size: 0.95rem; }
+.tour-popover p { margin: 0 0 0.9rem; font-size: 0.83rem; color: var(--text-muted); line-height: 1.4; }
+.tour-actions { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.tour-actions-right { display: flex; gap: 0.4rem; }
+.tour-btn-ghost {
+  background: transparent; border: 1px solid var(--border); color: var(--text-muted);
+  border-radius: 6px; padding: 0.4rem 0.7rem; cursor: pointer; font-size: 0.78rem; font-family: inherit;
+}
+.tour-actions #tour-next { border: none; background: var(--accent); color: white; border-radius: 6px; padding: 0.4rem 0.9rem; cursor: pointer; font-size: 0.78rem; font-weight: 600; }
+
 /* --- Card --- */
 .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 1.1rem 1.2rem; }
 .card-title-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.6rem; }
@@ -203,7 +255,10 @@ tbody tr:hover { background: var(--accent-50); }
 .crm-column-header { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.7rem; }
 .crm-column-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 .crm-column-count { color: var(--text-faint); font-weight: 400; }
-.crm-card { background: var(--bg); border-radius: 8px; padding: 0.6rem 0.7rem; margin-bottom: 0.5rem; font-size: 0.85rem; border: 1px solid var(--border); }
+.crm-card { background: var(--bg); border-radius: 8px; padding: 0.6rem 0.7rem; margin-bottom: 0.5rem; font-size: 0.85rem; border: 1px solid var(--border); cursor: grab; }
+.crm-card.dragging { opacity: 0.4; }
+.crm-cards-drop { min-height: 30px; border-radius: 8px; transition: background-color 0.1s; }
+.crm-cards-drop.drag-over { background: var(--accent-50); outline: 2px dashed var(--accent); outline-offset: -2px; }
 .crm-card-top { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; }
 .crm-avatar {
   width: 26px; height: 26px; border-radius: 50%; background: var(--accent-100); color: var(--accent-dark);

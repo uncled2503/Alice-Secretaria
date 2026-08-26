@@ -1,4 +1,4 @@
-import { prisma } from "../db/client";
+import { prisma } from "../db/client.js";
 
 export type FunnelStageKind = "aberta" | "avaliacao_agendada" | "ganho" | "pos_procedimento" | "perdido";
 

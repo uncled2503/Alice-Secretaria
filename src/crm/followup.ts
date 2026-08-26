@@ -1,7 +1,7 @@
 import cron from "node-cron";
-import { prisma } from "../db/client";
-import { sendText, creds } from "../uazapi/client";
-import { getFunnelStages } from "./stages";
+import { prisma } from "../db/client.js";
+import { sendText } from "../whatsapp/manager.js";
+import { getFunnelStages } from "./stages.js";
 
 function renderTemplate(template: string, patientName: string | null): string {
   const firstName = patientName?.split(" ")[0] ?? "";
@@ -30,7 +30,7 @@ export async function runFollowUpCheck(): Promise<void> {
   const conversations = await prisma.conversation.findMany({
     where: { status: "active", humanTakeover: false },
     include: {
-      patient: { include: { clinic: true } },
+      patient: true,
       messages: { where: { role: "user" }, orderBy: { createdAt: "desc" }, take: 1 },
     },
   });
@@ -66,7 +66,7 @@ export async function runFollowUpCheck(): Promise<void> {
     const text = renderTemplate(rule.message, conversation.patient.name);
 
     try {
-      await sendText(conversation.patient.phone, text, creds(conversation.patient.clinic));
+      await sendText(conversation.patient.clinicId, conversation.patient.phone, text);
     } catch (err) {
       console.error(`Falha ao enviar recontato para ${conversation.patient.phone}:`, err);
       continue;

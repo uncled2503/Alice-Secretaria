@@ -13,15 +13,10 @@ datasource db {
 model Clinic {
   id            String    @id @default(cuid())
   name          String
-  whatsappPhone String    @unique // numero conectado na UazAPI (formato 55DDDNUMERO)
+  whatsappPhone String    @unique // numero do WhatsApp conectado (formato 55DDDNUMERO); atualizado sozinho ao parear
   timezone      String    @default("America/Sao_Paulo")
   workStartHour Int       @default(9)
   workEndHour   Int       @default(19)
-  // Credenciais UazAPI proprias desta clinica. Nulo = usa UAZAPI_BASE_URL/
-  // UAZAPI_TOKEN do .env (modo legado, clinica unica). Cada clinica com
-  // WhatsApp proprio precisa do seu token de instancia aqui.
-  uazapiToken   String?   @unique
-  uazapiBaseUrl String?
   createdAt     DateTime  @default(now())
 
   procedures    Procedure[]

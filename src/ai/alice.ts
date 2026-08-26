@@ -1,9 +1,9 @@
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
-import { prisma } from "../db/client";
-import { findAvailableSlots } from "../scheduling/slots";
-import { getActiveRulesPrompt } from "./rules";
-import { getFunnelStages } from "../crm/stages";
+import { prisma } from "../db/client.js";
+import { findAvailableSlots } from "../scheduling/slots.js";
+import { getActiveRulesPrompt } from "./rules.js";
+import { getFunnelStages } from "../crm/stages.js";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 // gpt-4o-mini por padrao: conversa de qualificacao/agendamento nao precisa do

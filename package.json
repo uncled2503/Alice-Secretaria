@@ -1,7 +1,8 @@
 {
   "name": "alice-secretaria-virtual",
   "version": "0.1.0",
-  "description": "Secretaria virtual com IA para clinicas de estetica, via WhatsApp (UazAPI) + OpenAI",
+  "description": "Secretaria virtual com IA para clinicas de estetica, via WhatsApp (Baileys) + OpenAI",
+  "type": "module",
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
@@ -10,25 +11,29 @@
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "pm2:start": "npm run build && npx pm2 start ecosystem.config.js",
+    "pm2:start": "npm run build && npx pm2 start ecosystem.config.cjs",
     "pm2:stop": "npx pm2 stop alice",
-    "pm2:restart": "npm run build && npx pm2 restart alice",
+    "pm2:restart": "npm run build && npx pm2 restart ecosystem.config.cjs",
     "pm2:logs": "npx pm2 logs alice",
     "pm2:status": "npx pm2 status"
   },
   "dependencies": {
+    "@hapi/boom": "^10.0.1",
     "@prisma/client": "^5.20.0",
-    "axios": "^1.7.7",
+    "@whiskeysockets/baileys": "^7.0.0-rc14",
     "dotenv": "^16.4.5",
     "express": "^4.21.0",
     "node-cron": "^3.0.3",
     "openai": "^7.5.0",
+    "pino": "^10.3.1",
+    "qrcode": "^1.5.4",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^22.7.4",
     "@types/node-cron": "^3.0.11",
+    "@types/qrcode": "^1.5.6",
     "pm2": "^7.0.4",
     "prisma": "^5.20.0",
     "tsx": "^4.19.1",

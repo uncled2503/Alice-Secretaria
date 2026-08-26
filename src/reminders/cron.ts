@@ -1,6 +1,6 @@
 import cron from "node-cron";
-import { prisma } from "../db/client";
-import { sendText, creds } from "../uazapi/client";
+import { prisma } from "../db/client.js";
+import { sendText } from "../whatsapp/manager.js";
 
 // Roda a cada 15min; sem custo extra alem do que ja roda no mesmo processo.
 export function startReminderJob(): void {
@@ -14,7 +14,7 @@ export function startReminderJob(): void {
         reminderSentAt: null,
         scheduledAt: { gte: now, lte: in24h },
       },
-      include: { patient: true, procedure: true, clinic: true },
+      include: { patient: true, procedure: true },
     });
 
     for (const appt of upcoming) {
@@ -22,7 +22,7 @@ export function startReminderJob(): void {
       const text = `Oi ${appt.patient.name ?? ""}! Passando para lembrar do seu ${appt.procedure.name} amanha, dia ${when}. Ate la!`;
 
       try {
-        await sendText(appt.patient.phone, text, creds(appt.clinic));
+        await sendText(appt.clinicId, appt.patient.phone, text);
         await prisma.appointment.update({
           where: { id: appt.id },
           data: { reminderSentAt: new Date() },

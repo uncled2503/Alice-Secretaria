@@ -1,4 +1,4 @@
-import { prisma } from "../db/client";
+import { prisma } from "../db/client.js";
 
 export interface Slot {
   start: Date;

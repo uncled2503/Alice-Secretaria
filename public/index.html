@@ -45,34 +45,41 @@
           <button data-tab="agenda" class="nav-item">
             <span class="nav-icon" data-icon="calendar"></span> Agenda
           </button>
-          <button data-tab="broadcasts" class="nav-item">
-            <span class="nav-icon" data-icon="send"></span> Mensagens
-          </button>
-          <button data-tab="followup" class="nav-item">
-            <span class="nav-icon" data-icon="repeat"></span> Recontato
-          </button>
         </div>
 
         <div class="nav-group">
           <div class="nav-group-label">Conta</div>
-          <button data-tab="procedures" class="nav-item">
-            <span class="nav-icon" data-icon="box"></span> Procedimentos
-          </button>
-          <button data-tab="rules" class="nav-item">
+          <button data-tab="settings" class="nav-item">
             <span class="nav-icon" data-icon="sparkles"></span> Personalizar Alice
-          </button>
-          <button data-tab="clinics" class="nav-item">
-            <span class="nav-icon" data-icon="building"></span> Clínicas
           </button>
         </div>
       </nav>
 
       <div class="sidebar-footer">
+        <button id="btn-guide" class="theme-toggle" style="margin-bottom:0.5rem">
+          <span class="nav-icon" data-icon="guide"></span> Guia
+        </button>
         <button id="theme-toggle" class="theme-toggle" title="Alternar tema">
           <span class="nav-icon" data-icon="sun"></span> Tema
         </button>
       </div>
     </aside>
+
+    <div id="tour-overlay" class="tour-overlay" style="display:none">
+      <div id="tour-spotlight" class="tour-spotlight"></div>
+      <div id="tour-popover" class="tour-popover">
+        <div class="tour-step-label" id="tour-step-label">PASSO 1/1</div>
+        <h4 id="tour-title"></h4>
+        <p id="tour-desc"></p>
+        <div class="tour-actions">
+          <button id="tour-end" type="button" class="tour-btn-ghost">Encerrar tour</button>
+          <div class="tour-actions-right">
+            <button id="tour-prev" type="button" class="tour-btn-ghost">Anterior</button>
+            <button id="tour-next" type="button">Próximo</button>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <main>
       <section id="tab-dashboard" class="tab-panel active">
@@ -164,37 +171,14 @@
       </section>
 
       <section id="tab-crm" class="tab-panel">
-        <div class="page-header"><h1>CRM</h1></div>
+        <div class="page-header">
+          <h1>CRM</h1>
+          <button id="btn-goto-funnel-config" type="button">Configurar funil</button>
+        </div>
         <div class="toolbar">
           <input id="crm-search" type="text" placeholder="Buscar por nome ou telefone..." class="search-input" />
         </div>
         <div id="crm-board" class="crm-board"></div>
-
-        <details class="funnel-config card">
-          <summary>Configurar etapas do funil</summary>
-          <form id="stage-form" class="broadcast-form">
-            <input id="st-label" type="text" placeholder="Nome da etapa nova" required />
-            <div class="broadcast-form-row">
-              <label>Cor:
-                <input id="st-color" type="color" value="#8b5cf6" />
-              </label>
-              <label>Tipo:
-                <select id="st-kind">
-                  <option value="aberta">Aberta (em andamento)</option>
-                  <option value="avaliacao_agendada">Avaliação agendada (marcador especial)</option>
-                  <option value="ganho">Ganho (fechou)</option>
-                  <option value="pos_procedimento">Pós-procedimento</option>
-                  <option value="perdido">Perdido</option>
-                </select>
-              </label>
-              <button type="submit">Adicionar etapa</button>
-            </div>
-          </form>
-          <table>
-            <thead><tr><th>Ordem</th><th>Nome</th><th>Cor</th><th>Tipo</th><th></th></tr></thead>
-            <tbody id="stages-body"></tbody>
-          </table>
-        </details>
       </section>
 
       <section id="tab-chat" class="tab-panel">
@@ -266,99 +250,214 @@
         </div>
       </section>
 
-      <section id="tab-followup" class="tab-panel">
-        <div class="page-header"><h1>Recontato</h1></div>
-        <p class="hint">A Alice manda essas mensagens automaticamente quando o paciente fica sem responder pelo número de dias indicado. Edite o texto ou desative uma etapa a qualquer momento.</p>
-        <div class="card">
-          <table>
-            <thead><tr><th>Etapa</th><th>Dias de silêncio</th><th>Mensagem</th><th>Ativo</th><th></th></tr></thead>
-            <tbody id="followup-body"></tbody>
-          </table>
-        </div>
-      </section>
-
-      <section id="tab-broadcasts" class="tab-panel">
-        <div class="page-header"><h1>Mensagens programadas</h1></div>
-        <form id="broadcast-form" class="broadcast-form card">
-          <input id="bc-title" type="text" placeholder="Título (só pra identificar)" required />
-          <textarea id="bc-message" placeholder="Mensagem (use {nome} pra personalizar)" required></textarea>
-          <div class="broadcast-form-row">
-            <label>Enviar para:
-              <select id="bc-target">
-                <option value="">Todos os contatos</option>
-              </select>
-            </label>
-            <label>Quando:
-              <input id="bc-when" type="datetime-local" required />
-            </label>
-            <button type="submit">Agendar</button>
-          </div>
-        </form>
-
-        <div class="card">
-          <table>
-            <thead><tr><th>Título</th><th>Destino</th><th>Agendada para</th><th>Status</th><th>Progresso</th><th></th></tr></thead>
-            <tbody id="broadcasts-body"></tbody>
-          </table>
-        </div>
-      </section>
-
-      <section id="tab-rules" class="tab-panel">
+      <section id="tab-settings" class="tab-panel">
         <div class="page-header"><h1>Personalizar Alice</h1></div>
-        <p class="hint">Descreva em uma frase o que você quer mudar. A Alice entende, classifica e monta a regra — você só revisa e aprova.</p>
-        <form id="rule-form" class="broadcast-form card">
-          <textarea id="rule-text" placeholder="Ex: quando perguntarem o preço, explicar o procedimento antes e oferecer 2 horários." required></textarea>
-          <div class="broadcast-form-row">
-            <button type="submit">Gerar sugestão</button>
-          </div>
-        </form>
 
-        <div id="rules-pending"></div>
-
-        <h3>Suas regras</h3>
-        <div id="rules-active"></div>
-      </section>
-
-      <section id="tab-procedures" class="tab-panel">
-        <div class="page-header"><h1>Procedimentos</h1></div>
-        <p class="hint">O que a Alice sabe oferecer e agendar para essa clínica.</p>
-        <form id="procedure-form" class="broadcast-form card">
-          <input id="pr-name" type="text" placeholder="Nome do procedimento" required />
-          <div class="broadcast-form-row">
-            <label>Duração (min):
-              <input id="pr-duration" type="number" min="5" value="60" />
-            </label>
-            <input id="pr-description" type="text" placeholder="Descrição (opcional)" style="flex:1" />
-            <button type="submit">Adicionar</button>
-          </div>
-        </form>
-
-        <div class="card">
-          <table>
-            <thead><tr><th>Nome</th><th>Duração</th><th>Descrição</th><th></th></tr></thead>
-            <tbody id="procedures-body"></tbody>
-          </table>
+        <div class="settings-tabs" id="settings-tabs">
+          <button data-sub="clinic-data" class="active">Dados da clínica</button>
+          <button data-sub="products">Produtos</button>
+          <button data-sub="procedures">Procedimentos</button>
+          <button data-sub="staff">Profissionais</button>
+          <button data-sub="channels">Canais</button>
+          <button data-sub="broadcasts">Mensagens Programadas</button>
+          <button data-sub="appt-reminder">Lembrete de Consulta</button>
+          <button data-sub="post-procedure">Pós-procedimento</button>
+          <button data-sub="renewal">Renovação</button>
+          <button data-sub="birthday">Aniversário</button>
+          <button data-sub="followup">Recontato</button>
+          <button data-sub="funnel">Funil</button>
+          <button data-sub="history">Histórico</button>
+          <button data-sub="rules">Personalizar Alice</button>
+          <button data-sub="clinics">Clínicas</button>
+          <button data-sub="external-api">API Externa</button>
         </div>
-      </section>
 
-      <section id="tab-clinics" class="tab-panel">
-        <div class="page-header"><h1>Clínicas</h1></div>
-        <p class="hint">Cada clínica com WhatsApp próprio precisa do token da SUA instância UazAPI. Sem preencher, ela usa as credenciais padrão do <code>.env</code> (bom só pra uma clínica única).</p>
-        <form id="clinic-form" class="broadcast-form card">
-          <input id="cl-name" type="text" placeholder="Nome da clínica" required />
-          <input id="cl-phone" type="text" placeholder="Telefone do WhatsApp (só números, ex: 5511999999999)" required />
-          <input id="cl-token" type="text" placeholder="Token da instância UazAPI (opcional)" />
-          <input id="cl-baseurl" type="text" placeholder="URL base da UazAPI (opcional, ex: https://free.uazapi.com)" />
-          <div class="broadcast-form-row">
-            <button type="submit">Cadastrar clínica</button>
+        <div id="sub-clinic-data" class="settings-subpanel active">
+          <p class="hint">Dados gerais e horário de funcionamento — o horário aqui é usado pelas mensagens programadas e pelo recontato automático, que só disparam dentro dele.</p>
+          <form id="clinic-data-form" class="broadcast-form card">
+            <input type="hidden" id="cd-id" />
+            <div class="broadcast-form-row">
+              <label style="flex:1">Nome da clínica
+                <input id="cd-name" type="text" required />
+              </label>
+              <label>WhatsApp (definido ao criar a clínica)
+                <input id="cd-phone" type="text" disabled />
+              </label>
+            </div>
+            <div class="broadcast-form-row">
+              <label>Fuso horário
+                <input id="cd-timezone" type="text" />
+              </label>
+              <label>Início do expediente
+                <input id="cd-start-hour" type="number" min="0" max="23" />
+              </label>
+              <label>Fim do expediente
+                <input id="cd-end-hour" type="number" min="0" max="23" />
+              </label>
+              <button type="submit">Salvar</button>
+            </div>
+          </form>
+        </div>
+
+        <div id="sub-products" class="settings-subpanel">
+          <div class="coming-soon">Produtos (itens físicos vendidos pela clínica, separado de procedimentos) — ainda não implementado.</div>
+        </div>
+
+        <div id="sub-procedures" class="settings-subpanel">
+          <p class="hint">O que a Alice sabe oferecer e agendar para essa clínica.</p>
+          <form id="procedure-form" class="broadcast-form card">
+            <input id="pr-name" type="text" placeholder="Nome do procedimento" required />
+            <div class="broadcast-form-row">
+              <label>Duração (min):
+                <input id="pr-duration" type="number" min="5" value="60" />
+              </label>
+              <input id="pr-description" type="text" placeholder="Descrição (opcional)" style="flex:1" />
+              <button type="submit">Adicionar</button>
+            </div>
+          </form>
+          <div class="card">
+            <table>
+              <thead><tr><th>Nome</th><th>Duração</th><th>Descrição</th><th></th></tr></thead>
+              <tbody id="procedures-body"></tbody>
+            </table>
           </div>
-        </form>
+        </div>
 
-        <div class="card">
-          <table>
-            <thead><tr><th>Nome</th><th>WhatsApp</th><th>UazAPI configurada</th></tr></thead>
-            <tbody id="clinics-body"></tbody>
-          </table>
+        <div id="sub-staff" class="settings-subpanel">
+          <div class="coming-soon">Cadastro de profissionais e quais procedimentos cada um atende — ainda não implementado.</div>
+        </div>
+
+        <div id="sub-channels" class="settings-subpanel">
+          <p class="hint">Conexão direta com o WhatsApp — sem gateway externo. Escaneie o QR Code pelo WhatsApp do celular (Aparelhos conectados → Conectar um aparelho).</p>
+          <div class="card channel-card">
+            <div id="channel-status-badge" class="badge badge-neutral">Verificando…</div>
+            <div id="channel-qr-wrap" style="display:none">
+              <img id="channel-qr-img" alt="QR Code do WhatsApp" />
+              <p class="hint" style="margin:0.6rem 0 0">Expira em cerca de 1 minuto — clique em "Gerar novo QR Code" se passar do tempo.</p>
+            </div>
+            <div class="broadcast-form-row" style="margin-top:0.8rem">
+              <button id="btn-channel-connect" type="button">Gerar QR Code</button>
+              <button id="btn-channel-disconnect" type="button" class="tour-btn-ghost" style="display:none">Desconectar</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="sub-broadcasts" class="settings-subpanel">
+          <form id="broadcast-form" class="broadcast-form card">
+            <input id="bc-title" type="text" placeholder="Título (só pra identificar)" required />
+            <textarea id="bc-message" placeholder="Mensagem (use {nome} pra personalizar)" required></textarea>
+            <div class="broadcast-form-row">
+              <label>Enviar para:
+                <select id="bc-target">
+                  <option value="">Todos os contatos</option>
+                </select>
+              </label>
+              <label>Quando:
+                <input id="bc-when" type="datetime-local" required />
+              </label>
+              <button type="submit">Agendar</button>
+            </div>
+          </form>
+          <div class="card">
+            <table>
+              <thead><tr><th>Título</th><th>Destino</th><th>Agendada para</th><th>Status</th><th>Progresso</th><th></th></tr></thead>
+              <tbody id="broadcasts-body"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="sub-appt-reminder" class="settings-subpanel">
+          <div class="coming-soon">O lembrete de consulta já roda automaticamente (24h antes, ver <code>src/reminders/cron.ts</code>) — configurar o texto/prazo por aqui ainda não implementado.</div>
+        </div>
+
+        <div id="sub-post-procedure" class="settings-subpanel">
+          <div class="coming-soon">Mensagem automática de cuidados pós-procedimento — ainda não implementado.</div>
+        </div>
+
+        <div id="sub-renewal" class="settings-subpanel">
+          <div class="coming-soon">Recontato para renovação de procedimentos periódicos — ainda não implementado.</div>
+        </div>
+
+        <div id="sub-birthday" class="settings-subpanel">
+          <div class="coming-soon">Mensagem automática de aniversário — precisa de campo de data de nascimento no contato, ainda não implementado.</div>
+        </div>
+
+        <div id="sub-followup" class="settings-subpanel">
+          <p class="hint">A Alice manda essas mensagens automaticamente quando o paciente fica sem responder pelo número de dias indicado. Edite o texto ou desative uma etapa a qualquer momento.</p>
+          <div class="card">
+            <table>
+              <thead><tr><th>Etapa</th><th>Dias de silêncio</th><th>Mensagem</th><th>Ativo</th><th></th></tr></thead>
+              <tbody id="followup-body"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="sub-funnel" class="settings-subpanel">
+          <p class="hint">Etapas do funil kanban usado na aba CRM.</p>
+          <form id="stage-form" class="broadcast-form card">
+            <input id="st-label" type="text" placeholder="Nome da etapa nova" required />
+            <div class="broadcast-form-row">
+              <label>Cor:
+                <input id="st-color" type="color" value="#8b5cf6" />
+              </label>
+              <label>Tipo:
+                <select id="st-kind">
+                  <option value="aberta">Aberta (em andamento)</option>
+                  <option value="avaliacao_agendada">Avaliação agendada (marcador especial)</option>
+                  <option value="ganho">Ganho (fechou)</option>
+                  <option value="pos_procedimento">Pós-procedimento</option>
+                  <option value="perdido">Perdido</option>
+                </select>
+              </label>
+              <button type="submit">Adicionar etapa</button>
+            </div>
+          </form>
+          <div class="card">
+            <table>
+              <thead><tr><th>Ordem</th><th>Nome</th><th>Cor</th><th>Tipo</th><th></th></tr></thead>
+              <tbody id="stages-body"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="sub-history" class="settings-subpanel">
+          <div class="coming-soon">Histórico de alterações da clínica — ainda não implementado.</div>
+        </div>
+
+        <div id="sub-rules" class="settings-subpanel">
+          <p class="hint">Descreva em uma frase o que você quer mudar. A Alice entende, classifica e monta a regra — você só revisa e aprova.</p>
+          <form id="rule-form" class="broadcast-form card">
+            <textarea id="rule-text" placeholder="Ex: quando perguntarem o preço, explicar o procedimento antes e oferecer 2 horários." required></textarea>
+            <div class="broadcast-form-row">
+              <button type="submit">Gerar sugestão</button>
+            </div>
+          </form>
+          <div id="rules-pending"></div>
+          <h3>Suas regras</h3>
+          <div id="rules-active"></div>
+        </div>
+
+        <div id="sub-clinics" class="settings-subpanel">
+          <p class="hint">Cada clínica com WhatsApp próprio precisa do token da SUA instância UazAPI. Sem preencher, ela usa as credenciais padrão do <code>.env</code> (bom só pra uma clínica única).</p>
+          <form id="clinic-form" class="broadcast-form card">
+            <input id="cl-name" type="text" placeholder="Nome da clínica" required />
+            <input id="cl-phone" type="text" placeholder="Telefone do WhatsApp (só números, ex: 5511999999999)" required />
+            <input id="cl-token" type="text" placeholder="Token da instância UazAPI (opcional)" />
+            <input id="cl-baseurl" type="text" placeholder="URL base da UazAPI (opcional, ex: https://free.uazapi.com)" />
+            <div class="broadcast-form-row">
+              <button type="submit">Cadastrar clínica</button>
+            </div>
+          </form>
+          <div class="card">
+            <table>
+              <thead><tr><th>Nome</th><th>WhatsApp</th><th>UazAPI configurada</th></tr></thead>
+              <tbody id="clinics-body"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="sub-external-api" class="settings-subpanel">
+          <div class="coming-soon">Chaves de API pra integrar sistemas externos com a Alice — ainda não implementado.</div>
         </div>
       </section>
     </main>
