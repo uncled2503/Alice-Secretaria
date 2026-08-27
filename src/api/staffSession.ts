@@ -1,10 +1,10 @@
 import { createHmac, timingSafeEqual } from "crypto";
 
-// Identifica QUAL atendente esta usando o painel, pra atribuir transferencias
-// de atendimento a uma pessoa. Isso e independente do ADMIN_USER/ADMIN_PASSWORD
-// (Basic Auth) que ja protege o painel inteiro - aquele continua sendo o
-// portao de entrada; isso aqui e so identificacao de "quem da equipe" por tras
-// dele, sem senha nova por requisicao (cookie assinado, sem sessao no banco).
+// Identifica QUEM esta logado e com que papel - isso e o controle de acesso
+// de verdade do painel (nao so atribuicao de mensagem). role="admin" opera
+// qualquer clinica; role="client" fica travado na propria clinica em toda a
+// API (ver getClinic em api/routes.ts). Sessao e um cookie assinado (sem
+// tabela de sessao no banco).
 const SECRET = process.env.SESSION_SECRET ?? "alice-dev-secret-troque-em-producao";
 const COOKIE_NAME = "alice_staff";
 const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -12,7 +12,8 @@ const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 export interface StaffSession {
   id: string;
   name: string;
-  clinicId: string;
+  clinicId: string | null;
+  role: "admin" | "client";
   exp: number;
 }
 
@@ -20,7 +21,7 @@ function sign(payload: string): string {
   return createHmac("sha256", SECRET).update(payload).digest("hex");
 }
 
-export function createSessionCookie(staff: { id: string; name: string; clinicId: string }): string {
+export function createSessionCookie(staff: { id: string; name: string; clinicId: string | null; role: "admin" | "client" }): string {
   const payload = Buffer.from(JSON.stringify({ ...staff, exp: Date.now() + MAX_AGE_MS })).toString("base64url");
   const sig = sign(payload);
   return `${COOKIE_NAME}=${payload}.${sig}; HttpOnly; Path=/; Max-Age=${Math.floor(MAX_AGE_MS / 1000)}; SameSite=Lax`;

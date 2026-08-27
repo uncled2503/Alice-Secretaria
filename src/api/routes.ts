@@ -17,19 +17,46 @@ function asyncRoute(handler: (req: Request, res: Response) => Promise<unknown>):
   };
 }
 
-// Resolve a clinica a partir de ?clinicId= (GET) ou clinicId no body (POST).
-// Sem clinicId, cai na primeira clinica cadastrada - mantem o painel
-// funcionando sem selecionar nada quando so existe uma clinica.
+// Resolve a clinica: contas "client" ficam SEMPRE travadas na propria clinica
+// (nunca confiamos num clinicId vindo do cliente pra essas contas - e assim
+// que o isolamento entre clientes da Alice e garantido). Contas "admin" usam
+// ?clinicId= (GET) ou clinicId no body (POST), ou a primeira clinica cadastrada
+// se nao especificado - mantem o painel interno funcionando sem selecionar nada.
 async function getClinic(req: Request) {
+  if (req.staff && req.staff.role !== "admin") {
+    if (!req.staff.clinicId) throw new Error("Conta sem clinica associada");
+    return prisma.clinic.findUniqueOrThrow({ where: { id: req.staff.clinicId } });
+  }
+
   const clinicId = (req.query.clinicId as string | undefined) || (req.body?.clinicId as string | undefined);
   if (clinicId) return prisma.clinic.findUniqueOrThrow({ where: { id: clinicId } });
   return prisma.clinic.findFirstOrThrow();
 }
 
+function requireAdmin(req: Request, res: Response): boolean {
+  if (req.staff?.role !== "admin") {
+    res.status(403).json({ error: "Somente contas admin podem fazer isso" });
+    return false;
+  }
+  return true;
+}
+
+// Contas "client" so podem mexer em recursos da propria clinica - usado em
+// toda rota que opera por :id direto (nao passa pelo getClinic acima).
+function assertClinicAccess(req: Request, res: Response, resourceClinicId: string): boolean {
+  if (req.staff && req.staff.role !== "admin" && req.staff.clinicId !== resourceClinicId) {
+    res.status(403).json({ error: "Sem acesso a esse recurso" });
+    return false;
+  }
+  return true;
+}
+
 apiRouter.get(
   "/clinics",
-  asyncRoute(async (_req, res) => {
+  asyncRoute(async (req, res) => {
+    const isClient = req.staff && req.staff.role !== "admin";
     const clinics = await prisma.clinic.findMany({
+      where: isClient ? { id: req.staff!.clinicId! } : {},
       orderBy: { createdAt: "asc" },
       select: {
         id: true,
@@ -48,6 +75,11 @@ apiRouter.get(
 apiRouter.put(
   "/clinics/:id",
   asyncRoute(async (req, res) => {
+    if (req.staff && req.staff.role !== "admin" && req.staff.clinicId !== req.params.id) {
+      res.status(403).json({ error: "Sem acesso a essa clinica" });
+      return;
+    }
+
     const { name, timezone, workStartHour, workEndHour, workDays } = req.body as {
       name?: string;
       timezone?: string;
@@ -70,9 +102,12 @@ apiRouter.put(
   })
 );
 
+// So admin cria clinica nova (onboarding de um cliente novo da Alice).
 apiRouter.post(
   "/clinics",
   asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+
     const { name, whatsappPhone } = req.body as { name?: string; whatsappPhone?: string };
 
     if (!name || !whatsappPhone) {
@@ -212,6 +247,9 @@ apiRouter.post(
 apiRouter.put(
   "/procedures/:id",
   asyncRoute(async (req, res) => {
+    const existing = await prisma.procedure.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, existing.clinicId)) return;
+
     const { name, durationMin, description } = req.body as {
       name?: string;
       durationMin?: number;
@@ -233,6 +271,9 @@ apiRouter.put(
 apiRouter.delete(
   "/procedures/:id",
   asyncRoute(async (req, res) => {
+    const existing = await prisma.procedure.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, existing.clinicId)) return;
+
     await prisma.procedure.delete({ where: { id: req.params.id } });
     res.json({ ok: true });
   })
@@ -278,6 +319,9 @@ apiRouter.delete(
   "/contacts/:id",
   asyncRoute(async (req, res) => {
     const { id } = req.params;
+    const patient = await prisma.patient.findUniqueOrThrow({ where: { id } });
+    if (!assertClinicAccess(req, res, patient.clinicId)) return;
+
     await prisma.$transaction([
       prisma.message.deleteMany({ where: { conversation: { patientId: id } } }),
       prisma.conversation.deleteMany({ where: { patientId: id } }),
@@ -325,6 +369,12 @@ apiRouter.get(
 apiRouter.get(
   "/conversations/:id/messages",
   asyncRoute(async (req, res) => {
+    const conversation = await prisma.conversation.findUniqueOrThrow({
+      where: { id: req.params.id },
+      include: { patient: true },
+    });
+    if (!assertClinicAccess(req, res, conversation.patient.clinicId)) return;
+
     const messages = await prisma.message.findMany({
       where: { conversationId: req.params.id },
       orderBy: { createdAt: "asc" },
@@ -348,6 +398,7 @@ apiRouter.post(
       where: { id: req.params.id },
       include: { patient: true },
     });
+    if (!assertClinicAccess(req, res, conversation.patient.clinicId)) return;
 
     const authorName = req.staff?.name ?? null;
 
@@ -382,6 +433,12 @@ apiRouter.post(
 apiRouter.post(
   "/conversations/:id/resume",
   asyncRoute(async (req, res) => {
+    const conversation = await prisma.conversation.findUniqueOrThrow({
+      where: { id: req.params.id },
+      include: { patient: true },
+    });
+    if (!assertClinicAccess(req, res, conversation.patient.clinicId)) return;
+
     await prisma.message.create({
       data: {
         conversationId: req.params.id,
@@ -436,6 +493,7 @@ apiRouter.post(
   asyncRoute(async (req, res) => {
     const { stage } = req.body as { stage?: string };
     const patient = await prisma.patient.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, patient.clinicId)) return;
     const stages = await getFunnelStages(patient.clinicId);
 
     if (!stage || !stages.some((s) => s.stageId === stage)) {
@@ -481,6 +539,9 @@ apiRouter.post(
 apiRouter.put(
   "/funnel-stages/:id",
   asyncRoute(async (req, res) => {
+    const existing = await prisma.funnelStage.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, existing.clinicId)) return;
+
     const { label, color, kind, order } = req.body as {
       label?: string;
       color?: string;
@@ -507,6 +568,7 @@ apiRouter.delete(
   "/funnel-stages/:id",
   asyncRoute(async (req, res) => {
     const stage = await prisma.funnelStage.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, stage.clinicId)) return;
     const remaining = await prisma.funnelStage.findMany({
       where: { clinicId: stage.clinicId, id: { not: stage.id } },
       orderBy: { order: "asc" },
@@ -589,6 +651,9 @@ apiRouter.post(
 apiRouter.put(
   "/appointments/:id",
   asyncRoute(async (req, res) => {
+    const existing = await prisma.appointment.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, existing.clinicId)) return;
+
     const { procedureId, scheduledAt, status } = req.body as {
       procedureId?: string;
       scheduledAt?: string;
@@ -610,6 +675,9 @@ apiRouter.put(
 apiRouter.delete(
   "/appointments/:id",
   asyncRoute(async (req, res) => {
+    const existing = await prisma.appointment.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, existing.clinicId)) return;
+
     await prisma.appointment.delete({ where: { id: req.params.id } });
     res.json({ ok: true });
   })
@@ -652,6 +720,9 @@ apiRouter.post(
 apiRouter.put(
   "/followup-rules/:id",
   asyncRoute(async (req, res) => {
+    const existing = await prisma.followUpRule.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, existing.clinicId)) return;
+
     const { afterDays, message, active } = req.body as {
       afterDays?: number;
       message?: string;
@@ -673,6 +744,9 @@ apiRouter.put(
 apiRouter.delete(
   "/followup-rules/:id",
   asyncRoute(async (req, res) => {
+    const existing = await prisma.followUpRule.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, existing.clinicId)) return;
+
     await prisma.followUpRule.delete({ where: { id: req.params.id } });
     res.json({ ok: true });
   })
@@ -745,6 +819,7 @@ apiRouter.post(
   "/broadcasts/:id/cancel",
   asyncRoute(async (req, res) => {
     const campaign = await prisma.broadcastCampaign.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, campaign.clinicId)) return;
     if (campaign.status !== "scheduled") {
       res.status(400).json({ error: "so da pra cancelar campanhas que ainda nao comecaram a enviar" });
       return;
@@ -795,6 +870,7 @@ apiRouter.post(
   "/rules/:id/approve",
   asyncRoute(async (req, res) => {
     const rule = await prisma.customRule.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, rule.clinicId)) return;
     if (rule.status !== "draft") {
       res.status(400).json({ error: "so da pra aprovar regras em rascunho" });
       return;
@@ -807,18 +883,58 @@ apiRouter.post(
 apiRouter.delete(
   "/rules/:id",
   asyncRoute(async (req, res) => {
+    const rule = await prisma.customRule.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, rule.clinicId)) return;
+
     await prisma.customRule.delete({ where: { id: req.params.id } });
     res.json({ ok: true });
   })
 );
 
-// --- Contas de atendente (identifica quem da equipe esta usando o painel,
-// pra atribuir transferencias de atendimento - nao substitui o Basic Auth
-// que ja protege o painel inteiro, so identifica quem esta por tras dele) ---
+// --- Contas de login do painel. role="admin" (equipe da Alice) opera
+// qualquer clinica; role="client" (dono da clinica, ex: Isac) fica travado
+// na propria clinica em toda a API via getClinic() acima - esse e o
+// isolamento real entre clientes da Alice. ---
 
 apiRouter.get("/staff/me", (req, res) => {
-  res.json(req.staff ? { id: req.staff.id, name: req.staff.name } : null);
+  res.json(req.staff ? { id: req.staff.id, name: req.staff.name, role: req.staff.role, clinicId: req.staff.clinicId } : null);
 });
+
+// So funciona enquanto NENHUMA conta admin existir ainda - resolve o
+// ovo-e-a-galinha de precisar estar logado como admin pra criar a primeira
+// conta admin. Se auto-desliga assim que a primeira for criada.
+apiRouter.post(
+  "/staff/bootstrap-admin",
+  asyncRoute(async (req, res) => {
+    const existingAdmin = await prisma.staffUser.findFirst({ where: { role: "admin" } });
+    if (existingAdmin) {
+      res.status(403).json({ error: "Ja existe uma conta admin - use o login normal" });
+      return;
+    }
+
+    const { name, username, password } = req.body as { name?: string; username?: string; password?: string };
+    if (!name || !username || !password) {
+      res.status(400).json({ error: "name, username e password sao obrigatorios" });
+      return;
+    }
+    if (password.length < 6) {
+      res.status(400).json({ error: "a senha precisa ter pelo menos 6 caracteres" });
+      return;
+    }
+
+    const existing = await prisma.staffUser.findUnique({ where: { username } });
+    if (existing) {
+      res.status(409).json({ error: "esse nome de usuario ja esta em uso" });
+      return;
+    }
+
+    const staff = await prisma.staffUser.create({
+      data: { clinicId: null, name, username, passwordHash: hashPassword(password), role: "admin" },
+    });
+    res.setHeader("Set-Cookie", createSessionCookie({ id: staff.id, name: staff.name, clinicId: null, role: "admin" }));
+    res.json({ id: staff.id, name: staff.name, role: "admin" });
+  })
+);
 
 apiRouter.post(
   "/staff/login",
@@ -835,8 +951,9 @@ apiRouter.post(
       return;
     }
 
-    res.setHeader("Set-Cookie", createSessionCookie({ id: staff.id, name: staff.name, clinicId: staff.clinicId }));
-    res.json({ id: staff.id, name: staff.name });
+    const role = staff.role === "admin" ? "admin" : "client";
+    res.setHeader("Set-Cookie", createSessionCookie({ id: staff.id, name: staff.name, clinicId: staff.clinicId, role }));
+    res.json({ id: staff.id, name: staff.name, role, clinicId: staff.clinicId });
   })
 );
 
@@ -852,7 +969,7 @@ apiRouter.get(
     const staff = await prisma.staffUser.findMany({
       where: { clinicId: clinic.id },
       orderBy: { createdAt: "asc" },
-      select: { id: true, name: true, username: true, createdAt: true },
+      select: { id: true, name: true, username: true, role: true, createdAt: true },
     });
     res.json(staff);
   })
@@ -861,7 +978,12 @@ apiRouter.get(
 apiRouter.post(
   "/staff",
   asyncRoute(async (req, res) => {
-    const { name, username, password } = req.body as { name?: string; username?: string; password?: string };
+    const { name, username, password, role: requestedRole } = req.body as {
+      name?: string;
+      username?: string;
+      password?: string;
+      role?: string;
+    };
     if (!name || !username || !password) {
       res.status(400).json({ error: "name, username e password sao obrigatorios" });
       return;
@@ -871,16 +993,23 @@ apiRouter.post(
       return;
     }
 
-    const clinic = await getClinic(req);
+    const callerIsAdmin = req.staff?.role === "admin";
+    const role: "admin" | "client" = callerIsAdmin && requestedRole === "admin" ? "admin" : "client";
+
     const existing = await prisma.staffUser.findUnique({ where: { username } });
     if (existing) {
       res.status(409).json({ error: "esse nome de usuario ja esta em uso" });
       return;
     }
 
+    // Conta admin nao pertence a uma clinica so; conta client sempre fica presa
+    // a clinica resolvida por getClinic (a propria, se quem esta criando ja for
+    // client; a escolhida via clinicId, se for um admin cadastrando um cliente novo).
+    const clinicId = role === "admin" ? null : (await getClinic(req)).id;
+
     const staff = await prisma.staffUser.create({
-      data: { clinicId: clinic.id, name, username, passwordHash: hashPassword(password) },
-      select: { id: true, name: true, username: true, createdAt: true },
+      data: { clinicId, name, username, passwordHash: hashPassword(password), role },
+      select: { id: true, name: true, username: true, role: true, createdAt: true },
     });
     res.json(staff);
   })
@@ -889,6 +1018,11 @@ apiRouter.post(
 apiRouter.delete(
   "/staff/:id",
   asyncRoute(async (req, res) => {
+    const target = await prisma.staffUser.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (req.staff?.role !== "admin" && target.clinicId !== req.staff?.clinicId) {
+      res.status(403).json({ error: "Sem acesso a essa conta" });
+      return;
+    }
     await prisma.staffUser.delete({ where: { id: req.params.id } });
     res.json({ ok: true });
   })

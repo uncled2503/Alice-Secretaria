@@ -437,6 +437,17 @@ td.actions { display: flex; gap: 0.4rem; }
 }
 .modal-actions { display: flex; justify-content: space-between; gap: 0.6rem; margin-top: 0.4rem; }
 
+/* --- Auth gate (tela de login que bloqueia o painel inteiro) --- */
+.auth-gate { position: fixed; inset: 0; z-index: 2000; background: var(--bg); display: flex; align-items: center; justify-content: center; padding: 1rem; }
+.auth-gate-card { width: 100%; max-width: 360px; text-align: center; }
+.auth-gate-card h1 { margin: 0 0 0.3rem; font-size: 1.4rem; }
+.auth-gate-card form { display: flex; flex-direction: column; gap: 0.8rem; text-align: left; margin-top: 1rem; }
+.auth-gate-card label { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.8rem; color: var(--text-muted); }
+.auth-gate-card input {
+  padding: 0.55rem 0.7rem; border: 1px solid var(--border); border-radius: 8px; background: var(--card-bg); color: var(--text); font-family: inherit;
+}
+.auth-gate-card button[type="submit"] { width: 100%; }
+
 /* --- Misc --- */
 .hint { color: var(--text-muted); font-size: 0.85rem; margin-top: -0.6rem; margin-bottom: 1rem; }
 h3 { font-size: 1rem; margin: 1.4rem 0 0.6rem; }

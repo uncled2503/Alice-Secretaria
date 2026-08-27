@@ -30,17 +30,18 @@ model Clinic {
   staffUsers    StaffUser[]
 }
 
-// Conta individual de atendente (nao confundir com o login unico do painel
-// em ADMIN_USER/ADMIN_PASSWORD - aquele continua sendo o portao de entrada;
-// isso aqui identifica QUEM da equipe esta usando, pra atribuir transferencias
-// de atendimento a uma pessoa (ver Message.authorName).
+// Conta de login do painel. role="admin" enxerga/opera todas as clinicas
+// (equipe da Alice, o SaaS); role="client" fica restrita a UMA clinica so
+// (dono da clinica cliente, ex: Isac) - fica travado nela em toda a API,
+// nunca ve nem acessa dados de outra clinica.
 model StaffUser {
   id           String   @id @default(cuid())
-  clinicId     String
-  clinic       Clinic   @relation(fields: [clinicId], references: [id])
+  clinicId     String? // null pra contas admin - nao pertencem a uma clinica so
+  clinic       Clinic?  @relation(fields: [clinicId], references: [id])
   name         String
   username     String   @unique
   passwordHash String
+  role         String   @default("client") // admin | client
   createdAt    DateTime @default(now())
 }
 

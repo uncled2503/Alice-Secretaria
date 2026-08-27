@@ -71,7 +71,11 @@ async function api(path, options = {}) {
     } catch {
       // resposta nao e JSON, ignora
     }
-    showError(`API ${path} -> HTTP ${res.status}${detail ? " (" + detail + ")" : ""}`);
+    if (res.status === 401) {
+      showAuthGate();
+    } else {
+      showError(`API ${path} -> HTTP ${res.status}${detail ? " (" + detail + ")" : ""}`);
+    }
     throw new Error(`API ${path} -> ${res.status}`);
   }
   return res.json();
@@ -139,46 +143,63 @@ document.getElementById("theme-toggle").addEventListener("click", () => {
   }
 });
 
-// --- Conta de atendente (identifica quem da equipe esta usando o painel,
-// pra atribuir transferencias de atendimento no Chat - nao substitui a senha
-// do painel, so identifica quem esta por tras dela) ---
-async function loadStaffSession() {
-  state.staff = await api("/staff/me");
+// --- Login (controle de acesso de verdade - role="admin" opera qualquer
+// clinica, role="client" fica travado na propria, ver getClinic no backend).
+// O painel inteiro fica escondido atras da tela de login ate autenticar. ---
+function showAuthGate() {
+  document.getElementById("auth-gate").style.display = "flex";
+  document.getElementById("app-root").style.display = "none";
+}
+
+function hideAuthGate() {
+  document.getElementById("auth-gate").style.display = "none";
+  document.getElementById("app-root").style.display = "";
+}
+
+function applyRoleUI() {
+  const isAdmin = state.staff?.role === "admin";
+  const clinicsTab = document.querySelector('#settings-tabs button[data-sub="clinics"]');
+  if (clinicsTab) clinicsTab.style.display = isAdmin ? "" : "none";
+
   const label = document.getElementById("staff-session-label");
-  label.textContent = state.staff ? state.staff.name : "Fazer login";
+  if (label && state.staff) label.textContent = state.staff.name;
 }
 
-function openStaffLoginModal() {
-  document.getElementById("staff-login-error").style.display = "none";
-  document.getElementById("staff-login-form").reset();
-  document.getElementById("staff-login-overlay").style.display = "flex";
-  document.getElementById("staff-login-username").focus();
+async function bootApp() {
+  applyRoleUI();
+  try {
+    await loadClinics();
+  } catch (err) {
+    console.error("Falha ao carregar clinicas:", err);
+  }
+  await refreshAll();
+  if (!state.pollHandle) state.pollHandle = setInterval(refreshAll, 5000);
 }
 
-function closeStaffLoginModal() {
-  document.getElementById("staff-login-overlay").style.display = "none";
+async function checkAuthAndBoot() {
+  const me = await api("/staff/me").catch(() => null);
+  if (!me) {
+    showAuthGate();
+    return;
+  }
+  state.staff = me;
+  hideAuthGate();
+  await bootApp();
 }
 
 document.getElementById("btn-staff-session").addEventListener("click", async () => {
-  if (state.staff) {
-    if (!confirm(`Sair da conta de ${state.staff.name}?`)) return;
-    await api("/staff/logout", { method: "POST" });
-    await loadStaffSession();
-  } else {
-    openStaffLoginModal();
-  }
+  if (!state.staff) return;
+  if (!confirm(`Sair da conta de ${state.staff.name}?`)) return;
+  await api("/staff/logout", { method: "POST" });
+  state.staff = null;
+  showAuthGate();
 });
 
-document.getElementById("staff-login-close").addEventListener("click", closeStaffLoginModal);
-document.getElementById("staff-login-overlay").addEventListener("click", (e) => {
-  if (e.target.id === "staff-login-overlay") closeStaffLoginModal();
-});
-
-document.getElementById("staff-login-form").addEventListener("submit", async (e) => {
+document.getElementById("auth-gate-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const username = document.getElementById("staff-login-username").value.trim();
-  const password = document.getElementById("staff-login-password").value;
-  const errorEl = document.getElementById("staff-login-error");
+  const username = document.getElementById("auth-gate-username").value.trim();
+  const password = document.getElementById("auth-gate-password").value;
+  const errorEl = document.getElementById("auth-gate-error");
   errorEl.style.display = "none";
 
   const res = await fetch("/api/staff/login", {
@@ -188,12 +209,12 @@ document.getElementById("staff-login-form").addEventListener("submit", async (e)
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    errorEl.textContent = body.error || "Nao foi possivel entrar.";
+    errorEl.textContent = body.error || "Não foi possível entrar.";
     errorEl.style.display = "block";
     return;
   }
-  closeStaffLoginModal();
-  await loadStaffSession();
+  document.getElementById("auth-gate-form").reset();
+  await checkAuthAndBoot();
 });
 
 // --- Navegacao (sidebar) ---
@@ -1594,19 +1615,4 @@ window.addEventListener("resize", () => {
   }
 });
 
-async function init() {
-  try {
-    await loadClinics();
-  } catch (err) {
-    console.error("Falha ao carregar clinicas:", err);
-  }
-  try {
-    await loadStaffSession();
-  } catch (err) {
-    console.error("Falha ao carregar sessao de atendente:", err);
-  }
-  await refreshAll();
-  setInterval(refreshAll, 5000);
-}
-
-init();
+checkAuthAndBoot();

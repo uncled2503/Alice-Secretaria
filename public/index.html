@@ -7,7 +7,25 @@
   <link rel="stylesheet" href="/admin/styles.css" />
 </head>
 <body>
-  <div class="app-shell">
+  <div id="auth-gate" class="auth-gate" style="display:none">
+    <div class="auth-gate-card">
+      <div class="brand-logo" style="width:44px;height:44px;font-size:1.2rem;margin-bottom:0.8rem">A</div>
+      <h1>Alice</h1>
+      <p class="hint" style="margin-top:0">Entre com sua conta para acessar o painel.</p>
+      <form id="auth-gate-form">
+        <label>Usuário
+          <input id="auth-gate-username" type="text" required autocomplete="username" />
+        </label>
+        <label>Senha
+          <input id="auth-gate-password" type="password" required autocomplete="current-password" />
+        </label>
+        <p class="hint" id="auth-gate-error" style="display:none;margin:0;color:#ef4444"></p>
+        <button type="submit">Entrar</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="app-root" class="app-shell" style="display:none">
     <aside class="sidebar">
       <div class="brand">
         <div class="brand-logo">A</div>
@@ -57,7 +75,7 @@
 
       <div class="sidebar-footer">
         <button id="btn-staff-session" class="theme-toggle" style="margin-bottom:0.5rem">
-          <span class="nav-icon" data-icon="user"></span> <span id="staff-session-label">Fazer login</span>
+          <span class="nav-icon" data-icon="user"></span> <span id="staff-session-label">—</span>
         </button>
         <button id="btn-guide" class="theme-toggle" style="margin-bottom:0.5rem">
           <span class="nav-icon" data-icon="guide"></span> Guia
@@ -541,27 +559,6 @@
       </div>
     </div>
 
-    <div id="staff-login-overlay" class="modal-overlay" style="display:none">
-      <div class="modal-card">
-        <div class="modal-header">
-          <h3 id="staff-login-title">Entrar como atendente</h3>
-          <button type="button" id="staff-login-close" class="modal-close">&times;</button>
-        </div>
-        <form id="staff-login-form">
-          <label>Usuário:
-            <input id="staff-login-username" type="text" required autocomplete="username" />
-          </label>
-          <label>Senha:
-            <input id="staff-login-password" type="password" required autocomplete="current-password" />
-          </label>
-          <p class="hint" id="staff-login-error" style="display:none;margin:0;color:#ef4444"></p>
-          <div class="modal-actions">
-            <span></span>
-            <button type="submit">Entrar</button>
-          </div>
-        </form>
-      </div>
-    </div>
   </div>
 
   <script src="/admin/app.js"></script>
