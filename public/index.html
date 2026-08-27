@@ -490,11 +490,43 @@
         </div>
 
         <div id="sub-appt-reminder" class="settings-subpanel">
-          <div class="coming-soon">O lembrete de consulta já roda automaticamente (24h antes, ver <code>src/reminders/cron.ts</code>) — configurar o texto/prazo por aqui ainda não implementado.</div>
+          <div class="list-toolbar">
+            <div>
+              <div class="list-count">Lembrete de Consulta (<span id="reminder-rules-count">0</span>)</div>
+              <p class="hint" style="margin:0.2rem 0 0">Envie lembretes automáticos antes do horário marcado para reduzir faltas.</p>
+            </div>
+            <div class="list-toolbar-actions">
+              <input id="reminder-rules-search" type="text" placeholder="Buscar lembrete" />
+              <button type="button" id="btn-add-reminder-rule">+ Novo lembrete</button>
+            </div>
+          </div>
+          <div class="card">
+            <table>
+              <thead><tr><th>Lembrete</th><th>Quando</th><th>Status</th><th>Ação</th></tr></thead>
+              <tbody id="reminder-rules-body"></tbody>
+            </table>
+            <div id="reminder-rules-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Nenhum lembrete criado.</div>
+          </div>
         </div>
 
         <div id="sub-post-procedure" class="settings-subpanel">
-          <div class="coming-soon">Mensagem automática de cuidados pós-procedimento — ainda não implementado.</div>
+          <div class="list-toolbar">
+            <div>
+              <div class="list-count">Pós-procedimento (<span id="pp-rules-count">0</span>)</div>
+              <p class="hint" style="margin:0.2rem 0 0">Envie cuidados e acompanhamento até 30 dias após o atendimento.</p>
+            </div>
+            <div class="list-toolbar-actions">
+              <input id="pp-rules-search" type="text" placeholder="Buscar pós-procedimento" />
+              <button type="button" id="btn-add-pp-rule">+ Nova mensagem</button>
+            </div>
+          </div>
+          <div class="card">
+            <table>
+              <thead><tr><th>Pós-procedimento</th><th>Status</th><th>Quando</th><th>Ação</th></tr></thead>
+              <tbody id="pp-rules-body"></tbody>
+            </table>
+            <div id="pp-rules-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Nenhuma mensagem criada.</div>
+          </div>
         </div>
 
         <div id="sub-renewal" class="settings-subpanel">
@@ -805,6 +837,99 @@
           <div class="modal-actions">
             <button type="button" id="broadcast-cancel-btn">Cancelar</button>
             <button type="submit">Agendar envio</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="reminder-rule-overlay" class="modal-overlay" style="display:none">
+      <div class="modal-card modal-card-lg">
+        <div class="modal-header">
+          <h3 id="reminder-rule-title">Novo lembrete de consulta</h3>
+          <button type="button" id="reminder-rule-close" class="modal-close">&times;</button>
+        </div>
+        <form id="reminder-rule-form">
+          <input type="hidden" id="rr-id" />
+          <label>Quanto tempo antes da consulta?*
+            <select id="rr-hours-before">
+              <option value="1">1 hora antes</option>
+              <option value="2">2 horas antes</option>
+              <option value="4">4 horas antes</option>
+              <option value="24" selected>24 horas antes</option>
+              <option value="48">48 horas antes</option>
+            </select>
+          </label>
+          <label>Mensagem*
+            <textarea id="rr-message" rows="3" placeholder="Ex.: Olá {primeiro_nome}, passando para lembrar do seu {procedimento} em {data_hora}." required></textarea>
+          </label>
+          <div class="payment-methods-grid">
+            <button type="button" class="payment-method-btn rr-var-btn" data-var="{primeiro_nome}">+ Primeiro nome</button>
+            <button type="button" class="payment-method-btn rr-var-btn" data-var="{nome_completo}">+ Nome completo</button>
+            <button type="button" class="payment-method-btn rr-var-btn" data-var="{telefone}">+ Telefone</button>
+            <button type="button" class="payment-method-btn rr-var-btn" data-var="{procedimento}">+ Procedimento</button>
+            <button type="button" class="payment-method-btn rr-var-btn" data-var="{profissional}">+ Profissional</button>
+            <button type="button" class="payment-method-btn rr-var-btn" data-var="{endereco}">+ Endereço</button>
+            <button type="button" class="payment-method-btn rr-var-btn" data-var="{data_hora}">+ Data e hora</button>
+            <button type="button" class="payment-method-btn rr-var-btn" data-var="{hora}">+ Hora</button>
+            <button type="button" class="payment-method-btn rr-var-btn" data-var="{unidade}">+ Unidade</button>
+          </div>
+          <p class="hint" style="margin-top:0">Toque numa variável para inserir. Ela será substituída pelos dados reais do paciente no envio.</p>
+          <label class="checkbox-row"><input type="checkbox" id="rr-active" checked /> Ativo</label>
+          <div class="modal-actions">
+            <button type="button" id="reminder-rule-delete-btn" class="btn-cancel" style="display:none">Excluir</button>
+            <button type="submit">Salvar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="pp-rule-overlay" class="modal-overlay" style="display:none">
+      <div class="modal-card modal-card-lg">
+        <div class="modal-header">
+          <h3 id="pp-rule-title">Nova mensagem de pós-procedimento</h3>
+          <button type="button" id="pp-rule-close" class="modal-close">&times;</button>
+        </div>
+        <form id="pp-rule-form">
+          <input type="hidden" id="pp-id" />
+          <label>Nome da automação*
+            <input id="pp-name" type="text" placeholder="Ex.: Cuidados pós-procedimento" required />
+          </label>
+          <div class="modal-form-row">
+            <label>Intervalo*
+              <input id="pp-interval-value" type="number" min="1" value="1" required />
+            </label>
+            <label>Unidade
+              <select id="pp-interval-unit">
+                <option value="hours">Horas</option>
+                <option value="days" selected>Dias</option>
+              </select>
+            </label>
+          </div>
+          <p class="hint" style="margin-top:0">A Alice entra em contato esse tempo depois do fim do atendimento. Limite de 30 dias.</p>
+          <label class="checkbox-row"><input type="checkbox" id="pp-only-completed" checked /> Somente após atendimento concluído</label>
+          <p class="hint" style="margin-top:0">Evita mandar a mensagem em agendamentos cancelados ou não realizados.</p>
+          <label>Procedimentos
+            <div id="pp-procedures-list" class="procedures-checklist"></div>
+          </label>
+          <p class="hint" style="margin-top:0">Deixe vazio para valer para todos os procedimentos.</p>
+          <label>Mensagem*
+            <textarea id="pp-message" rows="3" placeholder="Ex.: Oi {primeiro_nome}, tudo bem? Esperamos que você tenha gostado do seu {procedimento}!" required></textarea>
+          </label>
+          <div class="payment-methods-grid">
+            <button type="button" class="payment-method-btn pp-var-btn" data-var="{primeiro_nome}">+ Primeiro nome</button>
+            <button type="button" class="payment-method-btn pp-var-btn" data-var="{nome_completo}">+ Nome completo</button>
+            <button type="button" class="payment-method-btn pp-var-btn" data-var="{telefone}">+ Telefone</button>
+            <button type="button" class="payment-method-btn pp-var-btn" data-var="{procedimento}">+ Procedimento</button>
+            <button type="button" class="payment-method-btn pp-var-btn" data-var="{profissional}">+ Profissional</button>
+            <button type="button" class="payment-method-btn pp-var-btn" data-var="{endereco}">+ Endereço</button>
+            <button type="button" class="payment-method-btn pp-var-btn" data-var="{data_hora}">+ Data e hora</button>
+            <button type="button" class="payment-method-btn pp-var-btn" data-var="{unidade}">+ Unidade</button>
+          </div>
+          <p class="hint" style="margin-top:0">Toque numa variável para inserir. Ela será substituída pelos dados reais do paciente no envio.</p>
+          <label class="checkbox-row"><input type="checkbox" id="pp-active" checked /> Ativo</label>
+          <div class="modal-actions">
+            <button type="button" id="pp-rule-delete-btn" class="btn-cancel" style="display:none">Excluir</button>
+            <button type="submit">Salvar</button>
           </div>
         </form>
       </div>

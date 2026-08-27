@@ -4,6 +4,7 @@ import { fileURLToPath } from "url";
 import express from "express";
 import helmet from "helmet";
 import { startReminderJob } from "./reminders/cron.js";
+import { startPostProcedureJob } from "./reminders/postProcedure.js";
 import { startFollowUpJob } from "./crm/followup.js";
 import { startBroadcastJob } from "./crm/broadcast.js";
 import { restoreAllConnections } from "./whatsapp/manager.js";
@@ -88,6 +89,7 @@ const port = Number(process.env.PORT ?? 3000);
 app.listen(port, () => {
   console.log(`Alice rodando na porta ${port}`);
   startReminderJob();
+  startPostProcedureJob();
   startFollowUpJob();
   startBroadcastJob();
   restoreAllConnections().catch((err) => console.error("Falha ao restaurar conexoes do WhatsApp:", err));

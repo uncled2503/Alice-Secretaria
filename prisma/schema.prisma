@@ -37,6 +37,8 @@ model Clinic {
   locations     ClinicLocation[]
   products      Product[]
   professionals Professional[]
+  reminderRules ReminderRule[]
+  postProcedureRules PostProcedureRule[]
 }
 
 // Unidade/endereco fisico da clinica. Uma clinica pode ter varias (rede com
@@ -266,6 +268,65 @@ model Appointment {
   professional   Professional? @relation(fields: [professionalId], references: [id])
   scheduledAt    DateTime
   status         String        @default("confirmed") // confirmed | cancelled | completed
-  reminderSentAt DateTime?
   createdAt      DateTime      @default(now())
+
+  reminders      ReminderSent[]
+  postProcedureSent PostProcedureSent[]
+}
+
+// Lembrete automatico de consulta, configuravel (pode ter mais de um, ex: 24h
+// antes e 2h antes). ReminderSent evita mandar o mesmo lembrete duas vezes
+// pro mesmo agendamento.
+model ReminderRule {
+  id          String   @id @default(cuid())
+  clinicId    String
+  clinic      Clinic   @relation(fields: [clinicId], references: [id])
+  hoursBefore Int      @default(24)
+  message     String   // suporta as mesmas variaveis do broadcast + {procedimento}/{profissional}/{hora}
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  sentLogs    ReminderSent[]
+}
+
+model ReminderSent {
+  id            String       @id @default(cuid())
+  appointmentId String
+  appointment   Appointment  @relation(fields: [appointmentId], references: [id])
+  ruleId        String
+  rule          ReminderRule @relation(fields: [ruleId], references: [id])
+  sentAt        DateTime     @default(now())
+
+  @@unique([appointmentId, ruleId])
+}
+
+// Mensagem automatica de acompanhamento pos-procedimento (cuidados, checar
+// como o paciente esta). Dispara X horas/dias depois do agendamento, so pra
+// procedimentos concluidos (se onlyIfCompleted) e so pros procedimentos
+// escolhidos (procedureIds vazio = todos).
+model PostProcedureRule {
+  id              String   @id @default(cuid())
+  clinicId        String
+  clinic          Clinic   @relation(fields: [clinicId], references: [id])
+  name            String
+  message         String
+  intervalValue   Int      @default(1)
+  intervalUnit    String   @default("days") // hours | days
+  onlyIfCompleted Boolean  @default(true)
+  procedureIds    String   @default("") // vazio = todos; senao ids separados por virgula
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  sentLogs        PostProcedureSent[]
+}
+
+model PostProcedureSent {
+  id            String            @id @default(cuid())
+  appointmentId String
+  appointment   Appointment       @relation(fields: [appointmentId], references: [id])
+  ruleId        String
+  rule          PostProcedureRule @relation(fields: [ruleId], references: [id])
+  sentAt        DateTime          @default(now())
+
+  @@unique([appointmentId, ruleId])
 }

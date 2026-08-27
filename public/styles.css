@@ -447,18 +447,21 @@ td.actions { display: flex; gap: 0.4rem; }
 .modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.9rem; }
 .modal-header h3 { margin: 0; font-size: 1.05rem; }
 .modal-close { background: transparent; border: none; color: var(--text-muted); font-size: 1.4rem; line-height: 1; cursor: pointer; padding: 0; }
-#appt-edit-form, #product-form, #procedure-edit-form, #professional-form, #broadcast-form { display: flex; flex-direction: column; gap: 0.7rem; }
-#appt-edit-form label, #product-form label, #procedure-edit-form label, #professional-form label, #broadcast-form label {
+#appt-edit-form, #product-form, #procedure-edit-form, #professional-form, #broadcast-form, #reminder-rule-form, #pp-rule-form { display: flex; flex-direction: column; gap: 0.7rem; }
+#appt-edit-form label, #product-form label, #procedure-edit-form label, #professional-form label, #broadcast-form label, #reminder-rule-form label, #pp-rule-form label {
   display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.8rem; color: var(--text-muted);
 }
 #appt-edit-form select, #appt-edit-form input,
 #product-form select, #product-form input, #product-form textarea,
 #procedure-edit-form select, #procedure-edit-form input, #procedure-edit-form textarea,
 #professional-form select, #professional-form input, #professional-form textarea,
-#broadcast-form select, #broadcast-form input, #broadcast-form textarea {
+#broadcast-form select, #broadcast-form input, #broadcast-form textarea,
+#reminder-rule-form select, #reminder-rule-form input, #reminder-rule-form textarea,
+#pp-rule-form select, #pp-rule-form input, #pp-rule-form textarea {
   padding: 0.5rem 0.6rem; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font-family: inherit;
 }
-#product-form textarea, #procedure-edit-form textarea, #professional-form textarea, #broadcast-form textarea { resize: vertical; }
+#product-form textarea, #procedure-edit-form textarea, #professional-form textarea, #broadcast-form textarea,
+#reminder-rule-form textarea, #pp-rule-form textarea { resize: vertical; }
 .modal-actions { display: flex; justify-content: space-between; gap: 0.6rem; margin-top: 0.4rem; }
 
 .modal-form-row { display: flex; gap: 0.7rem; }

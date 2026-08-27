@@ -3,24 +3,31 @@ import { prisma } from "../db/client.js";
 import { sendText } from "../whatsapp/manager.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js";
 
-// Roda a cada 15min. Cada regra ativa dispara uma vez por agendamento (marca
-// em ReminderSent) - assim da pra ter mais de uma regra (ex: 24h antes e 2h
-// antes) sem mandar a mesma coisa duas vezes nem perder uma por causa da outra.
-export function startReminderJob(): void {
+function intervalMs(value: number, unit: string): number {
+  const hourMs = 60 * 60_000;
+  return unit === "hours" ? value * hourMs : value * 24 * hourMs;
+}
+
+// Roda a cada 15min. So dispara uma vez por agendamento por regra (marca em
+// PostProcedureSent), respeitando "so apos concluido" e o filtro de
+// procedimentos (procedureIds vazio = vale pra todos).
+export function startPostProcedureJob(): void {
   cron.schedule("*/15 * * * *", async () => {
-    const rules = await prisma.reminderRule.findMany({ where: { active: true } });
+    const rules = await prisma.postProcedureRule.findMany({ where: { active: true } });
     const clinicInfoCache = new Map<string, Awaited<ReturnType<typeof getClinicTemplateInfo>>>();
 
     for (const rule of rules) {
       const now = new Date();
-      const target = new Date(now.getTime() + rule.hoursBefore * 60 * 60_000);
+      const cutoff = new Date(now.getTime() - intervalMs(rule.intervalValue, rule.intervalUnit));
+      const procedureFilter = rule.procedureIds.split(",").filter(Boolean);
 
       const due = await prisma.appointment.findMany({
         where: {
           clinicId: rule.clinicId,
-          status: "confirmed",
-          scheduledAt: { gte: now, lte: target },
-          reminders: { none: { ruleId: rule.id } },
+          ...(rule.onlyIfCompleted ? { status: "completed" } : { status: { not: "cancelled" } }),
+          scheduledAt: { lte: cutoff },
+          ...(procedureFilter.length ? { procedureId: { in: procedureFilter } } : {}),
+          postProcedureSent: { none: { ruleId: rule.id } },
         },
         include: { patient: true, procedure: true, professional: true },
       });
@@ -46,9 +53,9 @@ export function startReminderJob(): void {
 
         try {
           await sendText(appt.clinicId, appt.patient.phone, text);
-          await prisma.reminderSent.create({ data: { appointmentId: appt.id, ruleId: rule.id } });
+          await prisma.postProcedureSent.create({ data: { appointmentId: appt.id, ruleId: rule.id } });
         } catch (err) {
-          console.error(`Falha ao enviar lembrete (regra ${rule.id}) para ${appt.patient.phone}:`, err);
+          console.error(`Falha ao enviar pos-procedimento (regra ${rule.id}) para ${appt.patient.phone}:`, err);
         }
       }
     }

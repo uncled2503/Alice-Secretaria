@@ -1154,6 +1154,148 @@ apiRouter.delete(
   })
 );
 
+// --- Lembrete de consulta (configuravel, pode ter mais de uma regra) ---
+
+apiRouter.get(
+  "/reminder-rules",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const rules = await prisma.reminderRule.findMany({ where: { clinicId: clinic.id }, orderBy: { createdAt: "asc" } });
+    res.json(rules);
+  })
+);
+
+apiRouter.post(
+  "/reminder-rules",
+  asyncRoute(async (req, res) => {
+    const { hoursBefore, message } = req.body as { hoursBefore?: number; message?: string };
+    if (!hoursBefore || !message) {
+      res.status(400).json({ error: "hoursBefore e message sao obrigatorios" });
+      return;
+    }
+
+    const clinic = await getClinic(req);
+    const rule = await prisma.reminderRule.create({ data: { clinicId: clinic.id, hoursBefore, message } });
+    res.json(rule);
+  })
+);
+
+apiRouter.put(
+  "/reminder-rules/:id",
+  asyncRoute(async (req, res) => {
+    const existing = await prisma.reminderRule.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, existing.clinicId)) return;
+
+    const { hoursBefore, message, active } = req.body as { hoursBefore?: number; message?: string; active?: boolean };
+    const rule = await prisma.reminderRule.update({
+      where: { id: req.params.id },
+      data: {
+        ...(hoursBefore !== undefined ? { hoursBefore } : {}),
+        ...(message !== undefined ? { message } : {}),
+        ...(active !== undefined ? { active } : {}),
+      },
+    });
+    res.json(rule);
+  })
+);
+
+apiRouter.delete(
+  "/reminder-rules/:id",
+  asyncRoute(async (req, res) => {
+    const existing = await prisma.reminderRule.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, existing.clinicId)) return;
+
+    await prisma.reminderRule.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  })
+);
+
+// --- Pos-procedimento (cuidados/acompanhamento apos o atendimento) ---
+
+apiRouter.get(
+  "/post-procedure-rules",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const rules = await prisma.postProcedureRule.findMany({ where: { clinicId: clinic.id }, orderBy: { createdAt: "asc" } });
+    res.json(rules);
+  })
+);
+
+apiRouter.post(
+  "/post-procedure-rules",
+  asyncRoute(async (req, res) => {
+    const { name, message, intervalValue, intervalUnit, onlyIfCompleted, procedureIds } = req.body as {
+      name?: string;
+      message?: string;
+      intervalValue?: number;
+      intervalUnit?: string;
+      onlyIfCompleted?: boolean;
+      procedureIds?: string[];
+    };
+    if (!name || !message || !intervalValue) {
+      res.status(400).json({ error: "name, message e intervalValue sao obrigatorios" });
+      return;
+    }
+
+    const clinic = await getClinic(req);
+    const rule = await prisma.postProcedureRule.create({
+      data: {
+        clinicId: clinic.id,
+        name,
+        message,
+        intervalValue,
+        intervalUnit: intervalUnit === "hours" ? "hours" : "days",
+        onlyIfCompleted: onlyIfCompleted ?? true,
+        procedureIds: (procedureIds ?? []).join(","),
+      },
+    });
+    res.json(rule);
+  })
+);
+
+apiRouter.put(
+  "/post-procedure-rules/:id",
+  asyncRoute(async (req, res) => {
+    const existing = await prisma.postProcedureRule.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, existing.clinicId)) return;
+
+    const { name, message, intervalValue, intervalUnit, onlyIfCompleted, procedureIds, active } = req.body as {
+      name?: string;
+      message?: string;
+      intervalValue?: number;
+      intervalUnit?: string;
+      onlyIfCompleted?: boolean;
+      procedureIds?: string[];
+      active?: boolean;
+    };
+
+    const rule = await prisma.postProcedureRule.update({
+      where: { id: req.params.id },
+      data: {
+        ...(name !== undefined ? { name } : {}),
+        ...(message !== undefined ? { message } : {}),
+        ...(intervalValue !== undefined ? { intervalValue } : {}),
+        ...(intervalUnit !== undefined ? { intervalUnit: intervalUnit === "hours" ? "hours" : "days" } : {}),
+        ...(onlyIfCompleted !== undefined ? { onlyIfCompleted } : {}),
+        ...(procedureIds !== undefined ? { procedureIds: procedureIds.join(",") } : {}),
+        ...(active !== undefined ? { active } : {}),
+      },
+    });
+    res.json(rule);
+  })
+);
+
+apiRouter.delete(
+  "/post-procedure-rules/:id",
+  asyncRoute(async (req, res) => {
+    const existing = await prisma.postProcedureRule.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, existing.clinicId)) return;
+
+    await prisma.postProcedureRule.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  })
+);
+
 apiRouter.get(
   "/broadcasts",
   asyncRoute(async (req, res) => {

@@ -1193,6 +1193,195 @@ document.getElementById("broadcast-form").addEventListener("submit", async (e) =
   await loadBroadcasts();
 });
 
+// --- Lembrete de consulta ---
+let allReminderRules = [];
+
+async function loadReminderRules() {
+  allReminderRules = await api("/reminder-rules");
+  renderReminderRules();
+}
+
+function renderReminderRules() {
+  const search = document.getElementById("reminder-rules-search").value.trim().toLowerCase();
+  const filtered = allReminderRules.filter((r) => !search || r.message.toLowerCase().includes(search));
+  document.getElementById("reminder-rules-count").textContent = allReminderRules.length;
+  document.getElementById("reminder-rules-empty").style.display = filtered.length ? "none" : "block";
+
+  const body = document.getElementById("reminder-rules-body");
+  body.innerHTML = "";
+  for (const r of filtered) {
+    const editBtn = el("button", { type: "button", class: "btn-icon-plain", title: "Editar" }, [el("span", { class: "nav-icon", "data-icon": "pencil" }, [])]);
+    editBtn.addEventListener("click", () => openReminderRuleModal(r));
+    body.appendChild(
+      el("tr", {}, [
+        el("td", { class: "cell-truncate", title: r.message }, [r.message]),
+        el("td", {}, [`${r.hoursBefore}h antes`]),
+        el("td", {}, [el("span", { class: `badge ${r.active ? "badge-green" : "badge-neutral"}` }, [r.active ? "Ativo" : "Pausado"])]),
+        el("td", { class: "actions" }, [editBtn]),
+      ])
+    );
+  }
+  paintIcons(body);
+}
+
+document.getElementById("reminder-rules-search").addEventListener("input", renderReminderRules);
+document.querySelectorAll(".rr-var-btn").forEach((btn) => {
+  btn.addEventListener("click", () => insertAtCursor(document.getElementById("rr-message"), btn.dataset.var));
+});
+
+function openReminderRuleModal(rule) {
+  document.getElementById("reminder-rule-title").textContent = rule ? "Editar lembrete" : "Novo lembrete de consulta";
+  document.getElementById("rr-id").value = rule?.id || "";
+  document.getElementById("rr-hours-before").value = rule?.hoursBefore || 24;
+  document.getElementById("rr-message").value = rule?.message || "";
+  document.getElementById("rr-active").checked = rule ? !!rule.active : true;
+  document.getElementById("reminder-rule-delete-btn").style.display = rule ? "" : "none";
+  document.getElementById("reminder-rule-overlay").style.display = "flex";
+}
+
+function closeReminderRuleModal() {
+  document.getElementById("reminder-rule-overlay").style.display = "none";
+}
+
+document.getElementById("btn-add-reminder-rule").addEventListener("click", () => openReminderRuleModal(null));
+document.getElementById("reminder-rule-close").addEventListener("click", closeReminderRuleModal);
+document.getElementById("reminder-rule-overlay").addEventListener("click", (e) => {
+  if (e.target.id === "reminder-rule-overlay") closeReminderRuleModal();
+});
+
+document.getElementById("reminder-rule-delete-btn").addEventListener("click", async () => {
+  const id = document.getElementById("rr-id").value;
+  if (!id || !(await showConfirm("Excluir esse lembrete?"))) return;
+  await api(`/reminder-rules/${id}`, { method: "DELETE" });
+  closeReminderRuleModal();
+  await loadReminderRules();
+});
+
+document.getElementById("reminder-rule-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const id = document.getElementById("rr-id").value;
+  const payload = {
+    hoursBefore: Number(document.getElementById("rr-hours-before").value),
+    message: document.getElementById("rr-message").value.trim(),
+    active: document.getElementById("rr-active").checked,
+  };
+  if (!payload.message) return;
+
+  if (id) {
+    await api(`/reminder-rules/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  } else {
+    await api("/reminder-rules", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  }
+  closeReminderRuleModal();
+  await loadReminderRules();
+});
+
+// --- Pos-procedimento ---
+let allPpRules = [];
+
+async function loadPostProcedureRules() {
+  allPpRules = await api("/post-procedure-rules");
+  renderPpRules();
+}
+
+function ppWhenLabel(r) {
+  const unitLabel = r.intervalUnit === "hours" ? (r.intervalValue === 1 ? "hora" : "horas") : (r.intervalValue === 1 ? "dia" : "dias");
+  return `${r.intervalValue} ${unitLabel} depois${r.onlyIfCompleted ? ", após conclusão" : ""}`;
+}
+
+function renderPpRules() {
+  const search = document.getElementById("pp-rules-search").value.trim().toLowerCase();
+  const filtered = allPpRules.filter((r) => !search || r.name.toLowerCase().includes(search));
+  document.getElementById("pp-rules-count").textContent = allPpRules.length;
+  document.getElementById("pp-rules-empty").style.display = filtered.length ? "none" : "block";
+
+  const body = document.getElementById("pp-rules-body");
+  body.innerHTML = "";
+  for (const r of filtered) {
+    const editBtn = el("button", { type: "button", class: "btn-icon-plain", title: "Editar" }, [el("span", { class: "nav-icon", "data-icon": "pencil" }, [])]);
+    editBtn.addEventListener("click", () => openPpRuleModal(r));
+    body.appendChild(
+      el("tr", {}, [
+        el("td", {}, [el("div", { style: "font-weight:600" }, [r.name]), el("div", { class: "hint cell-truncate", style: "margin:0.1rem 0 0" }, [r.message])]),
+        el("td", {}, [el("span", { class: `badge ${r.active ? "badge-green" : "badge-neutral"}` }, [r.active ? "Ativa" : "Pausada"])]),
+        el("td", {}, [ppWhenLabel(r)]),
+        el("td", { class: "actions" }, [editBtn]),
+      ])
+    );
+  }
+  paintIcons(body);
+}
+
+document.getElementById("pp-rules-search").addEventListener("input", renderPpRules);
+document.querySelectorAll(".pp-var-btn").forEach((btn) => {
+  btn.addEventListener("click", () => insertAtCursor(document.getElementById("pp-message"), btn.dataset.var));
+});
+
+async function openPpRuleModal(rule) {
+  document.getElementById("pp-rule-title").textContent = rule ? "Editar pós-procedimento" : "Nova mensagem de pós-procedimento";
+  document.getElementById("pp-id").value = rule?.id || "";
+  document.getElementById("pp-name").value = rule?.name || "";
+  document.getElementById("pp-interval-value").value = rule?.intervalValue || 1;
+  document.getElementById("pp-interval-unit").value = rule?.intervalUnit || "days";
+  document.getElementById("pp-only-completed").checked = rule ? !!rule.onlyIfCompleted : true;
+  document.getElementById("pp-message").value = rule?.message || "";
+  document.getElementById("pp-active").checked = rule ? !!rule.active : true;
+
+  const selectedProcedureIds = new Set((rule?.procedureIds || "").split(",").filter(Boolean));
+  const procedures = await api("/procedures");
+  const list = document.getElementById("pp-procedures-list");
+  list.innerHTML = "";
+  for (const proc of procedures) {
+    const checkbox = el("input", { type: "checkbox", value: proc.id }, []);
+    if (selectedProcedureIds.has(proc.id)) checkbox.checked = true;
+    list.appendChild(el("label", {}, [checkbox, proc.name]));
+  }
+
+  document.getElementById("pp-rule-delete-btn").style.display = rule ? "" : "none";
+  document.getElementById("pp-rule-overlay").style.display = "flex";
+}
+
+function closePpRuleModal() {
+  document.getElementById("pp-rule-overlay").style.display = "none";
+}
+
+document.getElementById("btn-add-pp-rule").addEventListener("click", () => openPpRuleModal(null));
+document.getElementById("pp-rule-close").addEventListener("click", closePpRuleModal);
+document.getElementById("pp-rule-overlay").addEventListener("click", (e) => {
+  if (e.target.id === "pp-rule-overlay") closePpRuleModal();
+});
+
+document.getElementById("pp-rule-delete-btn").addEventListener("click", async () => {
+  const id = document.getElementById("pp-id").value;
+  if (!id || !(await showConfirm("Excluir essa mensagem de pós-procedimento?"))) return;
+  await api(`/post-procedure-rules/${id}`, { method: "DELETE" });
+  closePpRuleModal();
+  await loadPostProcedureRules();
+});
+
+document.getElementById("pp-rule-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const id = document.getElementById("pp-id").value;
+  const payload = {
+    name: document.getElementById("pp-name").value.trim(),
+    message: document.getElementById("pp-message").value.trim(),
+    intervalValue: Number(document.getElementById("pp-interval-value").value),
+    intervalUnit: document.getElementById("pp-interval-unit").value,
+    onlyIfCompleted: document.getElementById("pp-only-completed").checked,
+    active: document.getElementById("pp-active").checked,
+    procedureIds: Array.from(document.querySelectorAll("#pp-procedures-list input:checked")).map((c) => c.value),
+  };
+  if (!payload.name || !payload.message) return;
+
+  if (id) {
+    await api(`/post-procedure-rules/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  } else {
+    await api("/post-procedure-rules", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  }
+  closePpRuleModal();
+  await loadPostProcedureRules();
+});
+
 // --- Personalizar Alice (regras em linguagem natural) ---
 let RULE_CATEGORY_LABELS = {};
 
@@ -2279,6 +2468,8 @@ const SETTINGS_SUB_LOADERS = {
     loadBroadcastTargetOptions();
     loadBroadcasts();
   },
+  "appt-reminder": loadReminderRules,
+  "post-procedure": loadPostProcedureRules,
   followup: loadFollowUpRules,
   funnel: loadStagesConfig,
   rules: loadRules,
