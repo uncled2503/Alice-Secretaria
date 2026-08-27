@@ -30,10 +30,16 @@ interface ClinicConnection {
   status: "connecting" | "open" | "close";
   qr: string | null; // ultimo QR code cru (ainda nao virou imagem)
   instanceId: number; // token unico - evita que eventos de um socket velho (apos reconexao forcada) mexam na conexao nova
+  connectingAt: number; // Date.now() de quando entrou em "connecting" - detecta conexao travada (nem QR, nem open, nem close)
 }
 
 const connections = new Map<string, ClinicConnection>();
 let connectionInstanceSeq = 0;
+
+// Se ficar "connecting" sem QR por mais que isso, trata como travada (ex:
+// rate-limit temporario do WhatsApp por reconexoes em sequencia) e libera
+// pra tentar de novo em vez de bloquear o botao pra sempre.
+const STUCK_CONNECTING_MS = 25_000;
 
 function authDir(clinicId: string): string {
   return path.join(AUTH_ROOT, clinicId);
@@ -153,7 +159,18 @@ async function handleIncomingWAMessage(clinicId: string, msg: WAMessage): Promis
 
 export async function connectClinic(clinicId: string): Promise<void> {
   const existing = connections.get(clinicId);
-  if (existing && existing.status !== "close") return; // ja conectado ou conectando
+  if (existing && existing.status !== "close") {
+    const stuck = existing.status === "connecting" && !existing.qr && Date.now() - existing.connectingAt > STUCK_CONNECTING_MS;
+    if (!stuck) return; // ja conectado ou conectando normalmente
+
+    console.log(`Conexao da clinica ${clinicId} travada em "connecting" ha mais de ${STUCK_CONNECTING_MS / 1000}s - descartando e tentando de novo.`);
+    try {
+      await existing.sock.end(undefined);
+    } catch {
+      // ignora - vamos descartar essa conexao de qualquer forma
+    }
+    connections.delete(clinicId);
+  }
 
   fs.mkdirSync(authDir(clinicId), { recursive: true });
   const { state, saveCreds } = await useMultiFileAuthState(authDir(clinicId));
@@ -173,7 +190,7 @@ export async function connectClinic(clinicId: string): Promise<void> {
   });
 
   const instanceId = ++connectionInstanceSeq;
-  connections.set(clinicId, { sock, status: "connecting", qr: null, instanceId });
+  connections.set(clinicId, { sock, status: "connecting", qr: null, instanceId, connectingAt: Date.now() });
 
   sock.ev.on("creds.update", saveCreds);
 
