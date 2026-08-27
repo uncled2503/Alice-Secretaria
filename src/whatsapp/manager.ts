@@ -9,6 +9,7 @@ import makeWASocket, {
   type WAMessage,
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
+import { ProxyAgent } from "proxy-agent";
 import pino from "pino";
 import QRCode from "qrcode";
 import OpenAI from "openai";
@@ -24,6 +25,18 @@ const AUTH_ROOT = process.env.WHATSAPP_AUTH_DIR ?? path.join(process.cwd(), "wha
 
 const logger = pino({ level: process.env.WHATSAPP_LOG_LEVEL ?? "silent" });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// Roteia SO o trafego do WhatsApp (socket + download de midia) por um proxy,
+// sem afetar as chamadas da OpenAI. Serve pra contornar bloqueio de IP do
+// WhatsApp na VPS (erro 428 "Connection Terminated" mesmo com sessao nova) -
+// aponta pra um proxy residencial/movel. Aceita http://, https:// e
+// socks5:// (usuario:senha@host:porta). Sem a variavel, conecta direto.
+const PROXY_URL = process.env.WHATSAPP_PROXY_URL?.trim() || undefined;
+const proxyAgent = PROXY_URL ? new ProxyAgent({ getProxyForUrl: () => PROXY_URL }) : undefined;
+if (proxyAgent) {
+  const safe = PROXY_URL!.replace(/\/\/[^@]+@/, "//***@"); // nao vaza usuario:senha no log
+  console.log(`WhatsApp vai conectar via proxy (${safe}).`);
+}
 
 interface ClinicConnection {
   sock: WASocket;
@@ -176,6 +189,7 @@ export async function connectClinic(clinicId: string): Promise<void> {
     auth: state,
     logger,
     printQRInTerminal: false,
+    ...(proxyAgent ? { agent: proxyAgent, fetchAgent: proxyAgent } : {}),
     browser: Browsers.macOS("Desktop"), // fingerprint de dispositivo real, menos suspeito que o padrao da lib
     // O WhatsApp so manda o historico completo (messaging-history.set) num
     // pareamento de aparelho novo - "Importar do WhatsApp" (triggerHistoryImport)
