@@ -196,8 +196,10 @@ document.getElementById("btn-staff-session").addEventListener("click", async () 
   if (!state.staff) return;
   if (!confirm(`Sair da conta de ${state.staff.name}?`)) return;
   await api("/staff/logout", { method: "POST" });
-  state.staff = null;
-  showAuthGate();
+  // Recarrega a pagina inteira - garante que nenhum dado da conta anterior
+  // (conversa aberta, clinica selecionada, etc.) sobrevive pra proxima conta
+  // que logar nesse mesmo navegador.
+  location.reload();
 });
 
 document.getElementById("auth-gate-form").addEventListener("submit", async (e) => {
@@ -219,7 +221,10 @@ document.getElementById("auth-gate-form").addEventListener("submit", async (e) =
     return;
   }
   document.getElementById("auth-gate-form").reset();
-  await checkAuthAndBoot();
+  // Recarrega a pagina inteira em vez de so chamar checkAuthAndBoot - assim
+  // nenhum estado de uma conta logada antes nesse navegador (conversa aberta,
+  // clinica selecionada) sobrevive pra sessao nova.
+  location.reload();
 });
 
 // --- Navegacao (sidebar) ---
