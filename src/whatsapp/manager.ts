@@ -268,6 +268,16 @@ export async function connectClinic(clinicId: string, opts: { auto?: boolean } =
         return;
       }
 
+      if (statusCode === DisconnectReason.restartRequired) {
+        // O proprio WhatsApp pede pra reiniciar a conexao logo apos um
+        // pareamento (ou sincronizacao de estado) bem sucedido - faz parte
+        // do protocolo normal, nao e falha. Reconecta na hora, sem contar
+        // como tentativa nem esperar o backoff das falhas de verdade.
+        console.log(`Clinica ${clinicId}: reiniciando conexao apos pareamento (normal do protocolo).`);
+        connectClinic(clinicId, { auto: conn.auto }).catch((err) => console.error(`Falha ao reiniciar conexao da clinica ${clinicId}:`, err));
+        return;
+      }
+
       // Reconectar (nao gerar QR) pode tentar de novo sozinho, com backoff e
       // limite de tentativas - se acabar precisando de QR, o bloco acima ja
       // interrompe antes de chegar aqui de novo.

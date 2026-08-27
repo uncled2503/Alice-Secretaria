@@ -37,30 +37,28 @@ async function api(pathSuffix, body) {
   return res.json();
 }
 
+// statusCode 515 (restartRequired) e o proprio WhatsApp pedindo pra reiniciar
+// a conexao logo depois de um pareamento bem sucedido - faz parte do
+// protocolo normal, nao e falha. Preciso reconectar com a MESMA pasta (as
+// credenciais ja foram salvas em creds.update) em vez de desistir.
+const RESTART_REQUIRED_STATUS_CODE = 515;
+
 async function runJob(clinicId, jobToken) {
   console.log(`[${clinicId}] job recebido - iniciando pareamento pela rede local...`);
   const authFolder = path.join(__dirname, "..", ".relay-sessions", `${clinicId}-${Date.now()}`);
   fs.mkdirSync(authFolder, { recursive: true });
-  const { state, saveCreds } = await useMultiFileAuthState(authFolder);
 
   return new Promise((resolve) => {
     const logger = pino({ level: "error" });
-
-    const sock = makeWASocket({
-      auth: state,
-      logger,
-      printQRInTerminal: false,
-      browser: Browsers.macOS("Desktop"),
-      syncFullHistory: false,
-    });
-
     let finished = false;
+    let currentSock = null;
+
     const finish = () => {
       if (finished) return;
       finished = true;
       clearTimeout(timeoutHandle);
       try {
-        sock.end(undefined);
+        currentSock?.end(undefined);
       } catch {
         // ja vamos descartar essa conexao de qualquer forma
       }
@@ -73,39 +71,68 @@ async function runJob(clinicId, jobToken) {
       finish();
     }, JOB_TIMEOUT_MS);
 
-    sock.ev.on("creds.update", saveCreds);
+    async function startSocket() {
+      const { state, saveCreds } = await useMultiFileAuthState(authFolder);
+      const sock = makeWASocket({
+        auth: state,
+        logger,
+        printQRInTerminal: false,
+        browser: Browsers.macOS("Desktop"),
+        syncFullHistory: false,
+      });
+      currentSock = sock;
 
-    sock.ev.on("connection.update", async (update) => {
-      if (update.qr) {
-        console.log(`[${clinicId}] QR gerado - escaneie pelo painel.`);
-        const dataUrl = await QRCode.toDataURL(update.qr);
-        await api("/relay/report", { secret: SECRET, clinicId, jobToken, event: "qr", qr: dataUrl }).catch((err) =>
-          console.error(`[${clinicId}] falha ao reportar QR:`, err.message)
-        );
-      }
+      sock.ev.on("creds.update", saveCreds);
 
-      if (update.connection === "open") {
-        console.log(`[${clinicId}] pareado com sucesso pela rede local - enviando sessao pra VPS...`);
-        const files = {};
-        for (const name of fs.readdirSync(authFolder)) {
-          files[name] = fs.readFileSync(path.join(authFolder, name)).toString("base64");
+      sock.ev.on("connection.update", async (update) => {
+        if (finished) return;
+
+        if (update.qr) {
+          console.log(`[${clinicId}] QR gerado - escaneie pelo painel.`);
+          const dataUrl = await QRCode.toDataURL(update.qr);
+          await api("/relay/report", { secret: SECRET, clinicId, jobToken, event: "qr", qr: dataUrl }).catch((err) =>
+            console.error(`[${clinicId}] falha ao reportar QR:`, err.message)
+          );
         }
-        try {
-          await api("/relay/session", { secret: SECRET, clinicId, jobToken, files });
-          console.log(`[${clinicId}] sessao entregue pra VPS - encerrando conexao local.`);
-        } catch (err) {
-          console.error(`[${clinicId}] falha ao enviar sessao pra VPS:`, err.message);
-        }
-        finish();
-      }
 
-      if (update.connection === "close") {
-        const statusCode = update.lastDisconnect?.error?.output?.statusCode;
-        const message = `Conexao local encerrada (statusCode=${statusCode ?? "?"}).`;
-        console.log(`[${clinicId}] ${message}`);
-        await api("/relay/report", { secret: SECRET, clinicId, jobToken, event: "close", message }).catch(() => {});
-        finish();
-      }
+        if (update.connection === "open") {
+          console.log(`[${clinicId}] pareado com sucesso pela rede local - enviando sessao pra VPS...`);
+          const files = {};
+          for (const name of fs.readdirSync(authFolder)) {
+            files[name] = fs.readFileSync(path.join(authFolder, name)).toString("base64");
+          }
+          try {
+            await api("/relay/session", { secret: SECRET, clinicId, jobToken, files });
+            console.log(`[${clinicId}] sessao entregue pra VPS - encerrando conexao local.`);
+          } catch (err) {
+            console.error(`[${clinicId}] falha ao enviar sessao pra VPS:`, err.message);
+          }
+          finish();
+        }
+
+        if (update.connection === "close") {
+          const statusCode = update.lastDisconnect?.error?.output?.statusCode;
+
+          if (statusCode === RESTART_REQUIRED_STATUS_CODE) {
+            console.log(`[${clinicId}] pareamento aceito, reiniciando conexao pra finalizar (normal do protocolo)...`);
+            startSocket().catch((err) => {
+              console.error(`[${clinicId}] falha ao reiniciar apos pareamento:`, err.message);
+              finish();
+            });
+            return;
+          }
+
+          const message = `Conexao local encerrada (statusCode=${statusCode ?? "?"}).`;
+          console.log(`[${clinicId}] ${message}`);
+          await api("/relay/report", { secret: SECRET, clinicId, jobToken, event: "close", message }).catch(() => {});
+          finish();
+        }
+      });
+    }
+
+    startSocket().catch((err) => {
+      console.error(`[${clinicId}] falha ao iniciar conexao:`, err.message);
+      finish();
     });
   });
 }
