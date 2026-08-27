@@ -15,6 +15,7 @@ import OpenAI from "openai";
 import { toFile } from "openai";
 import { prisma } from "../db/client.js";
 import { handleIncomingMessage } from "../ai/alice.js";
+import { processHistorySync } from "./import.js";
 
 // Sessao (credenciais do "aparelho conectado") persistida em disco, uma pasta
 // por clinica. Em producao isso PRECISA estar num volume persistente - se
@@ -28,9 +29,11 @@ interface ClinicConnection {
   sock: WASocket;
   status: "connecting" | "open" | "close";
   qr: string | null; // ultimo QR code cru (ainda nao virou imagem)
+  instanceId: number; // token unico - evita que eventos de um socket velho (apos reconexao forcada) mexam na conexao nova
 }
 
 const connections = new Map<string, ClinicConnection>();
+let connectionInstanceSeq = 0;
 
 function authDir(clinicId: string): string {
   return path.join(AUTH_ROOT, clinicId);
@@ -148,7 +151,7 @@ async function handleIncomingWAMessage(clinicId: string, msg: WAMessage): Promis
   if (reply) await sendText(clinicId, phone, reply);
 }
 
-export async function connectClinic(clinicId: string): Promise<void> {
+export async function connectClinic(clinicId: string, opts: { syncFullHistory?: boolean } = {}): Promise<void> {
   const existing = connections.get(clinicId);
   if (existing && existing.status !== "close") return; // ja conectado ou conectando
 
@@ -160,17 +163,18 @@ export async function connectClinic(clinicId: string): Promise<void> {
     logger,
     printQRInTerminal: false,
     browser: Browsers.macOS("Desktop"), // fingerprint de dispositivo real, menos suspeito que o padrao da lib
-    syncFullHistory: false, // nao precisa do historico antigo, so aumenta risco/trafego
+    syncFullHistory: opts.syncFullHistory ?? false, // por padrao nao pede historico antigo (menos trafego); so true quando o admin pede import manual
     markOnlineOnConnect: false, // nao fica "online" o tempo todo feito bot
   });
 
-  connections.set(clinicId, { sock, status: "connecting", qr: null });
+  const instanceId = ++connectionInstanceSeq;
+  connections.set(clinicId, { sock, status: "connecting", qr: null, instanceId });
 
   sock.ev.on("creds.update", saveCreds);
 
   sock.ev.on("connection.update", async (update) => {
     const conn = connections.get(clinicId);
-    if (!conn) return;
+    if (!conn || conn.instanceId !== instanceId) return; // socket velho de uma reconexao forcada - ignora
 
     if (update.qr) {
       conn.qr = update.qr;
@@ -209,6 +213,40 @@ export async function connectClinic(clinicId: string): Promise<void> {
       handleIncomingWAMessage(clinicId, msg).catch((err) => console.error("Erro processando mensagem recebida:", err));
     }
   });
+
+  sock.ev.on("messaging-history.set", (data) => {
+    const conn = connections.get(clinicId);
+    if (!conn || conn.instanceId !== instanceId) return;
+    processHistorySync(clinicId, data).catch((err) => console.error(`Erro importando historico da clinica ${clinicId}:`, err));
+  });
+}
+
+// Forca uma reconexao pedindo historico completo (contatos + ate 30 dias de
+// mensagens) - reaproveita a sessao ja pareada, NAO exige novo QR Code. So
+// funciona com a clinica ja conectada; o resultado chega aos poucos via
+// "messaging-history.set" e fica em Clinic.importStatus/importStats.
+export async function triggerHistoryImport(clinicId: string): Promise<void> {
+  const conn = connections.get(clinicId);
+  if (!conn || conn.status !== "open") {
+    throw new Error("WhatsApp precisa estar conectado pra importar dados");
+  }
+
+  await prisma.clinic.update({
+    where: { id: clinicId },
+    data: {
+      importStatus: "running",
+      importStats: JSON.stringify({ found: 0, created: 0, merged: 0, ignored: 0, conversations: 0, partialHistory: 0 }),
+      importUpdatedAt: new Date(),
+    },
+  });
+
+  try {
+    await conn.sock.end(undefined);
+  } catch {
+    // ignora - vamos reconectar de qualquer forma
+  }
+  connections.delete(clinicId);
+  await connectClinic(clinicId, { syncFullHistory: true });
 }
 
 export async function disconnectClinic(clinicId: string): Promise<void> {

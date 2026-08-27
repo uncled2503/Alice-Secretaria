@@ -21,6 +21,9 @@ model Clinic {
   active        Boolean   @default(true) // false = bloqueada temporariamente (ex: inadimplencia) - contas client dessa clinica nao conseguem logar nem usar a API
   notifyPhone   String?   // numero (com DDI/DDD) que recebe avisos de agendamento/cancelamento/handoff via WhatsApp
   notifyEvents  String    @default("") // quais avisos mandar pro notifyPhone, separados por virgula: new_appointment,reschedule,cancel,human_handoff
+  importStatus    String?   // null | "running" | "completed" - importacao de contatos/historico do WhatsApp
+  importStats     String?   // JSON: {found,created,merged,ignored,conversations,partialHistory,contactsInBase}
+  importUpdatedAt DateTime?
   createdAt     DateTime  @default(now())
 
   procedures    Procedure[]

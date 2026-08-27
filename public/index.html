@@ -443,6 +443,25 @@
               <button id="btn-channel-disconnect" type="button" class="tour-btn-ghost" style="display:none">Desconectar</button>
             </div>
           </div>
+
+          <div class="section-header" style="margin-top:1.2rem"><span class="nav-icon" data-icon="repeat"></span> Importar dados do WhatsApp</div>
+          <p class="hint" style="margin-top:0">Traga sua agenda de contatos e até 30 dias de conversas. Mensagens antigas entram como lidas e a Alice não responde a essas conversas importadas.</p>
+          <div class="card">
+            <div class="broadcast-form-row">
+              <button id="btn-channel-import" type="button">Importar do WhatsApp</button>
+              <span id="channel-import-status" class="hint" style="margin:0"></span>
+            </div>
+            <div id="channel-import-stats" class="import-stats-grid" style="display:none">
+              <div><span id="import-stat-found">0</span><label>Encontrados</label></div>
+              <div><span id="import-stat-created">0</span><label>Criados</label></div>
+              <div><span id="import-stat-merged">0</span><label>Já existentes/mesclados</label></div>
+              <div><span id="import-stat-ignored">0</span><label>Ignorados</label></div>
+              <div><span id="import-stat-conversations">0</span><label>Conversas</label></div>
+              <div><span id="import-stat-partial">0</span><label>Histórico parcial</label></div>
+              <div><span id="import-stat-total">0</span><label>Contatos na base</label></div>
+            </div>
+            <p class="hint" id="channel-import-updated" style="margin-bottom:0"></p>
+          </div>
         </div>
 
         <div id="sub-broadcasts" class="settings-subpanel">

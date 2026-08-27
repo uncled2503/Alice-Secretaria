@@ -10,19 +10,23 @@ function el(tag, props = {}, children = []) {
   return node;
 }
 
-// Banner de erro visivel no topo - sem isso, uma chamada que falha so aparece
-// no console (que ninguem olha) e o resto da tela fica silenciosamente vazio.
+// Popup de erro no meio da tela, some sozinho depois de um tempo - sem isso,
+// uma chamada que falha so aparece no console (que ninguem olha) e o resto
+// da tela fica silenciosamente vazio.
 function showError(message) {
   console.error(message);
-  let banner = document.getElementById("error-banner");
-  if (!banner) {
-    banner = el("div", { id: "error-banner", class: "error-banner" }, []);
-    document.body.prepend(banner);
+  let container = document.getElementById("error-toast-container");
+  if (!container) {
+    container = el("div", { id: "error-toast-container" }, []);
+    document.body.appendChild(container);
   }
-  const line = el("div", {}, [message]);
-  banner.appendChild(line);
-  banner.style.display = "block";
-  setTimeout(() => line.remove(), 12000);
+
+  const toast = el("div", { class: "error-toast" }, [message]);
+  container.appendChild(toast);
+
+  setTimeout(() => toast.classList.add("error-toast-hide"), 4000);
+  toast.addEventListener("transitionend", () => toast.remove());
+  setTimeout(() => toast.remove(), 5000); // rede de seguranca se o transitionend nao disparar
 }
 
 // Captura QUALQUER erro de JS (nao so falha de fetch) e mostra no banner.
@@ -2148,7 +2152,53 @@ async function loadChannelStatus() {
     connectBtn.style.display = "inline-block";
     disconnectBtn.style.display = "none";
   }
+
+  document.getElementById("btn-channel-import").disabled = !status.connected;
+  await loadImportStatus();
 }
+
+const IMPORT_STAT_FIELDS = {
+  found: "import-stat-found",
+  created: "import-stat-created",
+  merged: "import-stat-merged",
+  ignored: "import-stat-ignored",
+  conversations: "import-stat-conversations",
+  partialHistory: "import-stat-partial",
+  contactsInBase: "import-stat-total",
+};
+
+async function loadImportStatus() {
+  const info = await api("/whatsapp/import-status");
+  const statusEl = document.getElementById("channel-import-status");
+  const statsWrap = document.getElementById("channel-import-stats");
+  const updatedEl = document.getElementById("channel-import-updated");
+  const importBtn = document.getElementById("btn-channel-import");
+
+  if (info.stats) {
+    statsWrap.style.display = "grid";
+    for (const [key, elId] of Object.entries(IMPORT_STAT_FIELDS)) {
+      document.getElementById(elId).textContent = info.stats[key] ?? 0;
+    }
+  } else {
+    statsWrap.style.display = "none";
+  }
+
+  if (info.status === "running") {
+    statusEl.textContent = "Importando… isso pode levar alguns minutos.";
+    importBtn.disabled = true;
+  } else {
+    if (!importBtn.disabled) importBtn.disabled = false;
+    statusEl.textContent = info.status === "completed" ? "Importação concluída." : "";
+  }
+
+  updatedEl.textContent = info.updatedAt ? `Atualizado em ${new Date(info.updatedAt).toLocaleString("pt-BR")}` : "";
+}
+
+document.getElementById("btn-channel-import").addEventListener("click", async () => {
+  if (!confirm("Isso vai reconectar o WhatsApp rapidamente (sem precisar de novo QR Code) pra buscar contatos e até 30 dias de conversas. Continuar?")) return;
+  await api("/whatsapp/import", { method: "POST" });
+  await loadImportStatus();
+});
 
 function startChannelPolling() {
   stopChannelPolling();

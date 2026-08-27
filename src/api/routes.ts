@@ -1,7 +1,7 @@
 import { Router, type Request, type Response, type RequestHandler } from "express";
 import { rateLimit } from "express-rate-limit";
 import { prisma } from "../db/client.js";
-import { sendText, connectClinic, disconnectClinic, getStatus, getQrDataUrl, getProfilePicUrl } from "../whatsapp/manager.js";
+import { sendText, connectClinic, disconnectClinic, getStatus, getQrDataUrl, getProfilePicUrl, triggerHistoryImport } from "../whatsapp/manager.js";
 import { getFunnelStages, generateStageId } from "../crm/stages.js";
 import { createRuleDraft, RULE_CATEGORIES } from "../ai/rules.js";
 import { notifyStaff } from "../crm/notify.js";
@@ -307,6 +307,35 @@ apiRouter.post(
     const clinic = await getClinic(req);
     await disconnectClinic(clinic.id);
     res.json({ ok: true });
+  })
+);
+
+apiRouter.get(
+  "/whatsapp/import-status",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const info = await prisma.clinic.findUniqueOrThrow({
+      where: { id: clinic.id },
+      select: { importStatus: true, importStats: true, importUpdatedAt: true },
+    });
+    res.json({
+      status: info.importStatus,
+      stats: info.importStats ? JSON.parse(info.importStats) : null,
+      updatedAt: info.importUpdatedAt,
+    });
+  })
+);
+
+apiRouter.post(
+  "/whatsapp/import",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    try {
+      await triggerHistoryImport(clinic.id);
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message ?? "Falha ao iniciar importacao" });
+    }
   })
 );
 
