@@ -511,6 +511,13 @@ td.actions { display: flex; gap: 0.4rem; }
 .color-swatch { width: 26px; height: 26px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
 .color-swatch.active { border-color: var(--text); }
 
+.spinner {
+  display: inline-block; width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  animation: spin 0.7s linear infinite; flex-shrink: 0;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
 .import-stats-grid {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 0.8rem;
   margin: 1rem 0; padding: 0.9rem; border: 1px solid var(--border); border-radius: 8px; background: var(--bg);

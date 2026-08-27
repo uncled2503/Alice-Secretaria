@@ -434,6 +434,10 @@
           <p class="hint">Conexão direta com o WhatsApp — sem gateway externo. Escaneie o QR Code pelo WhatsApp do celular (Aparelhos conectados → Conectar um aparelho).</p>
           <div class="card channel-card">
             <div id="channel-status-badge" class="badge badge-neutral">Verificando…</div>
+            <div id="channel-qr-loading" style="display:none;align-items:center;gap:0.5rem;margin-top:0.8rem">
+              <span class="spinner"></span>
+              <span class="hint" style="margin:0">Gerando QR Code…</span>
+            </div>
             <div id="channel-qr-wrap" style="display:none">
               <img id="channel-qr-img" alt="QR Code do WhatsApp" />
               <p class="hint" style="margin:0.6rem 0 0">Expira em cerca de 1 minuto — clique em "Gerar novo QR Code" se passar do tempo.</p>
@@ -447,8 +451,9 @@
           <div class="section-header" style="margin-top:1.2rem"><span class="nav-icon" data-icon="repeat"></span> Importar dados do WhatsApp</div>
           <p class="hint" style="margin-top:0">Traga sua agenda de contatos e até 30 dias de conversas. Mensagens antigas entram como lidas e a Alice não responde a essas conversas importadas.</p>
           <div class="card">
-            <div class="broadcast-form-row">
+            <div class="broadcast-form-row" style="align-items:center">
               <button id="btn-channel-import" type="button">Importar do WhatsApp</button>
+              <span id="channel-import-spinner" class="spinner" style="display:none"></span>
               <span id="channel-import-status" class="hint" style="margin:0"></span>
             </div>
             <div id="channel-import-stats" class="import-stats-grid" style="display:none">

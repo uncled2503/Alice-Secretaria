@@ -592,6 +592,18 @@ document.getElementById("chat-filter-tabs").addEventListener("click", (e) => {
   renderConversationsList();
 });
 
+// Volta o painel de Chat pro estado vazio - usado quando a conversa aberta
+// deixa de existir/fazer sentido (contato apagado, ou trocou de clinica no
+// seletor do admin) pra nao deixar mensagem de outra clinica na tela.
+function resetChatPane() {
+  document.getElementById("chat-messages").innerHTML = "";
+  document.getElementById("chat-messages").style.display = "none";
+  document.getElementById("chat-header").style.display = "none";
+  document.getElementById("chat-controls").style.display = "none";
+  document.getElementById("chat-empty").style.display = "flex";
+  document.querySelectorAll("#conversations-list li").forEach((li) => li.classList.remove("active"));
+}
+
 async function loadMessages(conversationId) {
   let messages;
   try {
@@ -603,12 +615,7 @@ async function loadMessages(conversationId) {
       // a cada poll, em vez de repetir o erro pra sempre.
       if (state.activeConversationId === conversationId) {
         state.activeConversationId = null;
-        document.getElementById("chat-messages").innerHTML = "";
-        document.getElementById("chat-messages").style.display = "none";
-        document.getElementById("chat-header").style.display = "none";
-        document.getElementById("chat-controls").style.display = "none";
-        document.getElementById("chat-empty").style.display = "flex";
-        document.querySelectorAll("#conversations-list li").forEach((li) => li.classList.remove("active"));
+        resetChatPane();
       }
       return;
     }
@@ -1363,6 +1370,7 @@ async function loadClinics() {
       // ignora se nao puder salvar
     }
     state.activeConversationId = null;
+    resetChatPane();
     updateBrandName();
     refreshAll();
   });
@@ -2129,11 +2137,13 @@ async function loadChannelStatus() {
   const qrImg = document.getElementById("channel-qr-img");
   const connectBtn = document.getElementById("btn-channel-connect");
   const disconnectBtn = document.getElementById("btn-channel-disconnect");
+  const qrLoading = document.getElementById("channel-qr-loading");
 
   if (status.connected) {
     badge.textContent = "Conectado";
     badge.className = "badge badge-green";
     qrWrap.style.display = "none";
+    qrLoading.style.display = "none";
     connectBtn.style.display = "none";
     disconnectBtn.style.display = "inline-block";
   } else if (status.qr) {
@@ -2141,6 +2151,7 @@ async function loadChannelStatus() {
     badge.className = "badge badge-neutral";
     qrImg.src = status.qr;
     qrWrap.style.display = "block";
+    qrLoading.style.display = "none";
     connectBtn.textContent = "Gerar novo QR Code";
     connectBtn.style.display = "inline-block";
     disconnectBtn.style.display = "none";
@@ -2148,6 +2159,7 @@ async function loadChannelStatus() {
     badge.textContent = status.connecting ? "Conectando…" : "Desconectado";
     badge.className = "badge badge-neutral";
     qrWrap.style.display = "none";
+    qrLoading.style.display = status.connecting ? "flex" : "none";
     connectBtn.textContent = "Gerar QR Code";
     connectBtn.style.display = "inline-block";
     disconnectBtn.style.display = "none";
