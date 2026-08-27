@@ -446,26 +446,22 @@
         </div>
 
         <div id="sub-broadcasts" class="settings-subpanel">
-          <form id="broadcast-form" class="broadcast-form card">
-            <input id="bc-title" type="text" placeholder="Título (só pra identificar)" required />
-            <textarea id="bc-message" placeholder="Mensagem (use {nome} pra personalizar)" required></textarea>
-            <div class="broadcast-form-row">
-              <label>Enviar para:
-                <select id="bc-target">
-                  <option value="">Todos os contatos</option>
-                </select>
-              </label>
-              <label>Quando:
-                <input id="bc-when" type="datetime-local" required />
-              </label>
-              <button type="submit">Agendar</button>
+          <div class="list-toolbar">
+            <div>
+              <div class="list-count">Mensagens Programadas (<span id="broadcasts-count">0</span>)</div>
+              <p class="hint" style="margin:0.2rem 0 0">Programe mensagens para seus contatos. O envio é feito em ritmo seguro, dentro do horário comercial.</p>
             </div>
-          </form>
+            <div class="list-toolbar-actions">
+              <input id="broadcasts-search" type="text" placeholder="Buscar por título" />
+              <button type="button" id="btn-add-broadcast">+ Nova mensagem programada</button>
+            </div>
+          </div>
           <div class="card">
             <table>
-              <thead><tr><th>Título</th><th>Destino</th><th>Agendada para</th><th>Status</th><th>Progresso</th><th></th></tr></thead>
+              <thead><tr><th>Mensagem</th><th>Agendada para</th><th>Status</th><th>Progresso</th><th>Ação</th></tr></thead>
               <tbody id="broadcasts-body"></tbody>
             </table>
+            <div id="broadcasts-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Nenhuma mensagem programada.</div>
           </div>
         </div>
 
@@ -735,6 +731,56 @@
           <div class="modal-actions">
             <button type="button" id="procedure-delete-btn" class="btn-cancel" style="display:none">Excluir</button>
             <button type="submit">Salvar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="broadcast-edit-overlay" class="modal-overlay" style="display:none">
+      <div class="modal-card modal-card-lg">
+        <div class="modal-header">
+          <h3>Nova mensagem programada</h3>
+          <button type="button" id="broadcast-edit-close" class="modal-close">&times;</button>
+        </div>
+        <form id="broadcast-form">
+          <label>Título*
+            <input id="bc-title" type="text" placeholder="Ex.: Campanha de retorno de junho" required />
+          </label>
+          <label>Mensagem*
+            <textarea id="bc-message" rows="4" placeholder="Ex.: Olá {primeiro_nome}, temos uma novidade para você!" required></textarea>
+          </label>
+          <div class="payment-methods-grid">
+            <button type="button" class="payment-method-btn bc-var-btn" data-var="{primeiro_nome}">+ Primeiro nome</button>
+            <button type="button" class="payment-method-btn bc-var-btn" data-var="{nome_completo}">+ Nome completo</button>
+            <button type="button" class="payment-method-btn bc-var-btn" data-var="{telefone}">+ Telefone</button>
+            <button type="button" class="payment-method-btn bc-var-btn" data-var="{endereco}">+ Endereço</button>
+            <button type="button" class="payment-method-btn bc-var-btn" data-var="{data_hora}">+ Data e hora</button>
+            <button type="button" class="payment-method-btn bc-var-btn" data-var="{unidade}">+ Unidade</button>
+          </div>
+          <p class="hint" style="margin-top:0">Toque numa variável para inserir. Ela será substituída pelos dados reais do paciente no envio.</p>
+
+          <label>Para quais contatos?*
+            <select id="bc-target-mode">
+              <option value="all">Todos os contatos</option>
+              <option value="stage">Uma etapa do funil</option>
+              <option value="contacts">Contatos específicos</option>
+            </select>
+          </label>
+          <label id="bc-stage-wrap" style="display:none">Etapa do funil
+            <select id="bc-target-stage"></select>
+          </label>
+          <div id="bc-contacts-wrap" style="display:none">
+            <input id="bc-contacts-search" type="text" placeholder="Buscar contato por nome ou telefone..." />
+            <p class="hint" id="bc-contacts-count" style="margin:0.3rem 0">0 contato(s) selecionado(s).</p>
+            <div id="bc-contacts-list" class="procedures-checklist" style="max-height:180px"></div>
+          </div>
+
+          <label>Quando enviar?*
+            <input id="bc-when" type="datetime-local" required />
+          </label>
+          <div class="modal-actions">
+            <button type="button" id="broadcast-cancel-btn">Cancelar</button>
+            <button type="submit">Agendar envio</button>
           </div>
         </form>
       </div>

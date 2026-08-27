@@ -1003,9 +1003,8 @@ document.getElementById("followup-form").addEventListener("submit", async (e) =>
 // --- Mensagens programadas ---
 async function loadBroadcastTargetOptions() {
   const columns = await api("/crm/board");
-  const select = document.getElementById("bc-target");
+  const select = document.getElementById("bc-target-stage");
   select.innerHTML = "";
-  select.appendChild(el("option", { value: "" }, ["Todos os contatos"]));
   for (const col of columns) {
     select.appendChild(el("option", { value: col.id }, [col.label]));
   }
@@ -1018,12 +1017,22 @@ const STATUS_LABELS = {
   cancelled: "Cancelada",
 };
 
+let allBroadcasts = [];
+
 async function loadBroadcasts() {
-  const campaigns = await api("/broadcasts");
+  allBroadcasts = await api("/broadcasts");
+  renderBroadcasts();
+}
+
+function renderBroadcasts() {
+  const search = document.getElementById("broadcasts-search").value.trim().toLowerCase();
+  const filtered = allBroadcasts.filter((c) => !search || c.title.toLowerCase().includes(search));
+  document.getElementById("broadcasts-count").textContent = allBroadcasts.length;
+  document.getElementById("broadcasts-empty").style.display = filtered.length ? "none" : "block";
+
   const body = document.getElementById("broadcasts-body");
   body.innerHTML = "";
-
-  for (const c of campaigns) {
+  for (const c of filtered) {
     const progress = c.total > 0 ? `${c.sent}/${c.total} enviados` : "—";
     const actionCell = el("td", {}, []);
     if (c.status === "scheduled") {
@@ -1037,8 +1046,7 @@ async function loadBroadcasts() {
 
     body.appendChild(
       el("tr", {}, [
-        el("td", {}, [c.title]),
-        el("td", {}, [c.targetStage ?? "Todos"]),
+        el("td", {}, [el("div", { style: "font-weight:600" }, [c.title]), el("div", { class: "hint cell-truncate", style: "margin:0.1rem 0 0" }, [c.message])]),
         el("td", {}, [new Date(c.scheduledFor).toLocaleString("pt-BR")]),
         el("td", {}, [STATUS_LABELS[c.status] ?? c.status]),
         el("td", {}, [progress]),
@@ -1048,21 +1056,99 @@ async function loadBroadcasts() {
   }
 }
 
+document.getElementById("broadcasts-search").addEventListener("input", renderBroadcasts);
+
+// --- Modal de nova mensagem programada ---
+let bcSelectedContacts = new Map(); // id -> label, pra manter selecao entre filtros de busca
+
+function insertAtCursor(textarea, text) {
+  const start = textarea.selectionStart ?? textarea.value.length;
+  const end = textarea.selectionEnd ?? textarea.value.length;
+  textarea.value = textarea.value.slice(0, start) + text + textarea.value.slice(end);
+  textarea.focus();
+  textarea.selectionStart = textarea.selectionEnd = start + text.length;
+}
+
+document.querySelectorAll(".bc-var-btn").forEach((btn) => {
+  btn.addEventListener("click", () => insertAtCursor(document.getElementById("bc-message"), btn.dataset.var));
+});
+
+document.getElementById("bc-target-mode").addEventListener("change", (e) => {
+  document.getElementById("bc-stage-wrap").style.display = e.target.value === "stage" ? "flex" : "none";
+  document.getElementById("bc-contacts-wrap").style.display = e.target.value === "contacts" ? "block" : "none";
+});
+
+function renderBcContactsList() {
+  const search = document.getElementById("bc-contacts-search").value.trim().toLowerCase();
+  const contacts = (state.contacts || []).filter(
+    (c) => !search || (c.name ?? "").toLowerCase().includes(search) || c.phone.includes(search)
+  );
+  document.getElementById("bc-contacts-count").textContent = `${bcSelectedContacts.size} contato(s) selecionado(s).`;
+
+  const list = document.getElementById("bc-contacts-list");
+  list.innerHTML = "";
+  for (const c of contacts.slice(0, 100)) {
+    const checkbox = el("input", { type: "checkbox", value: c.id }, []);
+    checkbox.checked = bcSelectedContacts.has(c.id);
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) bcSelectedContacts.set(c.id, c.name ?? c.phone);
+      else bcSelectedContacts.delete(c.id);
+      document.getElementById("bc-contacts-count").textContent = `${bcSelectedContacts.size} contato(s) selecionado(s).`;
+    });
+    list.appendChild(el("label", {}, [checkbox, c.name ? `${c.name} (${c.phone})` : c.phone]));
+  }
+}
+
+document.getElementById("bc-contacts-search").addEventListener("input", renderBcContactsList);
+
+function openBroadcastModal() {
+  document.getElementById("broadcast-form").reset();
+  document.getElementById("bc-target-mode").value = "all";
+  document.getElementById("bc-stage-wrap").style.display = "none";
+  document.getElementById("bc-contacts-wrap").style.display = "none";
+  bcSelectedContacts = new Map();
+  loadBroadcastTargetOptions();
+  renderBcContactsList();
+  document.getElementById("broadcast-edit-overlay").style.display = "flex";
+}
+
+function closeBroadcastModal() {
+  document.getElementById("broadcast-edit-overlay").style.display = "none";
+}
+
+document.getElementById("btn-add-broadcast").addEventListener("click", openBroadcastModal);
+document.getElementById("broadcast-edit-close").addEventListener("click", closeBroadcastModal);
+document.getElementById("broadcast-cancel-btn").addEventListener("click", closeBroadcastModal);
+document.getElementById("broadcast-edit-overlay").addEventListener("click", (e) => {
+  if (e.target.id === "broadcast-edit-overlay") closeBroadcastModal();
+});
+
 document.getElementById("broadcast-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const title = document.getElementById("bc-title").value.trim();
   const message = document.getElementById("bc-message").value.trim();
-  const targetStage = document.getElementById("bc-target").value || null;
   const when = document.getElementById("bc-when").value;
+  const targetMode = document.getElementById("bc-target-mode").value;
   if (!title || !message || !when) return;
+
+  const payload = { title, message, scheduledFor: new Date(when).toISOString() };
+  if (targetMode === "stage") {
+    payload.targetStage = document.getElementById("bc-target-stage").value;
+  } else if (targetMode === "contacts") {
+    if (bcSelectedContacts.size === 0) {
+      showError("Selecione pelo menos um contato.");
+      return;
+    }
+    payload.contactIds = Array.from(bcSelectedContacts.keys());
+  }
 
   await api("/broadcasts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ title, message, targetStage, scheduledFor: new Date(when).toISOString() }),
+    body: JSON.stringify(payload),
   });
 
-  e.target.reset();
+  closeBroadcastModal();
   await loadBroadcasts();
 });
 
