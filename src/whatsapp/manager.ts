@@ -22,7 +22,10 @@ import { processHistorySync } from "./import.js";
 // nao, a clinica perde a conexao e tem que escanear o QR de novo a cada deploy.
 const AUTH_ROOT = process.env.WHATSAPP_AUTH_DIR ?? path.join(process.cwd(), "whatsapp-auth");
 
-const logger = pino({ level: process.env.WHATSAPP_LOG_LEVEL ?? "silent" });
+// "error" por padrao (nao "silent") - sem isso, falha de conexao/pareamento
+// do Baileys (rate-limit, sessao invalida etc.) nao deixava rastro nenhum
+// nos logs, so o generico "conexao caiu" do handler abaixo.
+const logger = pino({ level: process.env.WHATSAPP_LOG_LEVEL ?? "error" });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 interface ClinicConnection {
@@ -223,7 +226,10 @@ export async function connectClinic(clinicId: string): Promise<void> {
         connections.delete(clinicId);
         fs.rmSync(authDir(clinicId), { recursive: true, force: true });
       } else {
-        console.log(`Conexao da clinica ${clinicId} caiu (${statusCode ?? "?"}), tentando reconectar em 5s...`);
+        const boomError = update.lastDisconnect?.error as Boom | undefined;
+        console.log(
+          `Conexao da clinica ${clinicId} caiu (statusCode=${statusCode ?? "?"}, msg="${boomError?.message ?? "?"}"), tentando reconectar em 5s...`
+        );
         setTimeout(() => connectClinic(clinicId).catch((err) => console.error("Falha ao reconectar:", err)), 5000);
       }
     }
