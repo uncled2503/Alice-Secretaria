@@ -521,6 +521,99 @@ apiRouter.delete(
   })
 );
 
+// Diretorio de profissionais (nome, foto, bio, quais procedimentos cada um
+// atende). Sem agenda/turno proprio - a atribuicao a um agendamento e
+// manual, feita direto no modal de editar agendamento.
+apiRouter.get(
+  "/professionals",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const professionals = await prisma.professional.findMany({
+      where: { clinicId: clinic.id },
+      orderBy: { createdAt: "asc" },
+      include: { procedures: { select: { id: true, name: true } } },
+    });
+    res.json(professionals);
+  })
+);
+
+apiRouter.post(
+  "/professionals",
+  asyncRoute(async (req, res) => {
+    const { name, instagram, bio, color, photoUrl, procedureIds } = req.body as {
+      name?: string;
+      instagram?: string;
+      bio?: string;
+      color?: string;
+      photoUrl?: string;
+      procedureIds?: string[];
+    };
+    if (!name) {
+      res.status(400).json({ error: "name obrigatorio" });
+      return;
+    }
+
+    const clinic = await getClinic(req);
+    const professional = await prisma.professional.create({
+      data: {
+        clinicId: clinic.id,
+        name,
+        instagram: instagram || null,
+        bio: bio || null,
+        color: color || null,
+        photoUrl: photoUrl || null,
+        ...(procedureIds ? { procedures: { connect: procedureIds.map((id) => ({ id })) } } : {}),
+      },
+      include: { procedures: { select: { id: true, name: true } } },
+    });
+    res.json(professional);
+  })
+);
+
+apiRouter.put(
+  "/professionals/:id",
+  asyncRoute(async (req, res) => {
+    const existing = await prisma.professional.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, existing.clinicId)) return;
+
+    const { name, instagram, bio, color, photoUrl, active, procedureIds } = req.body as {
+      name?: string;
+      instagram?: string;
+      bio?: string;
+      color?: string;
+      photoUrl?: string;
+      active?: boolean;
+      procedureIds?: string[];
+    };
+
+    const professional = await prisma.professional.update({
+      where: { id: req.params.id },
+      data: {
+        ...(name !== undefined ? { name } : {}),
+        ...(instagram !== undefined ? { instagram: instagram || null } : {}),
+        ...(bio !== undefined ? { bio: bio || null } : {}),
+        ...(color !== undefined ? { color: color || null } : {}),
+        ...(photoUrl !== undefined ? { photoUrl: photoUrl || null } : {}),
+        ...(active !== undefined ? { active } : {}),
+        ...(procedureIds !== undefined ? { procedures: { set: procedureIds.map((id) => ({ id })) } } : {}),
+      },
+      include: { procedures: { select: { id: true, name: true } } },
+    });
+    res.json(professional);
+  })
+);
+
+apiRouter.delete(
+  "/professionals/:id",
+  asyncRoute(async (req, res) => {
+    const existing = await prisma.professional.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, existing.clinicId)) return;
+
+    await prisma.professional.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  })
+);
+
 apiRouter.get(
   "/contacts",
   asyncRoute(async (req, res) => {
@@ -848,7 +941,7 @@ apiRouter.get(
         ...(start && end ? { scheduledAt: { gte: new Date(start), lte: new Date(end) } } : {}),
       },
       orderBy: { scheduledAt: "asc" },
-      include: { patient: true, procedure: true },
+      include: { patient: true, procedure: true, professional: true },
     });
 
     res.json(
@@ -858,6 +951,7 @@ apiRouter.get(
         status: a.status,
         patient: { name: a.patient.name, phone: a.patient.phone },
         procedure: { id: a.procedureId, name: a.procedure.name, durationMin: a.procedure.durationMin },
+        professional: a.professional ? { id: a.professional.id, name: a.professional.name, color: a.professional.color } : null,
       }))
     );
   })
@@ -868,10 +962,11 @@ apiRouter.get(
 apiRouter.post(
   "/appointments",
   asyncRoute(async (req, res) => {
-    const { patientName, patientPhone, procedureId, scheduledAt } = req.body as {
+    const { patientName, patientPhone, procedureId, professionalId, scheduledAt } = req.body as {
       patientName?: string;
       patientPhone?: string;
       procedureId?: string;
+      professionalId?: string | null;
       scheduledAt?: string;
     };
 
@@ -889,7 +984,7 @@ apiRouter.post(
     });
 
     const appointment = await prisma.appointment.create({
-      data: { clinicId: clinic.id, patientId: patient.id, procedureId, scheduledAt: new Date(scheduledAt) },
+      data: { clinicId: clinic.id, patientId: patient.id, procedureId, professionalId: professionalId || null, scheduledAt: new Date(scheduledAt) },
       include: { procedure: true },
     });
     await notifyStaff(
@@ -908,8 +1003,9 @@ apiRouter.put(
     const existing = await prisma.appointment.findUniqueOrThrow({ where: { id: req.params.id }, include: { patient: true } });
     if (!assertClinicAccess(req, res, existing.clinicId)) return;
 
-    const { procedureId, scheduledAt, status } = req.body as {
+    const { procedureId, professionalId, scheduledAt, status } = req.body as {
       procedureId?: string;
+      professionalId?: string | null;
       scheduledAt?: string;
       status?: string;
     };
@@ -918,6 +1014,7 @@ apiRouter.put(
       where: { id: req.params.id },
       data: {
         ...(procedureId !== undefined ? { procedureId } : {}),
+        ...(professionalId !== undefined ? { professionalId: professionalId || null } : {}),
         ...(scheduledAt !== undefined ? { scheduledAt: new Date(scheduledAt) } : {}),
         ...(status !== undefined ? { status } : {}),
       },

@@ -271,7 +271,7 @@
 
         <div class="card" id="agenda-list-wrap" style="display:none">
           <table>
-            <thead><tr><th>Data/Hora</th><th>Paciente</th><th>Procedimento</th><th>Status</th></tr></thead>
+            <thead><tr><th>Data/Hora</th><th>Paciente</th><th>Procedimento</th><th>Profissional</th><th>Status</th></tr></thead>
             <tbody id="agenda-body"></tbody>
           </table>
         </div>
@@ -419,7 +419,15 @@
         </div>
 
         <div id="sub-staff" class="settings-subpanel">
-          <div class="coming-soon">Cadastro de profissionais e quais procedimentos cada um atende — ainda não implementado.</div>
+          <div class="list-toolbar">
+            <div class="list-count">Profissionais (<span id="professionals-count">0</span>)</div>
+            <div class="list-toolbar-actions">
+              <input id="professionals-search" type="text" placeholder="Buscar profissional" />
+              <button type="button" id="btn-add-professional">+ Adicionar Profissional</button>
+            </div>
+          </div>
+          <div id="professionals-grid" class="professionals-grid"></div>
+          <div id="professionals-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Nenhum profissional cadastrado.</div>
         </div>
 
         <div id="sub-channels" class="settings-subpanel">
@@ -595,6 +603,11 @@
           <label>Procedimento:
             <select id="appt-edit-procedure" required></select>
           </label>
+          <label>Profissional responsável:
+            <select id="appt-edit-professional">
+              <option value="">Não atribuído</option>
+            </select>
+          </label>
           <label>Data/hora:
             <input id="appt-edit-when" type="datetime-local" required />
           </label>
@@ -721,6 +734,59 @@
 
           <div class="modal-actions">
             <button type="button" id="procedure-delete-btn" class="btn-cancel" style="display:none">Excluir</button>
+            <button type="submit">Salvar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="professional-edit-overlay" class="modal-overlay" style="display:none">
+      <div class="modal-card modal-card-lg">
+        <div class="modal-header">
+          <h3 id="professional-modal-title">Adicionar Profissional</h3>
+          <button type="button" id="professional-edit-close" class="modal-close">&times;</button>
+        </div>
+        <form id="professional-form">
+          <input type="hidden" id="pf-id" />
+          <div class="photo-dropzone" id="pf-photo-drop">
+            <img id="pf-photo-preview" style="display:none" alt="" />
+            <div id="pf-photo-placeholder">
+              <span class="nav-icon" data-icon="user"></span>
+              <p>Clique para enviar<br /><span class="hint" style="margin:0">PNG, JPG e WEBP, até 2MB</span></p>
+            </div>
+            <input type="file" id="pf-photo-input" accept="image/png,image/jpeg,image/webp" style="display:none" />
+          </div>
+          <div class="modal-form-row">
+            <label style="flex:2">Nome do profissional*
+              <input id="pf-name" type="text" required />
+            </label>
+            <label>Instagram
+              <input id="pf-instagram" type="text" placeholder="@usuario" />
+            </label>
+          </div>
+          <label>Descrição do profissional
+            <textarea id="pf-bio" rows="3" placeholder="Mini biografia, especializações"></textarea>
+          </label>
+          <div>
+            <div class="section-header-sm" style="margin-bottom:0.5rem">Cor de identificação</div>
+            <div class="color-swatch-grid" id="pf-color-grid">
+              <button type="button" class="color-swatch active" data-color="" style="background:var(--text-faint)" title="Automática"></button>
+              <button type="button" class="color-swatch" data-color="#7c3aed" style="background:#7c3aed"></button>
+              <button type="button" class="color-swatch" data-color="#2563eb" style="background:#2563eb"></button>
+              <button type="button" class="color-swatch" data-color="#0891b2" style="background:#0891b2"></button>
+              <button type="button" class="color-swatch" data-color="#059669" style="background:#059669"></button>
+              <button type="button" class="color-swatch" data-color="#d97706" style="background:#d97706"></button>
+              <button type="button" class="color-swatch" data-color="#dc2626" style="background:#dc2626"></button>
+              <button type="button" class="color-swatch" data-color="#db2777" style="background:#db2777"></button>
+              <button type="button" class="color-swatch" data-color="#475569" style="background:#475569"></button>
+            </div>
+          </div>
+          <label>Procedimentos que atende
+            <div id="pf-procedures-list" class="procedures-checklist"></div>
+          </label>
+          <label class="checkbox-row"><input type="checkbox" id="pf-active" checked /> Ativo</label>
+          <div class="modal-actions">
+            <button type="button" id="professional-delete-btn" class="btn-cancel" style="display:none">Excluir</button>
             <button type="submit">Salvar</button>
           </div>
         </form>

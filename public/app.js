@@ -740,13 +740,15 @@ function renderAgendaGrid(appointments, days) {
 
     const topPct = (when.getMinutes() / 60) * 100;
     const heightPx = Math.max((a.procedure.durationMin / 60) * 46, 18);
+    const apptStyle = `top:${topPct}%;height:${heightPx}px${a.professional?.color ? `;border-left:3px solid ${a.professional.color}` : ""}`;
     const apptEl = el(
       "div",
-      { class: "agenda-appt", style: `top:${topPct}%;height:${heightPx}px` },
+      { class: "agenda-appt", style: apptStyle },
       [
         el("div", { class: "t" }, [when.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })]),
         el("div", {}, [a.patient.name ?? a.patient.phone]),
         el("div", {}, [a.procedure.name]),
+        a.professional ? el("div", { class: "hint", style: "margin:0" }, [a.professional.name]) : "",
       ]
     );
     apptEl.addEventListener("click", () => openApptEditModal(a));
@@ -786,6 +788,7 @@ async function loadAgenda() {
       el("td", {}, [new Date(a.scheduledAt).toLocaleString("pt-BR")]),
       el("td", {}, [a.patient.name ?? a.patient.phone]),
       el("td", {}, [a.procedure.name]),
+      el("td", {}, [a.professional?.name || "-"]),
       el("td", {}, [a.status]),
     ]);
     row.addEventListener("click", () => openApptEditModal(a));
@@ -814,6 +817,16 @@ function openApptEditModal(appt) {
     }
   });
 
+  const profSelect = document.getElementById("appt-edit-professional");
+  profSelect.innerHTML = '<option value="">Não atribuído</option>';
+  api("/professionals").then((professionals) => {
+    for (const p of professionals) {
+      const opt = el("option", { value: p.id }, [p.name]);
+      if (p.id === appt.professional?.id) opt.selected = true;
+      profSelect.appendChild(opt);
+    }
+  });
+
   document.getElementById("appt-edit-overlay").style.display = "flex";
 }
 
@@ -832,12 +845,13 @@ document.getElementById("appt-edit-form").addEventListener("submit", async (e) =
   const id = state.editingAppointmentId;
   if (!id) return;
   const procedureId = document.getElementById("appt-edit-procedure").value;
+  const professionalId = document.getElementById("appt-edit-professional").value;
   const when = document.getElementById("appt-edit-when").value;
   const status = document.getElementById("appt-edit-status").value;
   await api(`/appointments/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ procedureId, scheduledAt: new Date(when).toISOString(), status }),
+    body: JSON.stringify({ procedureId, professionalId, scheduledAt: new Date(when).toISOString(), status }),
   });
   closeApptEditModal();
   await loadAgenda();
@@ -1518,6 +1532,167 @@ document.getElementById("product-form").addEventListener("submit", async (e) => 
   await loadProducts();
 });
 
+// --- Profissionais ---
+let allProfessionals = [];
+let pendingProfessionalPhoto = null;
+
+function initialsOf(name) {
+  return name.trim().split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase() ?? "").join("");
+}
+
+async function loadProfessionals() {
+  allProfessionals = await api("/professionals");
+  renderProfessionals();
+}
+
+function renderProfessionals() {
+  const search = document.getElementById("professionals-search").value.trim().toLowerCase();
+  const filtered = allProfessionals.filter((p) => !search || p.name.toLowerCase().includes(search));
+  document.getElementById("professionals-count").textContent = allProfessionals.length;
+  document.getElementById("professionals-empty").style.display = filtered.length ? "none" : "block";
+
+  const grid = document.getElementById("professionals-grid");
+  grid.innerHTML = "";
+  for (const prof of filtered) {
+    const avatar = prof.photoUrl
+      ? el("img", { class: "professional-avatar", src: prof.photoUrl, alt: "" }, [])
+      : el("div", { class: "professional-avatar", style: `background:${prof.color || "var(--accent)"}` }, [initialsOf(prof.name)]);
+
+    const badges = [el("span", { class: "label" }, ["Procedimentos"])].concat(
+      prof.procedures.length ? prof.procedures.map((p) => el("span", { class: "payment-badge" }, [p.name])) : [el("span", { class: "hint" }, ["Nenhum vinculado"])]
+    );
+
+    const card = el("div", { class: "professional-card" }, [
+      el("div", { class: "professional-card-header" }, [
+        avatar,
+        el("div", { class: "professional-card-info" }, [
+          el("div", { class: "name" }, [prof.name]),
+          prof.instagram ? el("div", { class: "instagram" }, [prof.instagram]) : "",
+          el("span", { class: `badge ${prof.active ? "badge-green" : "badge-neutral"}` }, [prof.active ? "Ativo" : "Inativo"]),
+        ]),
+        (() => {
+          const b = el("button", { type: "button", class: "btn-icon-plain", title: "Editar" }, [el("span", { class: "nav-icon", "data-icon": "pencil" }, [])]);
+          b.addEventListener("click", () => openProfessionalModal(prof));
+          return b;
+        })(),
+      ]),
+      prof.bio ? el("div", { class: "professional-card-bio" }, [prof.bio]) : "",
+      el("div", { class: "professional-card-procedures" }, badges),
+    ]);
+    grid.appendChild(card);
+  }
+  paintIcons(grid);
+}
+
+document.getElementById("professionals-search").addEventListener("input", renderProfessionals);
+document.getElementById("btn-add-professional").addEventListener("click", () => openProfessionalModal(null));
+
+function updateProfessionalPhotoPreview() {
+  const img = document.getElementById("pf-photo-preview");
+  const placeholder = document.getElementById("pf-photo-placeholder");
+  if (pendingProfessionalPhoto) {
+    img.src = pendingProfessionalPhoto;
+    img.style.display = "block";
+    placeholder.style.display = "none";
+  } else {
+    img.style.display = "none";
+    placeholder.style.display = "block";
+  }
+}
+
+async function openProfessionalModal(prof) {
+  document.getElementById("professional-modal-title").textContent = prof ? "Editar Profissional" : "Adicionar Profissional";
+  document.getElementById("pf-id").value = prof?.id || "";
+  document.getElementById("pf-name").value = prof?.name || "";
+  document.getElementById("pf-instagram").value = prof?.instagram || "";
+  document.getElementById("pf-bio").value = prof?.bio || "";
+  document.getElementById("pf-active").checked = prof ? !!prof.active : true;
+  pendingProfessionalPhoto = prof?.photoUrl || null;
+  updateProfessionalPhotoPreview();
+
+  document.querySelectorAll("#pf-color-grid .color-swatch").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.color === (prof?.color || ""));
+  });
+
+  const linkedIds = new Set((prof?.procedures || []).map((p) => p.id));
+  const allProcedures = await api("/procedures");
+  const list = document.getElementById("pf-procedures-list");
+  list.innerHTML = "";
+  for (const proc of allProcedures) {
+    const checkbox = el("input", { type: "checkbox", value: proc.id }, []);
+    if (linkedIds.has(proc.id)) checkbox.checked = true;
+    list.appendChild(el("label", {}, [checkbox, proc.name]));
+  }
+
+  document.getElementById("professional-delete-btn").style.display = prof ? "" : "none";
+  document.getElementById("professional-edit-overlay").style.display = "flex";
+}
+
+function closeProfessionalModal() {
+  document.getElementById("professional-edit-overlay").style.display = "none";
+}
+
+document.getElementById("professional-edit-close").addEventListener("click", closeProfessionalModal);
+document.getElementById("professional-edit-overlay").addEventListener("click", (e) => {
+  if (e.target.id === "professional-edit-overlay") closeProfessionalModal();
+});
+
+document.querySelectorAll("#pf-color-grid .color-swatch").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll("#pf-color-grid .color-swatch").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+  });
+});
+
+document.getElementById("pf-photo-drop").addEventListener("click", () => document.getElementById("pf-photo-input").click());
+document.getElementById("pf-photo-input").addEventListener("change", (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  if (file.size > 2 * 1024 * 1024) {
+    showError("Imagem maior que 2MB - escolha um arquivo menor.");
+    e.target.value = "";
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    pendingProfessionalPhoto = reader.result;
+    updateProfessionalPhotoPreview();
+  };
+  reader.readAsDataURL(file);
+});
+
+document.getElementById("professional-delete-btn").addEventListener("click", async () => {
+  const id = document.getElementById("pf-id").value;
+  if (!id || !confirm("Remover esse profissional?")) return;
+  await api(`/professionals/${id}`, { method: "DELETE" });
+  closeProfessionalModal();
+  await loadProfessionals();
+});
+
+document.getElementById("professional-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const id = document.getElementById("pf-id").value;
+  const activeColor = document.querySelector("#pf-color-grid .color-swatch.active");
+  const payload = {
+    name: document.getElementById("pf-name").value.trim(),
+    instagram: document.getElementById("pf-instagram").value.trim(),
+    bio: document.getElementById("pf-bio").value.trim(),
+    color: activeColor ? activeColor.dataset.color : "",
+    photoUrl: pendingProfessionalPhoto,
+    active: document.getElementById("pf-active").checked,
+    procedureIds: Array.from(document.querySelectorAll("#pf-procedures-list input:checked")).map((c) => c.value),
+  };
+  if (!payload.name) return;
+
+  if (id) {
+    await api(`/professionals/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  } else {
+    await api("/professionals", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  }
+  closeProfessionalModal();
+  await loadProfessionals();
+});
+
 async function loadClinicsList() {
   const clinics = await api("/clinics");
   const body = document.getElementById("clinics-body");
@@ -1899,6 +2074,7 @@ const SETTINGS_SUB_LOADERS = {
   },
   products: loadProducts,
   procedures: loadProcedures,
+  staff: loadProfessionals,
   broadcasts: () => {
     loadBroadcastTargetOptions();
     loadBroadcasts();

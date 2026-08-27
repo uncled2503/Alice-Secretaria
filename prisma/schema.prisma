@@ -33,6 +33,7 @@ model Clinic {
   staffUsers    StaffUser[]
   locations     ClinicLocation[]
   products      Product[]
+  professionals Professional[]
 }
 
 // Unidade/endereco fisico da clinica. Uma clinica pode ter varias (rede com
@@ -98,6 +99,26 @@ model Procedure {
   resultTimeline     String?   // quando o resultado costuma aparecer
 
   appointments  Appointment[]
+  professionals Professional[] @relation("ProfessionalProcedures")
+}
+
+// Diretorio simples de profissionais da clinica (nome, foto, bio, quais
+// procedimentos cada um faz). Sem agenda/turno proprio ainda - a atribuicao
+// a um agendamento e manual (ver Appointment.professionalId).
+model Professional {
+  id        String   @id @default(cuid())
+  clinicId  String
+  clinic    Clinic   @relation(fields: [clinicId], references: [id])
+  name      String
+  instagram String?
+  bio       String?
+  color     String?  // cor de identificacao (ex: na agenda), hex
+  photoUrl  String?  // data URI (base64) da foto enviada
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  procedures   Procedure[]   @relation("ProfessionalProcedures")
+  appointments Appointment[]
 }
 
 // Produto fisico vendido pela clinica (ex: home care), separado de procedimentos.
@@ -230,15 +251,17 @@ model Message {
 }
 
 model Appointment {
-  id             String    @id @default(cuid())
+  id             String        @id @default(cuid())
   clinicId       String
-  clinic         Clinic    @relation(fields: [clinicId], references: [id])
+  clinic         Clinic        @relation(fields: [clinicId], references: [id])
   patientId      String
-  patient        Patient   @relation(fields: [patientId], references: [id])
+  patient        Patient       @relation(fields: [patientId], references: [id])
   procedureId    String
-  procedure      Procedure @relation(fields: [procedureId], references: [id])
+  procedure      Procedure     @relation(fields: [procedureId], references: [id])
+  professionalId String?
+  professional   Professional? @relation(fields: [professionalId], references: [id])
   scheduledAt    DateTime
-  status         String    @default("confirmed") // confirmed | cancelled | completed
+  status         String        @default("confirmed") // confirmed | cancelled | completed
   reminderSentAt DateTime?
-  createdAt      DateTime  @default(now())
+  createdAt      DateTime      @default(now())
 }
