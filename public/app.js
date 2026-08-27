@@ -1655,6 +1655,7 @@ document.getElementById("clinic-data-form").addEventListener("submit", async (e)
   e.preventDefault();
   const id = document.getElementById("cd-id").value;
   const name = document.getElementById("cd-name").value.trim();
+  const whatsappPhone = document.getElementById("cd-phone").value.trim();
   const timezone = document.getElementById("cd-timezone").value.trim();
   const workStartHour = Number(document.getElementById("cd-start-hour").value);
   const workEndHour = Number(document.getElementById("cd-end-hour").value);
@@ -1665,12 +1666,12 @@ document.getElementById("clinic-data-form").addEventListener("submit", async (e)
   const notifyEvents = Array.from(document.querySelectorAll("#cd-notify-events input[type=checkbox]:checked"))
     .map((box) => box.value)
     .join(",");
-  if (!id || !name) return;
+  if (!id || !name || !whatsappPhone.replace(/\D/g, "")) return;
 
   await api(`/clinics/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, timezone, workStartHour, workEndHour, workDays, notifyPhone, notifyEvents }),
+    body: JSON.stringify({ name, whatsappPhone, timezone, workStartHour, workEndHour, workDays, notifyPhone, notifyEvents }),
   });
 
   await loadClinics();

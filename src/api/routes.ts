@@ -84,8 +84,9 @@ apiRouter.put(
       return;
     }
 
-    const { name, timezone, workStartHour, workEndHour, workDays, active, notifyPhone, notifyEvents } = req.body as {
+    const { name, whatsappPhone, timezone, workStartHour, workEndHour, workDays, active, notifyPhone, notifyEvents } = req.body as {
       name?: string;
+      whatsappPhone?: string;
       timezone?: string;
       workStartHour?: number;
       workEndHour?: number;
@@ -98,20 +99,34 @@ apiRouter.put(
     // So admin bloqueia/desbloqueia - um cliente nao pode se desbloquear sozinho.
     if (active !== undefined && !requireAdmin(req, res)) return;
 
-    const clinic = await prisma.clinic.update({
-      where: { id: req.params.id },
-      data: {
-        ...(name !== undefined ? { name } : {}),
-        ...(timezone !== undefined ? { timezone } : {}),
-        ...(workStartHour !== undefined ? { workStartHour } : {}),
-        ...(workEndHour !== undefined ? { workEndHour } : {}),
-        ...(workDays !== undefined ? { workDays } : {}),
-        ...(active !== undefined ? { active } : {}),
-        ...(notifyPhone !== undefined ? { notifyPhone: notifyPhone || null } : {}),
-        ...(notifyEvents !== undefined ? { notifyEvents } : {}),
-      },
-    });
-    res.json(clinic);
+    if (whatsappPhone !== undefined && !whatsappPhone.replace(/\D/g, "")) {
+      res.status(400).json({ error: "whatsappPhone nao pode ficar vazio" });
+      return;
+    }
+
+    try {
+      const clinic = await prisma.clinic.update({
+        where: { id: req.params.id },
+        data: {
+          ...(name !== undefined ? { name } : {}),
+          ...(whatsappPhone !== undefined ? { whatsappPhone: whatsappPhone.replace(/\D/g, "") } : {}),
+          ...(timezone !== undefined ? { timezone } : {}),
+          ...(workStartHour !== undefined ? { workStartHour } : {}),
+          ...(workEndHour !== undefined ? { workEndHour } : {}),
+          ...(workDays !== undefined ? { workDays } : {}),
+          ...(active !== undefined ? { active } : {}),
+          ...(notifyPhone !== undefined ? { notifyPhone: notifyPhone || null } : {}),
+          ...(notifyEvents !== undefined ? { notifyEvents } : {}),
+        },
+      });
+      res.json(clinic);
+    } catch (err: any) {
+      if (err?.code === "P2002") {
+        res.status(409).json({ error: "Ja existe uma clinica cadastrada com esse numero de WhatsApp" });
+        return;
+      }
+      throw err;
+    }
   })
 );
 

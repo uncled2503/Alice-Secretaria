@@ -309,13 +309,31 @@
               <label style="flex:1">Nome da clínica
                 <input id="cd-name" type="text" required />
               </label>
-              <label>WhatsApp (definido ao criar a clínica)
-                <input id="cd-phone" type="text" disabled />
+              <label>WhatsApp
+                <input id="cd-phone" type="text" placeholder="Só números, ex: 5511999999999" />
               </label>
             </div>
+            <p class="hint" style="margin-top:-0.4rem">Esse número é atualizado sozinho assim que você escaneia o QR Code em "Canais" - só altere aqui se precisar corrigir manualmente.</p>
             <div class="broadcast-form-row">
               <label>Fuso horário
-                <input id="cd-timezone" type="text" />
+                <select id="cd-timezone">
+                  <option value="America/Noronha">Fernando de Noronha (GMT-2)</option>
+                  <option value="America/Sao_Paulo">Brasília, São Paulo, Rio de Janeiro (GMT-3)</option>
+                  <option value="America/Bahia">Salvador (GMT-3)</option>
+                  <option value="America/Fortaleza">Fortaleza (GMT-3)</option>
+                  <option value="America/Recife">Recife (GMT-3)</option>
+                  <option value="America/Maceio">Maceió (GMT-3)</option>
+                  <option value="America/Araguaina">Araguaína (GMT-3)</option>
+                  <option value="America/Belem">Belém (GMT-3)</option>
+                  <option value="America/Santarem">Santarém (GMT-3)</option>
+                  <option value="America/Campo_Grande">Campo Grande (GMT-4)</option>
+                  <option value="America/Cuiaba">Cuiabá (GMT-4)</option>
+                  <option value="America/Porto_Velho">Porto Velho (GMT-4)</option>
+                  <option value="America/Boa_Vista">Boa Vista (GMT-4)</option>
+                  <option value="America/Manaus">Manaus (GMT-4)</option>
+                  <option value="America/Eirunepe">Eirunepé (GMT-5)</option>
+                  <option value="America/Rio_Branco">Rio Branco (GMT-5)</option>
+                </select>
               </label>
               <label>Início do expediente
                 <input id="cd-start-hour" type="number" min="0" max="23" />
