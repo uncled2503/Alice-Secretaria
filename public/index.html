@@ -301,9 +301,10 @@
         </div>
 
         <div id="sub-clinic-data" class="settings-subpanel active">
-          <p class="hint">Dados gerais e horário de funcionamento — o horário aqui é usado pelas mensagens programadas e pelo recontato automático, que só disparam dentro dele.</p>
+          <div class="section-header"><span class="nav-icon" data-icon="building"></span> Dados gerais da clínica</div>
           <form id="clinic-data-form" class="broadcast-form card">
             <input type="hidden" id="cd-id" />
+            <p class="hint" style="margin-top:0">O horário abaixo é usado pelas mensagens programadas e pelo recontato automático, que só disparam dentro dele.</p>
             <div class="broadcast-form-row">
               <label style="flex:1">Nome da clínica
                 <input id="cd-name" type="text" required />
@@ -335,9 +336,34 @@
                   <label><input type="checkbox" value="6" />Sáb</label>
                 </div>
               </label>
-              <button type="submit">Salvar</button>
+            </div>
+
+            <div class="section-header" style="margin-top:1rem"><span class="nav-icon" data-icon="building"></span> Notificações no WhatsApp</div>
+            <p class="hint" style="margin-top:0">Receba um aviso no seu WhatsApp sempre que houver agendamento novo, remarcação, cancelamento ou transferência para atendimento humano. As mensagens são enviadas pelo WhatsApp conectado em "Canais".</p>
+            <div class="broadcast-form-row">
+              <label style="flex:1">Número para receber avisos (com DDI/DDD, ex: 5511999999999)
+                <input id="cd-notify-phone" type="text" placeholder="Deixe em branco para desativar" />
+              </label>
+            </div>
+            <div class="broadcast-form-row">
+              <label>Quais avisos mandar
+                <div id="cd-notify-events" class="weekday-picker">
+                  <label><input type="checkbox" value="new_appointment" />Novo agendamento</label>
+                  <label><input type="checkbox" value="reschedule" />Remarcação</label>
+                  <label><input type="checkbox" value="cancel" />Cancelamento</label>
+                  <label><input type="checkbox" value="human_handoff" />Transferência para humano</label>
+                </div>
+              </label>
+            </div>
+            <div class="broadcast-form-row">
+              <button type="submit">Salvar informações</button>
             </div>
           </form>
+
+          <div class="section-header" style="margin-top:1.4rem"><span class="nav-icon" data-icon="building"></span> Endereço</div>
+          <p class="hint" style="margin-top:0">Preencha o endereço abaixo e, caso tenha mais de uma unidade, clique em adicionar unidade.</p>
+          <div id="clinic-locations-list"></div>
+          <button type="button" id="btn-add-location" class="btn-add-unit">+ Adicionar outra unidade</button>
         </div>
 
         <div id="sub-products" class="settings-subpanel">

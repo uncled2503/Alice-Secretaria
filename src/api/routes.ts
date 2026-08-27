@@ -3,6 +3,7 @@ import { prisma } from "../db/client.js";
 import { sendText, connectClinic, disconnectClinic, getStatus, getQrDataUrl, getProfilePicUrl } from "../whatsapp/manager.js";
 import { getFunnelStages, generateStageId } from "../crm/stages.js";
 import { createRuleDraft, RULE_CATEGORIES } from "../ai/rules.js";
+import { notifyStaff } from "../crm/notify.js";
 import { hashPassword, verifyPassword } from "./passwords.js";
 import { createSessionCookie, clearSessionCookie } from "./staffSession.js";
 
@@ -67,6 +68,8 @@ apiRouter.get(
         workEndHour: true,
         workDays: true,
         active: true,
+        notifyPhone: true,
+        notifyEvents: true,
       },
     });
     res.json(clinics.map((c) => ({ ...c, ...getStatus(c.id) })));
@@ -81,13 +84,15 @@ apiRouter.put(
       return;
     }
 
-    const { name, timezone, workStartHour, workEndHour, workDays, active } = req.body as {
+    const { name, timezone, workStartHour, workEndHour, workDays, active, notifyPhone, notifyEvents } = req.body as {
       name?: string;
       timezone?: string;
       workStartHour?: number;
       workEndHour?: number;
       workDays?: string;
       active?: boolean;
+      notifyPhone?: string | null;
+      notifyEvents?: string;
     };
 
     // So admin bloqueia/desbloqueia - um cliente nao pode se desbloquear sozinho.
@@ -102,6 +107,8 @@ apiRouter.put(
         ...(workEndHour !== undefined ? { workEndHour } : {}),
         ...(workDays !== undefined ? { workDays } : {}),
         ...(active !== undefined ? { active } : {}),
+        ...(notifyPhone !== undefined ? { notifyPhone: notifyPhone || null } : {}),
+        ...(notifyEvents !== undefined ? { notifyEvents } : {}),
       },
     });
     res.json(clinic);
@@ -125,6 +132,98 @@ apiRouter.post(
       data: { name, whatsappPhone: whatsappPhone.replace(/\D/g, "") },
     });
     res.json(clinic);
+  })
+);
+
+// --- Unidades/enderecos da clinica (uma clinica pode ter mais de uma) ---
+
+apiRouter.get(
+  "/clinic-locations",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const locations = await prisma.clinicLocation.findMany({
+      where: { clinicId: clinic.id },
+      orderBy: { order: "asc" },
+    });
+    res.json(locations);
+  })
+);
+
+apiRouter.post(
+  "/clinic-locations",
+  asyncRoute(async (req, res) => {
+    const { name } = req.body as { name?: string };
+    if (!name) {
+      res.status(400).json({ error: "name obrigatorio" });
+      return;
+    }
+
+    const clinic = await getClinic(req);
+    const last = await prisma.clinicLocation.findFirst({ where: { clinicId: clinic.id }, orderBy: { order: "desc" } });
+
+    const location = await prisma.clinicLocation.create({
+      data: { clinicId: clinic.id, name, order: (last?.order ?? -1) + 1 },
+    });
+    res.json(location);
+  })
+);
+
+apiRouter.put(
+  "/clinic-locations/:id",
+  asyncRoute(async (req, res) => {
+    const existing = await prisma.clinicLocation.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, existing.clinicId)) return;
+
+    const {
+      name,
+      googleMapsUrl,
+      website,
+      timezone,
+      street,
+      number,
+      complement,
+      neighborhood,
+      city,
+      state,
+      zipCode,
+      country,
+      arrivalInstructions,
+      active,
+      order,
+    } = req.body as Record<string, string | number | boolean | undefined>;
+
+    const location = await prisma.clinicLocation.update({
+      where: { id: req.params.id },
+      data: {
+        ...(name !== undefined ? { name: name as string } : {}),
+        ...(googleMapsUrl !== undefined ? { googleMapsUrl: (googleMapsUrl as string) || null } : {}),
+        ...(website !== undefined ? { website: (website as string) || null } : {}),
+        ...(timezone !== undefined ? { timezone: timezone as string } : {}),
+        ...(street !== undefined ? { street: (street as string) || null } : {}),
+        ...(number !== undefined ? { number: (number as string) || null } : {}),
+        ...(complement !== undefined ? { complement: (complement as string) || null } : {}),
+        ...(neighborhood !== undefined ? { neighborhood: (neighborhood as string) || null } : {}),
+        ...(city !== undefined ? { city: (city as string) || null } : {}),
+        ...(state !== undefined ? { state: (state as string) || null } : {}),
+        ...(zipCode !== undefined ? { zipCode: (zipCode as string) || null } : {}),
+        ...(country !== undefined ? { country: country as string } : {}),
+        ...(arrivalInstructions !== undefined ? { arrivalInstructions: (arrivalInstructions as string) || null } : {}),
+        ...(active !== undefined ? { active: active as boolean } : {}),
+        ...(order !== undefined ? { order: order as number } : {}),
+      },
+    });
+    res.json(location);
+  })
+);
+
+apiRouter.delete(
+  "/clinic-locations/:id",
+  asyncRoute(async (req, res) => {
+    const existing = await prisma.clinicLocation.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, existing.clinicId)) return;
+
+    await prisma.clinicLocation.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
   })
 );
 
@@ -414,6 +513,12 @@ apiRouter.post(
       await prisma.message.create({
         data: { conversationId: conversation.id, role: "system", content: "Atendimento transferido para o atendente", authorName },
       });
+      const patientLabel = conversation.patient.name ?? conversation.patient.phone;
+      await notifyStaff(
+        conversation.patient.clinicId,
+        "human_handoff",
+        `Atendimento assumido manualmente: ${patientLabel}${authorName ? ` (por ${authorName})` : ""}.`
+      );
     }
 
     await prisma.message.create({
@@ -648,7 +753,13 @@ apiRouter.post(
 
     const appointment = await prisma.appointment.create({
       data: { clinicId: clinic.id, patientId: patient.id, procedureId, scheduledAt: new Date(scheduledAt) },
+      include: { procedure: true },
     });
+    await notifyStaff(
+      clinic.id,
+      "new_appointment",
+      `Novo agendamento: ${patient.name ?? patient.phone} - ${appointment.procedure.name} em ${appointment.scheduledAt.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}.`
+    );
     res.json(appointment);
   })
 );
@@ -657,7 +768,7 @@ apiRouter.post(
 apiRouter.put(
   "/appointments/:id",
   asyncRoute(async (req, res) => {
-    const existing = await prisma.appointment.findUniqueOrThrow({ where: { id: req.params.id } });
+    const existing = await prisma.appointment.findUniqueOrThrow({ where: { id: req.params.id }, include: { patient: true } });
     if (!assertClinicAccess(req, res, existing.clinicId)) return;
 
     const { procedureId, scheduledAt, status } = req.body as {
@@ -673,7 +784,20 @@ apiRouter.put(
         ...(scheduledAt !== undefined ? { scheduledAt: new Date(scheduledAt) } : {}),
         ...(status !== undefined ? { status } : {}),
       },
+      include: { procedure: true },
     });
+
+    const patientLabel = existing.patient.name ?? existing.patient.phone;
+    if (status === "cancelled" && existing.status !== "cancelled") {
+      await notifyStaff(existing.clinicId, "cancel", `Agendamento cancelado: ${patientLabel} - ${appointment.procedure.name}.`);
+    } else if (scheduledAt !== undefined && new Date(scheduledAt).getTime() !== existing.scheduledAt.getTime()) {
+      await notifyStaff(
+        existing.clinicId,
+        "reschedule",
+        `Agendamento remarcado: ${patientLabel} - ${appointment.procedure.name} agora em ${appointment.scheduledAt.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}.`
+      );
+    }
+
     res.json(appointment);
   })
 );

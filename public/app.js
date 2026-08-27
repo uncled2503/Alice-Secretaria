@@ -1421,6 +1421,12 @@ function loadClinicDataForm() {
   document.querySelectorAll("#cd-workdays input[type=checkbox]").forEach((box) => {
     box.checked = workDays.includes(box.value);
   });
+
+  document.getElementById("cd-notify-phone").value = clinic.notifyPhone ?? "";
+  const notifyEvents = (clinic.notifyEvents ?? "").split(",");
+  document.querySelectorAll("#cd-notify-events input[type=checkbox]").forEach((box) => {
+    box.checked = notifyEvents.includes(box.value);
+  });
 }
 
 document.getElementById("clinic-data-form").addEventListener("submit", async (e) => {
@@ -1433,16 +1439,176 @@ document.getElementById("clinic-data-form").addEventListener("submit", async (e)
   const workDays = Array.from(document.querySelectorAll("#cd-workdays input[type=checkbox]:checked"))
     .map((box) => box.value)
     .join(",");
+  const notifyPhone = document.getElementById("cd-notify-phone").value.trim().replace(/\D/g, "");
+  const notifyEvents = Array.from(document.querySelectorAll("#cd-notify-events input[type=checkbox]:checked"))
+    .map((box) => box.value)
+    .join(",");
   if (!id || !name) return;
 
   await api(`/clinics/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, timezone, workStartHour, workEndHour, workDays }),
+    body: JSON.stringify({ name, timezone, workStartHour, workEndHour, workDays, notifyPhone, notifyEvents }),
   });
 
   await loadClinics();
   loadClinicDataForm();
+});
+
+// --- Unidades/enderecos da clinica ---
+function locationFullAddress(loc) {
+  const parts = [
+    [loc.street, loc.number].filter(Boolean).join(", "),
+    loc.complement,
+    loc.neighborhood,
+    [loc.city, loc.state].filter(Boolean).join(" - "),
+    loc.zipCode,
+    loc.country,
+  ].filter(Boolean);
+  return parts.join(", ");
+}
+
+function renderLocationCard(loc, index, total) {
+  const nameInput = el("input", { id: `loc-name-${loc.id}`, type: "text", value: loc.name ?? "" }, []);
+  const mapsInput = el("input", { id: `loc-maps-${loc.id}`, type: "text", value: loc.googleMapsUrl ?? "", placeholder: "https://maps.google.com/..." }, []);
+  const siteInput = el("input", { id: `loc-site-${loc.id}`, type: "text", value: loc.website ?? "" }, []);
+  const tzInput = el("input", { id: `loc-tz-${loc.id}`, type: "text", value: loc.timezone ?? "America/Sao_Paulo" }, []);
+  const streetInput = el("input", { id: `loc-street-${loc.id}`, type: "text", value: loc.street ?? "" }, []);
+  const numberInput = el("input", { id: `loc-number-${loc.id}`, type: "text", value: loc.number ?? "" }, []);
+  const complementInput = el("input", { id: `loc-complement-${loc.id}`, type: "text", value: loc.complement ?? "", placeholder: "Ex: Conjunto 101 / Bloco B" }, []);
+  const neighborhoodInput = el("input", { id: `loc-neighborhood-${loc.id}`, type: "text", value: loc.neighborhood ?? "" }, []);
+  const cityInput = el("input", { id: `loc-city-${loc.id}`, type: "text", value: loc.city ?? "" }, []);
+  const stateInput = el("input", { id: `loc-state-${loc.id}`, type: "text", value: loc.state ?? "" }, []);
+  const zipInput = el("input", { id: `loc-zip-${loc.id}`, type: "text", value: loc.zipCode ?? "" }, []);
+  const countryInput = el("input", { id: `loc-country-${loc.id}`, type: "text", value: loc.country ?? "Brasil" }, []);
+  const arrivalInput = el("input", { id: `loc-arrival-${loc.id}`, type: "text", value: loc.arrivalInstructions ?? "" }, []);
+  const activeCheckbox = el("input", { type: "checkbox" }, []);
+  activeCheckbox.checked = loc.active;
+
+  const preview = el("p", { class: "full-address-preview" }, [locationFullAddress(loc) || "Endereço aparecerá aqui conforme você preenche."]);
+  const allAddressInputs = [streetInput, numberInput, complementInput, neighborhoodInput, cityInput, stateInput, zipInput, countryInput];
+  allAddressInputs.forEach((input) =>
+    input.addEventListener("input", () => {
+      preview.textContent =
+        locationFullAddress({
+          street: streetInput.value,
+          number: numberInput.value,
+          complement: complementInput.value,
+          neighborhood: neighborhoodInput.value,
+          city: cityInput.value,
+          state: stateInput.value,
+          zipCode: zipInput.value,
+          country: countryInput.value,
+        }) || "Endereço aparecerá aqui conforme você preenche.";
+    })
+  );
+
+  const upBtn = el("button", { type: "button", class: "btn-icon-plain", title: "Mover pra cima" }, ["▲"]);
+  const downBtn = el("button", { type: "button", class: "btn-icon-plain", title: "Mover pra baixo" }, ["▼"]);
+  if (index === 0) upBtn.disabled = true;
+  if (index === total - 1) downBtn.disabled = true;
+  upBtn.addEventListener("click", () => moveLocation(loc.id, -1));
+  downBtn.addEventListener("click", () => moveLocation(loc.id, 1));
+
+  const deleteBtn = el("button", { type: "button", class: "btn-icon-danger", title: "Excluir unidade" }, [
+    el("span", { class: "nav-icon", "data-icon": "trash" }, []),
+  ]);
+  deleteBtn.addEventListener("click", async () => {
+    if (!confirm(`Excluir a unidade "${loc.name}"?`)) return;
+    await api(`/clinic-locations/${loc.id}`, { method: "DELETE" });
+    await loadClinicLocations();
+  });
+
+  const saveBtn = el("button", { type: "button", class: "btn-save" }, ["Salvar unidade"]);
+  saveBtn.addEventListener("click", async () => {
+    saveBtn.textContent = "Salvando...";
+    await api(`/clinic-locations/${loc.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: nameInput.value.trim(),
+        googleMapsUrl: mapsInput.value.trim(),
+        website: siteInput.value.trim(),
+        timezone: tzInput.value.trim(),
+        street: streetInput.value.trim(),
+        number: numberInput.value.trim(),
+        complement: complementInput.value.trim(),
+        neighborhood: neighborhoodInput.value.trim(),
+        city: cityInput.value.trim(),
+        state: stateInput.value.trim(),
+        zipCode: zipInput.value.trim(),
+        country: countryInput.value.trim(),
+        arrivalInstructions: arrivalInput.value.trim(),
+        active: activeCheckbox.checked,
+      }),
+    });
+    saveBtn.textContent = "Salvo!";
+    setTimeout(() => (saveBtn.textContent = "Salvar unidade"), 1500);
+  });
+
+  return el("div", { class: "card location-card" }, [
+    el("div", { class: "location-card-header" }, [
+      nameInput,
+      ...(index === 0 ? [el("span", { class: "badge-primary" }, ["PRINCIPAL"])] : []),
+      el("span", { class: "spacer" }, []),
+      upBtn,
+      downBtn,
+      el("label", { class: "active-toggle" }, [activeCheckbox, "Ativa"]),
+      deleteBtn,
+    ]),
+    el("div", { class: "broadcast-form-row" }, [
+      el("label", { style: "flex:1" }, ["Google Maps (opcional)", mapsInput]),
+      el("label", { style: "flex:1" }, ["Website (opcional)", siteInput]),
+    ]),
+    el("div", { class: "broadcast-form-row" }, [el("label", { style: "flex:1" }, ["Fuso horário", tzInput])]),
+    el("div", { class: "broadcast-form-row" }, [
+      el("label", { style: "flex:3" }, ["Rua/Avenida", streetInput]),
+      el("label", { style: "flex:1" }, ["Número", numberInput]),
+    ]),
+    el("div", { class: "broadcast-form-row" }, [
+      el("label", { style: "flex:1" }, ["Complemento", complementInput]),
+      el("label", { style: "flex:1" }, ["Bairro", neighborhoodInput]),
+    ]),
+    el("div", { class: "broadcast-form-row" }, [
+      el("label", { style: "flex:1" }, ["Cidade", cityInput]),
+      el("label", { style: "flex:1" }, ["Estado", stateInput]),
+      el("label", { style: "flex:1" }, ["CEP", zipInput]),
+      el("label", { style: "flex:1" }, ["País", countryInput]),
+    ]),
+    el("div", { class: "broadcast-form-row" }, [el("label", { style: "flex:1" }, ["Instruções de chegada (opcional)", arrivalInput])]),
+    preview,
+    el("div", { class: "broadcast-form-row", style: "margin-top:0.6rem" }, [saveBtn]),
+  ]);
+}
+
+async function loadClinicLocations() {
+  const locations = await api("/clinic-locations");
+  const container = document.getElementById("clinic-locations-list");
+  container.innerHTML = "";
+  locations.forEach((loc, i) => container.appendChild(renderLocationCard(loc, i, locations.length)));
+  paintIcons(container);
+}
+
+async function moveLocation(id, direction) {
+  const locations = await api("/clinic-locations");
+  const index = locations.findIndex((l) => l.id === id);
+  const swapIndex = index + direction;
+  if (swapIndex < 0 || swapIndex >= locations.length) return;
+
+  const a = locations[index];
+  const b = locations[swapIndex];
+  await api(`/clinic-locations/${a.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ order: b.order }) });
+  await api(`/clinic-locations/${b.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ order: a.order }) });
+  await loadClinicLocations();
+}
+
+document.getElementById("btn-add-location").addEventListener("click", async () => {
+  await api("/clinic-locations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "Nova unidade" }),
+  });
+  await loadClinicLocations();
 });
 
 // --- Canais (conexao WhatsApp direta, sem gateway externo) ---
@@ -1504,7 +1670,10 @@ document.getElementById("btn-channel-disconnect").addEventListener("click", asyn
 
 // --- Navegacao das sub-abas de "Personalizar Alice" ---
 const SETTINGS_SUB_LOADERS = {
-  "clinic-data": loadClinicDataForm,
+  "clinic-data": () => {
+    loadClinicDataForm();
+    loadClinicLocations();
+  },
   procedures: loadProcedures,
   broadcasts: () => {
     loadBroadcastTargetOptions();

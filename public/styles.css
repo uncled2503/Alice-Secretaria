@@ -450,6 +450,31 @@ td.actions { display: flex; gap: 0.4rem; }
 
 /* --- Misc --- */
 .hint { color: var(--text-muted); font-size: 0.85rem; margin-top: -0.6rem; margin-bottom: 1rem; }
+
+.section-header {
+  display: flex; align-items: center; gap: 0.5rem; font-size: 0.78rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-muted); margin-bottom: 0.6rem;
+}
+.section-header .nav-icon { width: 16px; height: 16px; color: var(--accent); }
+
+.location-card { position: relative; margin-bottom: 1rem; }
+.location-card-header { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.8rem; flex-wrap: wrap; }
+.location-card-header .badge-primary { font-size: 0.68rem; font-weight: 700; color: var(--accent-dark); text-transform: uppercase; letter-spacing: 0.03em; }
+.location-card-header .spacer { flex: 1; }
+.location-card-header label.active-toggle { display: flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: var(--text-muted); flex-direction: row !important; }
+.btn-icon-plain {
+  width: 30px; height: 30px; padding: 0; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--card-bg); color: var(--text-muted); display: flex; align-items: center; justify-content: center; cursor: pointer;
+}
+.btn-icon-plain .nav-icon { width: 15px; height: 15px; }
+.btn-icon-plain:hover { background: var(--accent-50); }
+.btn-icon-plain:disabled { opacity: 0.35; cursor: default; }
+.location-card .full-address-preview { font-size: 0.78rem; color: var(--text-faint); margin: 0.4rem 0 0; }
+.btn-add-unit {
+  width: 100%; background: transparent; border: 1px dashed var(--border); color: var(--accent-dark);
+  border-radius: 10px; padding: 0.8rem; cursor: pointer; font-weight: 600; font-size: 0.85rem; margin-bottom: 1rem;
+}
+.btn-add-unit:hover { background: var(--accent-50); }
 h3 { font-size: 1rem; margin: 1.4rem 0 0.6rem; }
 
 .rule-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 0.8rem 1rem; margin-bottom: 0.7rem; }

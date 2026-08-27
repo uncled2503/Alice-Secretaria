@@ -19,6 +19,8 @@ model Clinic {
   workEndHour   Int       @default(19)
   workDays      String    @default("1,2,3,4,5,6") // dias da semana com expediente (0=domingo..6=sabado), separados por virgula
   active        Boolean   @default(true) // false = bloqueada temporariamente (ex: inadimplencia) - contas client dessa clinica nao conseguem logar nem usar a API
+  notifyPhone   String?   // numero (com DDI/DDD) que recebe avisos de agendamento/cancelamento/handoff via WhatsApp
+  notifyEvents  String    @default("") // quais avisos mandar pro notifyPhone, separados por virgula: new_appointment,reschedule,cancel,human_handoff
   createdAt     DateTime  @default(now())
 
   procedures    Procedure[]
@@ -29,6 +31,32 @@ model Clinic {
   customRules   CustomRule[]
   funnelStages  FunnelStage[]
   staffUsers    StaffUser[]
+  locations     ClinicLocation[]
+}
+
+// Unidade/endereco fisico da clinica. Uma clinica pode ter varias (rede com
+// mais de um endereco); a ordem (order) define qual aparece primeiro/e e
+// qual e a "principal" no painel.
+model ClinicLocation {
+  id                  String   @id @default(cuid())
+  clinicId            String
+  clinic              Clinic   @relation(fields: [clinicId], references: [id])
+  name                String
+  googleMapsUrl       String?
+  website             String?
+  timezone            String   @default("America/Sao_Paulo")
+  street              String?
+  number              String?
+  complement          String?
+  neighborhood        String?
+  city                String?
+  state               String?
+  zipCode             String?
+  country             String   @default("Brasil")
+  arrivalInstructions String?
+  active              Boolean  @default(true)
+  order               Int      @default(0)
+  createdAt           DateTime @default(now())
 }
 
 // Conta de login do painel. role="admin" enxerga/opera todas as clinicas

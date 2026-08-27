@@ -4,6 +4,7 @@ import { prisma } from "../db/client.js";
 import { findAvailableSlots } from "../scheduling/slots.js";
 import { getActiveRulesPrompt } from "./rules.js";
 import { getFunnelStages } from "../crm/stages.js";
+import { notifyStaff } from "../crm/notify.js";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 // gpt-4o-mini por padrao: conversa de qualificacao/agendamento nao precisa do
@@ -84,6 +85,13 @@ async function runTool(clinicId: string, patientId: string, name: string, input:
         data: { funnelStage: scheduledStage.stageId },
       });
     }
+
+    const patient = await prisma.patient.findUnique({ where: { id: patientId } });
+    await notifyStaff(
+      clinicId,
+      "new_appointment",
+      `Novo agendamento (via Alice): ${patient?.name ?? patient?.phone ?? "paciente"} - ${procedure.name} em ${scheduledAt.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}.`
+    );
 
     return `Agendado com sucesso para ${scheduledAt.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}.`;
   }
