@@ -8,6 +8,7 @@ import { startBroadcastJob } from "./crm/broadcast.js";
 import { restoreAllConnections } from "./whatsapp/manager.js";
 import { apiRouter } from "./api/routes.js";
 import { readStaffSession } from "./api/staffSession.js";
+import { prisma } from "./db/client.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -36,12 +37,23 @@ const PUBLIC_API_PATHS = new Set(["/staff/login", "/staff/me", "/staff/bootstrap
 
 app.use(
   "/api",
-  (req, res, next) => {
+  async (req, res, next) => {
     req.staff = readStaffSession(req.headers.cookie);
     if (!req.staff && !PUBLIC_API_PATHS.has(req.path)) {
       res.status(401).json({ error: "Login necessario" });
       return;
     }
+
+    // Clinica bloqueada (ex: inadimplencia): conta client dessa clinica para
+    // de conseguir usar a API, mesmo com um cookie de sessao ainda valido.
+    if (req.staff && req.staff.role !== "admin" && req.staff.clinicId) {
+      const clinic = await prisma.clinic.findUnique({ where: { id: req.staff.clinicId }, select: { active: true } });
+      if (!clinic || !clinic.active) {
+        res.status(403).json({ error: "Conta bloqueada temporariamente. Entre em contato com o suporte." });
+        return;
+      }
+    }
+
     next();
   },
   apiRouter

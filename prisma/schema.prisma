@@ -18,6 +18,7 @@ model Clinic {
   workStartHour Int       @default(9)
   workEndHour   Int       @default(19)
   workDays      String    @default("1,2,3,4,5,6") // dias da semana com expediente (0=domingo..6=sabado), separados por virgula
+  active        Boolean   @default(true) // false = bloqueada temporariamente (ex: inadimplencia) - contas client dessa clinica nao conseguem logar nem usar a API
   createdAt     DateTime  @default(now())
 
   procedures    Procedure[]

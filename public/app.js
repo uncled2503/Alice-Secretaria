@@ -71,8 +71,8 @@ async function api(path, options = {}) {
     } catch {
       // resposta nao e JSON, ignora
     }
-    if (res.status === 401) {
-      showAuthGate();
+    if (res.status === 401 || res.status === 403) {
+      showAuthGate(detail || null);
     } else {
       showError(`API ${path} -> HTTP ${res.status}${detail ? " (" + detail + ")" : ""}`);
     }
@@ -146,9 +146,14 @@ document.getElementById("theme-toggle").addEventListener("click", () => {
 // --- Login (controle de acesso de verdade - role="admin" opera qualquer
 // clinica, role="client" fica travado na propria, ver getClinic no backend).
 // O painel inteiro fica escondido atras da tela de login ate autenticar. ---
-function showAuthGate() {
+function showAuthGate(message) {
   document.getElementById("auth-gate").style.display = "flex";
   document.getElementById("app-root").style.display = "none";
+  const errorEl = document.getElementById("auth-gate-error");
+  if (message) {
+    errorEl.textContent = message;
+    errorEl.style.display = "block";
+  }
 }
 
 function hideAuthGate() {
@@ -1301,6 +1306,20 @@ async function loadClinicsList() {
   const body = document.getElementById("clinics-body");
   body.innerHTML = "";
   for (const c of clinics) {
+    const toggleBtn = el("button", { type: "button", class: c.active ? "btn-cancel" : "btn-approve" }, [
+      c.active ? "Bloquear" : "Desbloquear",
+    ]);
+    toggleBtn.addEventListener("click", async () => {
+      const action = c.active ? "bloquear" : "desbloquear";
+      if (!confirm(`Tem certeza que quer ${action} o acesso de "${c.name}"?`)) return;
+      await api(`/clinics/${c.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active: !c.active }),
+      });
+      await loadClinicsList();
+    });
+
     body.appendChild(
       el("tr", {}, [
         el("td", {}, [c.name]),
@@ -1310,6 +1329,12 @@ async function loadClinicsList() {
             c.connected ? "Conectado" : c.connecting ? "Conectando…" : "Desconectado",
           ]),
         ]),
+        el("td", {}, [
+          el("span", { class: `badge ${c.active ? "badge-green" : "badge-neutral"}` }, [
+            c.active ? "Em dia" : "Bloqueada",
+          ]),
+        ]),
+        el("td", {}, [toggleBtn]),
       ])
     );
   }

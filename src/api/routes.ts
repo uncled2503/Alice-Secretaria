@@ -66,6 +66,7 @@ apiRouter.get(
         workStartHour: true,
         workEndHour: true,
         workDays: true,
+        active: true,
       },
     });
     res.json(clinics.map((c) => ({ ...c, ...getStatus(c.id) })));
@@ -80,13 +81,17 @@ apiRouter.put(
       return;
     }
 
-    const { name, timezone, workStartHour, workEndHour, workDays } = req.body as {
+    const { name, timezone, workStartHour, workEndHour, workDays, active } = req.body as {
       name?: string;
       timezone?: string;
       workStartHour?: number;
       workEndHour?: number;
       workDays?: string;
+      active?: boolean;
     };
+
+    // So admin bloqueia/desbloqueia - um cliente nao pode se desbloquear sozinho.
+    if (active !== undefined && !requireAdmin(req, res)) return;
 
     const clinic = await prisma.clinic.update({
       where: { id: req.params.id },
@@ -96,6 +101,7 @@ apiRouter.put(
         ...(workStartHour !== undefined ? { workStartHour } : {}),
         ...(workEndHour !== undefined ? { workEndHour } : {}),
         ...(workDays !== undefined ? { workDays } : {}),
+        ...(active !== undefined ? { active } : {}),
       },
     });
     res.json(clinic);
@@ -952,6 +958,14 @@ apiRouter.post(
     }
 
     const role = staff.role === "admin" ? "admin" : "client";
+    if (role === "client" && staff.clinicId) {
+      const clinic = await prisma.clinic.findUnique({ where: { id: staff.clinicId }, select: { active: true } });
+      if (!clinic || !clinic.active) {
+        res.status(403).json({ error: "Conta bloqueada temporariamente. Entre em contato com o suporte." });
+        return;
+      }
+    }
+
     res.setHeader("Set-Cookie", createSessionCookie({ id: staff.id, name: staff.name, clinicId: staff.clinicId, role }));
     res.json({ id: staff.id, name: staff.name, role, clinicId: staff.clinicId });
   })
