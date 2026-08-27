@@ -256,7 +256,19 @@ export async function connectClinic(clinicId: string): Promise<void> {
 // a sessao atual e gera um QR Code novo pra escanear; o historico chega
 // pelo listener de "messaging-history.set" assim que o QR for lido, e fica
 // em Clinic.importStatus/importStats.
+// Cada tentativa forca um pareamento novo (desconecta + reconecta) - clicar
+// repetido em pouco tempo e exatamente o padrao que o WhatsApp trata como
+// suspeito e pode bloquear temporariamente. Um intervalo minimo entre
+// tentativas evita isso sem precisar confiar em ninguem "nao clicar de novo".
+const IMPORT_COOLDOWN_MS = 10 * 60 * 1000;
+
 export async function triggerHistoryImport(clinicId: string): Promise<void> {
+  const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { importUpdatedAt: true } });
+  if (clinic.importUpdatedAt && Date.now() - clinic.importUpdatedAt.getTime() < IMPORT_COOLDOWN_MS) {
+    const waitMin = Math.ceil((IMPORT_COOLDOWN_MS - (Date.now() - clinic.importUpdatedAt.getTime())) / 60000);
+    throw new Error(`Aguarde mais ${waitMin} minuto(s) antes de importar de novo - tentativas repetidas em sequencia podem fazer o WhatsApp bloquear a conexao temporariamente.`);
+  }
+
   await prisma.clinic.update({
     where: { id: clinicId },
     data: {
