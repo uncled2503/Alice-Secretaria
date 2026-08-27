@@ -2,6 +2,7 @@ import "dotenv/config";
 import path from "path";
 import { fileURLToPath } from "url";
 import express from "express";
+import helmet from "helmet";
 import { startReminderJob } from "./reminders/cron.js";
 import { startFollowUpJob } from "./crm/followup.js";
 import { startBroadcastJob } from "./crm/broadcast.js";
@@ -12,6 +13,11 @@ import { prisma } from "./db/client.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
+
+// CSP desligado de proposito: o painel usa atributos style="" via JS (grid da
+// agenda, modais) que uma CSP padrao bloquearia sem um audit dedicado. O resto
+// dos headers do helmet (X-Frame-Options, nosniff, HSTS etc) fica ativo.
+app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.json({ limit: "8mb" })); // fotos de produto vem como data URI (base64) no body
 
 app.get("/health", (_req, res) => res.json({ ok: true }));

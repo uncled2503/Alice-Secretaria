@@ -5,7 +5,14 @@ import { createHmac, timingSafeEqual } from "crypto";
 // qualquer clinica; role="client" fica travado na propria clinica em toda a
 // API (ver getClinic em api/routes.ts). Sessao e um cookie assinado (sem
 // tabela de sessao no banco).
-const SECRET = process.env.SESSION_SECRET ?? "alice-dev-secret-troque-em-producao";
+// Sem fallback hardcoded de proposito - esse arquivo e publico (repo aberto
+// no GitHub), entao um valor padrao fixo aqui seria conhecido por qualquer
+// pessoa e permitiria forjar cookie de sessao (inclusive admin) de qualquer
+// conta. Se faltar a env var, o servidor recusa subir (ver checagem no import).
+if (!process.env.SESSION_SECRET) {
+  throw new Error("SESSION_SECRET nao configurado - defina uma variavel de ambiente aleatoria antes de subir o servidor.");
+}
+const SECRET: string = process.env.SESSION_SECRET;
 const COOKIE_NAME = "alice_staff";
 const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 

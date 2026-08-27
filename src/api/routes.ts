@@ -1,4 +1,5 @@
 import { Router, type Request, type Response, type RequestHandler } from "express";
+import { rateLimit } from "express-rate-limit";
 import { prisma } from "../db/client.js";
 import { sendText, connectClinic, disconnectClinic, getStatus, getQrDataUrl, getProfilePicUrl } from "../whatsapp/manager.js";
 import { getFunnelStages, generateStageId } from "../crm/stages.js";
@@ -1260,6 +1261,16 @@ apiRouter.delete(
 // na propria clinica em toda a API via getClinic() acima - esse e o
 // isolamento real entre clientes da Alice. ---
 
+// So login/bootstrap aceitam requisicao sem sessao - sem limite de tentativas,
+// dariam pra forcar senha por tentativa e erro sem nenhum obstaculo.
+const loginRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Muitas tentativas de login. Aguarde alguns minutos e tente de novo." },
+});
+
 apiRouter.get("/staff/me", (req, res) => {
   res.json(req.staff ? { id: req.staff.id, name: req.staff.name, role: req.staff.role, clinicId: req.staff.clinicId } : null);
 });
@@ -1269,6 +1280,7 @@ apiRouter.get("/staff/me", (req, res) => {
 // conta admin. Se auto-desliga assim que a primeira for criada.
 apiRouter.post(
   "/staff/bootstrap-admin",
+  loginRateLimit,
   asyncRoute(async (req, res) => {
     const existingAdmin = await prisma.staffUser.findFirst({ where: { role: "admin" } });
     if (existingAdmin) {
@@ -1302,6 +1314,7 @@ apiRouter.post(
 
 apiRouter.post(
   "/staff/login",
+  loginRateLimit,
   asyncRoute(async (req, res) => {
     const { username, password } = req.body as { username?: string; password?: string };
     if (!username || !password) {
