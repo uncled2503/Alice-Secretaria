@@ -195,14 +195,6 @@ export async function connectClinic(clinicId: string, opts: { auto?: boolean } =
     connections.delete(clinicId);
   }
 
-  // Clique manual novo comeca uma cadeia de tentativas do zero - nao deixa um
-  // contador de falhas de uma cadeia automatica anterior (ex: reconexao que
-  // desistiu) bloquear o clique de agora antes mesmo da primeira tentativa.
-  if (!opts.auto) {
-    reconnectAttempts.delete(clinicId);
-    lastConnectError.delete(clinicId);
-  }
-
   fs.mkdirSync(authDir(clinicId), { recursive: true });
   const { state, saveCreds } = await useMultiFileAuthState(authDir(clinicId));
 
