@@ -142,6 +142,7 @@ main { flex: 1; padding: 1.6rem 2rem 3rem; max-width: 1600px; min-width: 0; }
 .badge { display: inline-block; padding: 0.25rem 0.7rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
 .badge-green { background: var(--green-bg); color: var(--green-text); }
 .badge-neutral { background: var(--bg); color: var(--text-muted); border: 1px solid var(--border); }
+.badge-red { background: #7f1d1d; color: white; }
 
 .page-header > button, .page-header > .header-actions {
   background: var(--accent); color: white; border: none; border-radius: 8px;

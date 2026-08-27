@@ -2375,14 +2375,17 @@ async function loadChannelStatus() {
     connectBtn.style.display = "inline-block";
     disconnectBtn.style.display = "none";
   } else {
-    badge.textContent = status.connecting ? "Conectando…" : "Desconectado";
-    badge.className = "badge badge-neutral";
+    badge.textContent = status.connecting ? "Conectando…" : status.lastError ? "Não foi possível conectar" : "Desconectado";
+    badge.className = status.lastError && !status.connecting ? "badge badge-red" : "badge badge-neutral";
     qrWrap.style.display = "none";
     qrLoading.style.display = status.connecting ? "flex" : "none";
     connectBtn.textContent = "Gerar QR Code";
     connectBtn.style.display = "inline-block";
     disconnectBtn.style.display = "none";
   }
+
+  const errorEl = document.getElementById("channel-last-error");
+  if (errorEl) errorEl.textContent = !status.connecting && !status.connected ? status.lastError || "" : "";
 
   await loadImportStatus();
 }
