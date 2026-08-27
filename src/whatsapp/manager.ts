@@ -294,6 +294,12 @@ export async function disconnectClinic(clinicId: string): Promise<void> {
 // Reconecta sozinho, na subida do servidor, toda clinica que ja tinha sessao
 // salva - sem isso, um restart do processo exigiria escanear o QR de novo
 // pra cada clinica manualmente.
+// Espaca cada reconexao em vez de disparar todas juntas no boot - com poucas
+// clinicas nao faz diferenca, mas conforme a base cresce, reconectar dezenas
+// de contas de uma vez so, do mesmo IP do servidor, e exatamente o tipo de
+// rajada que pode chamar atencao indevida do WhatsApp.
+const RESTORE_STAGGER_MS = 3000;
+
 export async function restoreAllConnections(): Promise<void> {
   if (!fs.existsSync(AUTH_ROOT)) return;
   const clinicIds = fs.readdirSync(AUTH_ROOT, { withFileTypes: true })
@@ -302,5 +308,6 @@ export async function restoreAllConnections(): Promise<void> {
 
   for (const clinicId of clinicIds) {
     await connectClinic(clinicId).catch((err) => console.error(`Falha ao restaurar conexao de ${clinicId}:`, err));
+    await new Promise((resolve) => setTimeout(resolve, RESTORE_STAGGER_MS));
   }
 }
