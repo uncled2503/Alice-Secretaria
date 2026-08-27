@@ -1,12 +1,13 @@
 // Agente de pareamento pela rede local - roda aqui no PC (nao na VPS) quando
 // a VPS estiver sendo recusada pelo WhatsApp na hora de gerar QR Code.
-// Uso: RELAY_SECRET=<mesmo valor da VPS> node scripts/relay-agent.mjs
+// Uso: npm run relay-agent (le RELAY_SECRET do .env, igual ao resto do projeto)
 //
 // Fica esperando (heartbeat) por um pedido de pareamento criado quando
 // alguem clica em "Gerar QR Code" no painel; ao receber um, pareia
 // localmente (QR aparece no painel normalmente) e, assim que conectar,
 // entrega a sessao pronta pra VPS assumir o atendimento e encerra a conexao
 // local - esse agente nao fica no meio das conversas do dia a dia.
+import "dotenv/config";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
