@@ -32,6 +32,7 @@ model Clinic {
   funnelStages  FunnelStage[]
   staffUsers    StaffUser[]
   locations     ClinicLocation[]
+  products      Product[]
 }
 
 // Unidade/endereco fisico da clinica. Uma clinica pode ter varias (rede com
@@ -75,14 +76,41 @@ model StaffUser {
 }
 
 model Procedure {
-  id            String    @id @default(cuid())
-  clinicId      String
-  clinic        Clinic    @relation(fields: [clinicId], references: [id])
-  name          String
-  durationMin   Int       @default(60)
-  description   String?
+  id                 String    @id @default(cuid())
+  clinicId           String
+  clinic             Clinic    @relation(fields: [clinicId], references: [id])
+  name               String
+  durationMin        Int       @default(60)
+  description        String?
+
+  price              Float?    // valor a vista, em reais; null = nao informado
+  priceVariable      Boolean   @default(false) // preco depende de avaliacao presencial
+  offerInstallments  Boolean   @default(false)
+  maxInstallments    Int?      // ex: 10 -> "10x de R$ X" (calculado a partir de price)
+  paymentMethods     String    @default("") // dinheiro,pix,credito,debito separados por virgula
+  paymentLink        String?
+
+  // Contexto pra Alice entender e apresentar o procedimento sem inventar
+  // indicacao/beneficio/prazo que a clinica nao cadastrou.
+  goals              String?   // objetivos/queixas atendidas, uma por linha
+  benefits           String?   // beneficios que podem ser afirmados, um por linha
+  aliases            String?   // outros nomes/formas de pedir, separados por virgula
+  resultTimeline     String?   // quando o resultado costuma aparecer
 
   appointments  Appointment[]
+}
+
+// Produto fisico vendido pela clinica (ex: home care), separado de procedimentos.
+model Product {
+  id          String   @id @default(cuid())
+  clinicId    String
+  clinic      Clinic   @relation(fields: [clinicId], references: [id])
+  name        String
+  price       Float?
+  description String?
+  photoUrl    String?  // data URI (base64) da foto enviada
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
 }
 
 model Patient {

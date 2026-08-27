@@ -5,6 +5,7 @@ import { findAvailableSlots } from "../scheduling/slots.js";
 import { getActiveRulesPrompt } from "./rules.js";
 import { getFunnelStages } from "../crm/stages.js";
 import { notifyStaff } from "../crm/notify.js";
+import type { Procedure } from "@prisma/client";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 // gpt-4o-mini por padrao: conversa de qualificacao/agendamento nao precisa do
@@ -99,15 +100,53 @@ async function runTool(clinicId: string, patientId: string, name: string, input:
   return "Ferramenta desconhecida.";
 }
 
+const PAYMENT_METHOD_LABELS: Record<string, string> = {
+  dinheiro: "dinheiro",
+  pix: "Pix",
+  credito: "cartao de credito",
+  debito: "cartao de debito",
+};
+
+// So passa pro prompt o que a clinica realmente cadastrou - nunca inventa
+// indicacao, beneficio, prazo ou preco que nao veio do banco.
+function describeProcedureForPrompt(p: Procedure): string {
+  const lines = [`- ${p.name} (${p.durationMin}min)`];
+
+  if (p.price != null) {
+    let priceLine = `  Valor: R$ ${p.price.toFixed(2)}`;
+    if (p.offerInstallments && p.maxInstallments) {
+      priceLine += ` (ate ${p.maxInstallments}x de R$ ${(p.price / p.maxInstallments).toFixed(2)})`;
+    }
+    lines.push(priceLine);
+  } else if (p.priceVariable) {
+    lines.push("  Valor: depende de avaliacao presencial (nao informar valor fixo)");
+  }
+
+  const methods = p.paymentMethods
+    ? p.paymentMethods
+        .split(",")
+        .filter(Boolean)
+        .map((m) => PAYMENT_METHOD_LABELS[m] || m)
+    : [];
+  if (methods.length) lines.push(`  Formas de pagamento: ${methods.join(", ")}`);
+  if (p.paymentLink) lines.push(`  Link de pagamento: ${p.paymentLink}`);
+
+  if (p.description) lines.push(`  Descricao: ${p.description}`);
+  if (p.aliases) lines.push(`  Tambem pode ser chamado de: ${p.aliases}`);
+  if (p.goals) lines.push(`  Atende objetivos/queixas: ${p.goals.split("\n").filter(Boolean).join("; ")}`);
+  if (p.benefits) lines.push(`  Beneficios que podem ser afirmados: ${p.benefits.split("\n").filter(Boolean).join("; ")}`);
+  if (p.resultTimeline) lines.push(`  Prazo de resultado: ${p.resultTimeline}`);
+
+  return lines.join("\n");
+}
+
 async function buildSystemPrompt(clinicId: string): Promise<string> {
   const clinic = await prisma.clinic.findUniqueOrThrow({
     where: { id: clinicId },
     include: { procedures: true },
   });
 
-  const procedureList = clinic.procedures
-    .map((p) => `- ${p.name} (${p.durationMin}min)${p.description ? ": " + p.description : ""}`)
-    .join("\n");
+  const procedureList = clinic.procedures.map((p) => describeProcedureForPrompt(p)).join("\n\n");
 
   return `Voce e a Alice, secretaria virtual da clinica de estetica "${clinic.name}".
 Atenda pelo WhatsApp de forma humanizada, calorosa e objetiva, como uma recepcionista experiente.
@@ -120,6 +159,8 @@ Seu trabalho:
 
 Procedimentos oferecidos pela clinica:
 ${procedureList || "(nenhum procedimento cadastrado ainda)"}
+
+Use so os dados de valor, beneficio, indicacao e prazo que estao cadastrados acima em cada procedimento. Se o paciente perguntar algo que nao esta ali (preco de um item sem valor, prazo de um item sem prazo cadastrado, etc.), diga que precisa confirmar na avaliacao/com a equipe - nunca invente numero, garantia ou prazo.
 
 Responda sempre em portugues do Brasil, em mensagens curtas como quem digita no WhatsApp.${await getActiveRulesPrompt(clinicId)}`;
 }

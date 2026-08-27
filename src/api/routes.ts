@@ -353,27 +353,52 @@ apiRouter.get(
   })
 );
 
+type ProcedureBody = {
+  name?: string;
+  durationMin?: number;
+  description?: string;
+  price?: number | null;
+  priceVariable?: boolean;
+  offerInstallments?: boolean;
+  maxInstallments?: number | null;
+  paymentMethods?: string[];
+  paymentLink?: string | null;
+  goals?: string;
+  benefits?: string;
+  aliases?: string;
+  resultTimeline?: string;
+};
+
+function procedureWriteData(body: ProcedureBody) {
+  return {
+    ...(body.name !== undefined ? { name: body.name } : {}),
+    ...(body.durationMin !== undefined ? { durationMin: body.durationMin && body.durationMin > 0 ? body.durationMin : 60 } : {}),
+    ...(body.description !== undefined ? { description: body.description || null } : {}),
+    ...(body.price !== undefined ? { price: body.price === null ? null : Number(body.price) } : {}),
+    ...(body.priceVariable !== undefined ? { priceVariable: !!body.priceVariable } : {}),
+    ...(body.offerInstallments !== undefined ? { offerInstallments: !!body.offerInstallments } : {}),
+    ...(body.maxInstallments !== undefined ? { maxInstallments: body.maxInstallments === null ? null : Number(body.maxInstallments) } : {}),
+    ...(body.paymentMethods !== undefined ? { paymentMethods: body.paymentMethods.join(",") } : {}),
+    ...(body.paymentLink !== undefined ? { paymentLink: body.paymentLink || null } : {}),
+    ...(body.goals !== undefined ? { goals: body.goals || null } : {}),
+    ...(body.benefits !== undefined ? { benefits: body.benefits || null } : {}),
+    ...(body.aliases !== undefined ? { aliases: body.aliases || null } : {}),
+    ...(body.resultTimeline !== undefined ? { resultTimeline: body.resultTimeline || null } : {}),
+  };
+}
+
 apiRouter.post(
   "/procedures",
   asyncRoute(async (req, res) => {
-    const { name, durationMin, description } = req.body as {
-      name?: string;
-      durationMin?: number;
-      description?: string;
-    };
-    if (!name) {
+    const body = req.body as ProcedureBody;
+    if (!body.name) {
       res.status(400).json({ error: "name obrigatorio" });
       return;
     }
 
     const clinic = await getClinic(req);
     const procedure = await prisma.procedure.create({
-      data: {
-        clinicId: clinic.id,
-        name,
-        durationMin: durationMin && durationMin > 0 ? durationMin : 60,
-        description: description || null,
-      },
+      data: { clinicId: clinic.id, name: body.name, ...procedureWriteData(body) },
     });
     res.json(procedure);
   })
@@ -385,19 +410,9 @@ apiRouter.put(
     const existing = await prisma.procedure.findUniqueOrThrow({ where: { id: req.params.id } });
     if (!assertClinicAccess(req, res, existing.clinicId)) return;
 
-    const { name, durationMin, description } = req.body as {
-      name?: string;
-      durationMin?: number;
-      description?: string;
-    };
-
     const procedure = await prisma.procedure.update({
       where: { id: req.params.id },
-      data: {
-        ...(name !== undefined ? { name } : {}),
-        ...(durationMin !== undefined ? { durationMin } : {}),
-        ...(description !== undefined ? { description: description || null } : {}),
-      },
+      data: procedureWriteData(req.body as ProcedureBody),
     });
     res.json(procedure);
   })
@@ -410,6 +425,83 @@ apiRouter.delete(
     if (!assertClinicAccess(req, res, existing.clinicId)) return;
 
     await prisma.procedure.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  })
+);
+
+apiRouter.get(
+  "/products",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const products = await prisma.product.findMany({
+      where: { clinicId: clinic.id },
+      orderBy: { createdAt: "asc" },
+    });
+    res.json(products);
+  })
+);
+
+apiRouter.post(
+  "/products",
+  asyncRoute(async (req, res) => {
+    const { name, price, description, photoUrl } = req.body as {
+      name?: string;
+      price?: number | null;
+      description?: string;
+      photoUrl?: string | null;
+    };
+    if (!name) {
+      res.status(400).json({ error: "name obrigatorio" });
+      return;
+    }
+
+    const clinic = await getClinic(req);
+    const product = await prisma.product.create({
+      data: {
+        clinicId: clinic.id,
+        name,
+        price: price === null || price === undefined ? null : Number(price),
+        description: description || null,
+        photoUrl: photoUrl || null,
+      },
+    });
+    res.json(product);
+  })
+);
+
+apiRouter.put(
+  "/products/:id",
+  asyncRoute(async (req, res) => {
+    const existing = await prisma.product.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, existing.clinicId)) return;
+
+    const { name, price, description, photoUrl } = req.body as {
+      name?: string;
+      price?: number | null;
+      description?: string;
+      photoUrl?: string | null;
+    };
+
+    const product = await prisma.product.update({
+      where: { id: req.params.id },
+      data: {
+        ...(name !== undefined ? { name } : {}),
+        ...(price !== undefined ? { price: price === null ? null : Number(price) } : {}),
+        ...(description !== undefined ? { description: description || null } : {}),
+        ...(photoUrl !== undefined ? { photoUrl: photoUrl || null } : {}),
+      },
+    });
+    res.json(product);
+  })
+);
+
+apiRouter.delete(
+  "/products/:id",
+  asyncRoute(async (req, res) => {
+    const existing = await prisma.product.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, existing.clinicId)) return;
+
+    await prisma.product.delete({ where: { id: req.params.id } });
     res.json({ ok: true });
   })
 );

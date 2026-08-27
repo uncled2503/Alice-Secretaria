@@ -100,6 +100,7 @@ const ICONS = {
   trash: '<path d="M4 7h16M9 7V4.5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1V7M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13" stroke-linecap="round" stroke-linejoin="round"/>',
   user: '<circle cx="12" cy="8" r="3.5"/><path d="M4.5 20c0-4.1 3.4-7 7.5-7s7.5 2.9 7.5 7" stroke-linecap="round"/>',
   swap: '<path d="M7 4v13M7 17l-3-3M7 17l3-3" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 20V7M17 7l-3 3M17 7l3 3" stroke-linecap="round" stroke-linejoin="round"/>',
+  pencil: '<path d="M4 20l1-4.5L15.5 5 19 8.5 8.5 19 4 20z" stroke-linejoin="round"/><path d="M13 7l4 4" stroke-linecap="round"/>',
 };
 
 function renderIcon(name) {
@@ -1241,69 +1242,280 @@ async function loadClinics() {
   });
 }
 
+// --- Helpers de moeda (BRL) ---
+function formatBRL(n) {
+  if (n == null || Number.isNaN(n)) return "";
+  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+function parseBRLInput(str) {
+  if (!str || !str.trim()) return null;
+  const cleaned = str.replace(/[^\d,.-]/g, "").replace(/\.(?=\d{3}(?:\D|$))/g, "").replace(",", ".");
+  const n = parseFloat(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+const PAYMENT_METHOD_LABELS = { dinheiro: "Dinheiro", pix: "Pix", credito: "Cartão de Crédito", debito: "Cartão de Débito" };
+
 // --- Procedimentos ---
+let allProcedures = [];
+
 async function loadProcedures() {
-  const procedures = await api("/procedures");
+  allProcedures = await api("/procedures");
+  renderProcedures();
+}
+
+function renderProcedures() {
+  const search = document.getElementById("procedures-search").value.trim().toLowerCase();
+  const filtered = allProcedures.filter((p) => !search || p.name.toLowerCase().includes(search));
+  document.getElementById("procedures-count").textContent = allProcedures.length;
+  document.getElementById("procedures-empty").style.display = filtered.length ? "none" : "block";
+
   const body = document.getElementById("procedures-body");
   body.innerHTML = "";
+  for (const proc of filtered) {
+    const editBtn = el("button", { type: "button", class: "btn-icon-plain", title: "Editar" }, [
+      el("span", { class: "nav-icon", "data-icon": "pencil" }, []),
+    ]);
+    editBtn.addEventListener("click", () => openProcedureModal(proc));
 
-  for (const proc of procedures) {
-    const nameInput = el("input", { type: "text" });
-    nameInput.value = proc.name;
-    const durationInput = el("input", { type: "number", min: "5" });
-    durationInput.value = proc.durationMin;
-    const descInput = el("input", { type: "text" });
-    descInput.value = proc.description ?? "";
+    let priceText = "-";
+    if (proc.price != null) {
+      priceText = formatBRL(proc.price);
+      if (proc.offerInstallments && proc.maxInstallments) {
+        priceText += ` (${proc.maxInstallments}x de ${formatBRL(proc.price / proc.maxInstallments)})`;
+      }
+    } else if (proc.priceVariable) {
+      priceText = "Variável";
+    }
 
-    const saveBtn = el("button", { class: "btn-save" }, ["Salvar"]);
-    saveBtn.addEventListener("click", async () => {
-      saveBtn.textContent = "Salvando...";
-      await api(`/procedures/${proc.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: nameInput.value,
-          durationMin: Number(durationInput.value),
-          description: descInput.value,
-        }),
-      });
-      saveBtn.textContent = "Salvo!";
-      setTimeout(() => (saveBtn.textContent = "Salvar"), 1500);
-    });
-
-    const deleteBtn = el("button", { class: "btn-discard" }, ["Remover"]);
-    deleteBtn.addEventListener("click", async () => {
-      await api(`/procedures/${proc.id}`, { method: "DELETE" });
-      await loadProcedures();
-    });
+    const methods = (proc.paymentMethods || "").split(",").filter(Boolean);
+    const methodsCell = el(
+      "td",
+      {},
+      methods.length ? methods.map((m) => el("span", { class: "payment-badge" }, [PAYMENT_METHOD_LABELS[m] || m])) : ["-"]
+    );
 
     body.appendChild(
       el("tr", {}, [
-        el("td", {}, [nameInput]),
-        el("td", {}, [durationInput]),
-        el("td", {}, [descInput]),
-        el("td", { class: "actions" }, [saveBtn, deleteBtn]),
+        el("td", {}, [proc.name]),
+        el("td", {}, [priceText]),
+        methodsCell,
+        el("td", { class: "cell-truncate", title: proc.description || "" }, [proc.description || "-"]),
+        el("td", { class: "actions" }, [editBtn]),
       ])
     );
   }
+  paintIcons(body);
 }
 
-document.getElementById("procedure-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const name = document.getElementById("pr-name").value.trim();
-  const durationMin = Number(document.getElementById("pr-duration").value) || 60;
-  const description = document.getElementById("pr-description").value.trim();
-  if (!name) return;
+document.getElementById("procedures-search").addEventListener("input", renderProcedures);
+document.getElementById("btn-add-procedure").addEventListener("click", () => openProcedureModal(null));
 
-  await api("/procedures", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, durationMin, description }),
+function openProcedureModal(proc) {
+  document.getElementById("procedure-modal-title").textContent = proc ? "Editar Serviço" : "Adicionar Serviço";
+  document.getElementById("pr2-id").value = proc?.id || "";
+  document.getElementById("pr2-name").value = proc?.name || "";
+  document.getElementById("pr2-duration").value = proc?.durationMin || 60;
+  document.getElementById("pr2-price").value = proc?.price != null ? proc.price.toFixed(2).replace(".", ",") : "";
+  document.getElementById("pr2-price-variable").checked = !!proc?.priceVariable;
+  document.getElementById("pr2-installments").checked = !!proc?.offerInstallments;
+  document.getElementById("pr2-installments-count").value = proc?.maxInstallments || 10;
+  document.getElementById("pr2-installments-count-wrap").style.display = proc?.offerInstallments ? "flex" : "none";
+  document.getElementById("pr2-description").value = proc?.description || "";
+  document.getElementById("pr2-desc-count").textContent = (proc?.description || "").length;
+  document.getElementById("pr2-goals").value = proc?.goals || "";
+  document.getElementById("pr2-benefits").value = proc?.benefits || "";
+  document.getElementById("pr2-aliases").value = proc?.aliases || "";
+  document.getElementById("pr2-timeline").value = proc?.resultTimeline || "";
+  document.getElementById("pr2-payment-link").value = proc?.paymentLink || "";
+
+  const activeMethods = new Set((proc?.paymentMethods || "").split(",").filter(Boolean));
+  document.querySelectorAll(".payment-method-btn").forEach((btn) => {
+    btn.classList.toggle("active", activeMethods.has(btn.dataset.method));
   });
 
-  e.target.reset();
-  document.getElementById("pr-duration").value = 60;
+  document.getElementById("procedure-delete-btn").style.display = proc ? "" : "none";
+  document.getElementById("procedure-edit-overlay").style.display = "flex";
+}
+
+function closeProcedureModal() {
+  document.getElementById("procedure-edit-overlay").style.display = "none";
+}
+
+document.getElementById("procedure-edit-close").addEventListener("click", closeProcedureModal);
+document.getElementById("procedure-edit-overlay").addEventListener("click", (e) => {
+  if (e.target.id === "procedure-edit-overlay") closeProcedureModal();
+});
+
+document.getElementById("pr2-installments").addEventListener("change", (e) => {
+  document.getElementById("pr2-installments-count-wrap").style.display = e.target.checked ? "flex" : "none";
+});
+
+document.getElementById("pr2-description").addEventListener("input", (e) => {
+  document.getElementById("pr2-desc-count").textContent = e.target.value.length;
+});
+
+document.querySelectorAll(".payment-method-btn").forEach((btn) => {
+  btn.addEventListener("click", () => btn.classList.toggle("active"));
+});
+
+document.getElementById("procedure-delete-btn").addEventListener("click", async () => {
+  const id = document.getElementById("pr2-id").value;
+  if (!id || !confirm("Remover esse procedimento?")) return;
+  await api(`/procedures/${id}`, { method: "DELETE" });
+  closeProcedureModal();
   await loadProcedures();
+});
+
+document.getElementById("procedure-edit-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const id = document.getElementById("pr2-id").value;
+  const offerInstallments = document.getElementById("pr2-installments").checked;
+  const payload = {
+    name: document.getElementById("pr2-name").value.trim(),
+    durationMin: Number(document.getElementById("pr2-duration").value),
+    price: parseBRLInput(document.getElementById("pr2-price").value),
+    priceVariable: document.getElementById("pr2-price-variable").checked,
+    offerInstallments,
+    maxInstallments: offerInstallments ? Number(document.getElementById("pr2-installments-count").value) : null,
+    description: document.getElementById("pr2-description").value.trim(),
+    goals: document.getElementById("pr2-goals").value.trim(),
+    benefits: document.getElementById("pr2-benefits").value.trim(),
+    aliases: document.getElementById("pr2-aliases").value.trim(),
+    resultTimeline: document.getElementById("pr2-timeline").value.trim(),
+    paymentMethods: Array.from(document.querySelectorAll(".payment-method-btn.active")).map((b) => b.dataset.method),
+    paymentLink: document.getElementById("pr2-payment-link").value.trim(),
+  };
+  if (!payload.name) return;
+
+  if (id) {
+    await api(`/procedures/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  } else {
+    await api("/procedures", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  }
+  closeProcedureModal();
+  await loadProcedures();
+});
+
+// --- Produtos ---
+let allProducts = [];
+let pendingProductPhoto = null;
+
+async function loadProducts() {
+  allProducts = await api("/products");
+  renderProducts();
+}
+
+function renderProducts() {
+  const search = document.getElementById("products-search").value.trim().toLowerCase();
+  const filtered = allProducts.filter((p) => !search || p.name.toLowerCase().includes(search));
+  document.getElementById("products-count").textContent = allProducts.length;
+  document.getElementById("products-empty").style.display = filtered.length ? "none" : "block";
+
+  const body = document.getElementById("products-body");
+  body.innerHTML = "";
+  for (const prod of filtered) {
+    const thumb = prod.photoUrl
+      ? el("img", { class: "product-thumb", src: prod.photoUrl, alt: "" }, [])
+      : el("div", { class: "product-thumb" }, []);
+
+    const editBtn = el("button", { type: "button", class: "btn-icon-plain", title: "Editar" }, [
+      el("span", { class: "nav-icon", "data-icon": "pencil" }, []),
+    ]);
+    editBtn.addEventListener("click", () => openProductModal(prod));
+
+    body.appendChild(
+      el("tr", {}, [
+        el("td", {}, [thumb]),
+        el("td", {}, [prod.name]),
+        el("td", {}, [prod.price != null ? formatBRL(prod.price) : "-"]),
+        el("td", { class: "cell-truncate", title: prod.description || "" }, [prod.description || "-"]),
+        el("td", { class: "actions" }, [editBtn]),
+      ])
+    );
+  }
+  paintIcons(body);
+}
+
+document.getElementById("products-search").addEventListener("input", renderProducts);
+document.getElementById("btn-add-product").addEventListener("click", () => openProductModal(null));
+
+function updateProductPhotoPreview() {
+  const img = document.getElementById("pd-photo-preview");
+  const placeholder = document.getElementById("pd-photo-placeholder");
+  if (pendingProductPhoto) {
+    img.src = pendingProductPhoto;
+    img.style.display = "block";
+    placeholder.style.display = "none";
+  } else {
+    img.style.display = "none";
+    placeholder.style.display = "block";
+  }
+}
+
+function openProductModal(prod) {
+  document.getElementById("product-modal-title").textContent = prod ? "Editar Produto" : "Adicionar Produto";
+  document.getElementById("pd-id").value = prod?.id || "";
+  document.getElementById("pd-name").value = prod?.name || "";
+  document.getElementById("pd-price").value = prod?.price != null ? prod.price.toFixed(2).replace(".", ",") : "";
+  document.getElementById("pd-description").value = prod?.description || "";
+  pendingProductPhoto = prod?.photoUrl || null;
+  updateProductPhotoPreview();
+  document.getElementById("product-delete-btn").style.display = prod ? "" : "none";
+  document.getElementById("product-edit-overlay").style.display = "flex";
+}
+
+function closeProductModal() {
+  document.getElementById("product-edit-overlay").style.display = "none";
+}
+
+document.getElementById("product-edit-close").addEventListener("click", closeProductModal);
+document.getElementById("product-edit-overlay").addEventListener("click", (e) => {
+  if (e.target.id === "product-edit-overlay") closeProductModal();
+});
+
+document.getElementById("pd-photo-drop").addEventListener("click", () => document.getElementById("pd-photo-input").click());
+document.getElementById("pd-photo-input").addEventListener("change", (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  if (file.size > 2 * 1024 * 1024) {
+    showError("Imagem maior que 2MB - escolha um arquivo menor.");
+    e.target.value = "";
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    pendingProductPhoto = reader.result;
+    updateProductPhotoPreview();
+  };
+  reader.readAsDataURL(file);
+});
+
+document.getElementById("product-delete-btn").addEventListener("click", async () => {
+  const id = document.getElementById("pd-id").value;
+  if (!id || !confirm("Remover esse produto?")) return;
+  await api(`/products/${id}`, { method: "DELETE" });
+  closeProductModal();
+  await loadProducts();
+});
+
+document.getElementById("product-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const id = document.getElementById("pd-id").value;
+  const payload = {
+    name: document.getElementById("pd-name").value.trim(),
+    price: parseBRLInput(document.getElementById("pd-price").value),
+    description: document.getElementById("pd-description").value.trim(),
+    photoUrl: pendingProductPhoto,
+  };
+  if (!payload.name) return;
+
+  if (id) {
+    await api(`/products/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  } else {
+    await api("/products", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  }
+  closeProductModal();
+  await loadProducts();
 });
 
 async function loadClinicsList() {
@@ -1684,6 +1896,7 @@ const SETTINGS_SUB_LOADERS = {
     loadClinicDataForm();
     loadClinicLocations();
   },
+  products: loadProducts,
   procedures: loadProcedures,
   broadcasts: () => {
     loadBroadcastTargetOptions();

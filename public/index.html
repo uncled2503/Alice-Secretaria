@@ -367,26 +367,36 @@
         </div>
 
         <div id="sub-products" class="settings-subpanel">
-          <div class="coming-soon">Produtos (itens físicos vendidos pela clínica, separado de procedimentos) — ainda não implementado.</div>
+          <div class="list-toolbar">
+            <div class="list-count">Produtos (<span id="products-count">0</span>)</div>
+            <div class="list-toolbar-actions">
+              <input id="products-search" type="text" placeholder="Buscar produto" />
+              <button type="button" id="btn-add-product">+ Adicionar Produto</button>
+            </div>
+          </div>
+          <div class="card">
+            <table>
+              <thead><tr><th></th><th>Nome</th><th>Valor</th><th>Descrição</th><th>Ação</th></tr></thead>
+              <tbody id="products-body"></tbody>
+            </table>
+            <div id="products-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Nenhum produto cadastrado.</div>
+          </div>
         </div>
 
         <div id="sub-procedures" class="settings-subpanel">
-          <p class="hint">O que a Alice sabe oferecer e agendar para essa clínica.</p>
-          <form id="procedure-form" class="broadcast-form card">
-            <input id="pr-name" type="text" placeholder="Nome do procedimento" required />
-            <div class="broadcast-form-row">
-              <label>Duração (min):
-                <input id="pr-duration" type="number" min="5" value="60" />
-              </label>
-              <input id="pr-description" type="text" placeholder="Descrição (opcional)" style="flex:1" />
-              <button type="submit">Adicionar</button>
+          <div class="list-toolbar">
+            <div class="list-count">Serviços (<span id="procedures-count">0</span>)</div>
+            <div class="list-toolbar-actions">
+              <input id="procedures-search" type="text" placeholder="Buscar procedimento" />
+              <button type="button" id="btn-add-procedure">+ Adicionar Serviço</button>
             </div>
-          </form>
+          </div>
           <div class="card">
             <table>
-              <thead><tr><th>Nome</th><th>Duração</th><th>Descrição</th><th></th></tr></thead>
+              <thead><tr><th>Serviço</th><th>Valor</th><th>Pagamento</th><th>Descrição</th><th>Ação</th></tr></thead>
               <tbody id="procedures-body"></tbody>
             </table>
+            <div id="procedures-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Nenhum procedimento cadastrado.</div>
           </div>
         </div>
 
@@ -579,6 +589,120 @@
           </label>
           <div class="modal-actions">
             <button type="button" id="appt-edit-delete" class="btn-cancel">Excluir</button>
+            <button type="submit">Salvar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="product-edit-overlay" class="modal-overlay" style="display:none">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 id="product-modal-title">Adicionar Produto</h3>
+          <button type="button" id="product-edit-close" class="modal-close">&times;</button>
+        </div>
+        <form id="product-form">
+          <input type="hidden" id="pd-id" />
+          <div class="photo-dropzone" id="pd-photo-drop">
+            <img id="pd-photo-preview" style="display:none" alt="" />
+            <div id="pd-photo-placeholder">
+              <span class="nav-icon" data-icon="box"></span>
+              <p>Clique para enviar<br /><span class="hint" style="margin:0">PNG, JPG e WEBP, até 2MB</span></p>
+            </div>
+            <input type="file" id="pd-photo-input" accept="image/png,image/jpeg,image/webp" style="display:none" />
+          </div>
+          <label>Nome do produto*
+            <input id="pd-name" type="text" required />
+          </label>
+          <label>Valor do produto
+            <input id="pd-price" type="text" inputmode="decimal" placeholder="0,00" />
+          </label>
+          <label>Descrição do produto
+            <textarea id="pd-description" rows="3" placeholder="Pra que serve, diferenciais, cuidados"></textarea>
+          </label>
+          <div class="modal-actions">
+            <button type="button" id="product-delete-btn" class="btn-cancel" style="display:none">Excluir</button>
+            <button type="submit">Salvar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="procedure-edit-overlay" class="modal-overlay" style="display:none">
+      <div class="modal-card modal-card-lg">
+        <div class="modal-header">
+          <h3 id="procedure-modal-title">Adicionar Serviço</h3>
+          <button type="button" id="procedure-edit-close" class="modal-close">&times;</button>
+        </div>
+        <form id="procedure-edit-form">
+          <input type="hidden" id="pr2-id" />
+          <div class="modal-form-row">
+            <label style="flex:2">Nome do serviço*
+              <input id="pr2-name" type="text" required />
+            </label>
+            <label>Duração*
+              <select id="pr2-duration">
+                <option value="15">15min</option>
+                <option value="30">30min</option>
+                <option value="45">45min</option>
+                <option value="60" selected>1h</option>
+                <option value="90">1h30</option>
+                <option value="120">2h</option>
+                <option value="180">3h</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="modal-section">
+            <label>Valor do procedimento
+              <input id="pr2-price" type="text" inputmode="decimal" placeholder="0,00" />
+            </label>
+            <label class="checkbox-row"><input type="checkbox" id="pr2-price-variable" /> Preço variável (depende de avaliação)</label>
+            <label class="checkbox-row"><input type="checkbox" id="pr2-installments" /> Oferecer parcelamento no cartão de crédito</label>
+            <label id="pr2-installments-count-wrap" style="display:none">Em até quantas vezes?
+              <input id="pr2-installments-count" type="number" min="2" max="24" value="10" />
+            </label>
+          </div>
+
+          <label>Descrição do procedimento
+            <textarea id="pr2-description" rows="3" maxlength="10000" placeholder="Descreva o procedimento"></textarea>
+          </label>
+          <p class="hint char-counter"><span id="pr2-desc-count">0</span> / 10.000</p>
+
+          <div class="modal-section">
+            <div class="section-header-sm">Como a Alice encontra e apresenta este procedimento</div>
+            <p class="hint">Cadastre fatos curtos. A Alice usa esses dados pra entender frases como "meu rosto parece cansado" sem inventar indicação ou benefício.</p>
+            <div class="modal-form-row">
+              <label style="flex:1">Objetivos e queixas atendidas
+                <textarea id="pr2-goals" rows="3" placeholder="Uma por linha&#10;Aspecto de rosto cansado&#10;Perda de firmeza"></textarea>
+              </label>
+              <label style="flex:1">Benefícios que podem ser afirmados
+                <textarea id="pr2-benefits" rows="3" placeholder="Um por linha&#10;Ajuda a melhorar a firmeza da pele"></textarea>
+              </label>
+            </div>
+            <label>Outros nomes e formas de pedir
+              <input id="pr2-aliases" type="text" placeholder="Separe por vírgulas, ex: botox, toxina" />
+            </label>
+            <label>Quando o resultado costuma aparecer
+              <textarea id="pr2-timeline" rows="2" placeholder="Ex: A evolução varia conforme o plano definido na avaliação."></textarea>
+            </label>
+          </div>
+
+          <div class="modal-section">
+            <div class="section-header-sm">Formas de pagamento aceitas</div>
+            <div class="payment-methods-grid">
+              <button type="button" class="payment-method-btn" data-method="dinheiro">Dinheiro</button>
+              <button type="button" class="payment-method-btn" data-method="pix">Pix</button>
+              <button type="button" class="payment-method-btn" data-method="credito">Cartão de Crédito</button>
+              <button type="button" class="payment-method-btn" data-method="debito">Cartão de Débito</button>
+            </div>
+            <label>Link de pagamento
+              <input id="pr2-payment-link" type="text" placeholder="https://pag.suaclinica.com/servico" />
+            </label>
+          </div>
+
+          <div class="modal-actions">
+            <button type="button" id="procedure-delete-btn" class="btn-cancel" style="display:none">Excluir</button>
             <button type="submit">Salvar</button>
           </div>
         </form>
