@@ -2,6 +2,7 @@ import { Router, type Request, type Response, type RequestHandler } from "expres
 import { rateLimit } from "express-rate-limit";
 import { prisma } from "../db/client.js";
 import { sendText, connectClinic, disconnectClinic, getStatus, getQrDataUrl, getProfilePicUrl, triggerHistoryImport } from "../whatsapp/manager.js";
+import { relayEnabled, requestPairing, getRelayStatus, heartbeat as relayHeartbeat, reportEvent as relayReportEvent, adoptSession as relayAdoptSession } from "../whatsapp/relay.js";
 import { getFunnelStages, generateStageId } from "../crm/stages.js";
 import { createRuleDraft, RULE_CATEGORIES } from "../ai/rules.js";
 import { notifyStaff } from "../crm/notify.js";
@@ -287,8 +288,23 @@ apiRouter.get(
   asyncRoute(async (req, res) => {
     const clinic = await getClinic(req);
     const status = getStatus(clinic.id);
-    const qr = status.connecting ? await getQrDataUrl(clinic.id) : null;
-    res.json({ ...status, qr });
+    const vpsQr = status.connecting ? await getQrDataUrl(clinic.id) : null;
+
+    // A VPS tem prioridade se ja tiver QR ou estiver conectada; caso
+    // contrario, mostra o que o agente da rede local reportar (se houver
+    // um pareamento em andamento por la - ver /whatsapp/connect e relay.ts).
+    if (status.connected || vpsQr) {
+      res.json({ ...status, qr: vpsQr });
+      return;
+    }
+
+    const relay = getRelayStatus(clinic.id);
+    if (relay) {
+      res.json({ connected: false, connecting: relay.connecting, qr: relay.qr, lastError: relay.lastError ?? status.lastError });
+      return;
+    }
+
+    res.json({ ...status, qr: null });
   })
 );
 
@@ -303,6 +319,51 @@ apiRouter.post(
     // chegar a oferecer um QR novo pra escanear.
     if (!getStatus(clinic.id).connected) await disconnectClinic(clinic.id);
     await connectClinic(clinic.id);
+    // Em paralelo, se tiver um agente de rede local disponivel (RELAY_SECRET
+    // configurado), deixa um pedido de pareamento pra ele tambem tentar -
+    // qual dos dois conseguir primeiro e o que aparece no painel.
+    if (relayEnabled()) requestPairing(clinic.id);
+    res.json({ ok: true });
+  })
+);
+
+// --- Ponte com o agente de rede local (scripts/relay-agent.mjs) ---
+// Autenticado por RELAY_SECRET (nao pela sessao de staff - o agente roda fora
+// do navegador). Ver src/whatsapp/relay.ts para o raciocinio completo.
+apiRouter.post(
+  "/relay/heartbeat",
+  asyncRoute(async (req, res) => {
+    const result = relayHeartbeat((req.body as { secret?: unknown })?.secret);
+    if (!result) {
+      res.status(401).json({ error: "Segredo invalido" });
+      return;
+    }
+    res.json(result);
+  })
+);
+
+apiRouter.post(
+  "/relay/report",
+  asyncRoute(async (req, res) => {
+    const { secret, clinicId, jobToken, event, qr, message } = (req.body ?? {}) as Record<string, unknown>;
+    const ok = relayReportEvent(secret, clinicId, jobToken, event, { qr, message });
+    if (!ok) {
+      res.status(401).json({ error: "Job invalido" });
+      return;
+    }
+    res.json({ ok: true });
+  })
+);
+
+apiRouter.post(
+  "/relay/session",
+  asyncRoute(async (req, res) => {
+    const { secret, clinicId, jobToken, files } = (req.body ?? {}) as Record<string, unknown>;
+    const ok = await relayAdoptSession(secret, clinicId, jobToken, files);
+    if (!ok) {
+      res.status(401).json({ error: "Job invalido" });
+      return;
+    }
     res.json({ ok: true });
   })
 );

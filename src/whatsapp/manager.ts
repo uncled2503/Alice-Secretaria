@@ -55,7 +55,7 @@ const reconnectAttempts = new Map<string, number>();
 const MAX_RECONNECT_ATTEMPTS = 5;
 const BASE_RECONNECT_DELAY_MS = 5000;
 
-function authDir(clinicId: string): string {
+export function authDir(clinicId: string): string {
   return path.join(AUTH_ROOT, clinicId);
 }
 
