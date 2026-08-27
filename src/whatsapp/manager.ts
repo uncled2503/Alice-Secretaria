@@ -44,14 +44,6 @@ let connectionInstanceSeq = 0;
 // pra tentar de novo em vez de bloquear o botao pra sempre.
 const STUCK_CONNECTING_MS = 25_000;
 
-// Reconexao automatica apos queda usa backoff exponencial (5s, 10s, 20s...) e
-// desiste depois de um numero maximo de tentativas seguidas, em vez de tentar
-// a cada 5s pra sempre - foi exatamente esse loop infinito que martelou os
-// servidores do WhatsApp sem parar e piorou um rate-limit ja em curso.
-const reconnectAttempts = new Map<string, number>();
-const MAX_RECONNECT_ATTEMPTS = 5;
-const BASE_RECONNECT_DELAY_MS = 5000;
-
 function authDir(clinicId: string): string {
   return path.join(AUTH_ROOT, clinicId);
 }
@@ -217,7 +209,6 @@ export async function connectClinic(clinicId: string): Promise<void> {
     if (update.connection === "open") {
       conn.status = "open";
       conn.qr = null;
-      reconnectAttempts.delete(clinicId);
       const ownJid = sock.user?.id?.split(":")[0]?.split("@")[0];
       if (ownJid) {
         await prisma.clinic.update({ where: { id: clinicId }, data: { whatsappPhone: ownJid } }).catch(() => {});
@@ -233,27 +224,19 @@ export async function connectClinic(clinicId: string): Promise<void> {
       if (loggedOut) {
         console.log(`Clinica ${clinicId} desconectada (logout) - apagando sessao, precisa de novo QR.`);
         connections.delete(clinicId);
-        reconnectAttempts.delete(clinicId);
         fs.rmSync(authDir(clinicId), { recursive: true, force: true });
         return;
       }
 
+      // Sem retry automatico de proposito: so tenta de novo quando alguem
+      // clicar em "Gerar QR Code" no painel. Foi a reconexao automatica (antes
+      // a cada 5s pra sempre) que martelou os servidores do WhatsApp sem
+      // parar e piorou um rate-limit - a sessao continua salva em disco, so
+      // nao tenta sozinha.
       const boomError = update.lastDisconnect?.error as Boom | undefined;
-      const attempts = (reconnectAttempts.get(clinicId) ?? 0) + 1;
-      reconnectAttempts.set(clinicId, attempts);
-
-      if (attempts > MAX_RECONNECT_ATTEMPTS) {
-        console.error(
-          `Clinica ${clinicId} falhou ${attempts - 1} vezes seguidas ao reconectar (ultimo erro: statusCode=${statusCode ?? "?"}, msg="${boomError?.message ?? "?"}") - desistindo de tentar sozinho pra nao martelar o WhatsApp. Reconecte manualmente pelo painel.`
-        );
-        return;
-      }
-
-      const delay = Math.min(BASE_RECONNECT_DELAY_MS * 2 ** (attempts - 1), 5 * 60_000);
-      console.log(
-        `Conexao da clinica ${clinicId} caiu (statusCode=${statusCode ?? "?"}, msg="${boomError?.message ?? "?"}"), tentativa ${attempts}/${MAX_RECONNECT_ATTEMPTS}, tentando de novo em ${Math.round(delay / 1000)}s...`
+      console.error(
+        `Conexao da clinica ${clinicId} caiu (statusCode=${statusCode ?? "?"}, msg="${boomError?.message ?? "?"}") - nao vai tentar sozinho, precisa clicar em "Gerar QR Code" no painel.`
       );
-      setTimeout(() => connectClinic(clinicId).catch((err) => console.error("Falha ao reconectar:", err)), delay);
     }
   });
 
@@ -310,7 +293,6 @@ export async function disconnectClinic(clinicId: string): Promise<void> {
     await conn.sock.logout().catch(() => {});
     connections.delete(clinicId);
   }
-  reconnectAttempts.delete(clinicId); // desconexao explicita = reinicia o orcamento de tentativas
   fs.rmSync(authDir(clinicId), { recursive: true, force: true });
 }
 
