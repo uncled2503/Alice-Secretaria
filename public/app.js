@@ -29,6 +29,36 @@ function showError(message) {
   setTimeout(() => toast.remove(), 5000); // rede de seguranca se o transitionend nao disparar
 }
 
+// Modal de confirmacao no meio da tela, no lugar do dialogo nativo feio do
+// navegador. Retorna uma Promise<boolean> - so pode ser usado dentro de
+// uma funcao async, com "if (!(await showConfirm(msg))) return;".
+function showConfirm(message) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById("confirm-overlay");
+    const okBtn = document.getElementById("confirm-ok-btn");
+    const cancelBtn = document.getElementById("confirm-cancel-btn");
+    document.getElementById("confirm-message").textContent = message;
+
+    const cleanup = (result) => {
+      overlay.style.display = "none";
+      okBtn.removeEventListener("click", onOk);
+      cancelBtn.removeEventListener("click", onCancel);
+      overlay.removeEventListener("click", onOverlayClick);
+      resolve(result);
+    };
+    const onOk = () => cleanup(true);
+    const onCancel = () => cleanup(false);
+    const onOverlayClick = (e) => {
+      if (e.target === overlay) cleanup(false);
+    };
+
+    okBtn.addEventListener("click", onOk);
+    cancelBtn.addEventListener("click", onCancel);
+    overlay.addEventListener("click", onOverlayClick);
+    overlay.style.display = "flex";
+  });
+}
+
 // Captura QUALQUER erro de JS (nao so falha de fetch) e mostra no banner.
 // Sem isso, um bug num pedaco do script trava tudo que vem depois em silencio
 // (nenhum listener registrado apos o ponto do erro chega a existir) e a unica
@@ -201,7 +231,7 @@ async function checkAuthAndBoot() {
 
 document.getElementById("btn-staff-session").addEventListener("click", async () => {
   if (!state.staff) return;
-  if (!confirm(`Sair da conta de ${state.staff.name}?`)) return;
+  if (!await showConfirm(`Sair da conta de ${state.staff.name}?`)) return;
   await api("/staff/logout", { method: "POST" });
   // Recarrega a pagina inteira - garante que nenhum dado da conta anterior
   // (conversa aberta, clinica selecionada, etc.) sobrevive pra proxima conta
@@ -287,7 +317,7 @@ function renderContactsTable(contacts) {
 
 async function deleteContact(contact) {
   const label = contact.name ? `${contact.name} (${contact.phone})` : contact.phone;
-  if (!confirm(`Excluir o contato ${label}? Isso apaga o histórico de conversas e agendamentos dele. Não pode ser desfeito.`)) return;
+  if (!await showConfirm(`Excluir o contato ${label}? Isso apaga o histórico de conversas e agendamentos dele. Não pode ser desfeito.`)) return;
   await api(`/contacts/${contact.id}`, { method: "DELETE" });
   await loadContacts();
 }
@@ -495,7 +525,7 @@ async function loadStagesConfig() {
 
     const deleteBtn = el("button", { class: "btn-discard" }, ["Remover"]);
     deleteBtn.addEventListener("click", async () => {
-      if (!confirm(`Remover a etapa "${stage.label}"? Pacientes nela vão pra primeira etapa restante.`)) return;
+      if (!await showConfirm(`Remover a etapa "${stage.label}"? Pacientes nela vão pra primeira etapa restante.`)) return;
       await api(`/funnel-stages/${stage.id}`, { method: "DELETE" });
       await loadStagesConfig();
       await loadCrmBoard();
@@ -893,7 +923,7 @@ document.getElementById("appt-edit-form").addEventListener("submit", async (e) =
 document.getElementById("appt-edit-delete").addEventListener("click", async () => {
   const id = state.editingAppointmentId;
   if (!id) return;
-  if (!confirm("Excluir este agendamento? Não pode ser desfeito.")) return;
+  if (!await showConfirm("Excluir este agendamento? Não pode ser desfeito.")) return;
   await api(`/appointments/${id}`, { method: "DELETE" });
   closeApptEditModal();
   await loadAgenda();
@@ -977,7 +1007,7 @@ async function loadFollowUpRules() {
       el("span", { class: "nav-icon", "data-icon": "trash" }, []),
     ]);
     deleteBtn.addEventListener("click", async () => {
-      if (!confirm(`Excluir a etapa de recontato ${rule.order}?`)) return;
+      if (!await showConfirm(`Excluir a etapa de recontato ${rule.order}?`)) return;
       await api(`/followup-rules/${rule.id}`, { method: "DELETE" });
       await loadFollowUpRules();
     });
@@ -1494,7 +1524,7 @@ document.querySelectorAll(".payment-method-btn").forEach((btn) => {
 
 document.getElementById("procedure-delete-btn").addEventListener("click", async () => {
   const id = document.getElementById("pr2-id").value;
-  if (!id || !confirm("Remover esse procedimento?")) return;
+  if (!id || !await showConfirm("Remover esse procedimento?")) return;
   await api(`/procedures/${id}`, { method: "DELETE" });
   closeProcedureModal();
   await loadProcedures();
@@ -1626,7 +1656,7 @@ document.getElementById("pd-photo-input").addEventListener("change", (e) => {
 
 document.getElementById("product-delete-btn").addEventListener("click", async () => {
   const id = document.getElementById("pd-id").value;
-  if (!id || !confirm("Remover esse produto?")) return;
+  if (!id || !await showConfirm("Remover esse produto?")) return;
   await api(`/products/${id}`, { method: "DELETE" });
   closeProductModal();
   await loadProducts();
@@ -1783,7 +1813,7 @@ document.getElementById("pf-photo-input").addEventListener("change", (e) => {
 
 document.getElementById("professional-delete-btn").addEventListener("click", async () => {
   const id = document.getElementById("pf-id").value;
-  if (!id || !confirm("Remover esse profissional?")) return;
+  if (!id || !await showConfirm("Remover esse profissional?")) return;
   await api(`/professionals/${id}`, { method: "DELETE" });
   closeProfessionalModal();
   await loadProfessionals();
@@ -1823,7 +1853,7 @@ async function loadClinicsList() {
     ]);
     toggleBtn.addEventListener("click", async () => {
       const action = c.active ? "bloquear" : "desbloquear";
-      if (!confirm(`Tem certeza que quer ${action} o acesso de "${c.name}"?`)) return;
+      if (!await showConfirm(`Tem certeza que quer ${action} o acesso de "${c.name}"?`)) return;
       await api(`/clinics/${c.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -1836,7 +1866,7 @@ async function loadClinicsList() {
       el("span", { class: "nav-icon", "data-icon": "trash" }, []),
     ]);
     deleteBtn.addEventListener("click", async () => {
-      if (!confirm(`Excluir a clínica "${c.name}"? Só funciona se ela estiver vazia (sem contato nem conta de equipe).`)) return;
+      if (!await showConfirm(`Excluir a clínica "${c.name}"? Só funciona se ela estiver vazia (sem contato nem conta de equipe).`)) return;
       await api(`/clinics/${c.id}`, { method: "DELETE" });
       await loadClinicsList();
     });
@@ -1889,7 +1919,7 @@ async function loadTeam() {
       el("span", { class: "nav-icon", "data-icon": "trash" }, []),
     ]);
     deleteBtn.addEventListener("click", async () => {
-      if (!confirm(`Remover a conta de ${t.name}?`)) return;
+      if (!await showConfirm(`Remover a conta de ${t.name}?`)) return;
       await api(`/staff/${t.id}`, { method: "DELETE" });
       await loadTeam();
     });
@@ -2032,7 +2062,7 @@ function renderLocationCard(loc, index, total) {
     el("span", { class: "nav-icon", "data-icon": "trash" }, []),
   ]);
   deleteBtn.addEventListener("click", async () => {
-    if (!confirm(`Excluir a unidade "${loc.name}"?`)) return;
+    if (!await showConfirm(`Excluir a unidade "${loc.name}"?`)) return;
     await api(`/clinic-locations/${loc.id}`, { method: "DELETE" });
     await loadClinicLocations();
   });
@@ -2165,7 +2195,6 @@ async function loadChannelStatus() {
     disconnectBtn.style.display = "none";
   }
 
-  document.getElementById("btn-channel-import").disabled = !status.connected;
   await loadImportStatus();
 }
 
@@ -2207,9 +2236,10 @@ async function loadImportStatus() {
 }
 
 document.getElementById("btn-channel-import").addEventListener("click", async () => {
-  if (!confirm("Isso vai reconectar o WhatsApp rapidamente (sem precisar de novo QR Code) pra buscar contatos e até 30 dias de conversas. Continuar?")) return;
+  const msg = "O WhatsApp só reenvia contatos e conversas antigas numa conexão nova. Isso vai desconectar o WhatsApp atual (se estiver conectado) e gerar um novo QR Code - assim que escanear, a importação roda automaticamente. Continuar?";
+  if (!(await showConfirm(msg))) return;
   await api("/whatsapp/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
-  await loadImportStatus();
+  await loadChannelStatus();
 });
 
 function startChannelPolling() {
@@ -2231,7 +2261,7 @@ document.getElementById("btn-channel-connect").addEventListener("click", async (
 });
 
 document.getElementById("btn-channel-disconnect").addEventListener("click", async () => {
-  if (!confirm("Desconectar o WhatsApp dessa clínica? Vai precisar escanear o QR Code de novo pra reconectar.")) return;
+  if (!await showConfirm("Desconectar o WhatsApp dessa clínica? Vai precisar escanear o QR Code de novo pra reconectar.")) return;
   await api("/whatsapp/disconnect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
   await loadChannelStatus();
 });

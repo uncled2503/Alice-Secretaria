@@ -151,7 +151,7 @@ async function handleIncomingWAMessage(clinicId: string, msg: WAMessage): Promis
   if (reply) await sendText(clinicId, phone, reply);
 }
 
-export async function connectClinic(clinicId: string, opts: { syncFullHistory?: boolean } = {}): Promise<void> {
+export async function connectClinic(clinicId: string): Promise<void> {
   const existing = connections.get(clinicId);
   if (existing && existing.status !== "close") return; // ja conectado ou conectando
 
@@ -163,7 +163,12 @@ export async function connectClinic(clinicId: string, opts: { syncFullHistory?: 
     logger,
     printQRInTerminal: false,
     browser: Browsers.macOS("Desktop"), // fingerprint de dispositivo real, menos suspeito que o padrao da lib
-    syncFullHistory: opts.syncFullHistory ?? false, // por padrao nao pede historico antigo (menos trafego); so true quando o admin pede import manual
+    // O WhatsApp so manda o historico completo (messaging-history.set) num
+    // pareamento de aparelho genuinamente novo - uma simples reconexao de uma
+    // sessao ja autenticada NAO reenvia nada, entao precisa ficar sempre
+    // ligado pra "Importar do WhatsApp" funcionar quando o admin pedir
+    // (ver triggerHistoryImport, que apaga a sessao pra forcar QR novo).
+    syncFullHistory: true,
     markOnlineOnConnect: false, // nao fica "online" o tempo todo feito bot
   });
 
@@ -221,16 +226,14 @@ export async function connectClinic(clinicId: string, opts: { syncFullHistory?: 
   });
 }
 
-// Forca uma reconexao pedindo historico completo (contatos + ate 30 dias de
-// mensagens) - reaproveita a sessao ja pareada, NAO exige novo QR Code. So
-// funciona com a clinica ja conectada; o resultado chega aos poucos via
-// "messaging-history.set" e fica em Clinic.importStatus/importStats.
+// O WhatsApp so manda o historico completo (contatos + ate 30 dias de
+// mensagens) num pareamento de aparelho genuinamente NOVO - uma reconexao
+// simples de uma sessao ja autenticada nao reenvia nada (testado: o evento
+// "messaging-history.set" nao dispara de novo). Por isso essa funcao apaga
+// a sessao atual e gera um QR Code novo pra escanear; o historico chega
+// pelo listener de "messaging-history.set" assim que o QR for lido, e fica
+// em Clinic.importStatus/importStats.
 export async function triggerHistoryImport(clinicId: string): Promise<void> {
-  const conn = connections.get(clinicId);
-  if (!conn || conn.status !== "open") {
-    throw new Error("WhatsApp precisa estar conectado pra importar dados");
-  }
-
   await prisma.clinic.update({
     where: { id: clinicId },
     data: {
@@ -240,13 +243,8 @@ export async function triggerHistoryImport(clinicId: string): Promise<void> {
     },
   });
 
-  try {
-    await conn.sock.end(undefined);
-  } catch {
-    // ignora - vamos reconectar de qualquer forma
-  }
-  connections.delete(clinicId);
-  await connectClinic(clinicId, { syncFullHistory: true });
+  await disconnectClinic(clinicId);
+  await connectClinic(clinicId);
 }
 
 export async function disconnectClinic(clinicId: string): Promise<void> {
