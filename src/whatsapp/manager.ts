@@ -34,6 +34,7 @@ interface ClinicConnection {
   qr: string | null; // ultimo QR code cru (ainda nao virou imagem)
   instanceId: number; // token unico - evita que eventos de um socket velho (apos reconexao forcada) mexam na conexao nova
   connectingAt: number; // Date.now() de quando entrou em "connecting" - detecta conexao travada (nem QR, nem open, nem close)
+  auto: boolean; // true = essa tentativa veio do retry automatico, nao de um clique manual
 }
 
 const connections = new Map<string, ClinicConnection>();
@@ -43,6 +44,15 @@ let connectionInstanceSeq = 0;
 // rate-limit temporario do WhatsApp por reconexoes em sequencia) e libera
 // pra tentar de novo em vez de bloquear o botao pra sempre.
 const STUCK_CONNECTING_MS = 25_000;
+
+// Reconectar (retomar sessao ja pareada, sem QR) pode tentar de novo sozinho
+// com backoff - e uma operacao de rotina, baixo risco. Gerar QR (pareamento
+// novo) NUNCA acontece sozinho: se uma tentativa automatica descobre que a
+// sessao nao e mais valida e precisaria de QR, para na hora em vez de ficar
+// gerando QR sem ninguem escanear - isso e o que exige clique manual.
+const reconnectAttempts = new Map<string, number>();
+const MAX_RECONNECT_ATTEMPTS = 5;
+const BASE_RECONNECT_DELAY_MS = 5000;
 
 function authDir(clinicId: string): string {
   return path.join(AUTH_ROOT, clinicId);
@@ -160,7 +170,7 @@ async function handleIncomingWAMessage(clinicId: string, msg: WAMessage): Promis
   if (reply) await sendText(clinicId, phone, reply);
 }
 
-export async function connectClinic(clinicId: string): Promise<void> {
+export async function connectClinic(clinicId: string, opts: { auto?: boolean } = {}): Promise<void> {
   const existing = connections.get(clinicId);
   if (existing && existing.status !== "close") {
     const stuck = existing.status === "connecting" && !existing.qr && Date.now() - existing.connectingAt > STUCK_CONNECTING_MS;
@@ -193,7 +203,7 @@ export async function connectClinic(clinicId: string): Promise<void> {
   });
 
   const instanceId = ++connectionInstanceSeq;
-  connections.set(clinicId, { sock, status: "connecting", qr: null, instanceId, connectingAt: Date.now() });
+  connections.set(clinicId, { sock, status: "connecting", qr: null, instanceId, connectingAt: Date.now(), auto: !!opts.auto });
 
   sock.ev.on("creds.update", saveCreds);
 
@@ -202,6 +212,20 @@ export async function connectClinic(clinicId: string): Promise<void> {
     if (!conn || conn.instanceId !== instanceId) return; // socket velho de uma reconexao forcada - ignora
 
     if (update.qr) {
+      if (conn.auto) {
+        // Uma tentativa automatica so deveria RETOMAR uma sessao ja pareada,
+        // em silencio, sem QR. Se chegou aqui e o Baileys esta pedindo QR, a
+        // sessao salva nao serve mais - para na hora em vez de gerar QR
+        // sozinho sem ninguem pra escanear, e exige clique manual.
+        console.error(`Clinica ${clinicId}: sessao nao e mais valida (precisaria de QR novo) - nao gera sozinho, aguardando clique manual em "Gerar QR Code".`);
+        try {
+          await conn.sock.end(undefined);
+        } catch {
+          // ignora - ja vamos descartar essa conexao
+        }
+        connections.delete(clinicId);
+        return;
+      }
       conn.qr = update.qr;
       conn.status = "connecting";
     }
@@ -209,6 +233,7 @@ export async function connectClinic(clinicId: string): Promise<void> {
     if (update.connection === "open") {
       conn.status = "open";
       conn.qr = null;
+      reconnectAttempts.delete(clinicId);
       const ownJid = sock.user?.id?.split(":")[0]?.split("@")[0];
       if (ownJid) {
         await prisma.clinic.update({ where: { id: clinicId }, data: { whatsappPhone: ownJid } }).catch(() => {});
@@ -224,19 +249,30 @@ export async function connectClinic(clinicId: string): Promise<void> {
       if (loggedOut) {
         console.log(`Clinica ${clinicId} desconectada (logout) - apagando sessao, precisa de novo QR.`);
         connections.delete(clinicId);
+        reconnectAttempts.delete(clinicId);
         fs.rmSync(authDir(clinicId), { recursive: true, force: true });
         return;
       }
 
-      // Sem retry automatico de proposito: so tenta de novo quando alguem
-      // clicar em "Gerar QR Code" no painel. Foi a reconexao automatica (antes
-      // a cada 5s pra sempre) que martelou os servidores do WhatsApp sem
-      // parar e piorou um rate-limit - a sessao continua salva em disco, so
-      // nao tenta sozinha.
+      // Reconectar (nao gerar QR) pode tentar de novo sozinho, com backoff e
+      // limite de tentativas - se acabar precisando de QR, o bloco acima ja
+      // interrompe antes de chegar aqui de novo.
       const boomError = update.lastDisconnect?.error as Boom | undefined;
-      console.error(
-        `Conexao da clinica ${clinicId} caiu (statusCode=${statusCode ?? "?"}, msg="${boomError?.message ?? "?"}") - nao vai tentar sozinho, precisa clicar em "Gerar QR Code" no painel.`
+      const attempts = (reconnectAttempts.get(clinicId) ?? 0) + 1;
+      reconnectAttempts.set(clinicId, attempts);
+
+      if (attempts > MAX_RECONNECT_ATTEMPTS) {
+        console.error(
+          `Clinica ${clinicId} falhou ${attempts - 1} vezes seguidas ao reconectar (ultimo erro: statusCode=${statusCode ?? "?"}, msg="${boomError?.message ?? "?"}") - desistindo de tentar sozinho. Reconecte manualmente pelo painel.`
+        );
+        return;
+      }
+
+      const delay = Math.min(BASE_RECONNECT_DELAY_MS * 2 ** (attempts - 1), 5 * 60_000);
+      console.log(
+        `Conexao da clinica ${clinicId} caiu (statusCode=${statusCode ?? "?"}, msg="${boomError?.message ?? "?"}"), tentativa ${attempts}/${MAX_RECONNECT_ATTEMPTS}, tentando retomar em ${Math.round(delay / 1000)}s...`
       );
+      setTimeout(() => connectClinic(clinicId, { auto: true }).catch((err) => console.error("Falha ao reconectar:", err)), delay);
     }
   });
 
@@ -293,6 +329,7 @@ export async function disconnectClinic(clinicId: string): Promise<void> {
     await conn.sock.logout().catch(() => {});
     connections.delete(clinicId);
   }
+  reconnectAttempts.delete(clinicId);
   fs.rmSync(authDir(clinicId), { recursive: true, force: true });
 }
 
@@ -312,7 +349,7 @@ export async function restoreAllConnections(): Promise<void> {
     .map((d) => d.name);
 
   for (const clinicId of clinicIds) {
-    await connectClinic(clinicId).catch((err) => console.error(`Falha ao restaurar conexao de ${clinicId}:`, err));
+    await connectClinic(clinicId, { auto: true }).catch((err) => console.error(`Falha ao restaurar conexao de ${clinicId}:`, err));
     await new Promise((resolve) => setTimeout(resolve, RESTORE_STAGGER_MS));
   }
 }
