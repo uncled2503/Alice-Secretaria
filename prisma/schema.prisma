@@ -185,8 +185,9 @@ model BroadcastCampaign {
   clinicId     String
   clinic       Clinic   @relation(fields: [clinicId], references: [id])
   title        String
-  message      String   // suporta {nome} como placeholder
-  targetStage  String?  // null = todos os contatos; ou um id de src/crm/stages.ts
+  message      String   // suporta {nome}/{primeiro_nome}/{nome_completo}/{telefone}/{endereco}/{unidade}/{data_hora}
+  targetStage  String?  // usado so quando targetMode = "stage" - id de src/crm/stages.ts
+  targetMode   String   @default("all") // all | stage | contacts - contacts usa BroadcastRecipient pre-populado na criacao
   scheduledFor DateTime
   status       String   @default("scheduled") // scheduled | sending | completed | cancelled
   createdAt    DateTime @default(now())

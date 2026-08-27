@@ -144,10 +144,18 @@ apiRouter.post(
       return;
     }
 
-    const clinic = await prisma.clinic.create({
-      data: { name, whatsappPhone: whatsappPhone.replace(/\D/g, "") },
-    });
-    res.json(clinic);
+    try {
+      const clinic = await prisma.clinic.create({
+        data: { name, whatsappPhone: whatsappPhone.replace(/\D/g, "") },
+      });
+      res.json(clinic);
+    } catch (err: any) {
+      if (err?.code === "P2002") {
+        res.status(409).json({ error: "Ja existe uma clinica cadastrada com esse numero de WhatsApp" });
+        return;
+      }
+      throw err;
+    }
   })
 );
 
@@ -1133,6 +1141,7 @@ apiRouter.get(
         title: c.title,
         message: c.message,
         targetStage: c.targetStage,
+        targetMode: c.targetMode,
         scheduledFor: c.scheduledFor,
         status: c.status,
         total: c.recipients.length,
@@ -1146,15 +1155,20 @@ apiRouter.get(
 apiRouter.post(
   "/broadcasts",
   asyncRoute(async (req, res) => {
-    const { title, message, scheduledFor, targetStage } = req.body as {
+    const { title, message, scheduledFor, targetStage, contactIds } = req.body as {
       title?: string;
       message?: string;
       scheduledFor?: string;
       targetStage?: string | null;
+      contactIds?: string[];
     };
 
     if (!title || !message || !scheduledFor) {
       res.status(400).json({ error: "title, message e scheduledFor sao obrigatorios" });
+      return;
+    }
+    if (!targetStage && !contactIds?.length) {
+      res.status(400).json({ error: "escolha um destino: todos os contatos, uma etapa do funil ou contatos especificos" });
       return;
     }
 
@@ -1167,15 +1181,33 @@ apiRouter.post(
       }
     }
 
+    let validContactIds: string[] = [];
+    if (contactIds?.length) {
+      const patients = await prisma.patient.findMany({
+        where: { id: { in: contactIds }, clinicId: clinic.id },
+        select: { id: true },
+      });
+      validContactIds = patients.map((p) => p.id);
+    }
+
+    const targetMode = targetStage ? "stage" : validContactIds.length ? "contacts" : "all";
     const campaign = await prisma.broadcastCampaign.create({
       data: {
         clinicId: clinic.id,
         title,
         message,
         targetStage: targetStage || null,
+        targetMode,
         scheduledFor: new Date(scheduledFor),
       },
     });
+
+    if (validContactIds.length) {
+      await prisma.broadcastRecipient.createMany({
+        data: validContactIds.map((patientId) => ({ campaignId: campaign.id, patientId })),
+      });
+    }
+
     res.json(campaign);
   })
 );
