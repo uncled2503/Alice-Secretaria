@@ -60,11 +60,22 @@ app.use(
 );
 
 // Error handler generico: garante que uma falha numa rota (ex: paciente/
-// conversa inexistente, WhatsApp desconectado) responda 500 em vez de
+// conversa inexistente, WhatsApp desconectado) responda em vez de
 // derrubar o processo — sem isso o atendimento de todos os pacientes para junto.
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  if (res.headersSent) return;
+
+  // findUniqueOrThrow/findFirstOrThrow lancam esse codigo quando o registro
+  // ja nao existe (ex: conversa/contato apagado enquanto a tela ainda estava
+  // aberta) - e um 404 normal, nao uma falha de servidor, entao nao vale
+  // logar como erro nem responder 500.
+  if (err && typeof err === "object" && "code" in err && (err as { code?: string }).code === "P2025") {
+    res.status(404).json({ error: "Registro nao encontrado (pode ter sido excluido)" });
+    return;
+  }
+
   console.error("Erro na API:", err);
-  if (!res.headersSent) res.status(500).json({ error: "Erro interno" });
+  res.status(500).json({ error: "Erro interno" });
 });
 
 const port = Number(process.env.PORT ?? 3000);

@@ -73,10 +73,12 @@ async function api(path, options = {}) {
     }
     if (res.status === 401 || res.status === 403) {
       showAuthGate(detail || null);
-    } else {
+    } else if (!options.silentStatuses?.includes(res.status)) {
       showError(`API ${path} -> HTTP ${res.status}${detail ? " (" + detail + ")" : ""}`);
     }
-    throw new Error(`API ${path} -> ${res.status}`);
+    const err = new Error(`API ${path} -> ${res.status}`);
+    err.status = res.status;
+    throw err;
   }
   return res.json();
 }
@@ -587,7 +589,27 @@ document.getElementById("chat-filter-tabs").addEventListener("click", (e) => {
 });
 
 async function loadMessages(conversationId) {
-  const messages = await api(`/conversations/${conversationId}/messages`);
+  let messages;
+  try {
+    messages = await api(`/conversations/${conversationId}/messages`, { silentStatuses: [404] });
+  } catch (err) {
+    if (err.status === 404) {
+      // A conversa foi apagada (ex: contato excluido) enquanto ainda estava
+      // aberta no Chat - limpa o estado pra parar de tentar recarregar ela
+      // a cada poll, em vez de repetir o erro pra sempre.
+      if (state.activeConversationId === conversationId) {
+        state.activeConversationId = null;
+        document.getElementById("chat-messages").innerHTML = "";
+        document.getElementById("chat-messages").style.display = "none";
+        document.getElementById("chat-header").style.display = "none";
+        document.getElementById("chat-controls").style.display = "none";
+        document.getElementById("chat-empty").style.display = "flex";
+        document.querySelectorAll("#conversations-list li").forEach((li) => li.classList.remove("active"));
+      }
+      return;
+    }
+    throw err;
+  }
   const box = document.getElementById("chat-messages");
   box.innerHTML = "";
   let lastDay = null;
