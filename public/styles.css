@@ -1,5 +1,13 @@
 * { box-sizing: border-box; }
 
+/* Barra de rolagem seguindo o tema - sem isso o navegador usa a barra clara
+   padrao por cima do fundo escuro, feio e sem contraste. */
+html { scrollbar-color: var(--border) var(--bg); }
+*::-webkit-scrollbar { width: 12px; height: 12px; }
+*::-webkit-scrollbar-track { background: var(--bg); }
+*::-webkit-scrollbar-thumb { background: var(--border); border-radius: 8px; border: 2px solid var(--bg); }
+*::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+
 :root {
   --accent: #ea580c;
   --accent-dark: #c2410c;
