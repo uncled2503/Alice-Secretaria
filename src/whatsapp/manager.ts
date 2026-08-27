@@ -215,7 +215,15 @@ export async function connectClinic(clinicId: string, opts: { auto?: boolean } =
   const instanceId = ++connectionInstanceSeq;
   connections.set(clinicId, { sock, status: "connecting", qr: null, instanceId, connectingAt: Date.now(), auto: !!opts.auto, everOpened: false });
 
-  sock.ev.on("creds.update", saveCreds);
+  // saveCreds() escreve em disco de forma assincrona e o event emitter da
+  // Baileys nao espera essa promise - sem rastrear isso, o reconnect
+  // imediato do restartRequired (abaixo) podia reler o creds.json ANTES da
+  // escrita do pareamento recem-feito terminar, carregando um estado velho
+  // e fazendo a Baileys pedir um QR novo de novo (visto ao vivo no agente).
+  let lastCredsSave: Promise<void> = Promise.resolve();
+  sock.ev.on("creds.update", () => {
+    lastCredsSave = saveCreds();
+  });
 
   sock.ev.on("connection.update", async (update) => {
     const conn = connections.get(clinicId);
@@ -272,9 +280,14 @@ export async function connectClinic(clinicId: string, opts: { auto?: boolean } =
         // O proprio WhatsApp pede pra reiniciar a conexao logo apos um
         // pareamento (ou sincronizacao de estado) bem sucedido - faz parte
         // do protocolo normal, nao e falha. Reconecta na hora, sem contar
-        // como tentativa nem esperar o backoff das falhas de verdade.
+        // como tentativa nem esperar o backoff das falhas de verdade - mas
+        // so depois que a ultima escrita do creds.json (pareamento) realmente
+        // terminou em disco, senao o reconnect relia um estado velho e a
+        // Baileys pedia QR de novo (visto ao vivo).
         console.log(`Clinica ${clinicId}: reiniciando conexao apos pareamento (normal do protocolo).`);
-        connectClinic(clinicId, { auto: conn.auto }).catch((err) => console.error(`Falha ao reiniciar conexao da clinica ${clinicId}:`, err));
+        lastCredsSave
+          .then(() => connectClinic(clinicId, { auto: conn.auto }))
+          .catch((err) => console.error(`Falha ao reiniciar conexao da clinica ${clinicId}:`, err));
         return;
       }
 

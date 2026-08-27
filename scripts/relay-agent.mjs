@@ -82,7 +82,14 @@ async function runJob(clinicId, jobToken) {
       });
       currentSock = sock;
 
-      sock.ev.on("creds.update", saveCreds);
+      // saveCreds() grava em disco de forma assincrona e o event emitter da
+      // Baileys nao espera essa promise - sem rastrear isso, tanto o reconnect
+      // do restartRequired quanto a leitura dos arquivos no "open" podiam
+      // pegar o creds.json de ANTES do pareamento terminar de salvar.
+      let lastCredsSave = Promise.resolve();
+      sock.ev.on("creds.update", () => {
+        lastCredsSave = saveCreds();
+      });
 
       sock.ev.on("connection.update", async (update) => {
         if (finished) return;
@@ -97,6 +104,7 @@ async function runJob(clinicId, jobToken) {
 
         if (update.connection === "open") {
           console.log(`[${clinicId}] pareado com sucesso pela rede local - enviando sessao pra VPS...`);
+          await lastCredsSave;
           const files = {};
           for (const name of fs.readdirSync(authFolder)) {
             files[name] = fs.readFileSync(path.join(authFolder, name)).toString("base64");
@@ -115,10 +123,12 @@ async function runJob(clinicId, jobToken) {
 
           if (statusCode === RESTART_REQUIRED_STATUS_CODE) {
             console.log(`[${clinicId}] pareamento aceito, reiniciando conexao pra finalizar (normal do protocolo)...`);
-            startSocket().catch((err) => {
-              console.error(`[${clinicId}] falha ao reiniciar apos pareamento:`, err.message);
-              finish();
-            });
+            lastCredsSave
+              .then(() => startSocket())
+              .catch((err) => {
+                console.error(`[${clinicId}] falha ao reiniciar apos pareamento:`, err.message);
+                finish();
+              });
             return;
           }
 
