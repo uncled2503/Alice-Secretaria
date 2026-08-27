@@ -2208,7 +2208,7 @@ async function loadImportStatus() {
 
 document.getElementById("btn-channel-import").addEventListener("click", async () => {
   if (!confirm("Isso vai reconectar o WhatsApp rapidamente (sem precisar de novo QR Code) pra buscar contatos e até 30 dias de conversas. Continuar?")) return;
-  await api("/whatsapp/import", { method: "POST" });
+  await api("/whatsapp/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
   await loadImportStatus();
 });
 
@@ -2226,13 +2226,13 @@ function stopChannelPolling() {
 }
 
 document.getElementById("btn-channel-connect").addEventListener("click", async () => {
-  await api("/whatsapp/connect", { method: "POST" });
+  await api("/whatsapp/connect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
   await loadChannelStatus();
 });
 
 document.getElementById("btn-channel-disconnect").addEventListener("click", async () => {
   if (!confirm("Desconectar o WhatsApp dessa clínica? Vai precisar escanear o QR Code de novo pra reconectar.")) return;
-  await api("/whatsapp/disconnect", { method: "POST" });
+  await api("/whatsapp/disconnect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
   await loadChannelStatus();
 });
 
