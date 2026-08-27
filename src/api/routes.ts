@@ -1183,6 +1183,31 @@ apiRouter.post(
   })
 );
 
+apiRouter.put(
+  "/staff/:id",
+  asyncRoute(async (req, res) => {
+    const target = await prisma.staffUser.findUniqueOrThrow({ where: { id: req.params.id } });
+    const isSelf = req.staff?.id === target.id;
+    if (req.staff?.role !== "admin" && !isSelf) {
+      res.status(403).json({ error: "Sem acesso a essa conta" });
+      return;
+    }
+
+    const { name } = req.body as { name?: string };
+    if (!name || !name.trim()) {
+      res.status(400).json({ error: "name e obrigatorio" });
+      return;
+    }
+
+    const staff = await prisma.staffUser.update({
+      where: { id: target.id },
+      data: { name: name.trim() },
+      select: { id: true, name: true, username: true, role: true, createdAt: true },
+    });
+    res.json(staff);
+  })
+);
+
 apiRouter.delete(
   "/staff/:id",
   asyncRoute(async (req, res) => {
