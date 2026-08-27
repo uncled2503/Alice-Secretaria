@@ -296,6 +296,12 @@ apiRouter.post(
   "/whatsapp/connect",
   asyncRoute(async (req, res) => {
     const clinic = await getClinic(req);
+    // "Gerar QR Code" so aparece no painel quando NAO esta conectado - clicar
+    // aqui significa "quero parear de novo", entao apaga qualquer sessao
+    // salva antes de tentar. Sem isso, uma sessao antiga invalida no disco
+    // fica sendo retentada (e rejeitada pelo WhatsApp) pra sempre, sem nunca
+    // chegar a oferecer um QR novo pra escanear.
+    if (!getStatus(clinic.id).connected) await disconnectClinic(clinic.id);
     await connectClinic(clinic.id);
     res.json({ ok: true });
   })
