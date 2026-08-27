@@ -15,8 +15,7 @@
     "pm2:stop": "npx pm2 stop alice",
     "pm2:restart": "npm run build && npx pm2 restart ecosystem.config.cjs",
     "pm2:logs": "npx pm2 logs alice",
-    "pm2:status": "npx pm2 status",
-    "relay-agent": "node scripts/relay-agent.mjs"
+    "pm2:status": "npx pm2 status"
   },
   "dependencies": {
     "@hapi/boom": "^10.0.1",

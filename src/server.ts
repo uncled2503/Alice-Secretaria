@@ -40,16 +40,10 @@ app.use(
 
 // So /staff/login e /staff/me passam sem sessao (o login em si e o "estou
 // logado?" do frontend); qualquer outra rota de API exige uma conta valida.
-// As rotas /relay/* tambem passam sem cookie - quem chama e o agente de rede
-// local (scripts/relay-agent.mjs), nao um navegador logado; a autenticacao
-// delas e o RELAY_SECRET, verificado dentro de cada handler (ver relay.ts).
 const PUBLIC_API_PATHS = new Set([
   "/staff/login",
   "/staff/me",
   "/staff/bootstrap-admin",
-  "/relay/heartbeat",
-  "/relay/report",
-  "/relay/session",
 ]);
 
 app.use(
