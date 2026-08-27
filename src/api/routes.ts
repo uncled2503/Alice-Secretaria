@@ -135,6 +135,36 @@ apiRouter.post(
   })
 );
 
+// So admin exclui, e so se a clinica estiver vazia (sem paciente/conta de
+// equipe) - evita apagar por engano uma clinica de cliente de verdade com
+// historico. Clinica de teste/duplicada criada errada cai nesse caso.
+apiRouter.delete(
+  "/clinics/:id",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+
+    const [patientCount, staffCount] = await Promise.all([
+      prisma.patient.count({ where: { clinicId: req.params.id } }),
+      prisma.staffUser.count({ where: { clinicId: req.params.id } }),
+    ]);
+    if (patientCount > 0 || staffCount > 0) {
+      res.status(400).json({ error: "So da pra excluir clinicas vazias (sem contato nem conta de equipe vinculada)" });
+      return;
+    }
+
+    await prisma.$transaction([
+      prisma.clinicLocation.deleteMany({ where: { clinicId: req.params.id } }),
+      prisma.funnelStage.deleteMany({ where: { clinicId: req.params.id } }),
+      prisma.followUpRule.deleteMany({ where: { clinicId: req.params.id } }),
+      prisma.customRule.deleteMany({ where: { clinicId: req.params.id } }),
+      prisma.procedure.deleteMany({ where: { clinicId: req.params.id } }),
+      prisma.broadcastCampaign.deleteMany({ where: { clinicId: req.params.id } }),
+      prisma.clinic.delete({ where: { id: req.params.id } }),
+    ]);
+    res.json({ ok: true });
+  })
+);
+
 // --- Unidades/enderecos da clinica (uma clinica pode ter mais de uma) ---
 
 apiRouter.get(

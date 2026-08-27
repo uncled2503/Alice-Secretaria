@@ -1325,6 +1325,15 @@ async function loadClinicsList() {
       await loadClinicsList();
     });
 
+    const deleteBtn = el("button", { type: "button", class: "btn-icon-danger", title: "Excluir clínica (só se estiver vazia)" }, [
+      el("span", { class: "nav-icon", "data-icon": "trash" }, []),
+    ]);
+    deleteBtn.addEventListener("click", async () => {
+      if (!confirm(`Excluir a clínica "${c.name}"? Só funciona se ela estiver vazia (sem contato nem conta de equipe).`)) return;
+      await api(`/clinics/${c.id}`, { method: "DELETE" });
+      await loadClinicsList();
+    });
+
     body.appendChild(
       el("tr", {}, [
         el("td", {}, [c.name]),
@@ -1339,10 +1348,11 @@ async function loadClinicsList() {
             c.active ? "Em dia" : "Bloqueada",
           ]),
         ]),
-        el("td", {}, [toggleBtn]),
+        el("td", { class: "actions" }, [toggleBtn, deleteBtn]),
       ])
     );
   }
+  paintIcons(body);
 }
 
 document.getElementById("clinic-form").addEventListener("submit", async (e) => {
