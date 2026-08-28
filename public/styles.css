@@ -432,12 +432,80 @@ tbody tr:hover { background: var(--accent-50); }
 #btn-toggle-human { align-self: flex-start; background: var(--accent-50); border: 1px solid var(--accent-100); color: var(--accent-dark); border-radius: 8px; padding: 0.3rem 0.7rem; cursor: pointer; font-size: 0.8rem; }
 
 /* --- Forms / buttons --- */
-.broadcast-form { display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 1.2rem; }
-.broadcast-form input[type="text"], .broadcast-form textarea {
-  width: 100%; padding: 0.55rem 0.7rem; border: 1px solid var(--border); border-radius: 8px;
-  font-family: inherit; font-size: 0.88rem; background: var(--card-bg); color: var(--text);
+
+/* Base de TODO campo de digitação do painel (dashboard + login). Antes cada
+   modal tinha que ser listado por id na mão, e os que faltavam ficavam com o
+   input cru do navegador (textarea monoespaçada, label colada, etc). */
+.app-shell input,
+.app-shell select,
+.app-shell textarea,
+.auth-gate input {
+  width: 100%;
+  font-family: inherit;
+  font-size: 0.9rem;
+  line-height: 1.4;
+  color: var(--text);
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 0.6rem 0.75rem;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.broadcast-form textarea { min-height: 4rem; resize: vertical; }
+.app-shell textarea,
+.auth-gate textarea {
+  min-height: 5rem;
+  resize: vertical;
+  line-height: 1.55;
+}
+.app-shell input::placeholder,
+.app-shell textarea::placeholder,
+.auth-gate input::placeholder { color: var(--text-faint); }
+
+.app-shell input:focus,
+.app-shell select:focus,
+.app-shell textarea:focus,
+.auth-gate input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-50);
+}
+
+.app-shell input[type="checkbox"],
+.app-shell input[type="radio"] {
+  width: auto;
+  padding: 0;
+  accent-color: var(--accent);
+}
+.app-shell input[type="color"] { padding: 0.15rem; height: 2.4rem; cursor: pointer; }
+.app-shell input[type="number"] { max-width: 100%; }
+
+/* seta própria no select (o triângulo padrão fica feio e desalinhado) */
+.app-shell select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 2.1rem;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.7rem center;
+  cursor: pointer;
+}
+
+/* Labels que embrulham um campo viram coluna (texto em cima, campo embaixo).
+   As linhas de checkbox / dias da semana mantêm o layout em linha (têm
+   !important próprio mais abaixo). */
+.app-shell form > label,
+.app-shell .broadcast-form > label,
+.modal-card form label,
+.modal-form-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.broadcast-form { display: flex; flex-direction: column; gap: 0.8rem; margin-bottom: 1.2rem; }
 .broadcast-form-row { display: flex; align-items: flex-end; gap: 1rem; flex-wrap: wrap; }
 .broadcast-form-row label { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.8rem; color: var(--text-muted); }
 .broadcast-form-row select, .broadcast-form-row input[type="datetime-local"], .broadcast-form-row input[type="text"] {
@@ -601,30 +669,19 @@ td.actions { display: flex; gap: 0.4rem; }
   position: fixed; inset: 0; z-index: 1500; background: rgba(0, 0, 0, 0.45);
   display: flex; align-items: center; justify-content: center; padding: 1rem;
 }
-.modal-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; width: 100%; max-width: 420px; padding: 1.2rem; }
-.modal-card-lg { max-width: 640px; max-height: 88vh; overflow-y: auto; }
-.modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.9rem; }
-.modal-header h3 { margin: 0; font-size: 1.05rem; }
+.modal-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 14px; width: 100%; max-width: 460px; padding: 1.4rem; max-height: 90vh; overflow-y: auto; }
+.modal-card-lg { max-width: 680px; }
+.modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.1rem; }
+.modal-header h3 { margin: 0; font-size: 1.1rem; font-weight: 700; }
 .modal-close { background: transparent; border: none; color: var(--text-muted); font-size: 1.4rem; line-height: 1; cursor: pointer; padding: 0; }
-#appt-edit-form, #product-form, #procedure-edit-form, #professional-form, #broadcast-form, #reminder-rule-form, #pp-rule-form { display: flex; flex-direction: column; gap: 0.7rem; }
-#appt-edit-form label, #product-form label, #procedure-edit-form label, #professional-form label, #broadcast-form label, #reminder-rule-form label, #pp-rule-form label {
-  display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.8rem; color: var(--text-muted);
-}
-#appt-edit-form select, #appt-edit-form input,
-#product-form select, #product-form input, #product-form textarea,
-#procedure-edit-form select, #procedure-edit-form input, #procedure-edit-form textarea,
-#professional-form select, #professional-form input, #professional-form textarea,
-#broadcast-form select, #broadcast-form input, #broadcast-form textarea,
-#reminder-rule-form select, #reminder-rule-form input, #reminder-rule-form textarea,
-#pp-rule-form select, #pp-rule-form input, #pp-rule-form textarea {
-  padding: 0.5rem 0.6rem; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font-family: inherit;
-}
-#product-form textarea, #procedure-edit-form textarea, #professional-form textarea, #broadcast-form textarea,
-#reminder-rule-form textarea, #pp-rule-form textarea { resize: vertical; }
-.modal-actions { display: flex; justify-content: space-between; gap: 0.6rem; margin-top: 0.4rem; }
+/* Layout de qualquer form dentro de modal — vale pra todos, sem listar id. */
+.modal-card form { display: flex; flex-direction: column; gap: 0.85rem; }
+.modal-card form > label { margin: 0; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 0.6rem; }
+.modal-actions .btn-cancel { margin-right: auto; }
 
-.modal-form-row { display: flex; gap: 0.7rem; }
-.modal-form-row label { flex: 1; }
+.modal-form-row { display: flex; gap: 0.8rem; flex-wrap: wrap; }
+.modal-form-row label { flex: 1 1 8rem; }
 .modal-section {
   display: flex; flex-direction: column; gap: 0.6rem; background: var(--bg); border: 1px solid var(--border);
   border-radius: 10px; padding: 0.8rem; margin: 0.2rem 0;
