@@ -1683,6 +1683,8 @@ async function loadRules() {
   const activeBox = document.getElementById("rules-active");
   pendingBox.innerHTML = "";
   activeBox.innerHTML = "";
+  const activeTotal = rules.filter((r) => r.status === "active").length;
+  document.getElementById("rules-active-count").textContent = activeTotal ? `(${activeTotal})` : "";
 
   for (const rule of rules) {
     if (rule.status === "active") {
@@ -1731,6 +1733,14 @@ async function loadRules() {
     }
   }
 }
+
+document.getElementById("btn-restore-rules").addEventListener("click", async () => {
+  const btn = document.getElementById("btn-restore-rules");
+  btn.disabled = true;
+  await api("/rules/restore-defaults", { method: "POST" });
+  btn.disabled = false;
+  await loadRules();
+});
 
 document.getElementById("rule-form").addEventListener("submit", async (e) => {
   e.preventDefault();

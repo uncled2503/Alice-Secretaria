@@ -4,7 +4,7 @@ import { prisma } from "../db/client.js";
 import { sendText, connectClinic, disconnectClinic, getStatus, getQrDataUrl, getProfilePicUrl, triggerHistoryImport } from "../whatsapp/manager.js";
 import { getFunnelStages, generateStageId } from "../crm/stages.js";
 import { logActivity, ACTIVITY_AREAS, ACTIVITY_TYPES } from "../crm/activity.js";
-import { createRuleDraft, RULE_CATEGORIES } from "../ai/rules.js";
+import { createRuleDraft, RULE_CATEGORIES, seedDefaultRules } from "../ai/rules.js";
 import { notifyStaff } from "../crm/notify.js";
 import { hashPassword, verifyPassword } from "./passwords.js";
 import { createSessionCookie, clearSessionCookie } from "./staffSession.js";
@@ -169,6 +169,7 @@ apiRouter.post(
       const clinic = await prisma.clinic.create({
         data: { name, whatsappPhone: whatsappPhone.replace(/\D/g, "") },
       });
+      await seedDefaultRules(clinic.id);
       res.json(clinic);
     } catch (err: any) {
       if (err?.code === "P2002") {
@@ -1738,11 +1739,29 @@ apiRouter.get(
   "/rules",
   asyncRoute(async (req, res) => {
     const clinic = await getClinic(req);
-    const rules = await prisma.customRule.findMany({
+    let rules = await prisma.customRule.findMany({
       where: { clinicId: clinic.id },
       orderBy: { createdAt: "desc" },
     });
+
+    // Clinica sem nenhuma regra ainda: entra com o conjunto recomendado.
+    if (rules.length === 0) {
+      await seedDefaultRules(clinic.id);
+      rules = await prisma.customRule.findMany({ where: { clinicId: clinic.id }, orderBy: { createdAt: "desc" } });
+    }
+
     res.json(rules);
+  })
+);
+
+// Recria as regras recomendadas que foram excluidas (nao duplica as que
+// ja existem). Botao "Restaurar regras recomendadas" no painel.
+apiRouter.post(
+  "/rules/restore-defaults",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const added = await seedDefaultRules(clinic.id);
+    res.json({ added });
   })
 );
 
