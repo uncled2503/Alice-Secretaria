@@ -68,7 +68,7 @@ section { padding: 66px 0; }
    cor da seção de baixo (--to). Uma subida e uma descida fortes por onda. */
 .wsep {
   position: relative;
-  height: clamp(52px, 7.5vw, 104px);
+  height: clamp(40px, 9vw, var(--h, 88px));
   background: var(--from, #fff);
   line-height: 0;
   overflow: hidden;
