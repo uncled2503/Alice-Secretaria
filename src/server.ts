@@ -38,6 +38,18 @@ app.use(
   })
 );
 
+// Site institucional (landing page) servido na raiz. Imagens da marca ficam
+// em public/assets e sao expostas em /assets pra landing e painel usarem.
+app.use("/assets", express.static(path.join(__dirname, "..", "public", "assets"), { maxAge: "7d" }));
+app.use(
+  "/",
+  express.static(path.join(__dirname, "..", "public", "site"), {
+    etag: false,
+    lastModified: false,
+    setHeaders: (res) => res.set("Cache-Control", "no-store"),
+  })
+);
+
 // So /staff/login e /staff/me passam sem sessao (o login em si e o "estou
 // logado?" do frontend); qualquer outra rota de API exige uma conta valida.
 const PUBLIC_API_PATHS = new Set([
