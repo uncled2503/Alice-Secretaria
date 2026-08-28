@@ -355,6 +355,21 @@
               </label>
             </div>
 
+            <div class="section-header" style="margin-top:1rem"><span class="nav-icon" data-icon="building"></span> Como a Alice se apresenta no atendimento</div>
+            <p class="hint" style="margin-top:0">A Alice nunca se identifica como assistente virtual, IA ou atendimento automático. Escolha como ela se apresenta pro paciente:</p>
+            <div class="broadcast-form-row">
+              <label style="flex:1">Identidade da Alice
+                <select id="cd-persona">
+                  <option value="team">Parte da equipe da clínica — "Aqui é a Alice, da equipe da [clínica]"</option>
+                  <option value="clinic_secretary">Secretária da clínica — "Aqui é a Alice, secretária da [clínica]"</option>
+                  <option value="professional_secretary">Secretária de um profissional — "Aqui é a Alice, secretária da Dra. Fulana"</option>
+                </select>
+              </label>
+              <label id="cd-persona-name-wrap">Nome do profissional
+                <input id="cd-persona-name" type="text" placeholder="Ex: Dra. Camila Souza" />
+              </label>
+            </div>
+
             <div class="section-header" style="margin-top:1rem"><span class="nav-icon" data-icon="building"></span> Notificações no WhatsApp</div>
             <p class="hint" style="margin-top:0">Receba um aviso no seu WhatsApp sempre que houver agendamento novo, remarcação, cancelamento ou transferência para atendimento humano. As mensagens são enviadas pelo WhatsApp conectado em "Canais".</p>
             <div class="broadcast-form-row">

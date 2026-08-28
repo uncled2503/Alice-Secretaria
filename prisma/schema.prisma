@@ -21,6 +21,14 @@ model Clinic {
   active        Boolean   @default(true) // false = bloqueada temporariamente (ex: inadimplencia) - contas client dessa clinica nao conseguem logar nem usar a API
   notifyPhone   String?   // numero (com DDI/DDD) que recebe avisos de agendamento/cancelamento/handoff via WhatsApp
   notifyEvents  String    @default("") // quais avisos mandar pro notifyPhone, separados por virgula: new_appointment,reschedule,cancel,human_handoff
+
+  // Como a Alice se apresenta no atendimento ao paciente. Ela NUNCA se
+  // identifica como IA/assistente virtual - so como:
+  //   team                   -> "da equipe da {clinica}"
+  //   clinic_secretary       -> "secretaria da {clinica}"
+  //   professional_secretary -> "secretaria de {assistantPersonaName}"
+  assistantPersona     String  @default("team")
+  assistantPersonaName String? // nome do profissional quando assistantPersona = professional_secretary (ex: "Dra. Camila")
   importStatus    String?   // null | "running" | "completed" - importacao de contatos/historico do WhatsApp
   importStats     String?   // JSON: {found,created,merged,ignored,conversations,partialHistory,contactsInBase}
   importUpdatedAt DateTime?

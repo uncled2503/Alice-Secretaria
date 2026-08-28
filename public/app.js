@@ -2163,7 +2163,17 @@ function loadClinicDataForm() {
   document.querySelectorAll("#cd-notify-events input[type=checkbox]").forEach((box) => {
     box.checked = notifyEvents.includes(box.value);
   });
+
+  document.getElementById("cd-persona").value = clinic.assistantPersona ?? "team";
+  document.getElementById("cd-persona-name").value = clinic.assistantPersonaName ?? "";
+  syncPersonaNameVisibility();
 }
+
+function syncPersonaNameVisibility() {
+  const isProfessional = document.getElementById("cd-persona").value === "professional_secretary";
+  document.getElementById("cd-persona-name-wrap").style.display = isProfessional ? "" : "none";
+}
+document.getElementById("cd-persona").addEventListener("change", syncPersonaNameVisibility);
 
 document.getElementById("clinic-data-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -2180,12 +2190,14 @@ document.getElementById("clinic-data-form").addEventListener("submit", async (e)
   const notifyEvents = Array.from(document.querySelectorAll("#cd-notify-events input[type=checkbox]:checked"))
     .map((box) => box.value)
     .join(",");
+  const assistantPersona = document.getElementById("cd-persona").value;
+  const assistantPersonaName = document.getElementById("cd-persona-name").value.trim();
   if (!id || !name || !whatsappPhone.replace(/\D/g, "")) return;
 
   await api(`/clinics/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, whatsappPhone, timezone, workStartHour, workEndHour, workDays, notifyPhone, notifyEvents }),
+    body: JSON.stringify({ name, whatsappPhone, timezone, workStartHour, workEndHour, workDays, notifyPhone, notifyEvents, assistantPersona, assistantPersonaName }),
   });
 
   await loadClinics();

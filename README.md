@@ -1,4 +1,4 @@
-# Alice — secretária virtual para clínicas de estética
+# Alice — Secretária Virtual Humanizada para clínicas de estética
 
 MVP enxuto pra manter custo mínimo enquanto não tem volume, e escalar peça por
 peça conforme os leads forem aparecendo.

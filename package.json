@@ -1,7 +1,7 @@
 {
   "name": "alice-secretaria-virtual",
   "version": "0.1.0",
-  "description": "Secretaria virtual com IA para clinicas de estetica, via WhatsApp (Baileys) + OpenAI",
+  "description": "Alice - Secretaria Virtual Humanizada para clinicas de estetica, via WhatsApp (Baileys) + OpenAI",
   "type": "module",
   "main": "dist/server.js",
   "scripts": {

@@ -71,6 +71,8 @@ apiRouter.get(
         active: true,
         notifyPhone: true,
         notifyEvents: true,
+        assistantPersona: true,
+        assistantPersonaName: true,
       },
     });
     res.json(clinics.map((c) => ({ ...c, ...getStatus(c.id) })));
@@ -85,7 +87,7 @@ apiRouter.put(
       return;
     }
 
-    const { name, whatsappPhone, timezone, workStartHour, workEndHour, workDays, active, notifyPhone, notifyEvents } = req.body as {
+    const { name, whatsappPhone, timezone, workStartHour, workEndHour, workDays, active, notifyPhone, notifyEvents, assistantPersona, assistantPersonaName } = req.body as {
       name?: string;
       whatsappPhone?: string;
       timezone?: string;
@@ -95,10 +97,18 @@ apiRouter.put(
       active?: boolean;
       notifyPhone?: string | null;
       notifyEvents?: string;
+      assistantPersona?: string;
+      assistantPersonaName?: string | null;
     };
 
     // So admin bloqueia/desbloqueia - um cliente nao pode se desbloquear sozinho.
     if (active !== undefined && !requireAdmin(req, res)) return;
+
+    const PERSONAS = ["team", "clinic_secretary", "professional_secretary"];
+    if (assistantPersona !== undefined && !PERSONAS.includes(assistantPersona)) {
+      res.status(400).json({ error: "assistantPersona invalido" });
+      return;
+    }
 
     if (whatsappPhone !== undefined && !whatsappPhone.replace(/\D/g, "")) {
       res.status(400).json({ error: "whatsappPhone nao pode ficar vazio" });
@@ -118,6 +128,8 @@ apiRouter.put(
           ...(active !== undefined ? { active } : {}),
           ...(notifyPhone !== undefined ? { notifyPhone: notifyPhone || null } : {}),
           ...(notifyEvents !== undefined ? { notifyEvents } : {}),
+          ...(assistantPersona !== undefined ? { assistantPersona } : {}),
+          ...(assistantPersonaName !== undefined ? { assistantPersonaName: assistantPersonaName?.trim() || null } : {}),
         },
       });
       res.json(clinic);

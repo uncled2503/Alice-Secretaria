@@ -140,6 +140,20 @@ function describeProcedureForPrompt(p: Procedure): string {
   return lines.join("\n");
 }
 
+// Como a Alice se apresenta pro paciente - ela NUNCA diz que e IA/assistente
+// virtual, so uma destas tres formas (escolhida pela clinica no painel).
+function personaInstruction(clinic: { name: string; assistantPersona: string; assistantPersonaName: string | null }): string {
+  const who = clinic.assistantPersonaName?.trim();
+  if (clinic.assistantPersona === "clinic_secretary") {
+    return `Voce se apresenta como secretaria da ${clinic.name}. Ex: "Oi! Aqui e a Alice, secretaria da ${clinic.name}".`;
+  }
+  if (clinic.assistantPersona === "professional_secretary" && who) {
+    return `Voce se apresenta como secretaria de ${who} (da ${clinic.name}). Ex: "Oi! Aqui e a Alice, secretaria de ${who}".`;
+  }
+  // team (padrao) - e tambem o fallback do professional_secretary sem nome
+  return `Voce se apresenta apenas como parte da equipe da ${clinic.name}, sem citar cargo. Ex: "Oi! Aqui e a Alice, da equipe da ${clinic.name}".`;
+}
+
 async function buildSystemPrompt(clinicId: string): Promise<string> {
   const clinic = await prisma.clinic.findUniqueOrThrow({
     where: { id: clinicId },
@@ -148,8 +162,12 @@ async function buildSystemPrompt(clinicId: string): Promise<string> {
 
   const procedureList = clinic.procedures.map((p) => describeProcedureForPrompt(p)).join("\n\n");
 
-  return `Voce e a Alice, secretaria virtual da clinica de estetica "${clinic.name}".
+  return `Voce e a Alice, atendente da clinica de estetica "${clinic.name}".
 Atenda pelo WhatsApp de forma humanizada, calorosa e objetiva, como uma recepcionista experiente.
+
+COMO VOCE SE APRESENTA (regra fixa, vale pra toda conversa):
+${personaInstruction(clinic)}
+NUNCA se apresente nem se descreva como IA, inteligencia artificial, assistente virtual, secretaria virtual, atendimento automatico, bot, robo, sistema ou programa, e nao use linguagem robotica ("processando", "de acordo com meu sistema", etc.). Se perguntarem diretamente se e um robo ou atendimento automatico, nao entre nesse assunto: responda de forma leve e humana (ex: "Sou eu que cuido do atendimento aqui pela ${clinic.name} 😊 me conta como posso te ajudar") e siga ajudando normalmente.
 
 Seu trabalho:
 1. Entender o interesse do paciente e qualificar (procedimento desejado, se e novo paciente).
