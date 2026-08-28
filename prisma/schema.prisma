@@ -49,6 +49,24 @@ model Clinic {
   postProcedureRules PostProcedureRule[]
   renewalRules  RenewalRule[]
   birthdayRules BirthdayRule[]
+  activityLog   ActivityLog[]
+}
+
+// Historico de atividades da clinica: registro simples de mudancas
+// importantes (o que aconteceu, em qual area, quem fez e quando). So pra
+// leitura no painel - nenhuma logica depende disso.
+model ActivityLog {
+  id          String   @id @default(cuid())
+  clinicId    String
+  clinic      Clinic   @relation(fields: [clinicId], references: [id])
+  type        String   // slug do evento (ex: human_takeover, appointment_booked)
+  area        String   // slug da area (ex: atendimento, agenda, automacoes)
+  title       String
+  description String?
+  actorName   String?  // nome do atendente; null = acao automatica do sistema
+  createdAt   DateTime @default(now())
+
+  @@index([clinicId, createdAt])
 }
 
 // Unidade/endereco fisico da clinica. Uma clinica pode ter varias (rede com

@@ -634,7 +634,28 @@
         </div>
 
         <div id="sub-history" class="settings-subpanel">
-          <div class="coming-soon">Histórico de alterações da clínica — ainda não implementado.</div>
+          <p class="hint" style="margin-top:0">Acompanhe as mudanças importantes da clínica: o que aconteceu, quem fez e quando.</p>
+          <div class="list-toolbar">
+            <div class="list-count"><span id="activity-count">0</span> atividades registradas</div>
+          </div>
+          <div class="card">
+            <div class="broadcast-form-row" style="align-items:flex-end">
+              <label style="flex:1">O que aconteceu?
+                <select id="activity-filter-type"><option value="">Tudo o que aconteceu</option></select>
+              </label>
+              <label style="flex:1">Em qual área?
+                <select id="activity-filter-area"><option value="">Todas as áreas</option></select>
+              </label>
+              <button type="button" id="activity-apply" class="btn-brand btn-brand--primary">Mostrar atividades</button>
+            </div>
+          </div>
+          <div class="card" style="margin-top:0.8rem">
+            <div id="activity-list"></div>
+            <div id="activity-empty" class="hint" style="display:none;text-align:center;padding:1.2rem 0">Nenhuma atividade registrada ainda.</div>
+            <div style="text-align:center;padding:0.8rem 0">
+              <button type="button" id="activity-more" class="btn-brand btn-brand--secondary btn-brand--sm" style="display:none">Carregar mais</button>
+            </div>
+          </div>
         </div>
 
         <div id="sub-rules" class="settings-subpanel">

@@ -3,6 +3,7 @@ import { rateLimit } from "express-rate-limit";
 import { prisma } from "../db/client.js";
 import { sendText, connectClinic, disconnectClinic, getStatus, getQrDataUrl, getProfilePicUrl, triggerHistoryImport } from "../whatsapp/manager.js";
 import { getFunnelStages, generateStageId } from "../crm/stages.js";
+import { logActivity, ACTIVITY_AREAS, ACTIVITY_TYPES } from "../crm/activity.js";
 import { createRuleDraft, RULE_CATEGORIES } from "../ai/rules.js";
 import { notifyStaff } from "../crm/notify.js";
 import { hashPassword, verifyPassword } from "./passwords.js";
@@ -132,6 +133,14 @@ apiRouter.put(
           ...(assistantPersonaName !== undefined ? { assistantPersonaName: assistantPersonaName?.trim() || null } : {}),
         },
       });
+      await logActivity({
+        clinicId: clinic.id,
+        type: "clinic_updated",
+        area: "clinica",
+        title: active === false ? "Clínica bloqueada" : active === true ? "Clínica desbloqueada" : "Dados da clínica alterados",
+        description: "As configurações gerais da clínica foram atualizadas.",
+        actorName: req.staff?.name ?? null,
+      });
       res.json(clinic);
     } catch (err: any) {
       if (err?.code === "P2002") {
@@ -196,6 +205,7 @@ apiRouter.delete(
       prisma.postProcedureRule.deleteMany({ where: { clinicId: req.params.id } }),
       prisma.renewalRule.deleteMany({ where: { clinicId: req.params.id } }),
       prisma.birthdayRule.deleteMany({ where: { clinicId: req.params.id } }),
+      prisma.activityLog.deleteMany({ where: { clinicId: req.params.id } }),
       prisma.customRule.deleteMany({ where: { clinicId: req.params.id } }),
       prisma.procedure.deleteMany({ where: { clinicId: req.params.id } }),
       prisma.broadcastCampaign.deleteMany({ where: { clinicId: req.params.id } }),
@@ -475,6 +485,7 @@ apiRouter.post(
     const procedure = await prisma.procedure.create({
       data: { clinicId: clinic.id, name: body.name, ...procedureWriteData(body) },
     });
+    await logActivity({ clinicId: clinic.id, type: "catalog_added", area: "catalogo", title: "Serviço adicionado", description: procedure.name, actorName: req.staff?.name ?? null });
     res.json(procedure);
   })
 );
@@ -500,6 +511,7 @@ apiRouter.delete(
     if (!assertClinicAccess(req, res, existing.clinicId)) return;
 
     await prisma.procedure.delete({ where: { id: req.params.id } });
+    await logActivity({ clinicId: existing.clinicId, type: "catalog_removed", area: "catalogo", title: "Serviço removido", description: existing.name, actorName: req.staff?.name ?? null });
     res.json({ ok: true });
   })
 );
@@ -810,6 +822,14 @@ apiRouter.post(
         "human_handoff",
         `Atendimento assumido manualmente: ${patientLabel}${authorName ? ` (por ${authorName})` : ""}.`
       );
+      await logActivity({
+        clinicId: conversation.patient.clinicId,
+        type: "human_takeover",
+        area: "atendimento",
+        title: "Atendimento assumido por uma pessoa",
+        description: `A Alice parou de responder a conversa com ${patientLabel} para a equipe continuar o atendimento.`,
+        actorName: authorName,
+      });
     }
 
     await prisma.message.create({
@@ -852,6 +872,14 @@ apiRouter.post(
     await prisma.conversation.update({
       where: { id: req.params.id },
       data: { humanTakeover: false },
+    });
+    await logActivity({
+      clinicId: conversation.patient.clinicId,
+      type: "human_resume",
+      area: "atendimento",
+      title: "Atendimento devolvido para a Alice",
+      description: `A conversa com ${conversation.patient.name ?? conversation.patient.phone} voltou a ser respondida pela Alice.`,
+      actorName: req.staff?.name ?? null,
     });
     res.json({ ok: true });
   })
@@ -1087,6 +1115,14 @@ apiRouter.post(
       "new_appointment",
       `Novo agendamento: ${patient.name ?? patient.phone} - ${appointment.procedure.name} em ${appointment.scheduledAt.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}.`
     );
+    await logActivity({
+      clinicId: clinic.id,
+      type: "appointment_booked",
+      area: "agenda",
+      title: "Agendamento criado",
+      description: `${patient.name ?? patient.phone} — ${appointment.procedure.name} em ${appointment.scheduledAt.toLocaleString("pt-BR", { timeZone: clinic.timezone || "America/Sao_Paulo" })}.`,
+      actorName: req.staff?.name ?? null,
+    });
     res.json(appointment);
   })
 );
@@ -1117,14 +1153,26 @@ apiRouter.put(
     });
 
     const patientLabel = existing.patient.name ?? existing.patient.phone;
+    const actorName = req.staff?.name ?? null;
     if (status === "cancelled" && existing.status !== "cancelled") {
       await notifyStaff(existing.clinicId, "cancel", `Agendamento cancelado: ${patientLabel} - ${appointment.procedure.name}.`);
+      await logActivity({
+        clinicId: existing.clinicId, type: "appointment_cancelled", area: "agenda",
+        title: "Agendamento cancelado",
+        description: `${patientLabel} — ${appointment.procedure.name}.`, actorName,
+      });
     } else if (scheduledAt !== undefined && new Date(scheduledAt).getTime() !== existing.scheduledAt.getTime()) {
       await notifyStaff(
         existing.clinicId,
         "reschedule",
         `Agendamento remarcado: ${patientLabel} - ${appointment.procedure.name} agora em ${appointment.scheduledAt.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}.`
       );
+      await logActivity({
+        clinicId: existing.clinicId, type: "appointment_rescheduled", area: "agenda",
+        title: "Agendamento remarcado",
+        description: `${patientLabel} — ${appointment.procedure.name} agora em ${appointment.scheduledAt.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}.`,
+        actorName,
+      });
     }
 
     res.json(appointment);
@@ -1258,6 +1306,7 @@ apiRouter.post(
 
     const clinic = await getClinic(req);
     const rule = await prisma.reminderRule.create({ data: { clinicId: clinic.id, hoursBefore, message } });
+    await logActivity({ clinicId: clinic.id, type: "automation_created", area: "automacoes", title: "Lembrete de consulta criado", description: `${hoursBefore}h antes da consulta.`, actorName: req.staff?.name ?? null });
     res.json(rule);
   })
 );
@@ -1522,6 +1571,58 @@ apiRouter.delete(
     await prisma.birthdaySent.deleteMany({ where: { ruleId: req.params.id } });
     await prisma.birthdayRule.delete({ where: { id: req.params.id } });
     res.json({ ok: true });
+  })
+);
+
+// --- Historico de atividades da clinica ---
+
+apiRouter.get(
+  "/activity-log/filters",
+  asyncRoute(async (_req, res) => {
+    res.json({
+      areas: Object.entries(ACTIVITY_AREAS).map(([id, label]) => ({ id, label })),
+      types: Object.entries(ACTIVITY_TYPES).map(([id, label]) => ({ id, label })),
+    });
+  })
+);
+
+apiRouter.get(
+  "/activity-log",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const { type, area, cursor } = req.query as { type?: string; area?: string; cursor?: string };
+    const take = 40;
+
+    const where = {
+      clinicId: clinic.id,
+      ...(type ? { type } : {}),
+      ...(area ? { area } : {}),
+    };
+
+    const [total, rows] = await Promise.all([
+      prisma.activityLog.count({ where }),
+      prisma.activityLog.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        take: take + 1,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      }),
+    ]);
+
+    const hasMore = rows.length > take;
+    const items = (hasMore ? rows.slice(0, take) : rows).map((r) => ({
+      id: r.id,
+      type: r.type,
+      typeLabel: ACTIVITY_TYPES[r.type] ?? r.type,
+      area: r.area,
+      areaLabel: ACTIVITY_AREAS[r.area] ?? r.area,
+      title: r.title,
+      description: r.description,
+      actor: r.actorName ?? "Sistema (ação automática)",
+      createdAt: r.createdAt,
+    }));
+
+    res.json({ total, items, nextCursor: hasMore ? items[items.length - 1].id : null });
   })
 );
 

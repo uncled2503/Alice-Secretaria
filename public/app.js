@@ -1614,6 +1614,61 @@ document.getElementById("pp-rule-form").addEventListener("submit", async (e) => 
   await loadPostProcedureRules();
 });
 
+// ======================= HISTÓRICO DE ATIVIDADES =======================
+let activityCursor = null;
+let activityFiltersLoaded = false;
+
+async function loadActivityLog(reset = true) {
+  if (!activityFiltersLoaded) {
+    const f = await api("/activity-log/filters");
+    const typeSel = document.getElementById("activity-filter-type");
+    const areaSel = document.getElementById("activity-filter-area");
+    for (const t of f.types) typeSel.appendChild(el("option", { value: t.id }, [t.label]));
+    for (const a of f.areas) areaSel.appendChild(el("option", { value: a.id }, [a.label]));
+    activityFiltersLoaded = true;
+  }
+
+  const list = document.getElementById("activity-list");
+  if (reset) { list.innerHTML = ""; activityCursor = null; }
+
+  const type = document.getElementById("activity-filter-type").value;
+  const area = document.getElementById("activity-filter-area").value;
+  const qs = new URLSearchParams();
+  if (type) qs.set("type", type);
+  if (area) qs.set("area", area);
+  if (activityCursor) qs.set("cursor", activityCursor);
+
+  const data = await api(`/activity-log?${qs.toString()}`);
+  document.getElementById("activity-count").textContent = data.total;
+  document.getElementById("activity-empty").style.display = data.total === 0 ? "block" : "none";
+
+  for (const it of data.items) {
+    list.appendChild(
+      el("div", { class: "activity-item" }, [
+        el("div", { class: "activity-icon" }, [el("span", { class: "nav-icon", "data-icon": "guide" }, [])]),
+        el("div", { class: "activity-body" }, [
+          el("div", { class: "activity-head" }, [
+            el("strong", {}, [it.title]),
+            el("span", { class: "activity-time" }, [new Date(it.createdAt).toLocaleString("pt-BR")]),
+          ]),
+          it.description ? el("div", { class: "activity-desc" }, [it.description]) : el("span", {}, []),
+          el("div", { class: "activity-meta" }, [
+            el("span", {}, [el("b", {}, ["Área: "]), it.areaLabel]),
+            el("span", {}, [el("b", {}, ["Responsável: "]), it.actor]),
+          ]),
+        ]),
+      ])
+    );
+  }
+  paintIcons(list);
+
+  activityCursor = data.nextCursor;
+  document.getElementById("activity-more").style.display = data.nextCursor ? "inline-flex" : "none";
+}
+
+document.getElementById("activity-apply").addEventListener("click", () => loadActivityLog(true));
+document.getElementById("activity-more").addEventListener("click", () => loadActivityLog(false));
+
 // --- Personalizar Alice (regras em linguagem natural) ---
 let RULE_CATEGORY_LABELS = {};
 
@@ -2720,6 +2775,7 @@ const SETTINGS_SUB_LOADERS = {
   renewal: loadRenewalRules,
   birthday: loadBirthdayRules,
   followup: loadFollowUpRules,
+  history: () => loadActivityLog(true),
   funnel: loadStagesConfig,
   rules: loadRules,
   clinics: loadClinicsList,

@@ -5,6 +5,7 @@ import { findAvailableSlots } from "../scheduling/slots.js";
 import { getActiveRulesPrompt } from "./rules.js";
 import { getFunnelStages } from "../crm/stages.js";
 import { notifyStaff } from "../crm/notify.js";
+import { logActivity } from "../crm/activity.js";
 import type { Procedure } from "@prisma/client";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -93,6 +94,14 @@ async function runTool(clinicId: string, patientId: string, name: string, input:
       "new_appointment",
       `Novo agendamento (via Alice): ${patient?.name ?? patient?.phone ?? "paciente"} - ${procedure.name} em ${scheduledAt.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}.`
     );
+    await logActivity({
+      clinicId,
+      type: "appointment_booked",
+      area: "agenda",
+      title: "Agendamento criado pela Alice",
+      description: `${patient?.name ?? patient?.phone ?? "paciente"} — ${procedure.name} em ${scheduledAt.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}.`,
+      actorName: null,
+    });
 
     return `Agendado com sucesso para ${scheduledAt.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}.`;
   }
