@@ -137,6 +137,16 @@ section { padding: 66px 0; }
 .wsep-light.is-flip { transform: scaleX(-1); }             /* casa com divisor espelhado */
 .wsep .wsep-light path { fill: none; stroke-linecap: round; }
 
+/* Nas ondas que encostam numa seção ambar, a luz ambar sumiria (mesma cor) -
+   entao ela vira branca so nesses divisores. */
+.wsep-light.on-amber {
+  --wl-from: #ffffff;
+  --wl-via:  #fff3e0;
+  --wl-to:   #ffffff;
+}
+.wsep-light.on-amber .wsep-rail { opacity: 0.22; }
+.wsep-light.on-amber .wsep-glow { opacity: 0.7; }
+
 .wsep-rail {
   opacity: 0.12;
   stroke-width: 1.5;
