@@ -659,20 +659,137 @@
         </div>
 
         <div id="sub-rules" class="settings-subpanel">
-          <p class="hint">Descreva em uma frase o que você quer mudar. A Alice entende, classifica e monta a regra — você só revisa e aprova.</p>
-          <form id="rule-form" class="broadcast-form card">
-            <textarea id="rule-text" placeholder="Ex: quando perguntarem o preço, explicar o procedimento antes e oferecer 2 horários." required></textarea>
-            <div class="broadcast-form-row">
-              <button type="submit" class="btn-brand btn-brand--primary"><span class="nav-icon" data-icon="sparkles"></span> Gerar sugestão</button>
-            </div>
-          </form>
-          <div id="rules-pending"></div>
-          <div class="list-toolbar" style="margin-top:0.4rem">
-            <h3 style="margin:0">Suas regras <span id="rules-active-count" class="list-count" style="font-weight:400"></span></h3>
-            <button type="button" id="btn-restore-rules" class="btn-brand btn-brand--secondary btn-brand--sm">Restaurar regras recomendadas</button>
+          <div class="settings-tabs" id="rules-tabs" style="margin-bottom:1rem">
+            <button data-rt="home" class="active">Início</button>
+            <button data-rt="global">Regras globais</button>
+            <button data-rt="templates">Mensagens prontas</button>
+            <button data-rt="faq">FAQ da clínica</button>
+            <button data-rt="settings">Ajustes da Alice</button>
+            <button data-rt="playbooks">Roteiros</button>
           </div>
-          <p class="hint" style="margin-top:0">A clínica já vem com um conjunto de regras recomendadas. Exclua ou ajuste qualquer uma à vontade.</p>
-          <div id="rules-active"></div>
+
+          <!-- ===== Início ===== -->
+          <div id="rt-home" class="rules-panel active">
+            <div class="page-header"><h1 style="margin:0">O que você quer ensinar para a Alice hoje?</h1></div>
+            <p class="hint" style="margin-top:0">Descreva em uma frase, do seu jeito. A Alice entende, classifica e monta a regra — você só revisa e aprova.</p>
+            <form id="rule-form" class="broadcast-form card">
+              <textarea id="rule-text" placeholder="Escreva aqui o que você quer que a Alice passe a fazer..." required></textarea>
+              <div class="broadcast-form-row" style="justify-content:space-between;align-items:center">
+                <div class="rule-cat-hints">
+                  <span class="payment-method-btn rule-cat-hint" data-cat="pagamento">Preço e pagamento</span>
+                  <span class="payment-method-btn rule-cat-hint" data-cat="agendamento">Agendamento</span>
+                  <span class="payment-method-btn rule-cat-hint" data-cat="chamar_equipe">Chamar a equipe</span>
+                </div>
+                <button type="submit" class="btn-brand btn-brand--primary"><span class="nav-icon" data-icon="sparkles"></span> Gerar sugestão</button>
+              </div>
+            </form>
+            <div id="rules-pending"></div>
+            <div id="rt-home-stats" class="stat-grid" style="margin-top:1rem"></div>
+          </div>
+
+          <!-- ===== Regras globais ===== -->
+          <div id="rt-global" class="rules-panel">
+            <div class="list-toolbar">
+              <div>
+                <div class="list-count">Regras globais <span id="rules-active-count">(0)</span></div>
+                <p class="hint" style="margin:0.2rem 0 0">Coisas que a Alice deve sempre respeitar em toda conversa: tom de voz, catálogo, pagamento, agendamento, quando chamar a equipe.</p>
+              </div>
+              <div class="list-toolbar-actions">
+                <input id="rules-search" type="text" placeholder="Buscar nas regras" />
+                <button type="button" id="btn-restore-rules" class="btn-brand btn-brand--secondary btn-brand--sm">Restaurar recomendadas</button>
+                <button type="button" id="btn-add-rule" class="btn-brand btn-brand--primary"><span class="nav-icon" data-icon="plus"></span> Nova regra</button>
+              </div>
+            </div>
+            <div id="rules-cat-filter" class="rules-cat-filter"></div>
+            <div id="rules-active"></div>
+          </div>
+
+          <!-- ===== Mensagens prontas ===== -->
+          <div id="rt-templates" class="rules-panel">
+            <div class="list-toolbar">
+              <div>
+                <div class="list-count">Mensagens prontas (<span id="tpl-count">0</span>)</div>
+                <p class="hint" style="margin:0.2rem 0 0">Textos que a Alice reaproveita no atendimento (boas-vindas, confirmação, orientações). Use variáveis como {primeiro_nome}.</p>
+              </div>
+              <div class="list-toolbar-actions">
+                <input id="tpl-search" type="text" placeholder="Buscar mensagem" />
+                <button type="button" id="btn-add-tpl" class="btn-brand btn-brand--primary"><span class="nav-icon" data-icon="plus"></span> Nova mensagem</button>
+              </div>
+            </div>
+            <div id="tpl-list" class="rules-cards"></div>
+            <div id="tpl-empty" class="hint" style="display:none;text-align:center;padding:1.2rem 0">Nenhuma mensagem pronta criada.</div>
+          </div>
+
+          <!-- ===== FAQ da clínica ===== -->
+          <div id="rt-faq" class="rules-panel">
+            <div class="list-toolbar">
+              <div>
+                <div class="list-count">FAQ da clínica (<span id="faq-count">0</span>)</div>
+                <p class="hint" style="margin:0.2rem 0 0">Perguntas operacionais: estacionamento, acesso, documentos, políticas. Agenda, catálogo e preço continuam nas fontes oficiais.</p>
+              </div>
+              <div class="list-toolbar-actions">
+                <input id="faq-search" type="text" placeholder="Buscar FAQ" />
+                <button type="button" id="btn-add-faq" class="btn-brand btn-brand--primary"><span class="nav-icon" data-icon="plus"></span> Nova FAQ</button>
+              </div>
+            </div>
+            <div id="faq-list" class="rules-cards"></div>
+            <div id="faq-empty" class="hint" style="display:none;text-align:center;padding:1.2rem 0">Nenhuma FAQ cadastrada.</div>
+          </div>
+
+          <!-- ===== Ajustes da Alice ===== -->
+          <div id="rt-settings" class="rules-panel">
+            <p class="hint" style="margin-top:0">Como a Alice se apresenta, quando começa a responder e como envia as mensagens. Vale para todos os atendimentos.</p>
+            <form id="alice-settings-form" class="broadcast-form card">
+              <div class="section-header">Identidade do atendimento</div>
+              <div class="broadcast-form-row">
+                <label style="flex:1">Nome da secretária
+                  <input id="as-name" type="text" placeholder="Alice" />
+                </label>
+                <label style="flex:2">Área de atuação da clínica
+                  <input id="as-area" type="text" placeholder="Ex: harmonização facial, corporal e íntima" />
+                </label>
+              </div>
+              <label>Frase ao passar para uma pessoa
+                <input id="as-handoff" type="text" placeholder="Ex: Só um minuto, já verifico isso para você" />
+              </label>
+              <p class="hint" style="margin-top:0">O que a Alice escreve antes de entregar a conversa pra equipe. Em branco, usa a frase padrão.</p>
+
+              <div class="section-header" style="margin-top:1rem">Como a Alice envia mensagens</div>
+              <label class="checkbox-row"><input type="checkbox" id="as-split" checked /> Dividir respostas longas em várias bolhas</label>
+              <div class="broadcast-form-row">
+                <label>Máximo de mensagens
+                  <input id="as-split-max" type="number" min="1" max="8" value="4" />
+                </label>
+                <label>A partir de quantos caracteres é "resposta longa"
+                  <input id="as-split-threshold" type="number" min="120" max="2000" value="450" />
+                </label>
+              </div>
+
+              <div class="section-header" style="margin-top:1rem">Sinal para garantir o horário</div>
+              <label class="checkbox-row"><input type="checkbox" id="as-deposit" /> Exigir comprovante do sinal antes de confirmar o agendamento</label>
+              <p class="hint" style="margin-top:0">Quando ativado, a Alice pede o pagamento, aguarda a foto do comprovante e só então marca o horário.</p>
+
+              <div class="broadcast-form-row">
+                <button type="submit" class="btn-brand btn-brand--primary">Salvar ajustes</button>
+              </div>
+            </form>
+          </div>
+
+          <!-- ===== Roteiros ===== -->
+          <div id="rt-playbooks" class="rules-panel">
+            <div class="list-toolbar">
+              <div>
+                <div class="list-count">Roteiros (<span id="pb-count">0</span>)</div>
+                <p class="hint" style="margin:0.2rem 0 0">Sequências de conversa que a Alice conduz passo a passo em situações específicas.</p>
+              </div>
+              <div class="list-toolbar-actions">
+                <input id="pb-search" type="text" placeholder="Buscar roteiro" />
+                <button type="button" id="btn-add-pb" class="btn-brand btn-brand--primary"><span class="nav-icon" data-icon="plus"></span> Novo roteiro</button>
+              </div>
+            </div>
+            <div id="pb-list" class="rules-cards"></div>
+            <div id="pb-empty" class="hint" style="display:none;text-align:center;padding:1.2rem 0">Nenhum roteiro criado.</div>
+          </div>
         </div>
 
         <div id="sub-clinics" class="settings-subpanel">
@@ -1159,6 +1276,134 @@
           <label class="checkbox-row"><input type="checkbox" id="fu-active" checked /> Ativo</label>
           <div class="modal-actions">
             <button type="button" id="followup-rule-delete-btn" class="btn-cancel" style="display:none">Excluir</button>
+            <button type="submit">Salvar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="rule-edit-overlay" class="modal-overlay" style="display:none">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 id="rule-edit-title">Nova regra</h3>
+          <button type="button" id="rule-edit-close" class="modal-close">&times;</button>
+        </div>
+        <form id="rule-edit-form">
+          <input type="hidden" id="re-id" />
+          <label>Categoria
+            <select id="re-category"></select>
+          </label>
+          <label>Regra*
+            <textarea id="re-instruction" rows="4" placeholder="Ex.: Ao oferecer horários, ofereça no máximo duas opções por vez." required></textarea>
+          </label>
+          <p class="hint" style="margin-top:0">Escreva de forma objetiva o que a Alice deve fazer. A regra entra ativa na hora.</p>
+          <div class="modal-actions">
+            <button type="button" id="rule-edit-delete-btn" class="btn-cancel" style="display:none">Excluir</button>
+            <button type="submit">Salvar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="tpl-overlay" class="modal-overlay" style="display:none">
+      <div class="modal-card modal-card-lg">
+        <div class="modal-header">
+          <h3 id="tpl-title">Nova mensagem</h3>
+          <button type="button" id="tpl-close" class="modal-close">&times;</button>
+        </div>
+        <form id="tpl-form">
+          <input type="hidden" id="tpl-id" />
+          <label>Nome da mensagem*
+            <input id="tpl-name" type="text" placeholder="Ex.: Boas-vindas, Confirmação de horário" required />
+          </label>
+          <label>Como enviar</label>
+          <label class="checkbox-row"><input type="radio" name="tpl-mode" value="adapt" checked /> Adaptar ao contexto — mantém os fatos e ajusta o jeito de falar</label>
+          <label class="checkbox-row"><input type="radio" name="tpl-mode" value="exact" /> Enviar exatamente assim — preserva texto, pontuação e emojis</label>
+          <label>Quando usar (opcional)
+            <input id="tpl-when" type="text" placeholder="Ex.: depois que o agendamento for confirmado" />
+          </label>
+          <label>Texto da mensagem*
+            <textarea id="tpl-body" rows="4" placeholder="Ex.: Olá {primeiro_nome}! Seu horário está confirmado para {data_hora}." required></textarea>
+          </label>
+          <div class="payment-methods-grid">
+            <button type="button" class="payment-method-btn tpl-var-btn" data-var="{primeiro_nome}">+ Primeiro nome</button>
+            <button type="button" class="payment-method-btn tpl-var-btn" data-var="{nome_completo}">+ Nome completo</button>
+            <button type="button" class="payment-method-btn tpl-var-btn" data-var="{procedimento}">+ Procedimento</button>
+            <button type="button" class="payment-method-btn tpl-var-btn" data-var="{data_hora}">+ Data e hora</button>
+            <button type="button" class="payment-method-btn tpl-var-btn" data-var="{unidade}">+ Unidade</button>
+          </div>
+          <label class="checkbox-row"><input type="checkbox" id="tpl-active" checked /> Ativa</label>
+          <div class="modal-actions">
+            <button type="button" id="tpl-delete-btn" class="btn-cancel" style="display:none">Excluir</button>
+            <button type="submit">Salvar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="faq-overlay" class="modal-overlay" style="display:none">
+      <div class="modal-card modal-card-lg">
+        <div class="modal-header">
+          <h3 id="faq-title">Nova FAQ</h3>
+          <button type="button" id="faq-close" class="modal-close">&times;</button>
+        </div>
+        <form id="faq-form">
+          <input type="hidden" id="fq-id" />
+          <label>Pergunta*
+            <input id="fq-question" type="text" placeholder="Ex.: A clínica tem estacionamento?" required />
+          </label>
+          <label>Resposta oficial*
+            <textarea id="fq-answer" rows="3" placeholder="Escreva exatamente a orientação confirmada pela clínica." required></textarea>
+          </label>
+          <label>Perguntas alternativas (uma por linha)
+            <textarea id="fq-alternates" rows="2" placeholder="Tem onde estacionar?&#10;Vcs têm vaga pra carro?"></textarea>
+          </label>
+          <label class="checkbox-row"><input type="checkbox" id="fq-exact" /> Enviar exatamente como cadastrado</label>
+          <label class="checkbox-row"><input type="checkbox" id="fq-active" checked /> FAQ ativa</label>
+          <div class="modal-actions">
+            <button type="button" id="faq-delete-btn" class="btn-cancel" style="display:none">Excluir</button>
+            <button type="submit">Salvar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="pb-overlay" class="modal-overlay" style="display:none">
+      <div class="modal-card modal-card-lg">
+        <div class="modal-header">
+          <h3 id="pb-title">Novo roteiro</h3>
+          <button type="button" id="pb-close" class="modal-close">&times;</button>
+        </div>
+        <form id="pb-form">
+          <input type="hidden" id="pb-id" />
+          <label>Nome do roteiro*
+            <input id="pb-name" type="text" placeholder="Ex.: Primeiro atendimento" required />
+          </label>
+          <label>Tipo de atendimento
+            <select id="pb-type">
+              <option value="primeiro_atendimento">Primeiro atendimento</option>
+              <option value="agendamento">Agendamento direto</option>
+              <option value="procedimento">Procedimento específico</option>
+              <option value="preco">Preço e pagamento</option>
+              <option value="objecoes">Objeções</option>
+              <option value="remarcacao">Remarcar ou cancelar</option>
+              <option value="pos_procedimento">Pós-procedimento</option>
+              <option value="transferir">Transferir para humano</option>
+              <option value="livre" selected>Roteiro livre</option>
+            </select>
+          </label>
+          <label>Quando este roteiro deve ser usado?
+            <input id="pb-trigger" type="text" placeholder="Ex.: paciente diz 'quero agendar', 'pode marcar', 'tem horário hoje'" />
+          </label>
+          <label>Qual objetivo a Alice precisa cumprir?
+            <input id="pb-goal" type="text" placeholder="Ex.: entender a necessidade, oferecer duas opções e tentar agendar" />
+          </label>
+          <label>Passos (um por linha)*
+            <textarea id="pb-steps" rows="6" placeholder="1. Cumprimentar e confirmar interesse&#10;2. Perguntar o que incomoda&#10;3. Explicar rapidamente o procedimento&#10;4. Oferecer dois horários&#10;5. Transferir se houver exceção" required></textarea>
+          </label>
+          <label class="checkbox-row"><input type="checkbox" id="pb-active" checked /> Ativo</label>
+          <div class="modal-actions">
+            <button type="button" id="pb-delete-btn" class="btn-cancel" style="display:none">Excluir</button>
             <button type="submit">Salvar</button>
           </div>
         </form>

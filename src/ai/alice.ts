@@ -151,27 +151,64 @@ function describeProcedureForPrompt(p: Procedure): string {
 
 // Como a Alice se apresenta pro paciente - ela NUNCA diz que e IA/assistente
 // virtual, so uma destas tres formas (escolhida pela clinica no painel).
-function personaInstruction(clinic: { name: string; assistantPersona: string; assistantPersonaName: string | null }): string {
+function personaInstruction(clinic: { name: string; assistantName: string; assistantPersona: string; assistantPersonaName: string | null }): string {
+  const a = clinic.assistantName || "Alice";
   const who = clinic.assistantPersonaName?.trim();
   if (clinic.assistantPersona === "clinic_secretary") {
-    return `Voce se apresenta como secretaria da ${clinic.name}. Ex: "Oi! Aqui e a Alice, secretaria da ${clinic.name}".`;
+    return `Voce se apresenta como secretaria da ${clinic.name}. Ex: "Oi! Aqui e a ${a}, secretaria da ${clinic.name}".`;
   }
   if (clinic.assistantPersona === "professional_secretary" && who) {
-    return `Voce se apresenta como secretaria de ${who} (da ${clinic.name}). Ex: "Oi! Aqui e a Alice, secretaria de ${who}".`;
+    return `Voce se apresenta como secretaria de ${who} (da ${clinic.name}). Ex: "Oi! Aqui e a ${a}, secretaria de ${who}".`;
   }
   // team (padrao) - e tambem o fallback do professional_secretary sem nome
-  return `Voce se apresenta apenas como parte da equipe da ${clinic.name}, sem citar cargo. Ex: "Oi! Aqui e a Alice, da equipe da ${clinic.name}".`;
+  return `Voce se apresenta apenas como parte da equipe da ${clinic.name}, sem citar cargo. Ex: "Oi! Aqui e a ${a}, da equipe da ${clinic.name}".`;
 }
 
 async function buildSystemPrompt(clinicId: string): Promise<string> {
   const clinic = await prisma.clinic.findUniqueOrThrow({
     where: { id: clinicId },
-    include: { procedures: true },
+    include: {
+      procedures: true,
+      messageTemplates: { where: { active: true } },
+      faqs: { where: { active: true } },
+      playbooks: { where: { active: true } },
+    },
   });
 
+  const a = clinic.assistantName || "Alice";
   const procedureList = clinic.procedures.map((p) => describeProcedureForPrompt(p)).join("\n\n");
 
-  return `Voce e a Alice, atendente da clinica de estetica "${clinic.name}".
+  const areaLine = clinic.activityArea?.trim()
+    ? `\nArea de atuacao da clinica: ${clinic.activityArea.trim()}.`
+    : "";
+
+  const depositLine = clinic.requireDepositProof
+    ? `\nSINAL OBRIGATORIO: so confirme (book_appointment) um agendamento depois que o paciente enviar o comprovante do sinal na conversa. Antes disso, peca o pagamento e aguarde o comprovante.`
+    : "";
+
+  const handoffLine = clinic.handoffPhrase?.trim()
+    ? `\nQuando precisar passar o atendimento pra equipe, escreva antes exatamente: "${clinic.handoffPhrase.trim()}". Nao anuncie que vai "transferir pra um atendente" - como voce ja se apresenta como parte da equipe, isso confunde o paciente.`
+    : "";
+
+  const templatesBlock = clinic.messageTemplates.length
+    ? `\n\nMensagens prontas da clinica (reaproveite quando fizer sentido; ${"{"}modo exato${"}"} = enviar o texto exatamente como esta, so trocando as variaveis):\n${clinic.messageTemplates
+        .map((t) => `- ${t.name}${t.whenToUse ? ` (usar quando: ${t.whenToUse})` : ""} [${t.mode === "exact" ? "modo exato" : "adaptar tom"}]:\n  "${t.body}"`)
+        .join("\n")}`
+    : "";
+
+  const faqBlock = clinic.faqs.length
+    ? `\n\nFAQ operacional da clinica (use SO estas respostas pra estes assuntos; agenda, catalogo e preco continuam vindo das outras fontes):\n${clinic.faqs
+        .map((f) => `- P: ${f.question}${f.alternates.trim() ? ` (tambem: ${f.alternates.split("\n").filter(Boolean).join(" / ")})` : ""}\n  R${f.exactAnswer ? " (responder exatamente)" : ""}: ${f.answer}`)
+        .join("\n")}`
+    : "";
+
+  const playbookBlock = clinic.playbooks.length
+    ? `\n\nRoteiros (conduza a conversa nestes passos quando a situacao corresponder):\n${clinic.playbooks
+        .map((p) => `- ${p.name}${p.triggerText ? ` — usar quando: ${p.triggerText}` : ""}${p.goal ? `\n  Objetivo: ${p.goal}` : ""}\n  Passos:\n${p.steps.split("\n").filter(Boolean).map((s, i) => `   ${i + 1}. ${s}`).join("\n")}`)
+        .join("\n")}`
+    : "";
+
+  return `Voce e a ${a}, atendente da clinica de estetica "${clinic.name}".${areaLine}
 Atenda pelo WhatsApp de forma humanizada, calorosa e objetiva, como uma recepcionista experiente.
 
 COMO VOCE SE APRESENTA (regra fixa, vale pra toda conversa):
@@ -182,12 +219,12 @@ Seu trabalho:
 1. Entender o interesse do paciente e qualificar (procedimento desejado, se e novo paciente).
 2. Usar a ferramenta check_availability para consultar horarios reais antes de sugerir qualquer data.
 3. Confirmar o horario escolhido com o paciente e so entao usar book_appointment.
-4. Nunca invente horarios ou informacoes que nao vieram das ferramentas.
+4. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${handoffLine}
 
 Procedimentos oferecidos pela clinica:
 ${procedureList || "(nenhum procedimento cadastrado ainda)"}
 
-Use so os dados de valor, beneficio, indicacao e prazo que estao cadastrados acima em cada procedimento. Se o paciente perguntar algo que nao esta ali (preco de um item sem valor, prazo de um item sem prazo cadastrado, etc.), diga que precisa confirmar na avaliacao/com a equipe - nunca invente numero, garantia ou prazo.
+Use so os dados de valor, beneficio, indicacao e prazo que estao cadastrados acima em cada procedimento. Se o paciente perguntar algo que nao esta ali (preco de um item sem valor, prazo de um item sem prazo cadastrado, etc.), diga que precisa confirmar na avaliacao/com a equipe - nunca invente numero, garantia ou prazo.${templatesBlock}${faqBlock}${playbookBlock}
 
 Responda sempre em portugues do Brasil, em mensagens curtas como quem digita no WhatsApp.${await getActiveRulesPrompt(clinicId)}`;
 }

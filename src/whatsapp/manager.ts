@@ -123,14 +123,45 @@ async function humanDelay(sock: WASocket, jid: string, text: string): Promise<vo
   }
 }
 
+// Quebra uma resposta longa em bolhas menores (config "Ajustes da Alice").
+// Corta por paragrafo primeiro; se ainda ficar bolha gigante, corta por frase.
+function splitMessage(text: string, maxParts: number): string[] {
+  const paras = text.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+  let parts = paras.length > 1 ? paras : text.split(/(?<=[.!?])\s+(?=[A-ZÀ-Ú])/).map((s) => s.trim()).filter(Boolean);
+  if (parts.length <= 1) return [text];
+
+  // agrupa ate maxParts, juntando os menores em sequencia
+  while (parts.length > maxParts) {
+    let minIdx = 0;
+    for (let i = 1; i < parts.length - 1; i++) {
+      if (parts[i].length + parts[i + 1].length < parts[minIdx].length + parts[minIdx + 1].length) minIdx = i;
+    }
+    parts.splice(minIdx, 2, `${parts[minIdx]} ${parts[minIdx + 1]}`);
+  }
+  return parts;
+}
+
 export async function sendText(clinicId: string, phone: string, text: string): Promise<void> {
   const conn = connections.get(clinicId);
   if (!conn || conn.status !== "open") {
     throw new Error(`WhatsApp da clinica ${clinicId} nao esta conectado`);
   }
   const jid = toJid(phone);
-  await humanDelay(conn.sock, jid, text);
-  await conn.sock.sendMessage(jid, { text });
+
+  const cfg = await prisma.clinic
+    .findUnique({ where: { id: clinicId }, select: { splitLongMessages: true, splitMaxMessages: true, splitThresholdChars: true } })
+    .catch(() => null);
+
+  const parts =
+    cfg?.splitLongMessages && text.length > (cfg.splitThresholdChars ?? 450)
+      ? splitMessage(text, Math.max(cfg.splitMaxMessages ?? 4, 1))
+      : [text];
+
+  for (let i = 0; i < parts.length; i++) {
+    await humanDelay(conn.sock, jid, parts[i]);
+    await conn.sock.sendMessage(jid, { text: parts[i] });
+    if (i < parts.length - 1) await new Promise((r) => setTimeout(r, 1000 + Math.random() * 2000));
+  }
 }
 
 export function getStatus(clinicId: string): { connected: boolean; connecting: boolean; lastError: string | null } {

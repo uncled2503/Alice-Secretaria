@@ -1669,76 +1669,116 @@ async function loadActivityLog(reset = true) {
 document.getElementById("activity-apply").addEventListener("click", () => loadActivityLog(true));
 document.getElementById("activity-more").addEventListener("click", () => loadActivityLog(false));
 
-// --- Personalizar Alice (regras em linguagem natural) ---
+// ======================= PERSONALIZAR ALICE =======================
 let RULE_CATEGORY_LABELS = {};
+let RULE_CATEGORY_LIST = [];
+let allCustomRules = [];
+let ruleCatFilter = "";
 
-async function loadRules() {
-  if (Object.keys(RULE_CATEGORY_LABELS).length === 0) {
-    const categories = await api("/rules/categories");
-    RULE_CATEGORY_LABELS = Object.fromEntries(categories.map((c) => [c.id, c.label]));
+// --- Sub-abas ---
+document.getElementById("rules-tabs").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-rt]");
+  if (!btn) return;
+  const rt = btn.dataset.rt;
+  document.querySelectorAll("#rules-tabs button").forEach((b) => b.classList.toggle("active", b === btn));
+  document.querySelectorAll(".rules-panel").forEach((p) => p.classList.toggle("active", p.id === `rt-${rt}`));
+  RULES_SUB_LOADERS[rt]?.();
+});
+
+async function ensureRuleCategories() {
+  if (RULE_CATEGORY_LIST.length === 0) {
+    RULE_CATEGORY_LIST = await api("/rules/categories");
+    RULE_CATEGORY_LABELS = Object.fromEntries(RULE_CATEGORY_LIST.map((c) => [c.id, c.label]));
   }
+}
 
-  const rules = await api("/rules");
+// --- Regras globais ---
+async function loadRules() {
+  await ensureRuleCategories();
+  allCustomRules = await api("/rules");
+  renderRules();
+}
+
+function renderRules() {
   const pendingBox = document.getElementById("rules-pending");
   const activeBox = document.getElementById("rules-active");
   pendingBox.innerHTML = "";
   activeBox.innerHTML = "";
-  const activeTotal = rules.filter((r) => r.status === "active").length;
-  document.getElementById("rules-active-count").textContent = activeTotal ? `(${activeTotal})` : "";
 
-  for (const rule of rules) {
-    if (rule.status === "active") {
-      const discardBtn = el("button", { class: "btn-brand btn-brand--secondary btn-brand--sm" }, ["Remover"]);
-      discardBtn.addEventListener("click", async () => {
-        await api(`/rules/${rule.id}`, { method: "DELETE" });
-        await loadRules();
-      });
-      activeBox.appendChild(
-        el("div", { class: "rule-card" }, [
-          el("div", { class: "category" }, [RULE_CATEGORY_LABELS[rule.category] ?? rule.category]),
-          el("div", { class: "instruction" }, [rule.instruction ?? ""]),
-          el("div", { class: "actions" }, [discardBtn]),
-        ])
-      );
-    } else {
-      const isQuestion = rule.status === "needs_clarification";
-      const discardBtn = el("button", { class: "btn-brand btn-brand--secondary btn-brand--sm" }, ["Descartar"]);
-      discardBtn.addEventListener("click", async () => {
-        await api(`/rules/${rule.id}`, { method: "DELETE" });
-        await loadRules();
-      });
+  const search = document.getElementById("rules-search").value.trim().toLowerCase();
+  const active = allCustomRules.filter((r) => r.status === "active");
+  const pending = allCustomRules.filter((r) => r.status !== "active");
 
-      const children = [
-        el("div", { class: "category" }, [isQuestion ? "Precisa da sua atenção" : "Sugestão pendente"]),
-        el("div", { class: "raw" }, [`Você disse: "${rule.rawInput}"`]),
-      ];
+  document.getElementById("rules-active-count").textContent = `(${active.length})`;
 
-      if (isQuestion) {
-        children.push(el("div", { class: "question" }, [rule.clarifyingQuestion]));
-        children.push(
-          el("div", { class: "hint" }, ["Descreva de novo lá em cima, já respondendo essa pergunta."])
-        );
-      } else {
-        const approveBtn = el("button", { class: "btn-brand btn-brand--primary btn-brand--sm" }, ["Aprovar"]);
-        approveBtn.addEventListener("click", async () => {
-          await api(`/rules/${rule.id}/approve`, { method: "POST" });
-          await loadRules();
-        });
-        children.push(el("div", { class: "instruction" }, [`${RULE_CATEGORY_LABELS[rule.category] ?? rule.category}: ${rule.instruction}`]));
-        children.push(el("div", { class: "actions" }, [approveBtn, discardBtn]));
-      }
-      if (isQuestion) children.push(el("div", { class: "actions" }, [discardBtn]));
-
-      pendingBox.appendChild(el("div", { class: "rule-card pending" }, children));
-    }
+  // filtro por categoria
+  const catBox = document.getElementById("rules-cat-filter");
+  catBox.innerHTML = "";
+  const mkCatBtn = (id, label) => {
+    const b = el("button", { class: id === ruleCatFilter ? "active" : "" }, [label]);
+    b.addEventListener("click", () => { ruleCatFilter = id; renderRules(); });
+    return b;
+  };
+  catBox.appendChild(mkCatBtn("", `Todas (${active.length})`));
+  for (const c of RULE_CATEGORY_LIST) {
+    const n = active.filter((r) => r.category === c.id).length;
+    if (n) catBox.appendChild(mkCatBtn(c.id, `${c.label} (${n})`));
   }
+
+  // pendentes (aparecem em Início)
+  for (const rule of pending) {
+    const isQuestion = rule.status === "needs_clarification";
+    const discardBtn = el("button", { class: "btn-brand btn-brand--secondary btn-brand--sm" }, ["Descartar"]);
+    discardBtn.addEventListener("click", async () => { await api(`/rules/${rule.id}`, { method: "DELETE" }); await loadRules(); });
+    const children = [
+      el("div", { class: "category" }, [isQuestion ? "Precisa da sua atenção" : "Sugestão pendente"]),
+      el("div", { class: "raw" }, [`Você disse: "${rule.rawInput}"`]),
+    ];
+    if (isQuestion) {
+      children.push(el("div", { class: "question" }, [rule.clarifyingQuestion]));
+      children.push(el("div", { class: "hint" }, ["Descreva de novo lá em cima, já respondendo essa pergunta."]));
+      children.push(el("div", { class: "actions" }, [discardBtn]));
+    } else {
+      const approveBtn = el("button", { class: "btn-brand btn-brand--primary btn-brand--sm" }, ["Aprovar"]);
+      approveBtn.addEventListener("click", async () => { await api(`/rules/${rule.id}/approve`, { method: "POST" }); await loadRules(); });
+      children.push(el("div", { class: "instruction" }, [`${RULE_CATEGORY_LABELS[rule.category] ?? rule.category}: ${rule.instruction}`]));
+      children.push(el("div", { class: "actions" }, [approveBtn, discardBtn]));
+    }
+    pendingBox.appendChild(el("div", { class: "rule-card pending" }, children));
+  }
+
+  // ativas (Regras globais)
+  const shown = active.filter((r) =>
+    (!ruleCatFilter || r.category === ruleCatFilter) &&
+    (!search || (r.instruction || "").toLowerCase().includes(search))
+  );
+  if (shown.length === 0) {
+    activeBox.appendChild(el("p", { class: "hint", style: "text-align:center;padding:1rem 0" }, ["Nenhuma regra nesse filtro."]));
+  }
+  for (const rule of shown) {
+    const editBtn = el("button", { class: "btn-brand btn-brand--secondary btn-brand--sm" }, ["Editar"]);
+    editBtn.addEventListener("click", () => openRuleEditModal(rule));
+    const delBtn = el("button", { class: "btn-brand btn-brand--secondary btn-brand--sm" }, ["Excluir"]);
+    delBtn.addEventListener("click", async () => {
+      if (!(await showConfirm("Excluir essa regra?"))) return;
+      await api(`/rules/${rule.id}`, { method: "DELETE" });
+      await loadRules();
+    });
+    activeBox.appendChild(el("div", { class: "rule-card-2" }, [
+      el("div", { class: "rc-top" }, [el("span", { class: "rc-tag" }, [RULE_CATEGORY_LABELS[rule.category] ?? rule.category])]),
+      el("div", { class: "rc-body" }, [rule.instruction ?? ""]),
+      el("div", { class: "rc-actions" }, [editBtn, delBtn]),
+    ]));
+  }
+  updateHomeStats();
 }
 
-document.getElementById("btn-restore-rules").addEventListener("click", async () => {
-  const btn = document.getElementById("btn-restore-rules");
-  btn.disabled = true;
+document.getElementById("rules-search").addEventListener("input", renderRules);
+
+document.getElementById("btn-restore-rules").addEventListener("click", async (e) => {
+  e.target.disabled = true;
   await api("/rules/restore-defaults", { method: "POST" });
-  btn.disabled = false;
+  e.target.disabled = false;
   await loadRules();
 });
 
@@ -1747,23 +1787,315 @@ document.getElementById("rule-form").addEventListener("submit", async (e) => {
   const textArea = document.getElementById("rule-text");
   const text = textArea.value.trim();
   if (!text) return;
-
   const submitBtn = e.target.querySelector("button[type=submit]");
+  const label = submitBtn.innerHTML;
   submitBtn.textContent = "Pensando...";
   submitBtn.disabled = true;
   try {
-    await api("/rules", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
+    await api("/rules", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
     textArea.value = "";
     await loadRules();
   } finally {
-    submitBtn.textContent = "Gerar sugestão";
+    submitBtn.innerHTML = label;
     submitBtn.disabled = false;
+    paintIcons(submitBtn);
   }
 });
+document.querySelectorAll(".rule-cat-hint").forEach((chip) => {
+  chip.addEventListener("click", () => {
+    const t = document.getElementById("rule-text");
+    t.focus();
+    t.value = t.value ? t.value : `Sobre ${chip.textContent.toLowerCase()}: `;
+  });
+});
+
+// modal de regra (manual/editar)
+function openRuleEditModal(rule) {
+  const sel = document.getElementById("re-category");
+  if (!sel.options.length) for (const c of RULE_CATEGORY_LIST) sel.appendChild(el("option", { value: c.id }, [c.label]));
+  document.getElementById("rule-edit-title").textContent = rule ? "Editar regra" : "Nova regra";
+  document.getElementById("re-id").value = rule?.id || "";
+  document.getElementById("re-category").value = rule?.category || RULE_CATEGORY_LIST[0]?.id || "";
+  document.getElementById("re-instruction").value = rule?.instruction || "";
+  document.getElementById("rule-edit-delete-btn").style.display = rule ? "" : "none";
+  document.getElementById("rule-edit-overlay").style.display = "flex";
+}
+function closeRuleEditModal() { document.getElementById("rule-edit-overlay").style.display = "none"; }
+document.getElementById("btn-add-rule").addEventListener("click", () => openRuleEditModal(null));
+document.getElementById("rule-edit-close").addEventListener("click", closeRuleEditModal);
+document.getElementById("rule-edit-overlay").addEventListener("click", (e) => { if (e.target.id === "rule-edit-overlay") closeRuleEditModal(); });
+document.getElementById("rule-edit-delete-btn").addEventListener("click", async () => {
+  const id = document.getElementById("re-id").value;
+  if (!id || !(await showConfirm("Excluir essa regra?"))) return;
+  await api(`/rules/${id}`, { method: "DELETE" });
+  closeRuleEditModal();
+  await loadRules();
+});
+document.getElementById("rule-edit-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const id = document.getElementById("re-id").value;
+  const payload = { category: document.getElementById("re-category").value, instruction: document.getElementById("re-instruction").value.trim() };
+  if (!payload.instruction) return;
+  if (id) await api(`/rules/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  else await api("/rules/manual", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  closeRuleEditModal();
+  await loadRules();
+});
+
+// --- Mensagens prontas ---
+let allTemplates = [];
+async function loadTemplates() { allTemplates = await api("/message-templates"); renderTemplates(); }
+function renderTemplates() {
+  const search = document.getElementById("tpl-search").value.trim().toLowerCase();
+  const list = document.getElementById("tpl-list");
+  document.getElementById("tpl-count").textContent = allTemplates.length;
+  const shown = allTemplates.filter((t) => !search || t.name.toLowerCase().includes(search));
+  document.getElementById("tpl-empty").style.display = allTemplates.length ? "none" : "block";
+  list.innerHTML = "";
+  for (const t of shown) {
+    const editBtn = el("button", { class: "btn-brand btn-brand--secondary btn-brand--sm" }, ["Editar"]);
+    editBtn.addEventListener("click", () => openTplModal(t));
+    const delBtn = el("button", { class: "btn-brand btn-brand--secondary btn-brand--sm" }, ["Excluir"]);
+    delBtn.addEventListener("click", async () => { if (!(await showConfirm("Excluir essa mensagem?"))) return; await api(`/message-templates/${t.id}`, { method: "DELETE" }); await loadTemplates(); });
+    list.appendChild(el("div", { class: "rule-card-2" }, [
+      el("div", { class: "rc-top" }, [
+        el("span", { class: "rc-title" }, [t.name]),
+        el("span", { class: `rc-tag ${t.mode === "exact" ? "" : "muted"}` }, [t.mode === "exact" ? "envio exato" : "adapta o tom"]),
+        t.active ? el("span", {}, []) : el("span", { class: "rc-tag muted" }, ["inativa"]),
+      ]),
+      t.whenToUse ? el("div", { class: "rc-when" }, [`Usar quando: ${t.whenToUse}`]) : el("span", {}, []),
+      el("div", { class: "rc-body" }, [t.body]),
+      el("div", { class: "rc-actions" }, [editBtn, delBtn]),
+    ]));
+  }
+}
+document.getElementById("tpl-search").addEventListener("input", renderTemplates);
+document.querySelectorAll(".tpl-var-btn").forEach((b) => b.addEventListener("click", () => insertAtCursor(document.getElementById("tpl-body"), b.dataset.var)));
+function openTplModal(t) {
+  document.getElementById("tpl-title").textContent = t ? "Editar mensagem" : "Nova mensagem";
+  document.getElementById("tpl-id").value = t?.id || "";
+  document.getElementById("tpl-name").value = t?.name || "";
+  document.querySelector(`input[name="tpl-mode"][value="${t?.mode === "exact" ? "exact" : "adapt"}"]`).checked = true;
+  document.getElementById("tpl-when").value = t?.whenToUse || "";
+  document.getElementById("tpl-body").value = t?.body || "";
+  document.getElementById("tpl-active").checked = t ? !!t.active : true;
+  document.getElementById("tpl-delete-btn").style.display = t ? "" : "none";
+  document.getElementById("tpl-overlay").style.display = "flex";
+}
+const closeTpl = () => (document.getElementById("tpl-overlay").style.display = "none");
+document.getElementById("btn-add-tpl").addEventListener("click", () => openTplModal(null));
+document.getElementById("tpl-close").addEventListener("click", closeTpl);
+document.getElementById("tpl-overlay").addEventListener("click", (e) => { if (e.target.id === "tpl-overlay") closeTpl(); });
+document.getElementById("tpl-delete-btn").addEventListener("click", async () => {
+  const id = document.getElementById("tpl-id").value;
+  if (!id || !(await showConfirm("Excluir essa mensagem?"))) return;
+  await api(`/message-templates/${id}`, { method: "DELETE" }); closeTpl(); await loadTemplates();
+});
+document.getElementById("tpl-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const id = document.getElementById("tpl-id").value;
+  const payload = {
+    name: document.getElementById("tpl-name").value.trim(),
+    body: document.getElementById("tpl-body").value.trim(),
+    mode: document.querySelector('input[name="tpl-mode"]:checked').value,
+    whenToUse: document.getElementById("tpl-when").value.trim(),
+    active: document.getElementById("tpl-active").checked,
+  };
+  if (!payload.name || !payload.body) return;
+  await api(id ? `/message-templates/${id}` : "/message-templates", { method: id ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  closeTpl(); await loadTemplates();
+});
+
+// --- FAQ da clínica ---
+let allFaqs = [];
+async function loadFaqs() { allFaqs = await api("/faqs"); renderFaqs(); }
+function renderFaqs() {
+  const search = document.getElementById("faq-search").value.trim().toLowerCase();
+  const list = document.getElementById("faq-list");
+  document.getElementById("faq-count").textContent = allFaqs.length;
+  const shown = allFaqs.filter((f) => !search || f.question.toLowerCase().includes(search) || f.answer.toLowerCase().includes(search));
+  document.getElementById("faq-empty").style.display = allFaqs.length ? "none" : "block";
+  list.innerHTML = "";
+  for (const f of shown) {
+    const editBtn = el("button", { class: "btn-brand btn-brand--secondary btn-brand--sm" }, ["Editar"]);
+    editBtn.addEventListener("click", () => openFaqModal(f));
+    const delBtn = el("button", { class: "btn-brand btn-brand--secondary btn-brand--sm" }, ["Excluir"]);
+    delBtn.addEventListener("click", async () => { if (!(await showConfirm("Excluir essa FAQ?"))) return; await api(`/faqs/${f.id}`, { method: "DELETE" }); await loadFaqs(); });
+    list.appendChild(el("div", { class: "rule-card-2" }, [
+      el("div", { class: "rc-top" }, [
+        el("span", { class: "rc-title" }, [f.question]),
+        f.exactAnswer ? el("span", { class: "rc-tag" }, ["resposta exata"]) : el("span", {}, []),
+        f.active ? el("span", {}, []) : el("span", { class: "rc-tag muted" }, ["inativa"]),
+      ]),
+      el("div", { class: "rc-body" }, [f.answer]),
+      el("div", { class: "rc-actions" }, [editBtn, delBtn]),
+    ]));
+  }
+}
+document.getElementById("faq-search").addEventListener("input", renderFaqs);
+function openFaqModal(f) {
+  document.getElementById("faq-title").textContent = f ? "Editar FAQ" : "Nova FAQ";
+  document.getElementById("fq-id").value = f?.id || "";
+  document.getElementById("fq-question").value = f?.question || "";
+  document.getElementById("fq-answer").value = f?.answer || "";
+  document.getElementById("fq-alternates").value = f?.alternates || "";
+  document.getElementById("fq-exact").checked = f ? !!f.exactAnswer : false;
+  document.getElementById("fq-active").checked = f ? !!f.active : true;
+  document.getElementById("faq-delete-btn").style.display = f ? "" : "none";
+  document.getElementById("faq-overlay").style.display = "flex";
+}
+const closeFaq = () => (document.getElementById("faq-overlay").style.display = "none");
+document.getElementById("btn-add-faq").addEventListener("click", () => openFaqModal(null));
+document.getElementById("faq-close").addEventListener("click", closeFaq);
+document.getElementById("faq-overlay").addEventListener("click", (e) => { if (e.target.id === "faq-overlay") closeFaq(); });
+document.getElementById("faq-delete-btn").addEventListener("click", async () => {
+  const id = document.getElementById("fq-id").value;
+  if (!id || !(await showConfirm("Excluir essa FAQ?"))) return;
+  await api(`/faqs/${id}`, { method: "DELETE" }); closeFaq(); await loadFaqs();
+});
+document.getElementById("faq-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const id = document.getElementById("fq-id").value;
+  const payload = {
+    question: document.getElementById("fq-question").value.trim(),
+    answer: document.getElementById("fq-answer").value.trim(),
+    alternates: document.getElementById("fq-alternates").value.trim(),
+    exactAnswer: document.getElementById("fq-exact").checked,
+    active: document.getElementById("fq-active").checked,
+  };
+  if (!payload.question || !payload.answer) return;
+  await api(id ? `/faqs/${id}` : "/faqs", { method: id ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  closeFaq(); await loadFaqs();
+});
+
+// --- Roteiros ---
+let allPlaybooks = [];
+async function loadPlaybooks() { allPlaybooks = await api("/playbooks"); renderPlaybooks(); }
+function renderPlaybooks() {
+  const search = document.getElementById("pb-search").value.trim().toLowerCase();
+  const list = document.getElementById("pb-list");
+  document.getElementById("pb-count").textContent = allPlaybooks.length;
+  const shown = allPlaybooks.filter((p) => !search || p.name.toLowerCase().includes(search));
+  document.getElementById("pb-empty").style.display = allPlaybooks.length ? "none" : "block";
+  list.innerHTML = "";
+  for (const p of shown) {
+    const editBtn = el("button", { class: "btn-brand btn-brand--secondary btn-brand--sm" }, ["Editar"]);
+    editBtn.addEventListener("click", () => openPbModal(p));
+    const delBtn = el("button", { class: "btn-brand btn-brand--secondary btn-brand--sm" }, ["Excluir"]);
+    delBtn.addEventListener("click", async () => { if (!(await showConfirm("Excluir esse roteiro?"))) return; await api(`/playbooks/${p.id}`, { method: "DELETE" }); await loadPlaybooks(); });
+    const steps = (p.steps || "").split("\n").filter(Boolean);
+    list.appendChild(el("div", { class: "rule-card-2" }, [
+      el("div", { class: "rc-top" }, [
+        el("span", { class: "rc-title" }, [p.name]),
+        p.active ? el("span", { class: "rc-tag" }, ["no ar"]) : el("span", { class: "rc-tag muted" }, ["inativo"]),
+      ]),
+      p.triggerText ? el("div", { class: "rc-when" }, [`Usar quando: ${p.triggerText}`]) : el("span", {}, []),
+      el("div", { class: "rc-body" }, [steps.map((s, i) => `${i + 1}. ${s.replace(/^\d+[.)]\s*/, "")}`).join("\n")]),
+      el("div", { class: "rc-actions" }, [editBtn, delBtn]),
+    ]));
+  }
+}
+document.getElementById("pb-search").addEventListener("input", renderPlaybooks);
+function openPbModal(p) {
+  document.getElementById("pb-title").textContent = p ? "Editar roteiro" : "Novo roteiro";
+  document.getElementById("pb-id").value = p?.id || "";
+  document.getElementById("pb-name").value = p?.name || "";
+  document.getElementById("pb-type").value = p?.scriptType || "livre";
+  document.getElementById("pb-trigger").value = p?.triggerText || "";
+  document.getElementById("pb-goal").value = p?.goal || "";
+  document.getElementById("pb-steps").value = p?.steps || "";
+  document.getElementById("pb-active").checked = p ? !!p.active : true;
+  document.getElementById("pb-delete-btn").style.display = p ? "" : "none";
+  document.getElementById("pb-overlay").style.display = "flex";
+}
+const closePb = () => (document.getElementById("pb-overlay").style.display = "none");
+document.getElementById("btn-add-pb").addEventListener("click", () => openPbModal(null));
+document.getElementById("pb-close").addEventListener("click", closePb);
+document.getElementById("pb-overlay").addEventListener("click", (e) => { if (e.target.id === "pb-overlay") closePb(); });
+document.getElementById("pb-delete-btn").addEventListener("click", async () => {
+  const id = document.getElementById("pb-id").value;
+  if (!id || !(await showConfirm("Excluir esse roteiro?"))) return;
+  await api(`/playbooks/${id}`, { method: "DELETE" }); closePb(); await loadPlaybooks();
+});
+document.getElementById("pb-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const id = document.getElementById("pb-id").value;
+  const payload = {
+    name: document.getElementById("pb-name").value.trim(),
+    scriptType: document.getElementById("pb-type").value,
+    triggerText: document.getElementById("pb-trigger").value.trim(),
+    goal: document.getElementById("pb-goal").value.trim(),
+    steps: document.getElementById("pb-steps").value.trim(),
+    active: document.getElementById("pb-active").checked,
+  };
+  if (!payload.name || !payload.steps) return;
+  await api(id ? `/playbooks/${id}` : "/playbooks", { method: id ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  closePb(); await loadPlaybooks();
+});
+
+// --- Ajustes da Alice ---
+function loadAliceSettings() {
+  const c = (state.clinics || []).find((x) => x.id === state.clinicId);
+  if (!c) return;
+  document.getElementById("as-name").value = c.assistantName || "Alice";
+  document.getElementById("as-area").value = c.activityArea || "";
+  document.getElementById("as-handoff").value = c.handoffPhrase || "";
+  document.getElementById("as-split").checked = c.splitLongMessages !== false;
+  document.getElementById("as-split-max").value = c.splitMaxMessages ?? 4;
+  document.getElementById("as-split-threshold").value = c.splitThresholdChars ?? 450;
+  document.getElementById("as-deposit").checked = !!c.requireDepositProof;
+}
+document.getElementById("alice-settings-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const payload = {
+    assistantName: document.getElementById("as-name").value.trim() || "Alice",
+    activityArea: document.getElementById("as-area").value.trim(),
+    handoffPhrase: document.getElementById("as-handoff").value.trim(),
+    splitLongMessages: document.getElementById("as-split").checked,
+    splitMaxMessages: Number(document.getElementById("as-split-max").value),
+    splitThresholdChars: Number(document.getElementById("as-split-threshold").value),
+    requireDepositProof: document.getElementById("as-deposit").checked,
+  };
+  await api(`/clinics/${state.clinicId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  await loadClinics();
+  loadAliceSettings();
+});
+
+// --- Início: stats ---
+function updateHomeStats() {
+  const box = document.getElementById("rt-home-stats");
+  if (!box) return;
+  const activeRules = allCustomRules.filter((r) => r.status === "active").length;
+  const pendingRules = allCustomRules.filter((r) => r.status !== "active").length;
+  const cards = [
+    ["Regras ativas", activeRules, "A Alice cumpre sozinha em toda conversa."],
+    ["Precisam da sua atenção", pendingRules, pendingRules ? "Sugestões e perguntas pendentes." : "Nada pendente."],
+    ["Mensagens prontas", allTemplates.length, "Textos reaproveitados no atendimento."],
+    ["Roteiros no ar", allPlaybooks.filter((p) => p.active).length, "Conversas conduzidas passo a passo."],
+  ];
+  box.innerHTML = "";
+  for (const [label, value, hint] of cards) {
+    box.appendChild(el("div", { class: "card stat-card" }, [
+      el("div", { class: "stat-label" }, [label]),
+      el("div", { class: "stat-value" }, [String(value)]),
+      el("div", { class: "stat-hint" }, [hint]),
+    ]));
+  }
+}
+
+const RULES_SUB_LOADERS = {
+  home: () => { loadRules(); loadTemplates(); loadPlaybooks(); },
+  global: loadRules,
+  templates: loadTemplates,
+  faq: loadFaqs,
+  settings: loadAliceSettings,
+  playbooks: loadPlaybooks,
+};
+
+function loadPersonalize() {
+  const activeRt = document.querySelector("#rules-tabs button.active")?.dataset.rt || "home";
+  RULES_SUB_LOADERS[activeRt]?.();
+}
 
 
 async function refreshAll() {
@@ -2787,7 +3119,7 @@ const SETTINGS_SUB_LOADERS = {
   followup: loadFollowUpRules,
   history: () => loadActivityLog(true),
   funnel: loadStagesConfig,
-  rules: loadRules,
+  rules: loadPersonalize,
   clinics: loadClinicsList,
   channels: startChannelPolling,
   team: loadTeam,

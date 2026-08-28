@@ -74,6 +74,13 @@ apiRouter.get(
         notifyEvents: true,
         assistantPersona: true,
         assistantPersonaName: true,
+        assistantName: true,
+        activityArea: true,
+        handoffPhrase: true,
+        splitLongMessages: true,
+        splitMaxMessages: true,
+        splitThresholdChars: true,
+        requireDepositProof: true,
       },
     });
     res.json(clinics.map((c) => ({ ...c, ...getStatus(c.id) })));
@@ -88,7 +95,7 @@ apiRouter.put(
       return;
     }
 
-    const { name, whatsappPhone, timezone, workStartHour, workEndHour, workDays, active, notifyPhone, notifyEvents, assistantPersona, assistantPersonaName } = req.body as {
+    const b = req.body as {
       name?: string;
       whatsappPhone?: string;
       timezone?: string;
@@ -100,7 +107,15 @@ apiRouter.put(
       notifyEvents?: string;
       assistantPersona?: string;
       assistantPersonaName?: string | null;
+      assistantName?: string;
+      activityArea?: string | null;
+      handoffPhrase?: string | null;
+      splitLongMessages?: boolean;
+      splitMaxMessages?: number;
+      splitThresholdChars?: number;
+      requireDepositProof?: boolean;
     };
+    const { name, whatsappPhone, timezone, workStartHour, workEndHour, workDays, active, notifyPhone, notifyEvents, assistantPersona, assistantPersonaName } = b;
 
     // So admin bloqueia/desbloqueia - um cliente nao pode se desbloquear sozinho.
     if (active !== undefined && !requireAdmin(req, res)) return;
@@ -131,6 +146,13 @@ apiRouter.put(
           ...(notifyEvents !== undefined ? { notifyEvents } : {}),
           ...(assistantPersona !== undefined ? { assistantPersona } : {}),
           ...(assistantPersonaName !== undefined ? { assistantPersonaName: assistantPersonaName?.trim() || null } : {}),
+          ...(b.assistantName !== undefined ? { assistantName: b.assistantName.trim() || "Alice" } : {}),
+          ...(b.activityArea !== undefined ? { activityArea: b.activityArea?.trim() || null } : {}),
+          ...(b.handoffPhrase !== undefined ? { handoffPhrase: b.handoffPhrase?.trim() || null } : {}),
+          ...(b.splitLongMessages !== undefined ? { splitLongMessages: b.splitLongMessages } : {}),
+          ...(b.splitMaxMessages !== undefined ? { splitMaxMessages: Math.min(Math.max(b.splitMaxMessages, 1), 8) } : {}),
+          ...(b.splitThresholdChars !== undefined ? { splitThresholdChars: Math.min(Math.max(b.splitThresholdChars, 120), 2000) } : {}),
+          ...(b.requireDepositProof !== undefined ? { requireDepositProof: b.requireDepositProof } : {}),
         },
       });
       await logActivity({
@@ -207,6 +229,9 @@ apiRouter.delete(
       prisma.renewalRule.deleteMany({ where: { clinicId: req.params.id } }),
       prisma.birthdayRule.deleteMany({ where: { clinicId: req.params.id } }),
       prisma.activityLog.deleteMany({ where: { clinicId: req.params.id } }),
+      prisma.messageTemplate.deleteMany({ where: { clinicId: req.params.id } }),
+      prisma.clinicFaq.deleteMany({ where: { clinicId: req.params.id } }),
+      prisma.playbook.deleteMany({ where: { clinicId: req.params.id } }),
       prisma.customRule.deleteMany({ where: { clinicId: req.params.id } }),
       prisma.procedure.deleteMany({ where: { clinicId: req.params.id } }),
       prisma.broadcastCampaign.deleteMany({ where: { clinicId: req.params.id } }),
@@ -1797,6 +1822,42 @@ apiRouter.post(
   })
 );
 
+// Cria uma regra manualmente (sem passar pela IA) - ja entra ativa.
+apiRouter.post(
+  "/rules/manual",
+  asyncRoute(async (req, res) => {
+    const { category, instruction } = req.body as { category?: string; instruction?: string };
+    const validCat = RULE_CATEGORIES.some((c) => c.id === category);
+    if (!validCat || !instruction?.trim()) {
+      res.status(400).json({ error: "category valida e instruction sao obrigatorios" });
+      return;
+    }
+    const clinic = await getClinic(req);
+    const rule = await prisma.customRule.create({
+      data: { clinicId: clinic.id, category: category!, rawInput: "(regra escrita manualmente)", instruction: instruction.trim(), status: "active" },
+    });
+    res.json(rule);
+  })
+);
+
+apiRouter.put(
+  "/rules/:id",
+  asyncRoute(async (req, res) => {
+    const rule = await prisma.customRule.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, rule.clinicId)) return;
+    const { category, instruction, status } = req.body as { category?: string; instruction?: string; status?: string };
+    const updated = await prisma.customRule.update({
+      where: { id: req.params.id },
+      data: {
+        ...(category !== undefined && RULE_CATEGORIES.some((c) => c.id === category) ? { category } : {}),
+        ...(instruction !== undefined ? { instruction: instruction.trim() } : {}),
+        ...(status !== undefined && ["active", "draft"].includes(status) ? { status } : {}),
+      },
+    });
+    res.json(updated);
+  })
+);
+
 apiRouter.delete(
   "/rules/:id",
   asyncRoute(async (req, res) => {
@@ -1807,6 +1868,120 @@ apiRouter.delete(
     res.json({ ok: true });
   })
 );
+
+// ================= Personalizar Alice: mensagens prontas, FAQ, roteiros =================
+
+apiRouter.get("/message-templates", asyncRoute(async (req, res) => {
+  const clinic = await getClinic(req);
+  res.json(await prisma.messageTemplate.findMany({ where: { clinicId: clinic.id }, orderBy: { createdAt: "asc" } }));
+}));
+
+apiRouter.post("/message-templates", asyncRoute(async (req, res) => {
+  const { name, body, mode, whenToUse, active } = req.body as Record<string, any>;
+  if (!name?.trim() || !body?.trim()) { res.status(400).json({ error: "name e body sao obrigatorios" }); return; }
+  const clinic = await getClinic(req);
+  res.json(await prisma.messageTemplate.create({
+    data: { clinicId: clinic.id, name: name.trim(), body: body.trim(), mode: mode === "exact" ? "exact" : "adapt", whenToUse: whenToUse?.trim() || null, active: active ?? true },
+  }));
+}));
+
+apiRouter.put("/message-templates/:id", asyncRoute(async (req, res) => {
+  const existing = await prisma.messageTemplate.findUniqueOrThrow({ where: { id: req.params.id } });
+  if (!assertClinicAccess(req, res, existing.clinicId)) return;
+  const { name, body, mode, whenToUse, active } = req.body as Record<string, any>;
+  res.json(await prisma.messageTemplate.update({
+    where: { id: req.params.id },
+    data: {
+      ...(name !== undefined ? { name: String(name).trim() } : {}),
+      ...(body !== undefined ? { body: String(body).trim() } : {}),
+      ...(mode !== undefined ? { mode: mode === "exact" ? "exact" : "adapt" } : {}),
+      ...(whenToUse !== undefined ? { whenToUse: whenToUse?.trim() || null } : {}),
+      ...(active !== undefined ? { active } : {}),
+    },
+  }));
+}));
+
+apiRouter.delete("/message-templates/:id", asyncRoute(async (req, res) => {
+  const existing = await prisma.messageTemplate.findUniqueOrThrow({ where: { id: req.params.id } });
+  if (!assertClinicAccess(req, res, existing.clinicId)) return;
+  await prisma.messageTemplate.delete({ where: { id: req.params.id } });
+  res.json({ ok: true });
+}));
+
+apiRouter.get("/faqs", asyncRoute(async (req, res) => {
+  const clinic = await getClinic(req);
+  res.json(await prisma.clinicFaq.findMany({ where: { clinicId: clinic.id }, orderBy: { createdAt: "asc" } }));
+}));
+
+apiRouter.post("/faqs", asyncRoute(async (req, res) => {
+  const { question, answer, alternates, exactAnswer, active } = req.body as Record<string, any>;
+  if (!question?.trim() || !answer?.trim()) { res.status(400).json({ error: "question e answer sao obrigatorios" }); return; }
+  const clinic = await getClinic(req);
+  res.json(await prisma.clinicFaq.create({
+    data: { clinicId: clinic.id, question: question.trim(), answer: answer.trim(), alternates: (alternates ?? "").trim(), exactAnswer: !!exactAnswer, active: active ?? true },
+  }));
+}));
+
+apiRouter.put("/faqs/:id", asyncRoute(async (req, res) => {
+  const existing = await prisma.clinicFaq.findUniqueOrThrow({ where: { id: req.params.id } });
+  if (!assertClinicAccess(req, res, existing.clinicId)) return;
+  const { question, answer, alternates, exactAnswer, active } = req.body as Record<string, any>;
+  res.json(await prisma.clinicFaq.update({
+    where: { id: req.params.id },
+    data: {
+      ...(question !== undefined ? { question: String(question).trim() } : {}),
+      ...(answer !== undefined ? { answer: String(answer).trim() } : {}),
+      ...(alternates !== undefined ? { alternates: String(alternates).trim() } : {}),
+      ...(exactAnswer !== undefined ? { exactAnswer: !!exactAnswer } : {}),
+      ...(active !== undefined ? { active } : {}),
+    },
+  }));
+}));
+
+apiRouter.delete("/faqs/:id", asyncRoute(async (req, res) => {
+  const existing = await prisma.clinicFaq.findUniqueOrThrow({ where: { id: req.params.id } });
+  if (!assertClinicAccess(req, res, existing.clinicId)) return;
+  await prisma.clinicFaq.delete({ where: { id: req.params.id } });
+  res.json({ ok: true });
+}));
+
+apiRouter.get("/playbooks", asyncRoute(async (req, res) => {
+  const clinic = await getClinic(req);
+  res.json(await prisma.playbook.findMany({ where: { clinicId: clinic.id }, orderBy: { createdAt: "asc" } }));
+}));
+
+apiRouter.post("/playbooks", asyncRoute(async (req, res) => {
+  const { name, scriptType, triggerText, goal, steps, active } = req.body as Record<string, any>;
+  if (!name?.trim() || !(steps ?? "").trim()) { res.status(400).json({ error: "name e steps sao obrigatorios" }); return; }
+  const clinic = await getClinic(req);
+  res.json(await prisma.playbook.create({
+    data: { clinicId: clinic.id, name: name.trim(), scriptType: scriptType?.trim() || "livre", triggerText: triggerText?.trim() || null, goal: goal?.trim() || null, steps: steps.trim(), active: active ?? true },
+  }));
+}));
+
+apiRouter.put("/playbooks/:id", asyncRoute(async (req, res) => {
+  const existing = await prisma.playbook.findUniqueOrThrow({ where: { id: req.params.id } });
+  if (!assertClinicAccess(req, res, existing.clinicId)) return;
+  const { name, scriptType, triggerText, goal, steps, active } = req.body as Record<string, any>;
+  res.json(await prisma.playbook.update({
+    where: { id: req.params.id },
+    data: {
+      ...(name !== undefined ? { name: String(name).trim() } : {}),
+      ...(scriptType !== undefined ? { scriptType: String(scriptType).trim() || "livre" } : {}),
+      ...(triggerText !== undefined ? { triggerText: triggerText?.trim() || null } : {}),
+      ...(goal !== undefined ? { goal: goal?.trim() || null } : {}),
+      ...(steps !== undefined ? { steps: String(steps).trim() } : {}),
+      ...(active !== undefined ? { active } : {}),
+    },
+  }));
+}));
+
+apiRouter.delete("/playbooks/:id", asyncRoute(async (req, res) => {
+  const existing = await prisma.playbook.findUniqueOrThrow({ where: { id: req.params.id } });
+  if (!assertClinicAccess(req, res, existing.clinicId)) return;
+  await prisma.playbook.delete({ where: { id: req.params.id } });
+  res.json({ ok: true });
+}));
 
 // --- Contas de login do painel. role="admin" (equipe da Alice) opera
 // qualquer clinica; role="client" (dono da clinica, ex: Isac) fica travado

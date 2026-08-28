@@ -29,6 +29,16 @@ model Clinic {
   //   professional_secretary -> "secretaria de {assistantPersonaName}"
   assistantPersona     String  @default("team")
   assistantPersonaName String? // nome do profissional quando assistantPersona = professional_secretary (ex: "Dra. Camila")
+
+  // Ajustes da Alice (aba "Personalizar Alice" -> "Ajustes")
+  assistantName        String  @default("Alice") // nome pelo qual ela se apresenta
+  activityArea         String? // area de atuacao da clinica, em texto livre (ajuda a Alice a entender o tipo de cuidado)
+  handoffPhrase        String? // frase que ela escreve antes de passar pra equipe (vazio = frase padrao)
+  splitLongMessages    Boolean @default(true) // quebra respostas longas em varias bolhas
+  splitMaxMessages     Int     @default(4)
+  splitThresholdChars  Int     @default(450) // a partir de quantos caracteres ja e "resposta longa"
+  requireDepositProof  Boolean @default(false) // so confirma agendamento apos o paciente enviar comprovante do sinal
+
   importStatus    String?   // null | "running" | "completed" - importacao de contatos/historico do WhatsApp
   importStats     String?   // JSON: {found,created,merged,ignored,conversations,partialHistory,contactsInBase}
   importUpdatedAt DateTime?
@@ -50,6 +60,54 @@ model Clinic {
   renewalRules  RenewalRule[]
   birthdayRules BirthdayRule[]
   activityLog   ActivityLog[]
+  messageTemplates MessageTemplate[]
+  faqs          ClinicFaq[]
+  playbooks     Playbook[]
+}
+
+// "Mensagens prontas": textos que a Alice reaproveita no atendimento
+// (boas-vindas, confirmacao, orientacoes). Suporta as mesmas variaveis de
+// template das mensagens programadas.
+model MessageTemplate {
+  id        String   @id @default(cuid())
+  clinicId  String
+  clinic    Clinic   @relation(fields: [clinicId], references: [id])
+  name      String
+  body      String
+  mode      String   @default("adapt") // adapt = ajusta o tom | exact = envia exatamente assim
+  whenToUse String?  // dica de contexto pra Alice saber quando usar
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
+// "FAQ da clinica": perguntas operacionais com resposta oficial (acesso,
+// estacionamento, documentos, politicas). Agenda/catalogo/preco continuam
+// vindo das fontes oficiais, nao daqui.
+model ClinicFaq {
+  id          String   @id @default(cuid())
+  clinicId    String
+  clinic      Clinic   @relation(fields: [clinicId], references: [id])
+  question    String
+  answer      String
+  alternates  String   @default("") // outras formas de fazer a mesma pergunta, uma por linha
+  exactAnswer Boolean  @default(false) // true = responder exatamente o texto cadastrado
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+}
+
+// "Roteiros": sequencias de conversa que a Alice conduz passo a passo em
+// situacoes especificas (primeiro atendimento, remarcacao, pos-procedimento).
+model Playbook {
+  id          String   @id @default(cuid())
+  clinicId    String
+  clinic      Clinic   @relation(fields: [clinicId], references: [id])
+  name        String
+  scriptType  String   @default("livre") // primeiro_atendimento | agendamento | procedimento | preco | objecoes | remarcacao | pos_procedimento | transferir | livre
+  triggerText String?  // quando este roteiro deve ser usado
+  goal        String?  // objetivo que a Alice precisa cumprir
+  steps       String   @default("") // um passo por linha
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
 }
 
 // Historico de atividades da clinica: registro simples de mudancas

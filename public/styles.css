@@ -548,6 +548,34 @@ button[type="submit"]:not(.btn-brand):hover, .broadcast-form-row button:not(.btn
 [data-theme="dark"] .btn-cancel { border-color: var(--border); color: var(--accent-dark); }
 td.actions { display: flex; gap: 0.4rem; }
 
+/* Personalizar Alice: sub-abas e cartões */
+.rules-panel { display: none; }
+.rules-panel.active { display: block; }
+.rules-cat-filter { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.6rem 0 1rem; }
+.rules-cat-filter button {
+  background: var(--card-bg); border: 1px solid var(--border); color: var(--text-muted);
+  border-radius: 999px; padding: 0.3rem 0.8rem; font-size: 0.78rem; cursor: pointer; font-family: inherit;
+}
+.rules-cat-filter button.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.rule-cat-hints { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.rule-cat-hint { cursor: pointer; }
+
+.rules-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 0.9rem; }
+.rule-card-2 {
+  background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 1rem 1.1rem;
+  display: flex; flex-direction: column; gap: 0.5rem;
+}
+.rule-card-2 .rc-top { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.rule-card-2 .rc-title { font-weight: 700; font-size: 0.95rem; }
+.rule-card-2 .rc-body { font-size: 0.88rem; color: var(--text-muted); white-space: pre-wrap; }
+.rule-card-2 .rc-when { font-size: 0.78rem; color: var(--text-faint); }
+.rule-card-2 .rc-actions { display: flex; gap: 0.5rem; margin-top: 0.2rem; }
+.rc-tag {
+  font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+  padding: 0.15rem 0.5rem; border-radius: 999px; background: var(--accent-50); color: var(--accent-dark);
+}
+.rc-tag.muted { background: var(--bg); color: var(--text-faint); }
+
 /* Histórico de atividades */
 .activity-item { display: flex; gap: 0.8rem; padding: 0.9rem 0.2rem; border-bottom: 1px solid var(--border); }
 .activity-item:last-child { border-bottom: none; }
