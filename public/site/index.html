@@ -62,7 +62,7 @@
           <img class="chat-avatar" src="/assets/logo-personagem.webp" alt="Alice" />
           <div>
             <b>Alice · Clínica Bella Pele</b><br />
-            <small>● online agora</small>
+            <small>online agora</small>
           </div>
         </div>
         <div class="chat-body">
@@ -413,16 +413,69 @@
   </a>
 
   <script>
-    // Menu mobile
-    var t = document.getElementById('navToggle');
-    var h = document.getElementById('header');
-    if (t) t.addEventListener('click', function () { h.classList.toggle('open'); });
-    document.querySelectorAll('.nav-links a').forEach(function (a) {
-      a.addEventListener('click', function () { h.classList.remove('open'); });
-    });
-    // Ano do rodapé
-    var y = document.getElementById('year');
-    if (y) y.textContent = new Date().getFullYear();
+    (function () {
+      var h = document.getElementById('header');
+
+      // Menu mobile
+      var t = document.getElementById('navToggle');
+      if (t) t.addEventListener('click', function () { h.classList.toggle('open'); });
+      document.querySelectorAll('.nav-links a').forEach(function (a) {
+        a.addEventListener('click', function () { h.classList.remove('open'); });
+      });
+
+      // Ano do rodapé
+      var y = document.getElementById('year');
+      if (y) y.textContent = new Date().getFullYear();
+
+      // Header ganha sombra ao rolar
+      var onScroll = function () { h.classList.toggle('scrolled', window.scrollY > 8); };
+      onScroll();
+      window.addEventListener('scroll', onScroll, { passive: true });
+
+      // Scroll animation (aparece deslizando ao entrar na tela)
+      var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      var sel = '.section-head, .proof-grid > div, .compare-col, .card, .testi-card, .step, .plan, .band .container > *, .faq details';
+      var items = Array.prototype.slice.call(document.querySelectorAll(sel));
+
+      if (reduce || !('IntersectionObserver' in window)) return;
+
+      try {
+        items.forEach(function (el) { el.classList.add('reveal'); });
+
+        // direções alternadas pros blocos lado a lado
+        document.querySelectorAll('.compare-col').forEach(function (el, i) {
+          el.classList.add(i % 2 ? 'from-right' : 'from-left');
+        });
+        document.querySelectorAll('.band .container > *').forEach(function (el) {
+          el.classList.add('zoom');
+        });
+        ['.cards', '.testi', '.steps', '.plans'].forEach(function (s) {
+          document.querySelectorAll(s).forEach(function (grid) {
+            Array.prototype.forEach.call(grid.children, function (el, i) {
+              el.style.setProperty('--reveal-delay', ((i % 3) * 0.08).toFixed(2) + 's');
+            });
+          });
+        });
+
+        var io = new IntersectionObserver(function (entries) {
+          entries.forEach(function (e) {
+            if (e.isIntersecting) {
+              e.target.classList.add('reveal--in');
+              io.unobserve(e.target);
+            }
+          });
+        }, { threshold: 0.12, rootMargin: '0px 0px -7% 0px' });
+
+        items.forEach(function (el) { io.observe(el); });
+
+        // Rede de segurança: nada fica invisível pra sempre se algo travar
+        setTimeout(function () {
+          items.forEach(function (el) { el.classList.add('reveal--in'); });
+        }, 4000);
+      } catch (err) {
+        items.forEach(function (el) { el.classList.remove('reveal'); });
+      }
+    })();
   </script>
 </body>
 </html>
