@@ -137,6 +137,7 @@ const ICONS = {
   user: '<circle cx="12" cy="8" r="3.5"/><path d="M4.5 20c0-4.1 3.4-7 7.5-7s7.5 2.9 7.5 7" stroke-linecap="round"/>',
   swap: '<path d="M7 4v13M7 17l-3-3M7 17l3-3" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 20V7M17 7l-3 3M17 7l3 3" stroke-linecap="round" stroke-linejoin="round"/>',
   pencil: '<path d="M4 20l1-4.5L15.5 5 19 8.5 8.5 19 4 20z" stroke-linejoin="round"/><path d="M13 7l4 4" stroke-linecap="round"/>',
+  plus: '<path d="M12 5v14M5 12h14" stroke-linecap="round"/>',
 };
 
 function renderIcon(name) {
@@ -1399,7 +1400,7 @@ async function loadRules() {
 
   for (const rule of rules) {
     if (rule.status === "active") {
-      const discardBtn = el("button", { class: "btn-discard" }, ["Remover"]);
+      const discardBtn = el("button", { class: "btn-brand btn-brand--secondary btn-brand--sm" }, ["Remover"]);
       discardBtn.addEventListener("click", async () => {
         await api(`/rules/${rule.id}`, { method: "DELETE" });
         await loadRules();
@@ -1413,7 +1414,7 @@ async function loadRules() {
       );
     } else {
       const isQuestion = rule.status === "needs_clarification";
-      const discardBtn = el("button", { class: "btn-discard" }, ["Descartar"]);
+      const discardBtn = el("button", { class: "btn-brand btn-brand--secondary btn-brand--sm" }, ["Descartar"]);
       discardBtn.addEventListener("click", async () => {
         await api(`/rules/${rule.id}`, { method: "DELETE" });
         await loadRules();
@@ -1430,7 +1431,7 @@ async function loadRules() {
           el("div", { class: "hint" }, ["Descreva de novo lá em cima, já respondendo essa pergunta."])
         );
       } else {
-        const approveBtn = el("button", { class: "btn-approve" }, ["Aprovar"]);
+        const approveBtn = el("button", { class: "btn-brand btn-brand--primary btn-brand--sm" }, ["Aprovar"]);
         approveBtn.addEventListener("click", async () => {
           await api(`/rules/${rule.id}/approve`, { method: "POST" });
           await loadRules();

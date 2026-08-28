@@ -27,6 +27,16 @@ html { scrollbar-color: var(--border) var(--bg); }
   --msg-out-text: #111b21;
   --msg-assistant-bg: #ffedd5;
   --msg-assistant-text: #7c2d12;
+
+  /* Botao da marca (.btn-brand). #FF7A1A com texto branco reprova AA (2.6:1),
+     entao a cor de preenchimento e a laranja escura da marca (~5:1 com branco,
+     mesma familia do --accent-dark). --brand-orange-line e usada no texto/borda
+     do secundario e clareia no tema escuro pra manter contraste AA. */
+  --brand-orange: #c2410c;
+  --brand-orange-hover: #9a3412;
+  --brand-orange-line: #c2410c;
+  --brand-orange-soft: rgba(194, 65, 12, 0.10);
+  --brand-orange-ring: rgba(194, 65, 12, 0.40);
 }
 
 [data-theme="dark"] {
@@ -48,6 +58,11 @@ html { scrollbar-color: var(--border) var(--bg); }
   --msg-out-text: #f0f0f0;
   --msg-assistant-bg: #40290f;
   --msg-assistant-text: #fcd34d;
+
+  --brand-orange-hover: #a83a0d;
+  --brand-orange-line: #fb923c;
+  --brand-orange-soft: rgba(251, 146, 60, 0.15);
+  --brand-orange-ring: rgba(251, 146, 60, 0.45);
 }
 
 body {
@@ -426,11 +441,97 @@ tbody tr:hover { background: var(--accent-50); }
 .weekday-picker input { width: auto; }
 
 button { font-family: inherit; }
-button[type="submit"], .broadcast-form-row button {
+
+/* =======================================================================
+   .btn-brand — botao reutilizavel da area administrativa
+   Uso:  <button class="btn-brand btn-brand--primary">Salvar</button>
+         <button class="btn-brand btn-brand--secondary btn-brand--sm">Cancelar</button>
+   Icone a esquerda:  <span class="nav-icon" data-icon="plus"></span> + texto
+   Variantes: --primary (laranja solido) | --secondary (contorno laranja)
+   Tamanhos:  (padrao = md, ~44px) | --sm (~36px)
+   So icone:  adicione --icon e um aria-label no botao.
+   ======================================================================= */
+.btn-brand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  font-family: inherit;
+  font-weight: 600;
+  font-size: 0.875rem;
+  line-height: 1;
+  min-height: 44px;               /* area de clique >= 44px */
+  padding: 0 1.375rem;            /* ~22px */
+  border-radius: 9999px;          /* pill */
+  border: 1.5px solid transparent;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background-color 150ms ease, color 150ms ease,
+              border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+}
+.btn-brand .nav-icon,
+.btn-brand svg { width: 18px; height: 18px; flex-shrink: 0; }
+
+.btn-brand--sm { min-height: 36px; padding: 0 1rem; font-size: 0.8rem; gap: 0.4rem; }
+.btn-brand--sm .nav-icon,
+.btn-brand--sm svg { width: 16px; height: 16px; }
+
+.btn-brand--icon { padding: 0; width: 44px; }
+.btn-brand--icon.btn-brand--sm { width: 36px; }
+
+/* Variante primaria — laranja solido, texto branco.
+   Seletor com 2 classes de proposito: precisa vencer `button[type=submit]`
+   e `.broadcast-form-row button` do CSS base. */
+.btn-brand.btn-brand--primary {
+  background: var(--brand-orange);
+  color: #fff;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.12), 0 4px 10px var(--brand-orange-soft);
+}
+.btn-brand.btn-brand--primary:hover {
+  background: var(--brand-orange-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.14), 0 8px 18px var(--brand-orange-soft);
+}
+.btn-brand.btn-brand--primary:active { transform: translateY(0); box-shadow: 0 1px 2px rgba(0,0,0,0.12); }
+
+/* Variante secundaria — contorno laranja, preenche no hover */
+.btn-brand.btn-brand--secondary {
+  background: transparent;
+  color: var(--brand-orange-line);
+  border-color: var(--brand-orange-line);
+}
+.btn-brand.btn-brand--secondary:hover {
+  background: var(--brand-orange-soft);
+  transform: translateY(-1px);
+}
+.btn-brand.btn-brand--secondary:active { transform: translateY(0); }
+
+.btn-brand:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--brand-orange-ring);
+}
+.btn-brand:disabled,
+.btn-brand[disabled],
+.btn-brand.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-brand,
+  .btn-brand:hover,
+  .btn-brand:active { transform: none; }
+}
+
+button[type="submit"]:not(.btn-brand), .broadcast-form-row button:not(.btn-brand) {
   background: var(--accent); color: white; border: none; border-radius: 8px;
   padding: 0.55rem 1.2rem; cursor: pointer; height: fit-content; font-weight: 600; font-size: 0.85rem;
 }
-button[type="submit"]:hover, .broadcast-form-row button:hover { background: var(--accent-hover); }
+button[type="submit"]:not(.btn-brand):hover, .broadcast-form-row button:not(.btn-brand):hover { background: var(--accent-hover); }
 
 .btn-save { background: var(--accent); color: white; border: none; border-radius: 6px; padding: 0.4rem 0.8rem; cursor: pointer; font-size: 0.8rem; }
 .btn-approve { background: #10b981; color: white; border: none; border-radius: 6px; padding: 0.3rem 0.8rem; cursor: pointer; font-size: 0.78rem; }
