@@ -119,6 +119,49 @@ section { padding: 66px 0; }
 }
 .wsep path { fill: var(--to, #fff); }
 
+/* --- "Luz correndo" sobre a curva do divisor ---
+   O <svg class="wsep-light"> é irmão do divisor, DEPOIS dele no markup, e
+   herda o mesmo position/size de `.wsep svg`, então cai exatamente por cima
+   da costura. Dois <path> na MESMA curva aberta da onda: um trilho quase
+   invisível e um brilho que corre via stroke-dashoffset. Nada morfa. */
+:root {
+  --wl-from: #ffe6bd;
+  --wl-via:  #ffb457;
+  --wl-to:   #ff7d33;
+}
+.wsep-light {
+  pointer-events: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.wsep-light.is-flip { transform: scaleX(-1); }             /* casa com divisor espelhado */
+.wsep .wsep-light path { fill: none; stroke-linecap: round; }
+
+.wsep-rail {
+  opacity: 0.12;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;                        /* espessura constante apesar do preserveAspectRatio="none" */
+}
+.wsep-glow {
+  opacity: 0.45;
+  stroke-width: 1.75;
+  vector-effect: non-scaling-stroke;
+  stroke-dasharray: var(--wl-dash, 16) calc(100 - var(--wl-dash, 16));
+  animation: snake-dash var(--wl-dur, 7s) linear infinite;
+  filter: drop-shadow(0 0 3px var(--wl-via));               /* halo — vende o "luz" */
+}
+.wsep-light.is-rtl .wsep-glow { animation-direction: reverse; }
+
+@keyframes snake-dash {
+  from { stroke-dashoffset: 0; }
+  to   { stroke-dashoffset: -100; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wsep-rail, .wsep-glow { animation: none; }
+  .wsep-glow { opacity: 0; }                                /* sem traço parado cortado no meio da curva */
+}
+
 .eyebrow {
   display: inline-block;
   font-size: 0.8rem;
