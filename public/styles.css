@@ -548,6 +548,9 @@ button[type="submit"]:not(.btn-brand):hover, .broadcast-form-row button:not(.btn
 [data-theme="dark"] .btn-cancel { border-color: var(--border); color: var(--accent-dark); }
 td.actions { display: flex; gap: 0.4rem; }
 
+.chat-birthdate-wrap { display: inline-flex; align-items: center; gap: 0.3rem; margin-left: auto; font-size: 0.85rem; }
+.chat-birthdate { border: 1px solid var(--border); border-radius: 6px; padding: 0.25rem 0.4rem; background: var(--bg); color: var(--text); font-family: inherit; font-size: 0.8rem; }
+
 /* --- Modal --- */
 .modal-overlay {
   position: fixed; inset: 0; z-index: 1500; background: rgba(0, 0, 0, 0.45);

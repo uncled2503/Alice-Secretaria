@@ -707,6 +707,20 @@ async function openConversation(id) {
         el("div", { class: "phone" }, [conv.patient.phone]),
       ])
     );
+
+    // Data de nascimento (usada pela automação de aniversário)
+    const birthInput = el("input", { type: "date", class: "chat-birthdate", title: "Data de nascimento (para a mensagem de aniversário)" });
+    if (conv.patient.birthDate) birthInput.value = String(conv.patient.birthDate).slice(0, 10);
+    birthInput.addEventListener("change", async () => {
+      await api(`/patients/${conv.patient.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ birthDate: birthInput.value || null }),
+      });
+      conv.patient.birthDate = birthInput.value || null;
+    });
+    header.appendChild(el("label", { class: "chat-birthdate-wrap" }, [el("span", {}, ["🎂"]), birthInput]));
+
     header.appendChild(
       el("span", { class: `badge ${conv.humanTakeover ? "badge-neutral" : "badge-green"}` }, [
         conv.humanTakeover ? "Humano" : "Alice",
@@ -972,73 +986,290 @@ document.getElementById("appointment-form").addEventListener("submit", async (e)
   await loadAgenda();
 });
 
-// --- Recontato ---
-async function loadFollowUpRules() {
-  const rules = await api("/followup-rules");
-  const body = document.getElementById("followup-body");
+// Helpers compartilhados: preencher checklist de procedimentos + tabela padrao.
+async function fillProcedureChecklist(containerId, selectedIds) {
+  const selected = new Set((selectedIds || "").split(",").filter(Boolean));
+  const procedures = await api("/procedures");
+  const list = document.getElementById(containerId);
+  list.innerHTML = "";
+  for (const proc of procedures) {
+    const checkbox = el("input", { type: "checkbox", value: proc.id }, []);
+    if (selected.has(proc.id)) checkbox.checked = true;
+    list.appendChild(el("label", {}, [checkbox, proc.name]));
+  }
+}
+
+function ruleRow({ name, message, active, when, onEdit }) {
+  const editBtn = el("button", { type: "button", class: "btn-icon-plain", title: "Editar" }, [el("span", { class: "nav-icon", "data-icon": "pencil" }, [])]);
+  editBtn.addEventListener("click", onEdit);
+  return el("tr", {}, [
+    el("td", {}, [el("div", { style: "font-weight:600" }, [name]), el("div", { class: "hint cell-truncate", style: "margin:0.1rem 0 0" }, [message])]),
+    el("td", {}, [el("span", { class: `badge ${active ? "badge-green" : "badge-neutral"}` }, [active ? "Ativa" : "Pausada"])]),
+    el("td", {}, [when]),
+    el("td", { class: "actions" }, [editBtn]),
+  ]);
+}
+
+// ======================= RENOVAÇÃO =======================
+let allRenewalRules = [];
+
+async function loadRenewalRules() {
+  allRenewalRules = await api("/renewal-rules");
+  renderRenewalRules();
+}
+
+function renewalWhenLabel(r) {
+  const unit = r.intervalUnit === "years" ? (r.intervalValue === 1 ? "ano" : "anos") : (r.intervalValue === 1 ? "mês" : "meses");
+  return `${r.intervalValue} ${unit} após o atendimento${r.onlyIfCompleted ? ", se concluído" : ""}`;
+}
+
+function renderRenewalRules() {
+  const search = document.getElementById("renewal-rules-search").value.trim().toLowerCase();
+  const filtered = allRenewalRules.filter((r) => !search || r.name.toLowerCase().includes(search));
+  document.getElementById("renewal-rules-count").textContent = allRenewalRules.length;
+  document.getElementById("renewal-rules-empty").style.display = filtered.length ? "none" : "block";
+  const body = document.getElementById("renewal-rules-body");
   body.innerHTML = "";
-
-  for (const rule of rules) {
-    const daysInput = el("input", { type: "number", min: "1" });
-    daysInput.value = rule.afterDays;
-
-    const messageArea = el("textarea", {});
-    messageArea.value = rule.message;
-
-    const activeCheckbox = el("input", { type: "checkbox" });
-    activeCheckbox.checked = rule.active;
-
-    const saveBtn = el("button", { class: "btn-save" }, ["Salvar"]);
-    saveBtn.addEventListener("click", async () => {
-      saveBtn.textContent = "Salvando...";
-      await api(`/followup-rules/${rule.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          afterDays: Number(daysInput.value),
-          message: messageArea.value,
-          active: activeCheckbox.checked,
-        }),
-      });
-      saveBtn.textContent = "Salvo!";
-      setTimeout(() => (saveBtn.textContent = "Salvar"), 1500);
-    });
-
-    const deleteBtn = el("button", { type: "button", class: "btn-icon-danger", title: "Excluir etapa" }, [
-      el("span", { class: "nav-icon", "data-icon": "trash" }, []),
-    ]);
-    deleteBtn.addEventListener("click", async () => {
-      if (!await showConfirm(`Excluir a etapa de recontato ${rule.order}?`)) return;
-      await api(`/followup-rules/${rule.id}`, { method: "DELETE" });
-      await loadFollowUpRules();
-    });
-
-    body.appendChild(
-      el("tr", {}, [
-        el("td", {}, [`Follow-up ${rule.order}`]),
-        el("td", {}, [daysInput]),
-        el("td", {}, [messageArea]),
-        el("td", {}, [activeCheckbox]),
-        el("td", { class: "actions" }, [saveBtn, deleteBtn]),
-      ])
-    );
+  for (const r of filtered) {
+    body.appendChild(ruleRow({ name: r.name, message: r.message, active: r.active, when: renewalWhenLabel(r), onEdit: () => openRenewalRuleModal(r) }));
   }
   paintIcons(body);
 }
 
-document.getElementById("followup-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const afterDays = Number(document.getElementById("fu-days").value);
-  const message = document.getElementById("fu-message").value.trim();
-  if (!afterDays || !message) return;
-
-  await api("/followup-rules", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ afterDays, message }),
+document.getElementById("renewal-rules-search").addEventListener("input", renderRenewalRules);
+document.querySelectorAll(".rn-var-btn").forEach((btn) => {
+  btn.addEventListener("click", () => insertAtCursor(document.getElementById("rn-message"), btn.dataset.var));
+});
+document.querySelectorAll("#rn-presets .payment-method-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.getElementById("rn-interval-value").value = btn.dataset.value;
+    document.getElementById("rn-interval-unit").value = btn.dataset.unit;
   });
+});
 
-  e.target.reset();
+async function openRenewalRuleModal(rule) {
+  document.getElementById("renewal-rule-title").textContent = rule ? "Editar renovação" : "Nova renovação";
+  document.getElementById("rn-id").value = rule?.id || "";
+  document.getElementById("rn-name").value = rule?.name || "";
+  document.getElementById("rn-interval-value").value = rule?.intervalValue || 1;
+  document.getElementById("rn-interval-unit").value = rule?.intervalUnit || "months";
+  document.getElementById("rn-only-completed").checked = rule ? !!rule.onlyIfCompleted : true;
+  document.getElementById("rn-message").value = rule?.message || "";
+  document.getElementById("rn-active").checked = rule ? !!rule.active : true;
+  await fillProcedureChecklist("rn-procedures-list", rule?.procedureIds);
+  document.getElementById("renewal-rule-delete-btn").style.display = rule ? "" : "none";
+  document.getElementById("renewal-rule-overlay").style.display = "flex";
+}
+function closeRenewalRuleModal() { document.getElementById("renewal-rule-overlay").style.display = "none"; }
+
+document.getElementById("btn-add-renewal-rule").addEventListener("click", () => openRenewalRuleModal(null));
+document.getElementById("renewal-rule-close").addEventListener("click", closeRenewalRuleModal);
+document.getElementById("renewal-rule-overlay").addEventListener("click", (e) => { if (e.target.id === "renewal-rule-overlay") closeRenewalRuleModal(); });
+document.getElementById("renewal-rule-delete-btn").addEventListener("click", async () => {
+  const id = document.getElementById("rn-id").value;
+  if (!id || !(await showConfirm("Excluir essa renovação?"))) return;
+  await api(`/renewal-rules/${id}`, { method: "DELETE" });
+  closeRenewalRuleModal();
+  await loadRenewalRules();
+});
+document.getElementById("renewal-rule-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const id = document.getElementById("rn-id").value;
+  const payload = {
+    name: document.getElementById("rn-name").value.trim(),
+    message: document.getElementById("rn-message").value.trim(),
+    intervalValue: Number(document.getElementById("rn-interval-value").value),
+    intervalUnit: document.getElementById("rn-interval-unit").value,
+    onlyIfCompleted: document.getElementById("rn-only-completed").checked,
+    active: document.getElementById("rn-active").checked,
+    procedureIds: Array.from(document.querySelectorAll("#rn-procedures-list input:checked")).map((c) => c.value),
+  };
+  if (!payload.name || !payload.message || !payload.intervalValue) return;
+  const path = id ? `/renewal-rules/${id}` : "/renewal-rules";
+  await api(path, { method: id ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  closeRenewalRuleModal();
+  await loadRenewalRules();
+});
+
+// ======================= ANIVERSÁRIO =======================
+let allBirthdayRules = [];
+
+(function fillBirthdayHours() {
+  const sel = document.getElementById("bd-send-hour");
+  for (let h = 0; h < 24; h++) {
+    const o = el("option", { value: String(h) }, [`${String(h).padStart(2, "0")}:00`]);
+    if (h === 9) o.selected = true;
+    sel.appendChild(o);
+  }
+})();
+
+async function loadBirthdayRules() {
+  allBirthdayRules = await api("/birthday-rules");
+  renderBirthdayRules();
+}
+
+function renderBirthdayRules() {
+  const search = document.getElementById("birthday-rules-search").value.trim().toLowerCase();
+  const filtered = allBirthdayRules.filter((r) => !search || r.name.toLowerCase().includes(search));
+  document.getElementById("birthday-rules-count").textContent = allBirthdayRules.length;
+  document.getElementById("birthday-rules-empty").style.display = filtered.length ? "none" : "block";
+  const body = document.getElementById("birthday-rules-body");
+  body.innerHTML = "";
+  for (const r of filtered) {
+    body.appendChild(ruleRow({ name: r.name, message: r.message, active: r.active, when: `${String(r.sendHour).padStart(2, "0")}:00`, onEdit: () => openBirthdayRuleModal(r) }));
+  }
+  paintIcons(body);
+}
+
+document.getElementById("birthday-rules-search").addEventListener("input", renderBirthdayRules);
+document.querySelectorAll(".bd-var-btn").forEach((btn) => {
+  btn.addEventListener("click", () => insertAtCursor(document.getElementById("bd-message"), btn.dataset.var));
+});
+
+function openBirthdayRuleModal(rule) {
+  document.getElementById("birthday-rule-title").textContent = rule ? "Editar mensagem de aniversário" : "Nova mensagem de aniversário";
+  document.getElementById("bd-id").value = rule?.id || "";
+  document.getElementById("bd-name").value = rule?.name || "";
+  document.getElementById("bd-send-hour").value = String(rule?.sendHour ?? 9);
+  document.getElementById("bd-message").value = rule?.message || "";
+  document.getElementById("bd-active").checked = rule ? !!rule.active : true;
+  document.getElementById("birthday-rule-delete-btn").style.display = rule ? "" : "none";
+  document.getElementById("birthday-rule-overlay").style.display = "flex";
+}
+function closeBirthdayRuleModal() { document.getElementById("birthday-rule-overlay").style.display = "none"; }
+
+document.getElementById("btn-add-birthday-rule").addEventListener("click", () => openBirthdayRuleModal(null));
+document.getElementById("birthday-rule-close").addEventListener("click", closeBirthdayRuleModal);
+document.getElementById("birthday-rule-overlay").addEventListener("click", (e) => { if (e.target.id === "birthday-rule-overlay") closeBirthdayRuleModal(); });
+document.getElementById("birthday-rule-delete-btn").addEventListener("click", async () => {
+  const id = document.getElementById("bd-id").value;
+  if (!id || !(await showConfirm("Excluir essa mensagem de aniversário?"))) return;
+  await api(`/birthday-rules/${id}`, { method: "DELETE" });
+  closeBirthdayRuleModal();
+  await loadBirthdayRules();
+});
+document.getElementById("birthday-rule-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const id = document.getElementById("bd-id").value;
+  const payload = {
+    name: document.getElementById("bd-name").value.trim(),
+    message: document.getElementById("bd-message").value.trim(),
+    sendHour: Number(document.getElementById("bd-send-hour").value),
+    active: document.getElementById("bd-active").checked,
+  };
+  if (!payload.name || !payload.message) return;
+  const path = id ? `/birthday-rules/${id}` : "/birthday-rules";
+  await api(path, { method: id ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  closeBirthdayRuleModal();
+  await loadBirthdayRules();
+});
+
+// ======================= RECONTATO =======================
+let allFollowUpRules = [];
+
+async function loadFollowUpRules() {
+  allFollowUpRules = await api("/followup-rules");
+  renderFollowUpRules();
+}
+
+function followUpTotalMinutes(r) {
+  return r.afterMinutes > 0 ? r.afterMinutes : r.afterDays * 1440;
+}
+function followUpWhenLabel(r) {
+  let mins = followUpTotalMinutes(r);
+  const d = Math.floor(mins / 1440); mins -= d * 1440;
+  const h = Math.floor(mins / 60); mins -= h * 60;
+  const parts = [];
+  if (d) parts.push(`${d} ${d === 1 ? "dia" : "dias"}`);
+  if (h) parts.push(`${h}h`);
+  if (mins) parts.push(`${mins}min`);
+  return `Após ${parts.join(" ") || "0min"} de silêncio`;
+}
+
+function renderFollowUpRules() {
+  const search = document.getElementById("followup-rules-search").value.trim().toLowerCase();
+  const filtered = allFollowUpRules.filter((r) => !search || (r.name || `Recontato ${r.order}`).toLowerCase().includes(search));
+  document.getElementById("followup-rules-count").textContent = allFollowUpRules.length;
+  document.getElementById("followup-rules-empty").style.display = filtered.length ? "none" : "block";
+  const body = document.getElementById("followup-body");
+  body.innerHTML = "";
+  for (const r of filtered) {
+    body.appendChild(ruleRow({
+      name: r.name || `Recontato ${r.order}`,
+      message: r.message,
+      active: r.active,
+      when: followUpWhenLabel(r),
+      onEdit: () => openFollowUpRuleModal(r),
+    }));
+  }
+  paintIcons(body);
+}
+
+document.getElementById("followup-rules-search").addEventListener("input", renderFollowUpRules);
+document.querySelectorAll(".fu-var-btn").forEach((btn) => {
+  btn.addEventListener("click", () => insertAtCursor(document.getElementById("fu-message"), btn.dataset.var));
+});
+document.querySelectorAll("#fu-presets .payment-method-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.getElementById("fu-d").value = btn.dataset.d;
+    document.getElementById("fu-h").value = btn.dataset.h;
+    document.getElementById("fu-m").value = btn.dataset.m;
+  });
+});
+
+function openFollowUpRuleModal(rule) {
+  document.getElementById("followup-rule-title").textContent = rule ? "Editar recontato" : "Novo recontato";
+  document.getElementById("fu-id").value = rule?.id || "";
+  document.getElementById("fu-name").value = rule?.name || "";
+  const total = rule ? followUpTotalMinutes(rule) : 1440;
+  document.getElementById("fu-d").value = Math.floor(total / 1440);
+  document.getElementById("fu-h").value = Math.floor((total % 1440) / 60);
+  document.getElementById("fu-m").value = total % 60;
+  const repeat = rule?.repeatMode === "once" ? "once" : "every_silence";
+  document.querySelector(`input[name="fu-repeat"][value="${repeat}"]`).checked = true;
+  document.getElementById("fu-skip-appt").checked = rule ? !!rule.skipIfUpcomingAppt : true;
+  document.getElementById("fu-window-start").value = rule?.sendWindowStart ?? "";
+  document.getElementById("fu-window-end").value = rule?.sendWindowEnd ?? "";
+  document.getElementById("fu-message").value = rule?.message || "";
+  document.getElementById("fu-active").checked = rule ? !!rule.active : true;
+  document.getElementById("followup-rule-delete-btn").style.display = rule ? "" : "none";
+  document.getElementById("followup-rule-overlay").style.display = "flex";
+}
+function closeFollowUpRuleModal() { document.getElementById("followup-rule-overlay").style.display = "none"; }
+
+document.getElementById("btn-add-followup-rule").addEventListener("click", () => openFollowUpRuleModal(null));
+document.getElementById("followup-rule-close").addEventListener("click", closeFollowUpRuleModal);
+document.getElementById("followup-rule-overlay").addEventListener("click", (e) => { if (e.target.id === "followup-rule-overlay") closeFollowUpRuleModal(); });
+document.getElementById("followup-rule-delete-btn").addEventListener("click", async () => {
+  const id = document.getElementById("fu-id").value;
+  if (!id || !(await showConfirm("Excluir esse recontato?"))) return;
+  await api(`/followup-rules/${id}`, { method: "DELETE" });
+  closeFollowUpRuleModal();
+  await loadFollowUpRules();
+});
+document.getElementById("followup-rule-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const id = document.getElementById("fu-id").value;
+  const d = Number(document.getElementById("fu-d").value) || 0;
+  const h = Number(document.getElementById("fu-h").value) || 0;
+  const m = Number(document.getElementById("fu-m").value) || 0;
+  const afterMinutes = d * 1440 + h * 60 + m;
+  const wStart = document.getElementById("fu-window-start").value;
+  const wEnd = document.getElementById("fu-window-end").value;
+  const payload = {
+    name: document.getElementById("fu-name").value.trim(),
+    message: document.getElementById("fu-message").value.trim(),
+    afterMinutes,
+    repeatMode: document.querySelector('input[name="fu-repeat"]:checked').value,
+    skipIfUpcomingAppt: document.getElementById("fu-skip-appt").checked,
+    sendWindowStart: wStart === "" ? null : Number(wStart),
+    sendWindowEnd: wEnd === "" ? null : Number(wEnd),
+    active: document.getElementById("fu-active").checked,
+  };
+  if (!payload.name || !payload.message || afterMinutes <= 0) return;
+  const path = id ? `/followup-rules/${id}` : "/followup-rules";
+  await api(path, { method: id ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  closeFollowUpRuleModal();
   await loadFollowUpRules();
 });
 
@@ -2486,6 +2717,8 @@ const SETTINGS_SUB_LOADERS = {
   },
   "appt-reminder": loadReminderRules,
   "post-procedure": loadPostProcedureRules,
+  renewal: loadRenewalRules,
+  birthday: loadBirthdayRules,
   followup: loadFollowUpRules,
   funnel: loadStagesConfig,
   rules: loadRules,

@@ -5,6 +5,8 @@ import express from "express";
 import helmet from "helmet";
 import { startReminderJob } from "./reminders/cron.js";
 import { startPostProcedureJob } from "./reminders/postProcedure.js";
+import { startRenewalJob } from "./reminders/renewal.js";
+import { startBirthdayJob } from "./reminders/birthday.js";
 import { startFollowUpJob } from "./crm/followup.js";
 import { startBroadcastJob } from "./crm/broadcast.js";
 import { restoreAllConnections } from "./whatsapp/manager.js";
@@ -106,6 +108,8 @@ app.listen(port, () => {
   console.log(`Alice rodando na porta ${port}`);
   startReminderJob();
   startPostProcedureJob();
+  startRenewalJob();
+  startBirthdayJob();
   startFollowUpJob();
   startBroadcastJob();
   restoreAllConnections().catch((err) => console.error("Falha ao restaurar conexoes do WhatsApp:", err));

@@ -192,6 +192,10 @@ apiRouter.delete(
       prisma.clinicLocation.deleteMany({ where: { clinicId: req.params.id } }),
       prisma.funnelStage.deleteMany({ where: { clinicId: req.params.id } }),
       prisma.followUpRule.deleteMany({ where: { clinicId: req.params.id } }),
+      prisma.reminderRule.deleteMany({ where: { clinicId: req.params.id } }),
+      prisma.postProcedureRule.deleteMany({ where: { clinicId: req.params.id } }),
+      prisma.renewalRule.deleteMany({ where: { clinicId: req.params.id } }),
+      prisma.birthdayRule.deleteMany({ where: { clinicId: req.params.id } }),
       prisma.customRule.deleteMany({ where: { clinicId: req.params.id } }),
       prisma.procedure.deleteMany({ where: { clinicId: req.params.id } }),
       prisma.broadcastCampaign.deleteMany({ where: { clinicId: req.params.id } }),
@@ -747,6 +751,7 @@ apiRouter.get(
           id: c.patient.id,
           name: c.patient.name,
           phone: c.patient.phone,
+          birthDate: c.patient.birthDate,
           avatarUrl: await getProfilePicUrl(clinic.id, c.patient.phone),
         },
         lastMessage: c.messages[0]?.content ?? null,
@@ -882,6 +887,40 @@ apiRouter.get(
         })),
       }))
     );
+  })
+);
+
+// Edita dados do contato (nome, data de nascimento pro aniversario).
+apiRouter.put(
+  "/patients/:id",
+  asyncRoute(async (req, res) => {
+    const patient = await prisma.patient.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, patient.clinicId)) return;
+
+    const { name, birthDate } = req.body as { name?: string; birthDate?: string | null };
+    let parsedBirth: Date | null | undefined;
+    if (birthDate !== undefined) {
+      if (!birthDate) {
+        parsedBirth = null;
+      } else {
+        // "YYYY-MM-DD" -> meia-noite UTC (so dia/mes importam pro aniversario)
+        const d = new Date(`${birthDate}T00:00:00Z`);
+        if (isNaN(d.getTime())) {
+          res.status(400).json({ error: "birthDate invalido (use YYYY-MM-DD)" });
+          return;
+        }
+        parsedBirth = d;
+      }
+    }
+
+    const updated = await prisma.patient.update({
+      where: { id: req.params.id },
+      data: {
+        ...(name !== undefined ? { name: name.trim() || null } : {}),
+        ...(parsedBirth !== undefined ? { birthDate: parsedBirth } : {}),
+      },
+    });
+    res.json({ id: updated.id, name: updated.name, birthDate: updated.birthDate });
   })
 );
 
@@ -1115,12 +1154,40 @@ apiRouter.get(
   })
 );
 
+interface FollowUpBody {
+  name?: string;
+  afterDays?: number;
+  afterMinutes?: number;
+  message?: string;
+  repeatMode?: string;
+  skipIfHumanTakeover?: boolean;
+  skipIfUpcomingAppt?: boolean;
+  sendWindowStart?: number | null;
+  sendWindowEnd?: number | null;
+  active?: boolean;
+}
+
+function followUpData(b: FollowUpBody) {
+  return {
+    ...(b.name !== undefined ? { name: b.name } : {}),
+    ...(b.afterDays !== undefined ? { afterDays: b.afterDays } : {}),
+    ...(b.afterMinutes !== undefined ? { afterMinutes: b.afterMinutes } : {}),
+    ...(b.message !== undefined ? { message: b.message } : {}),
+    ...(b.repeatMode !== undefined ? { repeatMode: b.repeatMode === "once" ? "once" : "every_silence" } : {}),
+    ...(b.skipIfHumanTakeover !== undefined ? { skipIfHumanTakeover: b.skipIfHumanTakeover } : {}),
+    ...(b.skipIfUpcomingAppt !== undefined ? { skipIfUpcomingAppt: b.skipIfUpcomingAppt } : {}),
+    ...(b.sendWindowStart !== undefined ? { sendWindowStart: b.sendWindowStart } : {}),
+    ...(b.sendWindowEnd !== undefined ? { sendWindowEnd: b.sendWindowEnd } : {}),
+    ...(b.active !== undefined ? { active: b.active } : {}),
+  };
+}
+
 apiRouter.post(
   "/followup-rules",
   asyncRoute(async (req, res) => {
-    const { afterDays, message } = req.body as { afterDays?: number; message?: string };
-    if (!afterDays || !message) {
-      res.status(400).json({ error: "afterDays e message sao obrigatorios" });
+    const b = req.body as FollowUpBody;
+    if (!b.message || (!b.afterDays && !b.afterMinutes)) {
+      res.status(400).json({ error: "message e o tempo de silencio sao obrigatorios" });
       return;
     }
 
@@ -1131,7 +1198,13 @@ apiRouter.post(
     });
 
     const rule = await prisma.followUpRule.create({
-      data: { clinicId: clinic.id, order: (last?.order ?? 0) + 1, afterDays, message },
+      data: {
+        clinicId: clinic.id,
+        order: (last?.order ?? 0) + 1,
+        afterDays: b.afterDays ?? 0,
+        message: b.message,
+        ...followUpData({ ...b, afterDays: undefined, message: undefined }),
+      },
     });
     res.json(rule);
   })
@@ -1143,19 +1216,9 @@ apiRouter.put(
     const existing = await prisma.followUpRule.findUniqueOrThrow({ where: { id: req.params.id } });
     if (!assertClinicAccess(req, res, existing.clinicId)) return;
 
-    const { afterDays, message, active } = req.body as {
-      afterDays?: number;
-      message?: string;
-      active?: boolean;
-    };
-
     const rule = await prisma.followUpRule.update({
       where: { id: req.params.id },
-      data: {
-        ...(afterDays !== undefined ? { afterDays } : {}),
-        ...(message !== undefined ? { message } : {}),
-        ...(active !== undefined ? { active } : {}),
-      },
+      data: followUpData(req.body as FollowUpBody),
     });
     res.json(rule);
   })
@@ -1167,6 +1230,7 @@ apiRouter.delete(
     const existing = await prisma.followUpRule.findUniqueOrThrow({ where: { id: req.params.id } });
     if (!assertClinicAccess(req, res, existing.clinicId)) return;
 
+    await prisma.followUpSent.deleteMany({ where: { ruleId: req.params.id } });
     await prisma.followUpRule.delete({ where: { id: req.params.id } });
     res.json({ ok: true });
   })
@@ -1310,6 +1374,153 @@ apiRouter.delete(
     if (!assertClinicAccess(req, res, existing.clinicId)) return;
 
     await prisma.postProcedureRule.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  })
+);
+
+// --- Renovacao (retoma o contato meses/anos depois pra renovar procedimento) ---
+
+apiRouter.get(
+  "/renewal-rules",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const rules = await prisma.renewalRule.findMany({ where: { clinicId: clinic.id }, orderBy: { createdAt: "asc" } });
+    res.json(rules);
+  })
+);
+
+interface RenewalBody {
+  name?: string;
+  message?: string;
+  intervalValue?: number;
+  intervalUnit?: string;
+  onlyIfCompleted?: boolean;
+  procedureIds?: string[];
+  active?: boolean;
+}
+
+apiRouter.post(
+  "/renewal-rules",
+  asyncRoute(async (req, res) => {
+    const b = req.body as RenewalBody;
+    if (!b.name || !b.message || !b.intervalValue) {
+      res.status(400).json({ error: "name, message e intervalValue sao obrigatorios" });
+      return;
+    }
+    const clinic = await getClinic(req);
+    const rule = await prisma.renewalRule.create({
+      data: {
+        clinicId: clinic.id,
+        name: b.name,
+        message: b.message,
+        intervalValue: b.intervalValue,
+        intervalUnit: b.intervalUnit === "years" ? "years" : "months",
+        onlyIfCompleted: b.onlyIfCompleted ?? true,
+        procedureIds: (b.procedureIds ?? []).join(","),
+      },
+    });
+    res.json(rule);
+  })
+);
+
+apiRouter.put(
+  "/renewal-rules/:id",
+  asyncRoute(async (req, res) => {
+    const existing = await prisma.renewalRule.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, existing.clinicId)) return;
+    const b = req.body as RenewalBody;
+    const rule = await prisma.renewalRule.update({
+      where: { id: req.params.id },
+      data: {
+        ...(b.name !== undefined ? { name: b.name } : {}),
+        ...(b.message !== undefined ? { message: b.message } : {}),
+        ...(b.intervalValue !== undefined ? { intervalValue: b.intervalValue } : {}),
+        ...(b.intervalUnit !== undefined ? { intervalUnit: b.intervalUnit === "years" ? "years" : "months" } : {}),
+        ...(b.onlyIfCompleted !== undefined ? { onlyIfCompleted: b.onlyIfCompleted } : {}),
+        ...(b.procedureIds !== undefined ? { procedureIds: b.procedureIds.join(",") } : {}),
+        ...(b.active !== undefined ? { active: b.active } : {}),
+      },
+    });
+    res.json(rule);
+  })
+);
+
+apiRouter.delete(
+  "/renewal-rules/:id",
+  asyncRoute(async (req, res) => {
+    const existing = await prisma.renewalRule.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, existing.clinicId)) return;
+    await prisma.renewalSent.deleteMany({ where: { ruleId: req.params.id } });
+    await prisma.renewalRule.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  })
+);
+
+// --- Aniversario (parabens automatico no dia do aniversario do paciente) ---
+
+apiRouter.get(
+  "/birthday-rules",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const rules = await prisma.birthdayRule.findMany({ where: { clinicId: clinic.id }, orderBy: { createdAt: "asc" } });
+    res.json(rules);
+  })
+);
+
+interface BirthdayBody {
+  name?: string;
+  message?: string;
+  sendHour?: number;
+  active?: boolean;
+}
+
+apiRouter.post(
+  "/birthday-rules",
+  asyncRoute(async (req, res) => {
+    const b = req.body as BirthdayBody;
+    if (!b.name || !b.message) {
+      res.status(400).json({ error: "name e message sao obrigatorios" });
+      return;
+    }
+    const clinic = await getClinic(req);
+    const rule = await prisma.birthdayRule.create({
+      data: {
+        clinicId: clinic.id,
+        name: b.name,
+        message: b.message,
+        sendHour: b.sendHour != null && b.sendHour >= 0 && b.sendHour <= 23 ? b.sendHour : 9,
+      },
+    });
+    res.json(rule);
+  })
+);
+
+apiRouter.put(
+  "/birthday-rules/:id",
+  asyncRoute(async (req, res) => {
+    const existing = await prisma.birthdayRule.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, existing.clinicId)) return;
+    const b = req.body as BirthdayBody;
+    const rule = await prisma.birthdayRule.update({
+      where: { id: req.params.id },
+      data: {
+        ...(b.name !== undefined ? { name: b.name } : {}),
+        ...(b.message !== undefined ? { message: b.message } : {}),
+        ...(b.sendHour !== undefined && b.sendHour >= 0 && b.sendHour <= 23 ? { sendHour: b.sendHour } : {}),
+        ...(b.active !== undefined ? { active: b.active } : {}),
+      },
+    });
+    res.json(rule);
+  })
+);
+
+apiRouter.delete(
+  "/birthday-rules/:id",
+  asyncRoute(async (req, res) => {
+    const existing = await prisma.birthdayRule.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, existing.clinicId)) return;
+    await prisma.birthdaySent.deleteMany({ where: { ruleId: req.params.id } });
+    await prisma.birthdayRule.delete({ where: { id: req.params.id } });
     res.json({ ok: true });
   })
 );

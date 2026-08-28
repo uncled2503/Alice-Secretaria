@@ -546,31 +546,62 @@
         </div>
 
         <div id="sub-renewal" class="settings-subpanel">
-          <div class="coming-soon">Recontato para renovação de procedimentos periódicos — ainda não implementado.</div>
+          <div class="list-toolbar">
+            <div>
+              <div class="list-count">Renovação (<span id="renewal-rules-count">0</span>)</div>
+              <p class="hint" style="margin:0.2rem 0 0">Retome o contato meses ou anos depois para renovar procedimentos e tratamentos.</p>
+            </div>
+            <div class="list-toolbar-actions">
+              <input id="renewal-rules-search" type="text" placeholder="Buscar renovação" />
+              <button type="button" id="btn-add-renewal-rule" class="btn-brand btn-brand--primary"><span class="nav-icon" data-icon="plus"></span> Nova renovação</button>
+            </div>
+          </div>
+          <div class="card">
+            <table>
+              <thead><tr><th>Renovação</th><th>Status</th><th>Quando</th><th>Ação</th></tr></thead>
+              <tbody id="renewal-rules-body"></tbody>
+            </table>
+            <div id="renewal-rules-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Nenhuma renovação criada.</div>
+          </div>
         </div>
 
         <div id="sub-birthday" class="settings-subpanel">
-          <div class="coming-soon">Mensagem automática de aniversário — precisa de campo de data de nascimento no contato, ainda não implementado.</div>
+          <div class="list-toolbar">
+            <div>
+              <div class="list-count">Aniversário (<span id="birthday-rules-count">0</span>)</div>
+              <p class="hint" style="margin:0.2rem 0 0">Envie uma mensagem automática de parabéns no dia do aniversário do paciente. Preencha a data de nascimento no contato (aba Chat).</p>
+            </div>
+            <div class="list-toolbar-actions">
+              <input id="birthday-rules-search" type="text" placeholder="Buscar mensagem de aniversário" />
+              <button type="button" id="btn-add-birthday-rule" class="btn-brand btn-brand--primary"><span class="nav-icon" data-icon="plus"></span> Nova mensagem</button>
+            </div>
+          </div>
+          <div class="card">
+            <table>
+              <thead><tr><th>Mensagem</th><th>Status</th><th>Horário</th><th>Ação</th></tr></thead>
+              <tbody id="birthday-rules-body"></tbody>
+            </table>
+            <div id="birthday-rules-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Nenhuma mensagem de aniversário criada.</div>
+          </div>
         </div>
 
         <div id="sub-followup" class="settings-subpanel">
-          <p class="hint">A Alice manda essas mensagens automaticamente quando o paciente fica sem responder pelo número de dias indicado. Edite o texto ou desative uma etapa a qualquer momento.</p>
-          <form id="followup-form" class="broadcast-form card">
-            <div class="broadcast-form-row">
-              <label>Dias de silêncio
-                <input id="fu-days" type="number" min="1" required style="width:6rem" />
-              </label>
-              <label style="flex:1">Mensagem (use {nome} como placeholder)
-                <input id="fu-message" type="text" required />
-              </label>
-              <button type="submit">Adicionar etapa</button>
+          <div class="list-toolbar">
+            <div>
+              <div class="list-count">Recontato (<span id="followup-rules-count">0</span>)</div>
+              <p class="hint" style="margin:0.2rem 0 0">Quando um lead fica um tempo sem responder, a Alice envia um recontato. Conversas já ganhas, perdidas ou com horário marcado não recebem.</p>
             </div>
-          </form>
+            <div class="list-toolbar-actions">
+              <input id="followup-rules-search" type="text" placeholder="Buscar recontato" />
+              <button type="button" id="btn-add-followup-rule" class="btn-brand btn-brand--primary"><span class="nav-icon" data-icon="plus"></span> Novo recontato</button>
+            </div>
+          </div>
           <div class="card">
             <table>
-              <thead><tr><th>Etapa</th><th>Dias de silêncio</th><th>Mensagem</th><th>Ativo</th><th></th></tr></thead>
+              <thead><tr><th>Recontato</th><th>Status</th><th>Quando</th><th>Ação</th></tr></thead>
               <tbody id="followup-body"></tbody>
             </table>
+            <div id="followup-rules-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Nenhum recontato criado.</div>
           </div>
         </div>
 
@@ -945,6 +976,164 @@
           <label class="checkbox-row"><input type="checkbox" id="pp-active" checked /> Ativo</label>
           <div class="modal-actions">
             <button type="button" id="pp-rule-delete-btn" class="btn-cancel" style="display:none">Excluir</button>
+            <button type="submit">Salvar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="renewal-rule-overlay" class="modal-overlay" style="display:none">
+      <div class="modal-card modal-card-lg">
+        <div class="modal-header">
+          <h3 id="renewal-rule-title">Nova renovação</h3>
+          <button type="button" id="renewal-rule-close" class="modal-close">&times;</button>
+        </div>
+        <form id="renewal-rule-form">
+          <input type="hidden" id="rn-id" />
+          <label>Nome da automação*
+            <input id="rn-name" type="text" placeholder="Ex.: Renovação anual de botox" required />
+          </label>
+          <label>Quando renovar?</label>
+          <div class="payment-methods-grid" id="rn-presets">
+            <button type="button" class="payment-method-btn" data-value="3" data-unit="months">3 meses</button>
+            <button type="button" class="payment-method-btn" data-value="6" data-unit="months">6 meses</button>
+            <button type="button" class="payment-method-btn" data-value="1" data-unit="years">1 ano</button>
+            <button type="button" class="payment-method-btn" data-value="18" data-unit="months">18 meses</button>
+            <button type="button" class="payment-method-btn" data-value="2" data-unit="years">2 anos</button>
+          </div>
+          <div class="modal-form-row">
+            <label>Intervalo*
+              <input id="rn-interval-value" type="number" min="1" value="1" required />
+            </label>
+            <label>Unidade
+              <select id="rn-interval-unit">
+                <option value="months" selected>Meses</option>
+                <option value="years">Anos</option>
+              </select>
+            </label>
+          </div>
+          <p class="hint" style="margin-top:0">A Alice retoma o contato esse tempo depois do fim do atendimento. Limite de 2 anos.</p>
+          <label class="checkbox-row"><input type="checkbox" id="rn-only-completed" checked /> Somente após atendimento concluído</label>
+          <p class="hint" style="margin-top:0">Evita agendar a mensagem para cancelamentos e pacientes que não compareceram.</p>
+          <label>Procedimentos
+            <div id="rn-procedures-list" class="procedures-checklist"></div>
+          </label>
+          <p class="hint" style="margin-top:0">Deixe vazio para valer para todos os procedimentos.</p>
+          <label>Mensagem*
+            <textarea id="rn-message" rows="3" placeholder="Ex.: Olá {primeiro_nome}, está chegando o momento de renovar seu {procedimento}. Quer agendar uma avaliação?" required></textarea>
+          </label>
+          <div class="payment-methods-grid">
+            <button type="button" class="payment-method-btn rn-var-btn" data-var="{primeiro_nome}">+ Primeiro nome</button>
+            <button type="button" class="payment-method-btn rn-var-btn" data-var="{nome_completo}">+ Nome completo</button>
+            <button type="button" class="payment-method-btn rn-var-btn" data-var="{telefone}">+ Telefone</button>
+            <button type="button" class="payment-method-btn rn-var-btn" data-var="{procedimento}">+ Procedimento</button>
+            <button type="button" class="payment-method-btn rn-var-btn" data-var="{profissional}">+ Profissional</button>
+            <button type="button" class="payment-method-btn rn-var-btn" data-var="{endereco}">+ Endereço</button>
+            <button type="button" class="payment-method-btn rn-var-btn" data-var="{data_hora}">+ Data e hora</button>
+            <button type="button" class="payment-method-btn rn-var-btn" data-var="{unidade}">+ Unidade</button>
+          </div>
+          <p class="hint" style="margin-top:0">Toque numa variável para inserir. Ela será substituída pelos dados reais do paciente no envio.</p>
+          <label class="checkbox-row"><input type="checkbox" id="rn-active" checked /> Ativo</label>
+          <div class="modal-actions">
+            <button type="button" id="renewal-rule-delete-btn" class="btn-cancel" style="display:none">Excluir</button>
+            <button type="submit">Salvar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="birthday-rule-overlay" class="modal-overlay" style="display:none">
+      <div class="modal-card modal-card-lg">
+        <div class="modal-header">
+          <h3 id="birthday-rule-title">Nova mensagem de aniversário</h3>
+          <button type="button" id="birthday-rule-close" class="modal-close">&times;</button>
+        </div>
+        <form id="birthday-rule-form">
+          <input type="hidden" id="bd-id" />
+          <label>Nome da automação*
+            <input id="bd-name" type="text" placeholder="Ex.: Parabéns do paciente" required />
+          </label>
+          <label>Horário de envio
+            <select id="bd-send-hour"></select>
+          </label>
+          <p class="hint" style="margin-top:0">A mensagem é enviada nesse horário (fuso da clínica) no dia do aniversário.</p>
+          <label>Mensagem*
+            <textarea id="bd-message" rows="3" placeholder="Ex.: Feliz aniversário, {primeiro_nome}! 🎉 A equipe da {unidade} deseja um dia incrível pra você." required></textarea>
+          </label>
+          <div class="payment-methods-grid">
+            <button type="button" class="payment-method-btn bd-var-btn" data-var="{primeiro_nome}">+ Primeiro nome</button>
+            <button type="button" class="payment-method-btn bd-var-btn" data-var="{nome_completo}">+ Nome completo</button>
+            <button type="button" class="payment-method-btn bd-var-btn" data-var="{telefone}">+ Telefone</button>
+            <button type="button" class="payment-method-btn bd-var-btn" data-var="{aniversario}">+ Aniversário</button>
+            <button type="button" class="payment-method-btn bd-var-btn" data-var="{endereco}">+ Endereço</button>
+            <button type="button" class="payment-method-btn bd-var-btn" data-var="{unidade}">+ Unidade</button>
+          </div>
+          <p class="hint" style="margin-top:0">Toque numa variável para inserir. Ela será substituída pelos dados reais do paciente no envio.</p>
+          <label class="checkbox-row"><input type="checkbox" id="bd-active" checked /> Ativo</label>
+          <div class="modal-actions">
+            <button type="button" id="birthday-rule-delete-btn" class="btn-cancel" style="display:none">Excluir</button>
+            <button type="submit">Salvar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="followup-rule-overlay" class="modal-overlay" style="display:none">
+      <div class="modal-card modal-card-lg">
+        <div class="modal-header">
+          <h3 id="followup-rule-title">Novo recontato</h3>
+          <button type="button" id="followup-rule-close" class="modal-close">&times;</button>
+        </div>
+        <form id="followup-rule-form">
+          <input type="hidden" id="fu-id" />
+          <label>Nome do recontato*
+            <input id="fu-name" type="text" placeholder="Ex.: Recontato pós-orçamento" required />
+          </label>
+          <label>Tempo sem resposta*</label>
+          <div class="payment-methods-grid" id="fu-presets">
+            <button type="button" class="payment-method-btn" data-d="2" data-h="0" data-m="0">2 dias</button>
+            <button type="button" class="payment-method-btn" data-d="1" data-h="0" data-m="0">1 dia</button>
+            <button type="button" class="payment-method-btn" data-d="0" data-h="12" data-m="0">12 horas</button>
+            <button type="button" class="payment-method-btn" data-d="0" data-h="5" data-m="0">5 horas</button>
+            <button type="button" class="payment-method-btn" data-d="0" data-h="1" data-m="0">1 hora</button>
+          </div>
+          <div class="modal-form-row">
+            <label>Dias<input id="fu-d" type="number" min="0" value="1" /></label>
+            <label>Horas<input id="fu-h" type="number" min="0" max="23" value="0" /></label>
+            <label>Minutos<input id="fu-m" type="number" min="0" max="59" value="0" /></label>
+          </div>
+          <p class="hint" style="margin-top:0" id="fu-silence-hint">O recontato é enviado quando o contato fica esse tempo sem responder.</p>
+
+          <label>Repetição do recontato</label>
+          <label class="checkbox-row"><input type="radio" name="fu-repeat" value="every_silence" checked /> Repetir a cada novo silêncio</label>
+          <label class="checkbox-row"><input type="radio" name="fu-repeat" value="once" /> Enviar só uma vez por conversa</label>
+
+          <label class="checkbox-row"><input type="checkbox" id="fu-skip-appt" checked /> Não enviar se já houver agendamento futuro</label>
+
+          <div class="modal-form-row">
+            <label>Início da janela de envio
+              <input id="fu-window-start" type="number" min="0" max="23" placeholder="8" />
+            </label>
+            <label>Fim da janela de envio
+              <input id="fu-window-end" type="number" min="0" max="23" placeholder="18" />
+            </label>
+          </div>
+          <p class="hint" style="margin-top:0">Deixe os dois vazios para enviar a qualquer horário. Fora da janela, o envio é adiado.</p>
+
+          <label>Mensagem do recontato*
+            <textarea id="fu-message" rows="3" placeholder="Ex.: Olá {primeiro_nome}, tudo bem? Vi que nossa conversa ficou sem continuidade — quer que eu te ajude a seguir?" required></textarea>
+          </label>
+          <div class="payment-methods-grid">
+            <button type="button" class="payment-method-btn fu-var-btn" data-var="{primeiro_nome}">+ Primeiro nome</button>
+            <button type="button" class="payment-method-btn fu-var-btn" data-var="{nome_completo}">+ Nome completo</button>
+            <button type="button" class="payment-method-btn fu-var-btn" data-var="{telefone}">+ Telefone</button>
+            <button type="button" class="payment-method-btn fu-var-btn" data-var="{unidade}">+ Unidade</button>
+            <button type="button" class="payment-method-btn fu-var-btn" data-var="{endereco}">+ Endereço</button>
+          </div>
+          <p class="hint" style="margin-top:0">Toque numa variável para inserir. Ela será substituída pelos dados reais do contato no envio.</p>
+          <label class="checkbox-row"><input type="checkbox" id="fu-active" checked /> Ativo</label>
+          <div class="modal-actions">
+            <button type="button" id="followup-rule-delete-btn" class="btn-cancel" style="display:none">Excluir</button>
             <button type="submit">Salvar</button>
           </div>
         </form>

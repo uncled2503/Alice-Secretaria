@@ -12,6 +12,7 @@ export interface TemplateContext {
   procedureName?: string | null;
   professionalName?: string | null;
   when?: Date | null;
+  birthDate?: Date | null;
 }
 
 export function renderMessageTemplate(template: string, ctx: TemplateContext): string {
@@ -30,6 +31,7 @@ export function renderMessageTemplate(template: string, ctx: TemplateContext): s
     .replace(/\{profissional\}/gi, ctx.professionalName ?? "")
     .replace(/\{data_hora\}/gi, when.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }))
     .replace(/\{hora\}/gi, when.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" }))
+    .replace(/\{aniversario\}/gi, ctx.birthDate ? `${String(ctx.birthDate.getUTCDate()).padStart(2, "0")}/${String(ctx.birthDate.getUTCMonth() + 1).padStart(2, "0")}` : "")
     .trim();
 }
 

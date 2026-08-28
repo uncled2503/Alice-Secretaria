@@ -2,15 +2,12 @@ import cron from "node-cron";
 import { prisma } from "../db/client.js";
 import { sendText } from "../whatsapp/manager.js";
 import { getFunnelStages } from "./stages.js";
+import { renderMessageTemplate, getClinicTemplateInfo, type ClinicTemplateInfo } from "./template.js";
 
-function renderTemplate(template: string, patientName: string | null): string {
-  const firstName = patientName?.split(" ")[0] ?? "";
-  return template.replace(/\{nome\}/gi, firstName).trim();
-}
-
-// Cache simples por execucao do job - evita repetir a consulta de etapas
-// pra cada conversa da mesma clinica.
+// Cache simples por execucao do job.
 const stagesCache = new Map<string, Awaited<ReturnType<typeof getFunnelStages>>>();
+const clinicCache = new Map<string, { timezone: string; info: ClinicTemplateInfo }>();
+
 async function cachedStages(clinicId: string) {
   let stages = stagesCache.get(clinicId);
   if (!stages) {
@@ -20,12 +17,32 @@ async function cachedStages(clinicId: string) {
   return stages;
 }
 
+async function cachedClinic(clinicId: string) {
+  let entry = clinicCache.get(clinicId);
+  if (!entry) {
+    const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { timezone: true } });
+    entry = { timezone: clinic.timezone || "America/Sao_Paulo", info: await getClinicTemplateInfo(clinicId) };
+    clinicCache.set(clinicId, entry);
+  }
+  return entry;
+}
+
+function localHour(timeZone: string): number {
+  return Number(new Intl.DateTimeFormat("en-US", { timeZone, hourCycle: "h23", hour: "2-digit" }).format(new Date()));
+}
+
+// Janela [start, end): aceita janela que vira a meia-noite (ex: 20 -> 6).
+function withinWindow(hour: number, start: number | null, end: number | null): boolean {
+  if (start == null || end == null) return true;
+  return start <= end ? hour >= start && hour < end : hour >= start || hour < end;
+}
+
 // Verifica cada conversa aberta e dispara a proxima mensagem da cascata de
-// recontato quando o paciente fica X dias sem responder (silencio contado a
-// partir da ultima mensagem DELE, nao das nossas). Pausa automaticamente se
-// ja tem agendamento confirmado no futuro.
+// recontato quando o paciente fica um tempo sem responder (silencio contado a
+// partir da ultima mensagem DELE).
 export async function runFollowUpCheck(): Promise<void> {
   stagesCache.clear();
+  clinicCache.clear();
 
   const conversations = await prisma.conversation.findMany({
     where: { status: "active", humanTakeover: false },
@@ -39,34 +56,60 @@ export async function runFollowUpCheck(): Promise<void> {
     const lastPatientMessage = conversation.messages[0];
     if (!lastPatientMessage) continue;
 
-    const stages = await cachedStages(conversation.patient.clinicId);
+    const clinicId = conversation.patient.clinicId;
+    const stages = await cachedStages(clinicId);
     const recoveryEligible = new Set(stages.filter((s) => s.kind === "aberta").map((s) => s.stageId));
 
     if (
       conversation.patient.funnelStage !== "novo_lead" &&
       !recoveryEligible.has(conversation.patient.funnelStage)
     ) {
-      continue; // ja ganhou, perdeu, ou esta em pos-procedimento - nao é recontato
+      continue; // ja ganhou, perdeu, ou esta em pos-procedimento - nao e recontato
     }
-
-    const upcomingAppointment = await prisma.appointment.findFirst({
-      where: { patientId: conversation.patientId, status: "confirmed", scheduledAt: { gte: new Date() } },
-    });
-    if (upcomingAppointment) continue; // ja tem horario marcado, nao precisa recontatar
 
     const nextOrder = conversation.lastFollowUpOrder + 1;
     const rule = await prisma.followUpRule.findFirst({
-      where: { clinicId: conversation.patient.clinicId, order: nextOrder, active: true },
+      where: { clinicId, order: nextOrder, active: true },
     });
     if (!rule) continue;
 
-    const daysSinceSilence = (Date.now() - lastPatientMessage.createdAt.getTime()) / (24 * 60 * 60_000);
-    if (daysSinceSilence < rule.afterDays) continue;
+    if (rule.skipIfUpcomingAppt) {
+      const upcoming = await prisma.appointment.findFirst({
+        where: { patientId: conversation.patientId, status: "confirmed", scheduledAt: { gte: new Date() } },
+      });
+      if (upcoming) continue;
+    }
 
-    const text = renderTemplate(rule.message, conversation.patient.name);
+    if (rule.repeatMode === "once") {
+      const already = await prisma.followUpSent.findUnique({
+        where: { conversationId_ruleId: { conversationId: conversation.id, ruleId: rule.id } },
+      });
+      if (already) {
+        // ja mandou esse recontato uma vez nessa conversa - so avanca o ponteiro
+        // pra cascata seguir pros proximos recontatos.
+        await prisma.conversation.update({ where: { id: conversation.id }, data: { lastFollowUpOrder: nextOrder } });
+        continue;
+      }
+    }
+
+    const silenceMin = (Date.now() - lastPatientMessage.createdAt.getTime()) / 60_000;
+    const thresholdMin = rule.afterMinutes > 0 ? rule.afterMinutes : rule.afterDays * 1440;
+    if (silenceMin < thresholdMin) continue;
+
+    const clinic = await cachedClinic(clinicId);
+    if (!withinWindow(localHour(clinic.timezone), rule.sendWindowStart, rule.sendWindowEnd)) continue;
+
+    const text = renderMessageTemplate(rule.message, {
+      patientName: conversation.patient.name,
+      patientPhone: conversation.patient.phone,
+      clinicName: clinic.info.name,
+      locationName: clinic.info.primaryLocation?.name,
+      locationAddress: clinic.info.primaryLocation?.fullAddress,
+      birthDate: conversation.patient.birthDate,
+    });
 
     try {
-      await sendText(conversation.patient.clinicId, conversation.patient.phone, text);
+      await sendText(clinicId, conversation.patient.phone, text);
     } catch (err) {
       console.error(`Falha ao enviar recontato para ${conversation.patient.phone}:`, err);
       continue;
@@ -79,9 +122,12 @@ export async function runFollowUpCheck(): Promise<void> {
       where: { id: conversation.id },
       data: { lastFollowUpOrder: nextOrder },
     });
+    if (rule.repeatMode === "once") {
+      await prisma.followUpSent.create({ data: { conversationId: conversation.id, ruleId: rule.id } });
+    }
 
     // "recuperacao" e o slug padrao pra essa etapa; se a clinica renomeou/
-    // removeu esse stageId especifico, so pulamos esse bonus (sem quebrar o envio).
+    // removeu esse stageId, so pulamos esse bonus (sem quebrar o envio).
     const recoveryStage = stages.find((s) => s.stageId === "recuperacao");
     if (nextOrder === 1 && recoveryStage && recoveryEligible.has(conversation.patient.funnelStage)) {
       await prisma.patient.update({
@@ -92,9 +138,9 @@ export async function runFollowUpCheck(): Promise<void> {
   }
 }
 
-// Roda a cada hora - a granularidade de "dias" das regras nao exige mais que isso.
+// Roda a cada 15min - agora que os recontatos podem ter janela em minutos.
 export function startFollowUpJob(): void {
-  cron.schedule("0 * * * *", () => {
+  cron.schedule("*/15 * * * *", () => {
     runFollowUpCheck().catch((err) => console.error("Erro no job de recontato:", err));
   });
 }

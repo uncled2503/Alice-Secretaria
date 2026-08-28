@@ -47,6 +47,8 @@ model Clinic {
   professionals Professional[]
   reminderRules ReminderRule[]
   postProcedureRules PostProcedureRule[]
+  renewalRules  RenewalRule[]
+  birthdayRules BirthdayRule[]
 }
 
 // Unidade/endereco fisico da clinica. Uma clinica pode ter varias (rede com
@@ -153,12 +155,14 @@ model Patient {
   clinic        Clinic    @relation(fields: [clinicId], references: [id])
   phone         String    // numero do paciente no WhatsApp
   name          String?
+  birthDate     DateTime? // data de nascimento (so dia/mes importa pro aniversario)
   funnelStage   String    @default("novo_lead") // ver src/crm/stages.ts para a lista de etapas
   createdAt     DateTime  @default(now())
 
   conversations Conversation[]
   appointments  Appointment[]
   broadcastRecipients BroadcastRecipient[]
+  birthdaySent  BirthdaySent[]
 
   @@unique([clinicId, phone])
 }
@@ -174,20 +178,45 @@ model Conversation {
   createdAt         DateTime  @default(now())
 
   messages          Message[]
+  followUpSent      FollowUpSent[]
 }
 
 // Cascata de recontato: dispara mensagens automaticas quando o paciente fica
-// X dias sem responder. Config fixa por clinica (nao editavel por conversa).
+// um tempo sem responder. `order` mantem a sequencia da cascata (recontato 1,
+// 2, 3...); cada etapa tem seu proprio nome, tempo de silencio e opcoes.
 model FollowUpRule {
-  id         String  @id @default(cuid())
-  clinicId   String
-  clinic     Clinic  @relation(fields: [clinicId], references: [id])
-  order      Int     // 1, 2, 3... define a sequencia da cascata
-  afterDays  Int     // dias de silencio (sem mensagem do paciente) pra disparar
-  message    String  // suporta {nome} como placeholder
-  active     Boolean @default(true)
+  id                 String  @id @default(cuid())
+  clinicId           String
+  clinic             Clinic  @relation(fields: [clinicId], references: [id])
+  order              Int     // 1, 2, 3... define a sequencia da cascata
+  name               String  @default("")
+  afterDays          Int     // (legado) dias de silencio - mantido; o efetivo e afterMinutes
+  afterMinutes       Int     @default(0) // silencio total em minutos pra disparar (0 = usa afterDays)
+  message            String  // suporta as variaveis de template ({primeiro_nome} etc)
+  repeatMode         String  @default("every_silence") // every_silence | once
+  skipIfHumanTakeover Boolean @default(false)
+  skipIfUpcomingAppt Boolean @default(true)
+  sendWindowStart    Int?    // hora local (0-23) de inicio da janela de envio; null = qualquer horario
+  sendWindowEnd      Int?
+  active             Boolean @default(true)
+
+  sentLogs           FollowUpSent[]
 
   @@unique([clinicId, order])
+}
+
+// So usado quando repeatMode = "once": trava um envio dessa regra por conversa
+// pra sempre (no "every_silence" a cascata reinicia a cada novo silencio e essa
+// tabela e ignorada).
+model FollowUpSent {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  ruleId         String
+  rule           FollowUpRule @relation(fields: [ruleId], references: [id])
+  sentAt         DateTime     @default(now())
+
+  @@unique([conversationId, ruleId])
 }
 
 // Mensagem agendada em massa para a base de contatos (ou um estagio do funil).
@@ -280,6 +309,7 @@ model Appointment {
 
   reminders      ReminderSent[]
   postProcedureSent PostProcedureSent[]
+  renewalSent    RenewalSent[]
 }
 
 // Lembrete automatico de consulta, configuravel (pode ter mais de um, ex: 24h
@@ -337,4 +367,61 @@ model PostProcedureSent {
   sentAt        DateTime          @default(now())
 
   @@unique([appointmentId, ruleId])
+}
+
+// Renovacao: retoma o contato meses/anos depois do fim do atendimento pra
+// renovar um procedimento periodico (botox, preenchimento etc). Mesma
+// mecanica do pos-procedimento, so muda a escala de tempo (limite 2 anos).
+model RenewalRule {
+  id              String   @id @default(cuid())
+  clinicId        String
+  clinic          Clinic   @relation(fields: [clinicId], references: [id])
+  name            String
+  message         String
+  intervalValue   Int      @default(1)
+  intervalUnit    String   @default("months") // months | years
+  onlyIfCompleted Boolean  @default(true)
+  procedureIds    String   @default("") // vazio = todos
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  sentLogs        RenewalSent[]
+}
+
+model RenewalSent {
+  id            String      @id @default(cuid())
+  appointmentId String
+  appointment   Appointment @relation(fields: [appointmentId], references: [id])
+  ruleId        String
+  rule          RenewalRule @relation(fields: [ruleId], references: [id])
+  sentAt        DateTime    @default(now())
+
+  @@unique([appointmentId, ruleId])
+}
+
+// Mensagem automatica de parabens no dia do aniversario do paciente (usa
+// Patient.birthDate). BirthdaySent trava um envio por regra/paciente/ano.
+model BirthdayRule {
+  id        String   @id @default(cuid())
+  clinicId  String
+  clinic    Clinic   @relation(fields: [clinicId], references: [id])
+  name      String
+  message   String
+  sendHour  Int      @default(9) // hora local da clinica pra disparar
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  sentLogs  BirthdaySent[]
+}
+
+model BirthdaySent {
+  id        String       @id @default(cuid())
+  patientId String
+  patient   Patient      @relation(fields: [patientId], references: [id])
+  ruleId    String
+  rule      BirthdayRule @relation(fields: [ruleId], references: [id])
+  year      Int
+  sentAt    DateTime     @default(now())
+
+  @@unique([patientId, ruleId, year])
 }
