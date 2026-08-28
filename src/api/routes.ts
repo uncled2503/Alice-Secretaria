@@ -1,5 +1,6 @@
 import { Router, type Request, type Response, type RequestHandler } from "express";
 import { rateLimit } from "express-rate-limit";
+import { timingSafeEqual } from "crypto";
 import { prisma } from "../db/client.js";
 import { sendText, connectClinic, disconnectClinic, getStatus, getQrDataUrl, getProfilePicUrl, triggerHistoryImport } from "../whatsapp/manager.js";
 import { getFunnelStages, generateStageId } from "../crm/stages.js";
@@ -385,7 +386,7 @@ apiRouter.post(
     // salva antes de tentar. Sem isso, uma sessao antiga invalida no disco
     // fica sendo retentada (e rejeitada pelo WhatsApp) pra sempre, sem nunca
     // chegar a oferecer um QR novo pra escanear.
-    if (!getStatus(clinic.id).connected) await disconnectClinic(clinic.id);
+    if (!getStatus(clinic.id).connected) await disconnectClinic(clinic.id, { logout: false });
     await connectClinic(clinic.id);
     res.json({ ok: true });
   })
@@ -395,7 +396,7 @@ apiRouter.post(
   "/whatsapp/disconnect",
   asyncRoute(async (req, res) => {
     const clinic = await getClinic(req);
-    await disconnectClinic(clinic.id);
+    await disconnectClinic(clinic.id, { logout: true });
     res.json({ ok: true });
   })
 );
@@ -2047,13 +2048,26 @@ apiRouter.post(
       return;
     }
 
+    const expectedToken = process.env.ADMIN_BOOTSTRAP_TOKEN;
+    const suppliedToken = req.get("X-Bootstrap-Token") ?? "";
+    if (!expectedToken) {
+      res.status(503).json({ error: "ADMIN_BOOTSTRAP_TOKEN nao configurado no servidor" });
+      return;
+    }
+    const expectedBuffer = Buffer.from(expectedToken);
+    const suppliedBuffer = Buffer.from(suppliedToken);
+    if (expectedBuffer.length !== suppliedBuffer.length || !timingSafeEqual(expectedBuffer, suppliedBuffer)) {
+      res.status(403).json({ error: "Token de bootstrap invalido" });
+      return;
+    }
+
     const { name, username, password } = req.body as { name?: string; username?: string; password?: string };
     if (!name || !username || !password) {
       res.status(400).json({ error: "name, username e password sao obrigatorios" });
       return;
     }
-    if (password.length < 6) {
-      res.status(400).json({ error: "a senha precisa ter pelo menos 6 caracteres" });
+    if (password.length < 10) {
+      res.status(400).json({ error: "a senha precisa ter pelo menos 10 caracteres" });
       return;
     }
 
@@ -2132,8 +2146,8 @@ apiRouter.post(
       res.status(400).json({ error: "name, username e password sao obrigatorios" });
       return;
     }
-    if (password.length < 6) {
-      res.status(400).json({ error: "a senha precisa ter pelo menos 6 caracteres" });
+    if (password.length < 10) {
+      res.status(400).json({ error: "a senha precisa ter pelo menos 10 caracteres" });
       return;
     }
 

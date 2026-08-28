@@ -17,6 +17,7 @@ import { toFile } from "openai";
 import { prisma } from "../db/client.js";
 import { handleIncomingMessage } from "../ai/alice.js";
 import { processHistorySync } from "./import.js";
+import { describeWhatsAppConnectionError } from "./errors.js";
 
 // Sessao (credenciais do "aparelho conectado") persistida em disco, uma pasta
 // por clinica. Em producao isso PRECISA estar num volume persistente - se
@@ -63,9 +64,12 @@ interface ClinicConnection {
   sock: WASocket;
   status: "connecting" | "open" | "close";
   qr: string | null; // ultimo QR code cru (ainda nao virou imagem)
+  instanceId: number; // impede eventos atrasados de um socket antigo de alterarem o atual
+  qrDeadline?: NodeJS.Timeout;
 }
 
 const connections = new Map<string, ClinicConnection>();
+let connectionInstanceSequence = 0;
 
 // Reconexao automatica apos queda tenta de novo a cada 5s, mas desiste depois
 // de algumas tentativas seguidas sem sucesso - foi um loop infinito de retry
@@ -74,6 +78,8 @@ const connections = new Map<string, ClinicConnection>();
 const reconnectAttempts = new Map<string, number>();
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAY_MS = 5000;
+const QR_GENERATION_TIMEOUT_MS = 30_000;
+const SOCKET_SHUTDOWN_TIMEOUT_MS = 5000;
 
 // Ultimo motivo de falha por clinica - o painel usa pra explicar o que rolou
 // quando a conexao desiste de tentar sozinha, em vez de so mostrar "Desconectado".
@@ -234,6 +240,9 @@ export async function connectClinic(clinicId: string): Promise<void> {
   const existing = connections.get(clinicId);
   if (existing && existing.status !== "close") return; // ja conectado ou conectando
 
+  lastConnectError.delete(clinicId);
+  console.log(`[WhatsApp] Iniciando conexão da clínica ${clinicId} via ${proxyAgents.length ? "proxy" : "IP direto"}.`);
+
   fs.mkdirSync(authDir(clinicId), { recursive: true });
   const { state, saveCreds } = await useMultiFileAuthState(authDir(clinicId));
 
@@ -255,24 +264,45 @@ export async function connectClinic(clinicId: string): Promise<void> {
     // aqui garante que o historico chegue nessa reconexao.
     syncFullHistory: true,
     markOnlineOnConnect: false, // nao fica "online" o tempo todo feito bot
+    connectTimeoutMs: 20_000,
   });
 
-  connections.set(clinicId, { sock, status: "connecting", qr: null });
+  const instanceId = ++connectionInstanceSequence;
+  const conn: ClinicConnection = { sock, status: "connecting", qr: null, instanceId };
+  connections.set(clinicId, conn);
+
+  conn.qrDeadline = setTimeout(() => {
+    const current = connections.get(clinicId);
+    if (!current || current.instanceId !== instanceId || current.status !== "connecting" || current.qr) return;
+
+    const message = proxyAgents.length
+      ? "A proxy não entregou uma resposta do WhatsApp em 30 segundos. Verifique a proxy e tente novamente."
+      : "O IP da VPS não recebeu um QR Code em 30 segundos. O WhatsApp pode estar recusando esse IP; configure WHATSAPP_PROXY_URL.";
+    lastConnectError.set(clinicId, message);
+    connections.delete(clinicId);
+    console.error(`[WhatsApp] Timeout ao gerar QR da clínica ${clinicId}: ${message}`);
+    void current.sock.end(new Error("Tempo limite para gerar QR Code")).catch(() => {});
+  }, QR_GENERATION_TIMEOUT_MS);
 
   sock.ev.on("creds.update", saveCreds);
 
   sock.ev.on("connection.update", async (update) => {
-    const conn = connections.get(clinicId);
-    if (!conn) return;
+    const current = connections.get(clinicId);
+    if (!current || current.instanceId !== instanceId) return;
 
     if (update.qr) {
-      conn.qr = update.qr;
-      conn.status = "connecting";
+      if (current.qrDeadline) clearTimeout(current.qrDeadline);
+      current.qrDeadline = undefined;
+      current.qr = update.qr;
+      current.status = "connecting";
+      console.log(`[WhatsApp] QR Code recebido para a clínica ${clinicId}.`);
     }
 
     if (update.connection === "open") {
-      conn.status = "open";
-      conn.qr = null;
+      if (current.qrDeadline) clearTimeout(current.qrDeadline);
+      current.qrDeadline = undefined;
+      current.status = "open";
+      current.qr = null;
       reconnectAttempts.delete(clinicId);
       lastConnectError.delete(clinicId);
       const ownJid = sock.user?.id?.split(":")[0]?.split("@")[0];
@@ -283,8 +313,11 @@ export async function connectClinic(clinicId: string): Promise<void> {
     }
 
     if (update.connection === "close") {
-      conn.status = "close";
+      if (current.qrDeadline) clearTimeout(current.qrDeadline);
+      current.qrDeadline = undefined;
+      current.status = "close";
       const statusCode = (update.lastDisconnect?.error as Boom | undefined)?.output?.statusCode;
+      const boomMessage = (update.lastDisconnect?.error as Boom | undefined)?.message ?? "?";
       const loggedOut = statusCode === DisconnectReason.loggedOut;
 
       if (loggedOut) {
@@ -296,21 +329,35 @@ export async function connectClinic(clinicId: string): Promise<void> {
         return;
       }
 
-      // Qualquer outra queda (inclusive restartRequired/515, que o WhatsApp
-      // pede logo apos o pareamento) e so uma reconexao de rotina - tenta de
-      // novo em 5s, ate o limite de tentativas seguidas.
+      // 428 e a recusa conhecida do IP da VPS. Repetir cinco vezes apenas
+      // aumenta o rate-limit; mostra a causa imediatamente e espera ação.
+      if (statusCode === 428) {
+        const message = describeWhatsAppConnectionError(statusCode, boomMessage, proxyAgents.length > 0);
+        lastConnectError.set(clinicId, message);
+        connections.delete(clinicId);
+        console.error(`[WhatsApp] Conexão recusada para a clínica ${clinicId}: ${message}`);
+        return;
+      }
+
+      // 515 e esperado logo depois de ler o QR: o servidor pede que o novo
+      // socket reinicie já autenticado. Não conta como tentativa com falha.
+      if (statusCode === DisconnectReason.restartRequired) {
+        connections.delete(clinicId);
+        console.log(`[WhatsApp] Reinício solicitado após pareamento da clínica ${clinicId}; reconectando.`);
+        setTimeout(() => connectClinic(clinicId).catch((err) => console.error("Falha ao reiniciar conexão:", err)), 1000);
+        return;
+      }
+
+      // As demais quedas recebem tentativas limitadas de reconexao. Os casos
+      // especiais 428 e 515 ja foram tratados acima.
       const attempts = (reconnectAttempts.get(clinicId) ?? 0) + 1;
       reconnectAttempts.set(clinicId, attempts);
 
       if (attempts > MAX_RECONNECT_ATTEMPTS) {
-        const boomMsg = (update.lastDisconnect?.error as Boom | undefined)?.message ?? "?";
         console.error(
-          `Clinica ${clinicId} falhou ${attempts - 1} vezes seguidas ao reconectar (statusCode=${statusCode ?? "?"}, msg="${boomMsg}") - parando de tentar sozinho. Reconecte pelo painel.`
+          `Clinica ${clinicId} falhou ${attempts - 1} vezes seguidas ao reconectar (statusCode=${statusCode ?? "?"}, msg="${boomMessage}") - parando de tentar sozinho. Reconecte pelo painel.`
         );
-        lastConnectError.set(
-          clinicId,
-          `Não foi possível reconectar (erro do WhatsApp: ${statusCode ?? "?"}). Aguarde alguns minutos e clique em "Gerar QR Code".`
-        );
+        lastConnectError.set(clinicId, describeWhatsAppConnectionError(statusCode, boomMessage, proxyAgents.length > 0));
         connections.delete(clinicId);
         return;
       }
@@ -356,15 +403,36 @@ export async function triggerHistoryImport(clinicId: string): Promise<void> {
     },
   });
 
-  await disconnectClinic(clinicId);
+  await disconnectClinic(clinicId, { logout: true });
   await connectClinic(clinicId);
 }
 
-export async function disconnectClinic(clinicId: string): Promise<void> {
+export async function disconnectClinic(clinicId: string, options: { logout?: boolean } = {}): Promise<void> {
   const conn = connections.get(clinicId);
+  connections.delete(clinicId);
   if (conn) {
-    await conn.sock.logout().catch(() => {});
-    connections.delete(clinicId);
+    if (conn.qrDeadline) clearTimeout(conn.qrDeadline);
+
+    if (options.logout && conn.status === "open") {
+      let logoutCompleted = false;
+      let timeout: NodeJS.Timeout | undefined;
+      try {
+        logoutCompleted = await Promise.race([
+          conn.sock.logout().then(() => true).catch(() => false),
+          new Promise<boolean>((resolve) => {
+            timeout = setTimeout(() => resolve(false), SOCKET_SHUTDOWN_TIMEOUT_MS);
+          }),
+        ]);
+      } finally {
+        if (timeout) clearTimeout(timeout);
+      }
+      if (!logoutCompleted) {
+        console.warn(`[WhatsApp] Logout da clínica ${clinicId} excedeu 5 segundos; encerrando o socket localmente.`);
+        await conn.sock.end(new Error("Timeout ao desconectar")).catch(() => {});
+      }
+    } else {
+      await conn.sock.end(undefined).catch(() => {});
+    }
   }
   reconnectAttempts.delete(clinicId);
   lastConnectError.delete(clinicId);

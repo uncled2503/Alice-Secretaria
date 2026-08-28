@@ -17,13 +17,38 @@ import { prisma } from "./db/client.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
-// CSP desligado de proposito: o painel usa atributos style="" via JS (grid da
-// agenda, modais) que uma CSP padrao bloquearia sem um audit dedicado. O resto
-// dos headers do helmet (X-Frame-Options, nosniff, HSTS etc) fica ativo.
-app.use(helmet({ contentSecurityPolicy: false }));
+// O painel ainda usa estilos inline para componentes dinamicos, por isso
+// style-src permite unsafe-inline. Scripts continuam restritos aos arquivos
+// servidos pela propria aplicacao; a landing nao depende mais de JS inline.
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      scriptSrcAttr: ["'none'"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com"],
+      imgSrc: ["'self'", "data:", "blob:", "https:"],
+      connectSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+      frameAncestors: ["'none'"],
+    },
+  },
+}));
 app.use(express.json({ limit: "8mb" })); // fotos de produto vem como data URI (base64) no body
 
-app.get("/health", (_req, res) => res.json({ ok: true }));
+app.get("/health", async (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({ ok: true, database: "ok", uptimeSeconds: Math.floor(process.uptime()) });
+  } catch (error) {
+    console.error("Health check falhou:", error);
+    res.status(503).json({ ok: false, database: "unavailable" });
+  }
+});
 
 // Painel administrativo: so a "casca" HTML/CSS/JS, sem dado nenhum - fica
 // publica de proposito pra qualquer cliente (ex: Isac) conseguir carregar a

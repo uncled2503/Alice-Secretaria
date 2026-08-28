@@ -9,12 +9,16 @@ import { createHmac, timingSafeEqual } from "crypto";
 // no GitHub), entao um valor padrao fixo aqui seria conhecido por qualquer
 // pessoa e permitiria forjar cookie de sessao (inclusive admin) de qualquer
 // conta. Se faltar a env var, o servidor recusa subir (ver checagem no import).
-if (!process.env.SESSION_SECRET) {
-  throw new Error("SESSION_SECRET nao configurado - defina uma variavel de ambiente aleatoria antes de subir o servidor.");
+if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) {
+  throw new Error("SESSION_SECRET precisa ter pelo menos 32 caracteres aleatorios antes de subir o servidor.");
 }
 const SECRET: string = process.env.SESSION_SECRET;
 const COOKIE_NAME = "alice_staff";
 const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+function cookieSecurityAttributes(): string {
+  return process.env.NODE_ENV === "production" ? "; Secure" : "";
+}
 
 export interface StaffSession {
   id: string;
@@ -31,11 +35,11 @@ function sign(payload: string): string {
 export function createSessionCookie(staff: { id: string; name: string; clinicId: string | null; role: "admin" | "client" }): string {
   const payload = Buffer.from(JSON.stringify({ ...staff, exp: Date.now() + MAX_AGE_MS })).toString("base64url");
   const sig = sign(payload);
-  return `${COOKIE_NAME}=${payload}.${sig}; HttpOnly; Path=/; Max-Age=${Math.floor(MAX_AGE_MS / 1000)}; SameSite=Lax`;
+  return `${COOKIE_NAME}=${payload}.${sig}; HttpOnly; Path=/; Max-Age=${Math.floor(MAX_AGE_MS / 1000)}; SameSite=Lax${cookieSecurityAttributes()}`;
 }
 
 export function clearSessionCookie(): string {
-  return `${COOKIE_NAME}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax`;
+  return `${COOKIE_NAME}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax${cookieSecurityAttributes()}`;
 }
 
 function parseCookies(header: string | undefined): Record<string, string> {
