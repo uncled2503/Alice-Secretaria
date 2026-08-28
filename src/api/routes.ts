@@ -5,11 +5,43 @@ import { sendText, connectClinic, disconnectClinic, getStatus, getQrDataUrl, get
 import { getFunnelStages, generateStageId } from "../crm/stages.js";
 import { logActivity, ACTIVITY_AREAS, ACTIVITY_TYPES } from "../crm/activity.js";
 import { createRuleDraft, RULE_CATEGORIES, seedDefaultRules } from "../ai/rules.js";
+import { answerSiteQuestion, type SiteMessage } from "../ai/siteAssistant.js";
 import { notifyStaff } from "../crm/notify.js";
 import { hashPassword, verifyPassword } from "./passwords.js";
 import { createSessionCookie, clearSessionCookie } from "./staffSession.js";
 
 export const apiRouter = Router();
+
+// --- Assistente de duvidas do site institucional (publico, sem login) ---
+// Endpoint publico que chama a OpenAI, entao PRECISA de limite por IP pra nao
+// virar um GPT gratis / alvo de abuso.
+const siteAskRateLimit = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  limit: 25,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Muitas perguntas em pouco tempo. Aguarde alguns minutos ou fale com a gente pelo WhatsApp." },
+});
+
+apiRouter.post(
+  "/site/ask",
+  siteAskRateLimit,
+  asyncRoute(async (req, res) => {
+    const { messages } = (req.body ?? {}) as { messages?: unknown };
+    if (!Array.isArray(messages) || messages.length === 0) {
+      res.status(400).json({ error: "messages e obrigatorio" });
+      return;
+    }
+    const history = messages as SiteMessage[];
+    try {
+      const reply = await answerSiteQuestion(history);
+      res.json({ reply });
+    } catch (err) {
+      console.error("Falha no assistente do site:", err);
+      res.status(502).json({ error: "Nao consegui responder agora. Tenta de novo em instantes." });
+    }
+  })
+);
 
 // Express 4 nao encaminha rejeicoes de handlers async para o error handler
 // sozinho; sem isso, uma falha (ex: WhatsApp desconectado) derruba o processo

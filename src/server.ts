@@ -58,6 +58,7 @@ const PUBLIC_API_PATHS = new Set([
   "/staff/login",
   "/staff/me",
   "/staff/bootstrap-admin",
+  "/site/ask",
 ]);
 
 app.use(
