@@ -26,16 +26,37 @@ const AUTH_ROOT = process.env.WHATSAPP_AUTH_DIR ?? path.join(process.cwd(), "wha
 const logger = pino({ level: process.env.WHATSAPP_LOG_LEVEL ?? "silent" });
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// Roteia SO o trafego do WhatsApp (socket + download de midia) por um proxy,
-// sem afetar as chamadas da OpenAI. Serve pra contornar bloqueio de IP do
-// WhatsApp na VPS (erro 428 "Connection Terminated" mesmo com sessao nova) -
-// aponta pra um proxy residencial/movel. Aceita http://, https:// e
-// socks5:// (usuario:senha@host:porta). Sem a variavel, conecta direto.
-const PROXY_URL = process.env.WHATSAPP_PROXY_URL?.trim() || undefined;
-const proxyAgent = PROXY_URL ? new ProxyAgent({ getProxyForUrl: () => PROXY_URL }) : undefined;
-if (proxyAgent) {
-  const safe = PROXY_URL!.replace(/\/\/[^@]+@/, "//***@"); // nao vaza usuario:senha no log
-  console.log(`WhatsApp vai conectar via proxy (${safe}).`);
+// Roteia SO o trafego do WhatsApp (socket + download de midia) por proxy, sem
+// afetar as chamadas da OpenAI. Serve pra contornar bloqueio de IP do WhatsApp
+// na VPS (erro 428 "Connection Terminated" mesmo com sessao nova) - aponta pra
+// um proxy residencial/movel. Aceita http://, https:// e socks5://
+// (usuario:senha@host:porta). Sem a variavel, conecta direto.
+//
+// Da pra listar VARIAS proxies separadas por virgula (ou quebra de linha). Mas
+// cada clinica fica presa a UMA proxy fixa, escolhida pelo id e estavel entre
+// restarts - a conexao NAO fica alternando de IP: uma sessao de WhatsApp cujo
+// IP fica pulando e exatamente o padrao que o WhatsApp trata como suspeito.
+// Listar mais de uma so serve pra ESPALHAR clinicas diferentes por IPs
+// diferentes (util com muitas contas), nao pra trocar o IP de uma mesma conta.
+const PROXY_URLS = (process.env.WHATSAPP_PROXY_URL ?? "")
+  .split(/[\n,]+/)
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const maskProxy = (url: string) => url.replace(/\/\/[^@]+@/, "//***@"); // nao vaza usuario:senha no log
+const proxyAgents = PROXY_URLS.map((url) => new ProxyAgent({ getProxyForUrl: () => url }));
+
+if (proxyAgents.length) {
+  console.log(`WhatsApp vai conectar via ${proxyAgents.length} proxy(s): ${PROXY_URLS.map(maskProxy).join(", ")}`);
+}
+
+// Hash estavel (djb2): a mesma clinica sempre cai na mesma proxy, inclusive
+// depois de reiniciar o processo.
+function proxyForClinic(clinicId: string): ProxyAgent | undefined {
+  if (!proxyAgents.length) return undefined;
+  let h = 5381;
+  for (let i = 0; i < clinicId.length; i++) h = (((h << 5) + h) + clinicId.charCodeAt(i)) | 0;
+  return proxyAgents[Math.abs(h) % proxyAgents.length];
 }
 
 interface ClinicConnection {
@@ -185,11 +206,17 @@ export async function connectClinic(clinicId: string): Promise<void> {
   fs.mkdirSync(authDir(clinicId), { recursive: true });
   const { state, saveCreds } = await useMultiFileAuthState(authDir(clinicId));
 
+  const clinicProxy = proxyForClinic(clinicId);
+  if (clinicProxy) {
+    const idx = proxyAgents.indexOf(clinicProxy);
+    console.log(`Clinica ${clinicId} conectando via proxy #${idx + 1} (${maskProxy(PROXY_URLS[idx])}).`);
+  }
+
   const sock = makeWASocket({
     auth: state,
     logger,
     printQRInTerminal: false,
-    ...(proxyAgent ? { agent: proxyAgent, fetchAgent: proxyAgent } : {}),
+    ...(clinicProxy ? { agent: clinicProxy, fetchAgent: clinicProxy } : {}),
     browser: Browsers.macOS("Desktop"), // fingerprint de dispositivo real, menos suspeito que o padrao da lib
     // O WhatsApp so manda o historico completo (messaging-history.set) num
     // pareamento de aparelho novo - "Importar do WhatsApp" (triggerHistoryImport)
