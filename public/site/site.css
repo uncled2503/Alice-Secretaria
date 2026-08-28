@@ -6,31 +6,31 @@
    ========================================================================= */
 
 :root {
-  --brand: #7c3aed;
-  --brand-strong: #6d28d9;
-  --brand-soft: #a78bfa;
-  --brand-050: #f5f3ff;
-  --brand-100: #ede9fe;
-  --grad: linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%);
-  --grad-deep: linear-gradient(160deg, #5b21b6 0%, #7c3aed 55%, #8b5cf6 100%);
+  --brand: #d97706;
+  --brand-strong: #b45309;
+  --brand-soft: #f59e0b;
+  --brand-050: #fffbeb;
+  --brand-100: #fef3c7;
+  --grad: linear-gradient(135deg, #d97706 0%, #f59e0b 100%);
+  --grad-deep: linear-gradient(160deg, #7c2d12 0%, #b45309 50%, #d97706 100%);
 
-  --ink: #1c1633;
-  --ink-soft: #5b5670;
-  --ink-faint: #8b879c;
+  --ink: #231a12;
+  --ink-soft: #6b5d4f;
+  --ink-faint: #9a8b7c;
 
   --bg: #ffffff;
-  --bg-alt: #faf9ff;
+  --bg-alt: #fffaf2;
   --card: #ffffff;
-  --border: #ece9f6;
+  --border: #f0e9df;
 
   --ok: #16a34a;
   --ok-bg: #dcfce7;
   --no: #dc2626;
   --no-bg: #fee2e2;
 
-  --shadow-sm: 0 1px 3px rgba(28, 22, 51, 0.06), 0 6px 16px rgba(28, 22, 51, 0.05);
-  --shadow-md: 0 8px 30px rgba(91, 33, 182, 0.12);
-  --shadow-lg: 0 24px 60px rgba(91, 33, 182, 0.18);
+  --shadow-sm: 0 1px 3px rgba(35, 26, 18, 0.06), 0 6px 16px rgba(35, 26, 18, 0.05);
+  --shadow-md: 0 8px 30px rgba(180, 83, 9, 0.14);
+  --shadow-lg: 0 24px 60px rgba(180, 83, 9, 0.2);
 
   --radius: 16px;
   --radius-lg: 24px;
@@ -109,9 +109,9 @@ h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.01em; }
 .btn-primary {
   background: var(--grad);
   color: #fff;
-  box-shadow: 0 10px 24px rgba(124, 58, 237, 0.35);
+  box-shadow: 0 10px 24px rgba(217, 119, 6, 0.35);
 }
-.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 16px 34px rgba(124, 58, 237, 0.45); }
+.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 16px 34px rgba(217, 119, 6, 0.45); }
 .btn-ghost {
   background: #fff;
   color: var(--brand-strong);
@@ -196,7 +196,7 @@ h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.01em; }
   padding: 72px 0 90px;
   background:
     radial-gradient(1000px 500px at 15% -10%, var(--brand-050), transparent 60%),
-    radial-gradient(900px 500px at 100% 0%, #f0eafe, transparent 55%);
+    radial-gradient(900px 500px at 100% 0%, #fef1d6, transparent 55%);
 }
 .hero-grid {
   display: grid;
@@ -438,7 +438,7 @@ h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.01em; }
   border-radius: 12px;
   display: flex; align-items: center; justify-content: center;
   font-weight: 700;
-  box-shadow: 0 8px 18px rgba(124, 58, 237, 0.35);
+  box-shadow: 0 8px 18px rgba(217, 119, 6, 0.35);
 }
 .step h3 { font-size: 1.05rem; margin-bottom: 8px; }
 .step p { font-size: 0.92rem; color: var(--ink-soft); }
@@ -541,8 +541,8 @@ h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.01em; }
 
 /* =====================  FOOTER  ===================== */
 .site-footer {
-  background: #17122b;
-  color: #b9b3cf;
+  background: #1f1710;
+  color: #cabdae;
   padding: 48px 0 32px;
   font-size: 0.88rem;
 }
@@ -558,7 +558,7 @@ h1, h2, h3, h4 { line-height: 1.2; font-weight: 700; letter-spacing: -0.01em; }
 .footer-top .brand { color: #fff; }
 .footer-links { display: flex; gap: 24px; flex-wrap: wrap; }
 .footer-links a:hover { color: #fff; }
-.footer-bottom { padding-top: 22px; text-align: center; color: #6f6a86; font-size: 0.82rem; }
+.footer-bottom { padding-top: 22px; text-align: center; color: #857567; font-size: 0.82rem; }
 
 /* Botao flutuante WhatsApp */
 .wa-float {
