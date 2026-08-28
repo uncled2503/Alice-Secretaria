@@ -111,7 +111,14 @@ body {
   font-weight: 700; font-size: 1rem; flex-shrink: 0;
 }
 .brand-logo--img { background: none; padding: 0; object-fit: contain; }
+/* Tema escuro: personagem laranja ganha um selo branco pra nao sumir no fundo preto */
+[data-theme="dark"] .brand-logo--img { background: #fff; padding: 3px; }
+
 .auth-logo { display: block; height: 46px; width: auto; margin: 0 auto 0.9rem; }
+/* Logo do login troca pela versao branca no tema escuro (a preta some) */
+.auth-logo--dark { display: none; }
+[data-theme="dark"] .auth-logo--light { display: none; }
+[data-theme="dark"] .auth-logo--dark { display: block; }
 .brand-text { display: flex; flex-direction: column; line-height: 1.2; overflow: hidden; }
 .brand-text strong { font-size: 0.95rem; }
 .brand-text span { font-size: 0.72rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
