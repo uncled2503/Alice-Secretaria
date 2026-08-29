@@ -239,6 +239,44 @@ apiRouter.put(
   })
 );
 
+// Credenciais UAZAPI de uma clinica especifica. Estas rotas existem para o
+// painel administrativo gerenciar cada instancia sem depender da clinica
+// selecionada no topo. O token completo nunca volta para o navegador.
+apiRouter.get(
+  "/clinics/:id/uazapi",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    res.json(await getUazapiConfig(req.params.id));
+  })
+);
+
+apiRouter.put(
+  "/clinics/:id/uazapi",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const { baseUrl, token } = req.body as { baseUrl?: string; token?: string };
+    if (!baseUrl) {
+      res.status(400).json({ error: "baseUrl obrigatoria" });
+      return;
+    }
+    try {
+      const result = await saveUazapiConfig(req.params.id, { baseUrl, token });
+      await logActivity({
+        clinicId: req.params.id,
+        type: "clinic_updated",
+        area: "clinica",
+        title: "Credenciais UAZAPI alteradas",
+        description: "A instancia de WhatsApp da clinica foi validada pelo painel administrativo.",
+        actorName: req.staff?.name ?? null,
+      });
+      res.json(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Falha ao validar a UAZAPI";
+      res.status(400).json({ error: message });
+    }
+  })
+);
+
 // So admin cria clinica nova (onboarding de um cliente novo da Alice).
 apiRouter.post(
   "/clinics",

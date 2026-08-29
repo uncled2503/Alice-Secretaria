@@ -809,7 +809,7 @@
         </div>
 
         <div id="sub-clinics" class="settings-subpanel">
-          <p class="hint">Cada clínica tem sua própria conexão de WhatsApp (via QR Code, na aba "Canais"). O telefone abaixo é só um identificador inicial — é atualizado sozinho com o número real assim que você escaneia o QR Code.</p>
+          <p class="hint">Cada clínica usa uma instância UAZAPI própria, com seu próprio token e número de WhatsApp. O telefone abaixo é só um identificador inicial — ele é atualizado sozinho com o número real da instância conectada.</p>
           <form id="clinic-form" class="broadcast-form card">
             <input id="cl-name" type="text" placeholder="Nome da clínica" required />
             <input id="cl-phone" type="text" placeholder="Telefone do WhatsApp (só números, ex: 5511999999999)" required />
@@ -819,7 +819,7 @@
           </form>
           <div class="card">
             <table>
-              <thead><tr><th>Nome</th><th>WhatsApp</th><th>Conexão</th><th>Assinatura</th><th></th></tr></thead>
+              <thead><tr><th>Nome</th><th>WhatsApp</th><th>UAZAPI</th><th>Conexão</th><th>Assinatura</th><th></th></tr></thead>
               <tbody id="clinics-body"></tbody>
             </table>
           </div>
@@ -1474,6 +1474,31 @@
           <div class="modal-actions">
             <button type="button" id="professional-delete-btn" class="btn-cancel" style="display:none">Excluir</button>
             <button type="submit">Salvar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="clinic-uazapi-overlay" class="modal-overlay" style="display:none">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 id="clinic-uazapi-title">Configurar UAZAPI</h3>
+          <button type="button" id="clinic-uazapi-close" class="modal-close" aria-label="Fechar">&times;</button>
+        </div>
+        <form id="clinic-uazapi-form">
+          <input type="hidden" id="clinic-uazapi-id" />
+          <p class="hint" style="margin-top:0">Use o token da instância exclusiva desta clínica. O número do WhatsApp será identificado automaticamente pela UAZAPI.</p>
+          <label>URL da UAZAPI
+            <input id="clinic-uazapi-url" type="url" value="https://api.uazapi.com" placeholder="https://api.uazapi.com" required autocomplete="url" />
+          </label>
+          <label>Novo token da instância
+            <input id="clinic-uazapi-token" type="password" placeholder="Cole o token da instância" autocomplete="new-password" />
+          </label>
+          <p id="clinic-uazapi-token-hint" class="hint" style="margin:0">Nenhum token configurado. Informe um token para salvar.</p>
+          <p id="clinic-uazapi-feedback" class="hint" style="display:none;margin:0"></p>
+          <div class="modal-actions">
+            <button type="button" id="clinic-uazapi-cancel" class="btn-cancel">Cancelar</button>
+            <button type="submit" id="clinic-uazapi-save">Validar e salvar</button>
           </div>
         </form>
       </div>

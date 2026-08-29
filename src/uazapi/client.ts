@@ -230,7 +230,14 @@ export async function saveUazapiConfig(
 
   const credentials = { baseUrl, token };
   const status = normalizeStatusResponse(await request(credentials, "/instance/status"));
-  await prisma.clinic.update({ where: { id: clinicId }, data: { uazapiBaseUrl: baseUrl, uazapiToken: token } });
+  try {
+    await prisma.clinic.update({ where: { id: clinicId }, data: { uazapiBaseUrl: baseUrl, uazapiToken: token } });
+  } catch (error) {
+    if (record(error)?.code === "P2002") {
+      throw new Error("Este token UAZAPI ja esta vinculado a outra clinica");
+    }
+    throw error;
+  }
   statusCache.delete(clinicId);
 
   let webhookConfigured = false;

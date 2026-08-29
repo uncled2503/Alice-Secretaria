@@ -2689,10 +2689,20 @@ async function loadClinicsList() {
       await loadClinicsList();
     });
 
+    const uazapiBtn = el("button", { type: "button", class: "btn-brand btn-brand--secondary btn-brand--sm" }, [
+      c.configured ? "Trocar token" : "Configurar",
+    ]);
+    uazapiBtn.addEventListener("click", () => openClinicUazapiModal(c));
+
     body.appendChild(
       el("tr", {}, [
         el("td", {}, [c.name]),
         el("td", {}, [c.whatsappPhone]),
+        el("td", {}, [
+          el("span", { class: `badge ${c.configured ? "badge-green" : "badge-neutral"}` }, [
+            c.configured ? "Configurada" : "Pendente",
+          ]),
+        ]),
         el("td", {}, [
           el("span", { class: `badge ${c.connected ? "badge-green" : "badge-neutral"}` }, [
             c.connected ? "Conectado" : c.connecting ? "Conectando…" : "Desconectado",
@@ -2703,12 +2713,88 @@ async function loadClinicsList() {
             c.active ? "Em dia" : "Bloqueada",
           ]),
         ]),
-        el("td", { class: "actions" }, [toggleBtn, deleteBtn]),
+        el("td", { class: "actions" }, [uazapiBtn, toggleBtn, deleteBtn]),
       ])
     );
   }
   paintIcons(body);
 }
+
+function closeClinicUazapiModal() {
+  document.getElementById("clinic-uazapi-overlay").style.display = "none";
+}
+
+async function openClinicUazapiModal(clinic) {
+  const overlay = document.getElementById("clinic-uazapi-overlay");
+  const tokenInput = document.getElementById("clinic-uazapi-token");
+  const tokenHint = document.getElementById("clinic-uazapi-token-hint");
+  const feedback = document.getElementById("clinic-uazapi-feedback");
+  const saveBtn = document.getElementById("clinic-uazapi-save");
+
+  document.getElementById("clinic-uazapi-id").value = clinic.id;
+  document.getElementById("clinic-uazapi-title").textContent = `UAZAPI — ${clinic.name}`;
+  document.getElementById("clinic-uazapi-url").value = "https://api.uazapi.com";
+  tokenInput.value = "";
+  tokenInput.required = !clinic.configured;
+  tokenHint.textContent = "Carregando configuração…";
+  feedback.style.display = "none";
+  saveBtn.disabled = true;
+  overlay.style.display = "flex";
+
+  try {
+    const config = await api(`/clinics/${clinic.id}/uazapi`);
+    document.getElementById("clinic-uazapi-url").value = config.baseUrl;
+    tokenInput.required = !config.configured;
+    tokenHint.textContent = config.configured
+      ? `Token atual: ${config.tokenHint}. Deixe o campo vazio para manter esse token.`
+      : "Nenhum token configurado. Informe um token para salvar.";
+  } catch {
+    closeClinicUazapiModal();
+  } finally {
+    saveBtn.disabled = false;
+  }
+}
+
+document.getElementById("clinic-uazapi-close").addEventListener("click", closeClinicUazapiModal);
+document.getElementById("clinic-uazapi-cancel").addEventListener("click", closeClinicUazapiModal);
+document.getElementById("clinic-uazapi-overlay").addEventListener("click", (event) => {
+  if (event.target.id === "clinic-uazapi-overlay") closeClinicUazapiModal();
+});
+
+document.getElementById("clinic-uazapi-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const id = document.getElementById("clinic-uazapi-id").value;
+  const baseUrl = document.getElementById("clinic-uazapi-url").value.trim();
+  const tokenInput = document.getElementById("clinic-uazapi-token");
+  const token = tokenInput.value.trim();
+  const feedback = document.getElementById("clinic-uazapi-feedback");
+  const saveBtn = document.getElementById("clinic-uazapi-save");
+  if (!id || !baseUrl || (tokenInput.required && !token)) return;
+
+  saveBtn.disabled = true;
+  feedback.style.display = "none";
+  try {
+    const result = await api(`/clinics/${id}/uazapi`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ baseUrl, ...(token ? { token } : {}) }),
+    });
+    tokenInput.value = "";
+    tokenInput.required = false;
+    const config = await api(`/clinics/${id}/uazapi`);
+    document.getElementById("clinic-uazapi-token-hint").textContent =
+      `Token atual: ${config.tokenHint}. Deixe o campo vazio para manter esse token.`;
+    feedback.textContent = result.webhookConfigured
+      ? "Credenciais validadas e webhook configurado com sucesso."
+      : "Credenciais salvas. Configure PUBLIC_BASE_URL e UAZAPI_WEBHOOK_SECRET no servidor para ativar o webhook.";
+    feedback.style.color = result.webhookConfigured ? "var(--green-text)" : "var(--text-muted)";
+    feedback.style.display = "block";
+    await loadClinicsList();
+    await loadClinics();
+  } finally {
+    saveBtn.disabled = false;
+  }
+});
 
 document.getElementById("clinic-form").addEventListener("submit", async (e) => {
   e.preventDefault();

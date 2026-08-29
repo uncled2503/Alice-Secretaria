@@ -41,8 +41,8 @@ Custo variável: uso da OpenAI + plano/instâncias da UAZAPI, além da hospedage
    curl.exe -X POST http://localhost:3010/api/staff/bootstrap-admin -H "Content-Type: application/json" -H "X-Bootstrap-Token: VALOR-DE-ADMIN_BOOTSTRAP_TOKEN" -d "{\"name\":\"Administrador\",\"username\":\"admin\",\"password\":\"USE-UMA-SENHA-FORTE\"}"
    ```
    Depois da criação, remova `ADMIN_BOOTSTRAP_TOKEN` do ambiente; a rota também se desativa automaticamente porque já existe um admin.
-7. Acessar `http://localhost:3010/admin`, entrar como admin e ir em **Personalizar Alice → Canais**.
-8. Informar a URL do servidor UAZAPI e o **token da instância**, clicar em **Salvar e validar** e depois em **Gerar QR Code**.
+7. Acessar `http://localhost:3010/admin`, entrar como admin e ir em **Personalizar Alice → Clínicas**.
+8. Na clínica desejada, clicar em **Configurar**, informar a URL do servidor UAZAPI e o **token da instância**. Depois, selecionar a clínica e abrir **Canais → Gerar QR Code**.
 9. Escanear o QR Code pelo WhatsApp do celular (Aparelhos conectados → Conectar um aparelho). A Alice configura o webhook da instância automaticamente.
 
 ## Múltiplas clínicas
@@ -50,7 +50,7 @@ O sistema atende quantas clínicas você quiser, cada uma com seu próprio núme
 - Cada clínica precisa de uma instância UAZAPI própria e de um token de instância diferente.
 - A URL/token são salvos por clínica no SQLite. O token nunca é retornado pela API do painel nem enviado ao navegador depois de salvo.
 - A URL de webhook inclui uma assinatura HMAC específica da clínica; eventos recebidos entram numa fila durável e idempotente antes de serem processados.
-- Pra cadastrar uma segunda clínica: aba **Clínicas** no painel (nome e telefone — o telefone é atualizado sozinho assim que o QR é escaneado). Depois disso, o seletor de clínica no topo do painel troca todo o contexto (contatos, CRM, chat, agenda, recontato, mensagens, regras) pra clínica escolhida.
+- Pra cadastrar uma segunda clínica: aba **Clínicas** no painel (nome e telefone — o telefone é atualizado sozinho assim que o QR é escaneado). Na mesma lista, **Configurar/Trocar token** permite administrar a instância UAZAPI daquela clínica sem trocar o contexto do painel. Depois disso, o seletor de clínica no topo troca todo o contexto (contatos, CRM, chat, agenda, recontato, mensagens, regras) pra clínica escolhida.
 - Cada clínica tem seus próprios procedimentos, funil, regras e mensagens — totalmente isolados. Depois de cadastrar uma clínica nova, adicione os procedimentos dela na aba **Procedimentos** antes de conectar o WhatsApp — sem isso, a Alice não tem o que oferecer.
 
 ## Painel administrativo (`/admin`)
@@ -73,7 +73,7 @@ Seções principais na sidebar:
   - **Histórico**: registro pesquisável das atividades importantes da clínica e de quem realizou cada ação.
   - **Funil**: adicionar, renomear, recolorir, reordenar ou remover etapas do CRM — remover realoca os pacientes daquela etapa pra primeira restante.
   - **Canais**: conexão do WhatsApp da clínica — mostra status (conectado/conectando/desconectado), gera o QR Code e permite desconectar.
-  - **Clínicas**: cadastra clínicas novas (nome, WhatsApp). O seletor no topo da sidebar troca qual clínica as outras abas mostram.
+  - **Clínicas**: cadastra clínicas novas (nome, WhatsApp) e permite configurar ou trocar o token UAZAPI individual de cada uma. O seletor no topo da sidebar troca qual clínica as outras abas mostram.
   - **Personalizar Alice**: regras recomendadas, mensagens prontas, FAQ, identidade, ajustes de comportamento e roteiros de conversa que entram no contexto da IA.
   - **API Externa**: reservada para uma integração futura; é a única dessas abas que ainda não possui implementação funcional.
 
@@ -99,9 +99,9 @@ A integração segue a [documentação oficial uazapiGO](https://docs.uazapi.com
 1. No painel da UAZAPI, crie uma instância para a clínica.
 2. Copie a URL do servidor, por exemplo `https://seusubdominio.uazapi.com`.
 3. Copie o **token da instância**. Não use `admintoken`: ele serve para administração do servidor e é mais sensível.
-4. Na Alice, selecione a clínica e abra **Personalizar Alice → Canais**.
-5. Cole URL e token, clique em **Salvar e validar**. A Alice consulta `/instance/status` antes de aceitar as credenciais.
-6. Clique em **Gerar QR Code** e escaneie pelo celular.
+4. Na Alice, abra **Personalizar Alice → Clínicas** e clique em **Configurar** na clínica correspondente.
+5. Cole URL e token e clique em **Validar e salvar**. A Alice consulta `/instance/status` antes de aceitar as credenciais. Para trocar apenas a URL mantendo o token atual, deixe o campo de token vazio.
+6. Selecione a clínica no topo, abra **Canais**, clique em **Gerar QR Code** e escaneie pelo celular.
 7. O painel passa a consultar o status remoto. Não existe mais pasta de sessão nem proxy no servidor da Alice; a sessão fica na UAZAPI.
 
 ### Webhook e segurança
@@ -123,7 +123,7 @@ A rota é pública porque precisa ser chamada pela UAZAPI, mas exige assinatura 
 
 ### Diagnóstico
 
-- **“UAZAPI não configurada”**: salve URL e token na aba Canais.
+- **“UAZAPI não configurada”**: salve URL e token em **Clínicas → Configurar** ou na aba Canais da clínica selecionada.
 - **UAZAPI HTTP 401**: token de instância inválido ou pertencente a outro servidor.
 - **Credenciais salvas, mas webhook pendente**: confira `PUBLIC_BASE_URL` e `UAZAPI_WEBHOOK_SECRET`, faça novo deploy e salve novamente.
 - **QR não aparece**: consulte a própria instância no painel UAZAPI; a Alice apenas exibe o `qrcode` retornado por `/instance/status`.
@@ -147,7 +147,7 @@ A UAZAPI continua sendo uma integração não oficial do WhatsApp. Use preferenc
 6. **Domínio**: adicione o domínio/subdomínio, ative HTTPS e use exatamente essa origem em `PUBLIC_BASE_URL`.
 7. **Réplicas**: deixe em **1** — SQLite e o worker da fila de webhook pressupõem um único processo.
 8. Deploy. O `npm start` roda `prisma migrate deploy` antes de iniciar a aplicação.
-9. Entre como admin, selecione cada clínica e cadastre URL/token da instância em **Canais**.
+9. Entre como admin e, em **Clínicas**, cadastre a URL/token da instância de cada clínica.
 10. Gere e leia o QR. A UAZAPI preserva a sessão; deploys da Alice não exigem novo pareamento.
 
 Dentro do EasyPanel **não precisa do pm2** — o próprio Docker/EasyPanel reinicia o container se o processo cair.
