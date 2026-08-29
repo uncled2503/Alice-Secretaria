@@ -3196,12 +3196,20 @@ async function loadImportStatus() {
     statsWrap.style.display = "none";
   }
 
-  if (info.status === "running") {
+  // Uma importação "running" parada há mais de 20 min é de um processo que
+  // morreu (deploy/restart) — o servidor deixa disparar de novo, então o botão
+  // também precisa voltar.
+  const runningStale = info.status === "running" && info.updatedAt
+    && Date.now() - new Date(info.updatedAt).getTime() > 20 * 60 * 1000;
+
+  if (info.status === "running" && !runningStale) {
     statusEl.textContent = "Importando… isso pode levar alguns minutos.";
     importBtn.disabled = true;
-  } else if (info.status === "failed") {
+  } else if (info.status === "failed" || runningStale) {
     importBtn.disabled = !state.channelConnected;
-    statusEl.textContent = "A importação falhou. Verifique a conexão e tente novamente.";
+    statusEl.textContent = runningStale
+      ? "A importação anterior não finalizou. Clique para tentar de novo."
+      : "A importação falhou. Verifique a conexão e tente novamente.";
   } else {
     importBtn.disabled = !state.channelConnected;
     statusEl.textContent = info.status === "completed" ? "Importação concluída." : "";

@@ -516,6 +516,7 @@ export async function processUazapiWebhookQueue(): Promise<void> {
 }
 
 export async function startUazapiWebhookWorker(): Promise<void> {
+  await resetStaleHistoryImports();
   await prisma.uazapiWebhookEvent.updateMany({ where: { status: "processing" }, data: { status: "pending" } });
   await prisma.uazapiWebhookEvent.deleteMany({
     where: { status: "done", createdAt: { lt: new Date(Date.now() - 7 * 24 * 60 * 60_000) } },
@@ -602,6 +603,9 @@ async function runHistoryImport(clinicId: string): Promise<void> {
       const pagination = record(page.pagination);
       const total = Number(pagination?.totalRecords ?? 0);
       offset += chats.length;
+      // Heartbeat: mantem importUpdatedAt fresco pra uma importacao longa e
+      // legitima nao ser confundida com uma presa (ver IMPORT_STALE_MS).
+      await prisma.clinic.update({ where: { id: clinicId }, data: { importUpdatedAt: new Date() } });
       if (chats.length < limit || (total > 0 && offset >= total)) break;
     }
 
@@ -616,8 +620,32 @@ async function runHistoryImport(clinicId: string): Promise<void> {
   }
 }
 
+// Uma importacao roda em background e so pode terminar em "completed"/"failed".
+// Se o processo morre no meio (deploy, restart), o status fica preso em
+// "running" e trava o botao. Depois de IMPORT_STALE_MS sem heartbeat tratamos
+// como abandonada e deixamos disparar de novo.
+const IMPORT_STALE_MS = 20 * 60_000;
+
 export async function triggerHistoryImport(clinicId: string): Promise<void> {
   await clinicCredentials(clinicId);
+  const clinic = await prisma.clinic.findUniqueOrThrow({
+    where: { id: clinicId },
+    select: { importStatus: true, importUpdatedAt: true },
+  });
+  const sinceUpdate = Date.now() - (clinic.importUpdatedAt?.getTime() ?? 0);
+  if (clinic.importStatus === "running" && sinceUpdate < IMPORT_STALE_MS) {
+    throw new Error("Uma importacao ja esta em andamento. Aguarde alguns minutos e tente de novo.");
+  }
   await prisma.clinic.update({ where: { id: clinicId }, data: { importStatus: "running", importStats: null, importUpdatedAt: new Date() } });
   void runHistoryImport(clinicId).catch((error) => console.error(`[UAZAPI] Importacao da clinica ${clinicId} falhou:`, error));
+}
+
+// Toda "running" encontrada no boot foi abandonada por um processo que morreu -
+// nenhuma importacao sobrevive a um restart. Chamado junto do worker de webhook.
+export async function resetStaleHistoryImports(): Promise<void> {
+  const { count } = await prisma.clinic.updateMany({
+    where: { importStatus: "running" },
+    data: { importStatus: "failed", importUpdatedAt: new Date() },
+  });
+  if (count > 0) console.warn(`[UAZAPI] ${count} importacao(oes) presa(s) em "running" marcada(s) como falha no boot`);
 }
