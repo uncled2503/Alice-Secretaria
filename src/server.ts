@@ -1,4 +1,5 @@
 import "dotenv/config";
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import express from "express";
@@ -74,6 +75,59 @@ app.use(
 // Site institucional (landing page) servido na raiz. Imagens da marca ficam
 // em public/assets e sao expostas em /assets pra landing e painel usarem.
 app.use("/assets", express.static(path.join(__dirname, "..", "public", "assets"), { maxAge: "7d" }));
+
+// ---------------------------------------------------------------------------
+// SEO: canonical, Open Graph, sitemap e robots dependem do endereco publico
+// real. Em producao ele vem de PUBLIC_BASE_URL; sem essa variavel, deduzimos
+// do proprio request (o proxy reverso manda X-Forwarded-Proto/Host). O
+// index.html da landing tem o token %%BASE_URL%%, trocado aqui na entrega.
+// ---------------------------------------------------------------------------
+const CONFIGURED_BASE_URL = process.env.PUBLIC_BASE_URL?.trim().replace(/\/+$/, "");
+const SITE_INDEX_PATH = path.join(__dirname, "..", "public", "site", "index.html");
+
+function siteBaseUrl(req: express.Request): string {
+  if (CONFIGURED_BASE_URL) return CONFIGURED_BASE_URL;
+  const forwardedProto = String(req.headers["x-forwarded-proto"] ?? "").split(",")[0].trim();
+  const proto = forwardedProto || req.protocol || "https";
+  const host = req.get("host") ?? "localhost";
+  return `${proto}://${host}`;
+}
+
+let siteIndexTemplate: string | null = null;
+function renderSiteIndex(req: express.Request): string {
+  if (siteIndexTemplate === null || process.env.NODE_ENV !== "production") {
+    siteIndexTemplate = fs.readFileSync(SITE_INDEX_PATH, "utf8");
+  }
+  return siteIndexTemplate.split("%%BASE_URL%%").join(siteBaseUrl(req));
+}
+
+app.get(["/", "/index.html"], (req, res) => {
+  res.set("Cache-Control", "public, max-age=300");
+  res.type("html").send(renderSiteIndex(req));
+});
+
+app.get("/robots.txt", (req, res) => {
+  res.type("text/plain").send(
+    ["User-agent: *", "Disallow: /admin", "Disallow: /api/", "", `Sitemap: ${siteBaseUrl(req)}/sitemap.xml`, ""].join("\n"),
+  );
+});
+
+app.get("/sitemap.xml", (req, res) => {
+  const base = siteBaseUrl(req);
+  const lastmod = new Date().toISOString().slice(0, 10);
+  res.type("application/xml").send(
+    `<?xml version="1.0" encoding="UTF-8"?>\n` +
+      `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
+      `  <url>\n` +
+      `    <loc>${base}/</loc>\n` +
+      `    <lastmod>${lastmod}</lastmod>\n` +
+      `    <changefreq>weekly</changefreq>\n` +
+      `    <priority>1.0</priority>\n` +
+      `  </url>\n` +
+      `</urlset>\n`,
+  );
+});
+
 app.use(
   "/",
   express.static(path.join(__dirname, "..", "public", "site"), {
