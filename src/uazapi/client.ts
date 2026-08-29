@@ -77,6 +77,27 @@ async function clinicCredentials(clinicId: string): Promise<UazapiCredentials> {
   return { baseUrl: normalizeUazapiBaseUrl(clinic.uazapiBaseUrl), token: clinic.uazapiToken };
 }
 
+// Traduz as falhas mais comuns de configuracao (URL do servidor errada ou
+// token que nao pertence aquela instancia) numa mensagem acionavel. A UAZAPI
+// hospeda cada conta num subdominio proprio: um token valido em um servidor
+// responde 401 "Invalid token." em outro, e um host inexistente responde 404.
+function explainCredentialError(error: unknown, baseUrl: string): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/HTTP 401/.test(message)) {
+    return new Error(
+      `A UAZAPI recusou o token (401). Confirme no painel da UAZAPI que ${baseUrl} e a URL exata do ` +
+        "servidor dessa instancia e que voce colou o token da instancia (nao o token de administrador), sem espacos."
+    );
+  }
+  if (/HTTP 404/.test(message)) {
+    return new Error(
+      `${baseUrl} nao respondeu como um servidor UAZAPI (404). Use a URL do seu servidor no painel, ` +
+        "no formato https://seusubdominio.uazapi.com."
+    );
+  }
+  return error instanceof Error ? error : new Error(message);
+}
+
 function uazapiError(status: number, body: unknown): Error {
   const data = record(body);
   const message = textValue(
@@ -229,7 +250,12 @@ export async function saveUazapiConfig(
   if (!token) throw new Error("Informe o token da instancia UAZAPI");
 
   const credentials = { baseUrl, token };
-  const status = normalizeStatusResponse(await request(credentials, "/instance/status"));
+  let status: UazapiConnectionStatus;
+  try {
+    status = normalizeStatusResponse(await request(credentials, "/instance/status"));
+  } catch (error) {
+    throw explainCredentialError(error, baseUrl);
+  }
   try {
     await prisma.clinic.update({ where: { id: clinicId }, data: { uazapiBaseUrl: baseUrl, uazapiToken: token } });
   } catch (error) {
@@ -257,7 +283,7 @@ export async function getUazapiConfig(clinicId: string): Promise<{ configured: b
   });
   return {
     configured: !!(clinic.uazapiBaseUrl && clinic.uazapiToken),
-    baseUrl: clinic.uazapiBaseUrl ?? "https://api.uazapi.com",
+    baseUrl: clinic.uazapiBaseUrl ?? "",
     tokenHint: clinic.uazapiToken ? `••••${clinic.uazapiToken.slice(-4)}` : null,
   };
 }

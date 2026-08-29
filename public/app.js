@@ -112,6 +112,7 @@ async function api(path, options = {}) {
     }
     const err = new Error(`API ${path} -> ${res.status}`);
     err.status = res.status;
+    err.detail = detail || "";
     throw err;
   }
   return res.json();
@@ -2733,7 +2734,7 @@ async function openClinicUazapiModal(clinic) {
 
   document.getElementById("clinic-uazapi-id").value = clinic.id;
   document.getElementById("clinic-uazapi-title").textContent = `UAZAPI — ${clinic.name}`;
-  document.getElementById("clinic-uazapi-url").value = "https://api.uazapi.com";
+  document.getElementById("clinic-uazapi-url").value = "";
   tokenInput.value = "";
   tokenInput.required = !clinic.configured;
   tokenHint.textContent = "Carregando configuração…";
@@ -2778,6 +2779,7 @@ document.getElementById("clinic-uazapi-form").addEventListener("submit", async (
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ baseUrl, ...(token ? { token } : {}) }),
+      silentStatuses: [400],
     });
     tokenInput.value = "";
     tokenInput.required = false;
@@ -2791,6 +2793,11 @@ document.getElementById("clinic-uazapi-form").addEventListener("submit", async (
     feedback.style.display = "block";
     await loadClinicsList();
     await loadClinics();
+  } catch (error) {
+    if (error.status !== 400) throw error;
+    feedback.textContent = error.detail || "Não foi possível validar as credenciais da UAZAPI.";
+    feedback.style.color = "#b91c1c";
+    feedback.style.display = "block";
   } finally {
     saveBtn.disabled = false;
   }
@@ -3083,7 +3090,7 @@ async function loadUazapiConfig() {
   if (state.staff?.role !== "admin") return;
 
   const config = await api("/whatsapp/config");
-  document.getElementById("channel-uazapi-url").value = config.baseUrl || "https://api.uazapi.com";
+  document.getElementById("channel-uazapi-url").value = config.baseUrl || "";
   const tokenInput = document.getElementById("channel-uazapi-token");
   tokenInput.value = "";
   tokenInput.placeholder = config.configured && config.tokenHint
@@ -3229,12 +3236,16 @@ document.getElementById("btn-channel-uazapi-save").addEventListener("click", asy
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ baseUrl, ...(token ? { token } : {}) }),
+      silentStatuses: [400],
     });
     statusEl.textContent = result.webhookConfigured
       ? "Credenciais e webhook configurados."
       : "Credenciais salvas; falta configurar PUBLIC_BASE_URL/UAZAPI_WEBHOOK_SECRET no servidor.";
     await loadUazapiConfig();
     await loadChannelStatus();
+  } catch (error) {
+    if (error.status !== 400) throw error;
+    statusEl.textContent = error.detail || "Não foi possível validar as credenciais da UAZAPI.";
   } finally {
     button.disabled = false;
     button.textContent = "Salvar e validar";

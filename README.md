@@ -124,7 +124,7 @@ A rota é pública porque precisa ser chamada pela UAZAPI, mas exige assinatura 
 ### Diagnóstico
 
 - **“UAZAPI não configurada”**: salve URL e token em **Clínicas → Configurar** ou na aba Canais da clínica selecionada.
-- **UAZAPI HTTP 401**: token de instância inválido ou pertencente a outro servidor.
+- **UAZAPI recusou o token (401)**: a URL do servidor e o token precisam ser da **mesma** instância. Cada conta fica num subdomínio próprio (`https://seusubdominio.uazapi.com`); um token válido em um servidor responde `401 Invalid token.` em outro. Use o token da instância (não o de administrador) e sem espaços.
 - **Credenciais salvas, mas webhook pendente**: confira `PUBLIC_BASE_URL` e `UAZAPI_WEBHOOK_SECRET`, faça novo deploy e salve novamente.
 - **QR não aparece**: consulte a própria instância no painel UAZAPI; a Alice apenas exibe o `qrcode` retornado por `/instance/status`.
 - **Mensagens chegam na UAZAPI, mas não na Alice**: veja `GET /webhook/errors` na UAZAPI e confirme que a URL pública responde HTTPS.
