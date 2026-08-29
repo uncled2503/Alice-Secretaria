@@ -290,11 +290,22 @@ export async function getUazapiConfig(clinicId: string): Promise<{ configured: b
 
 export async function connectClinic(clinicId: string): Promise<void> {
   const credentials = await clinicCredentials(clinicId);
-  await configureWebhook(clinicId, credentials);
-  await request(credentials, "/instance/connect", {
-    method: "POST",
-    body: JSON.stringify({ browser: "auto" }),
-  });
+  // O webhook (recepcao de mensagens) depende de PUBLIC_BASE_URL/UAZAPI_WEBHOOK_SECRET
+  // no servidor. Se faltar, ainda assim geramos o QR: conectar o WhatsApp e um passo
+  // independente e o webhook pode ser ajustado depois sem reparear.
+  try {
+    await configureWebhook(clinicId, credentials);
+  } catch (error) {
+    console.warn(`[UAZAPI] QR gerado para ${clinicId} sem webhook configurado:`, error);
+  }
+  try {
+    await request(credentials, "/instance/connect", {
+      method: "POST",
+      body: JSON.stringify({ browser: "auto" }),
+    });
+  } catch (error) {
+    throw explainCredentialError(error, credentials.baseUrl);
+  }
   statusCache.delete(clinicId);
 }
 

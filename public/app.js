@@ -3192,8 +3192,19 @@ async function loadImportStatus() {
 document.getElementById("btn-channel-import").addEventListener("click", async () => {
   const msg = "Importar os contatos e as conversas dos últimos 7 dias armazenados pela UAZAPI? O WhatsApp continuará conectado.";
   if (!(await showConfirm(msg))) return;
-  await api("/whatsapp/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
-  await loadChannelStatus();
+  const statusEl = document.getElementById("channel-import-status");
+  try {
+    await api("/whatsapp/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+      silentStatuses: [400],
+    });
+    await loadChannelStatus();
+  } catch (error) {
+    if (error.status !== 400) throw error;
+    statusEl.textContent = error.detail || "Não foi possível iniciar a importação.";
+  }
 });
 
 function startChannelPolling() {
@@ -3211,14 +3222,42 @@ function stopChannelPolling() {
 }
 
 document.getElementById("btn-channel-connect").addEventListener("click", async () => {
-  await api("/whatsapp/connect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
-  await loadChannelStatus();
+  const btn = document.getElementById("btn-channel-connect");
+  const errorEl = document.getElementById("channel-last-error");
+  btn.disabled = true;
+  errorEl.textContent = "";
+  try {
+    await api("/whatsapp/connect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+      silentStatuses: [400],
+    });
+    await loadChannelStatus();
+  } catch (error) {
+    if (error.status !== 400) throw error;
+    errorEl.textContent = error.detail || "Não foi possível gerar o QR Code.";
+  } finally {
+    btn.disabled = false;
+  }
 });
 
 document.getElementById("btn-channel-disconnect").addEventListener("click", async () => {
   if (!await showConfirm("Desconectar o WhatsApp dessa clínica? Vai precisar escanear o QR Code de novo pra reconectar.")) return;
-  await api("/whatsapp/disconnect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
-  await loadChannelStatus();
+  const errorEl = document.getElementById("channel-last-error");
+  errorEl.textContent = "";
+  try {
+    await api("/whatsapp/disconnect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+      silentStatuses: [400],
+    });
+    await loadChannelStatus();
+  } catch (error) {
+    if (error.status !== 400) throw error;
+    errorEl.textContent = error.detail || "Não foi possível desconectar.";
+  }
 });
 
 document.getElementById("btn-channel-uazapi-save").addEventListener("click", async () => {

@@ -476,8 +476,12 @@ apiRouter.post(
   "/whatsapp/connect",
   asyncRoute(async (req, res) => {
     const clinic = await getClinic(req);
-    await connectClinic(clinic.id);
-    res.json({ ok: true });
+    try {
+      await connectClinic(clinic.id);
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Falha ao gerar o QR Code" });
+    }
   })
 );
 
@@ -485,8 +489,12 @@ apiRouter.post(
   "/whatsapp/disconnect",
   asyncRoute(async (req, res) => {
     const clinic = await getClinic(req);
-    await disconnectClinic(clinic.id);
-    res.json({ ok: true });
+    try {
+      await disconnectClinic(clinic.id);
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Falha ao desconectar" });
+    }
   })
 );
 
