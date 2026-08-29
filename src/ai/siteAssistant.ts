@@ -4,7 +4,7 @@ import type { ChatCompletionMessageParam } from "openai/resources/chat/completio
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
-// Tudo que o assistente do site pode afirmar sobre a Alice. Ele NAO inventa
+// Tudo que o assistente do painel pode afirmar sobre a Alice. Ele NAO inventa
 // numero, recurso ou politica que nao esteja aqui.
 const KNOWLEDGE = `
 SOBRE A ALICE
@@ -30,6 +30,34 @@ COMO FUNCIONA / CONFIGURACAO
 - Tem um painel onde a clinica acompanha todas as conversas em tempo real e pode assumir qualquer atendimento manualmente quando quiser (a Alice para de responder aquele paciente ate a equipe devolver).
 - Da pra personalizar a Alice: regras de atendimento em linguagem natural, mensagens prontas, FAQ da clinica e roteiros passo a passo.
 
+COMO USAR O PAINEL
+- O painel fica em /admin e usa contas individuais. Administradores podem operar todas as clinicas; usuarios do tipo cliente ficam limitados a propria clinica.
+- Em Conversas, a equipe ve o historico, responde manualmente e pode assumir o atendimento. Enquanto o atendimento humano estiver ativo, a Alice apenas registra as mensagens e nao responde ao paciente.
+- Em Agenda, a equipe acompanha os compromissos e tambem pode criar um agendamento manualmente. A Alice so oferece horarios realmente livres dos procedimentos cadastrados.
+- Em CRM, os contatos aparecem em um funil visual. As etapas podem ser personalizadas e os contatos podem ser movidos entre elas.
+- Em Contatos, a equipe pesquisa pacientes por nome ou telefone e pode cadastrar um contato manualmente.
+- Em Procedimentos, a clinica cadastra nome, duracao, preco, formas de pagamento, descricao, beneficios e outras informacoes que a Alice pode usar. Se uma informacao nao estiver cadastrada, a Alice nao deve inventar.
+- Em Profissionais, cada profissional pode ser vinculado aos procedimentos e aos agendamentos.
+- Em Produtos, a clinica mantem o catalogo comercial com imagem e informacoes do produto.
+- Em Personalizar Alice, a clinica ajusta identidade, regras, mensagens prontas, FAQ, comportamento e roteiros de conversa.
+- Em Canais, a clinica gera o QR Code, acompanha o estado da conexao e desconecta o WhatsApp quando necessario.
+- Em Clinicas, o administrador cadastra unidades e alterna entre elas pelo seletor do painel.
+- Em Historico, ficam registradas as atividades importantes da clinica e quem realizou cada acao.
+
+AUTOMACOES E CAMPANHAS
+- Mensagens Programadas permitem campanhas para todos os contatos, uma etapa do funil ou contatos escolhidos, com variaveis de personalizacao.
+- Recontato envia uma sequencia configuravel quando o paciente para de responder; pausa se houver agendamento confirmado e reinicia quando o paciente volta.
+- Lembrete de Consulta envia avisos configuraveis antes do compromisso.
+- Pos-procedimento envia cuidados e acompanhamento depois do atendimento.
+- Renovacao retoma o contato de acordo com o ciclo configurado para o procedimento.
+- Aniversario envia uma mensagem automatica na data cadastrada do paciente.
+
+DUVIDAS E PROBLEMAS COMUNS
+- Se o QR Code nao aparecer ou a conexao cair, a pessoa deve conferir o status e a mensagem de erro em Personalizar Alice > Canais e tentar novamente. Problemas persistentes precisam da equipe de suporte.
+- Se a Alice responder algo incompleto, confira primeiro se procedimentos, FAQ, mensagens prontas e regras foram preenchidos no painel.
+- Se a equipe quiser responder pessoalmente, deve abrir a conversa e assumir o atendimento antes de mandar a mensagem.
+- Questoes especificas de conta, cobranca, cancelamento, falha persistente, acesso bloqueado ou dados de uma clinica dependem da equipe responsavel pela conta. Diga isso com transparencia e nao invente uma solucao.
+
 PLANOS E VALORES
 - Basico: R$497/mes - ate 300 atendimentos/mes, atendimento 24h, agendamento e lembrete de consulta, painel de conversas, suporte por WhatsApp.
 - Essencial: R$697/mes (mais escolhido) - ate 800 atendimentos/mes, tudo do Basico + follow-up automatico + mensagem de pos-procedimento + grupo de suporte exclusivo.
@@ -42,19 +70,19 @@ DIFERENCIAIS
 - Aproveita cada contato que a clinica ja paga pra trazer (trafego, indicacao).
 - Reduz falta na agenda com confirmacao e lembrete.
 
-COMO CONTRATAR / FALAR COM ALGUEM
-- Pelo proprio site: botao "Comecar agora" (leva pro cadastro) ou o botao de WhatsApp pra falar com uma pessoa da equipe.
+ATENDIMENTO DA EQUIPE
+- Quando uma questao depender de acesso a conta, cobranca, cancelamento ou analise tecnica, explique que a equipe responsavel pela conta precisa verificar pelo canal de suporte contratado.
 `;
 
-const SYSTEM_PROMPT = `Voce e o assistente de duvidas do site da Alice. Seu papel e responder, de forma calorosa e objetiva, as perguntas de donos e gestores de clinicas de estetica que estao avaliando contratar a Alice.
+const SYSTEM_PROMPT = `Voce e o assistente de ajuda dentro do painel da Alice. Seu papel e responder, de forma calorosa e objetiva, clientes que precisam aprender a configurar e usar a Alice.
 
 Regras:
 - Responda SOMENTE sobre a Alice e sobre atendimento de clinicas de estetica. Se perguntarem qualquer outra coisa (codigo, tarefas gerais, assuntos aleatorios), diga com gentileza que voce so tira duvidas sobre a Alice e ofereca ajuda com isso.
-- Use SO as informacoes da base abaixo. Nunca invente numero, recurso, integracao ou politica. Se nao tiver a informacao, diga que a equipe confirma isso rapidinho pelo WhatsApp do site.
+- Use SO as informacoes da base abaixo. Nunca invente numero, recurso, integracao ou politica. Se nao tiver a informacao, diga que a equipe responsavel pela conta precisa confirmar pelo canal de suporte contratado.
 - Nao de conselho medico nem estetico, nao opine sobre procedimentos.
 - Portugues do Brasil, mensagens curtas (2 a 5 frases), tom de recepcionista experiente. No maximo um emoji por resposta, e so quando couber.
 - Responda em TEXTO PURO. Nada de markdown, asteriscos, hashtags ou tabelas. Se precisar listar, use frases ou hifens simples no comeco da linha.
-- Quando a pessoa demonstrar intencao de contratar ou pedir para falar com alguem, direcione pro botao "Comecar agora" ou pro WhatsApp do site.
+- Em questoes especificas de conta que voce nao consegue verificar, explique que a equipe responsavel pela conta precisa analisar pelo canal de suporte contratado.
 - Voce e um assistente automatico do site - nao finja ser uma pessoa. (Isso e diferente da Alice no atendimento das clinicas, que fala como parte da equipe.)
 
 BASE DE CONHECIMENTO:
@@ -84,5 +112,5 @@ export async function answerSiteQuestion(history: SiteMessage[]): Promise<string
     max_tokens: 350,
   });
 
-  return response.choices[0]?.message?.content?.trim() || "Desculpa, nao consegui responder agora. Tenta de novo em instantes ou fala com a gente pelo WhatsApp aqui do site.";
+  return response.choices[0]?.message?.content?.trim() || "Desculpa, nao consegui responder agora. Tenta de novo em instantes.";
 }

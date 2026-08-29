@@ -3252,4 +3252,94 @@ window.addEventListener("resize", () => {
   }
 });
 
+// --- Assistente de ajuda do painel (a rota exige a mesma sessao do usuario) ---
+(function initPanelAssistant() {
+  const fab = document.getElementById("panel-ai-fab");
+  const windowEl = document.getElementById("panel-ai-window");
+  const closeButton = document.getElementById("panel-ai-close");
+  const messagesEl = document.getElementById("panel-ai-messages");
+  const form = document.getElementById("panel-ai-form");
+  const input = document.getElementById("panel-ai-text");
+  const submitButton = form.querySelector('button[type="submit"]');
+  const history = [];
+  let greeted = false;
+  let busy = false;
+
+  function scrollMessages() {
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function addAssistantMessage(role, text) {
+    const message = document.createElement("div");
+    message.className = `panel-ai-message panel-ai-message--${role}`;
+    message.textContent = text;
+    messagesEl.appendChild(message);
+    scrollMessages();
+    return message;
+  }
+
+  function setAssistantOpen(open) {
+    windowEl.classList.toggle("is-open", open);
+    fab.classList.toggle("is-open", open);
+    fab.setAttribute("aria-expanded", open ? "true" : "false");
+    windowEl.setAttribute("aria-hidden", open ? "false" : "true");
+    if (!open) return;
+
+    if (!greeted) {
+      greeted = true;
+      addAssistantMessage(
+        "assistant",
+        "Oi! Posso explicar qualquer parte do painel da Alice: conexao do WhatsApp, agenda, CRM, mensagens, automacoes e configuracoes. Como posso ajudar?"
+      );
+    }
+    setTimeout(() => input.focus(), 50);
+  }
+
+  fab.addEventListener("click", () => setAssistantOpen(!windowEl.classList.contains("is-open")));
+  closeButton.addEventListener("click", () => setAssistantOpen(false));
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && windowEl.classList.contains("is-open")) setAssistantOpen(false);
+  });
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const text = input.value.trim();
+    if (!text || busy) return;
+
+    input.value = "";
+    addAssistantMessage("user", text);
+    history.push({ role: "user", content: text });
+    busy = true;
+    input.disabled = true;
+    submitButton.disabled = true;
+
+    const typing = document.createElement("div");
+    typing.className = "panel-ai-message panel-ai-message--assistant panel-ai-typing";
+    typing.innerHTML = "<span></span><span></span><span></span>";
+    messagesEl.appendChild(typing);
+    scrollMessages();
+
+    try {
+      const result = await api("/assistant/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: history.slice(-10) }),
+        silentStatuses: [429, 502],
+      });
+      typing.remove();
+      const reply = result.reply || "Nao consegui responder agora. Tente novamente em instantes.";
+      addAssistantMessage("assistant", reply);
+      if (result.reply) history.push({ role: "assistant", content: result.reply });
+    } catch {
+      typing.remove();
+      addAssistantMessage("assistant", "Nao consegui responder agora. Tente novamente em instantes.");
+    } finally {
+      busy = false;
+      input.disabled = false;
+      submitButton.disabled = false;
+      input.focus();
+    }
+  });
+})();
+
 checkAuthAndBoot();

@@ -13,20 +13,20 @@ import { createSessionCookie, clearSessionCookie } from "./staffSession.js";
 
 export const apiRouter = Router();
 
-// --- Assistente de duvidas do site institucional (publico, sem login) ---
-// Endpoint publico que chama a OpenAI, entao PRECISA de limite por IP pra nao
-// virar um GPT gratis / alvo de abuso.
-const siteAskRateLimit = rateLimit({
+// --- Assistente de ajuda do painel (somente usuario autenticado) ---
+// Mesmo protegido por login, mantem limite por IP para conter abuso acidental
+// ou uma sessao autenticada comprometida.
+const assistantAskRateLimit = rateLimit({
   windowMs: 10 * 60 * 1000,
   limit: 25,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: "Muitas perguntas em pouco tempo. Aguarde alguns minutos ou fale com a gente pelo WhatsApp." },
+  message: { error: "Muitas perguntas em pouco tempo. Aguarde alguns minutos e tente novamente." },
 });
 
 apiRouter.post(
-  "/site/ask",
-  siteAskRateLimit,
+  "/assistant/ask",
+  assistantAskRateLimit,
   asyncRoute(async (req, res) => {
     const { messages } = (req.body ?? {}) as { messages?: unknown };
     if (!Array.isArray(messages) || messages.length === 0) {
@@ -38,7 +38,7 @@ apiRouter.post(
       const reply = await answerSiteQuestion(history);
       res.json({ reply });
     } catch (err) {
-      console.error("Falha no assistente do site:", err);
+      console.error("Falha no assistente do painel:", err);
       res.status(502).json({ error: "Nao consegui responder agora. Tenta de novo em instantes." });
     }
   })

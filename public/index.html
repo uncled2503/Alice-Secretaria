@@ -1473,6 +1473,30 @@
       </div>
     </div>
 
+    <button class="panel-ai-fab" id="panel-ai-fab" type="button" aria-label="Abrir ajuda da Alice" aria-expanded="false">
+      <span class="panel-ai-fab-label">Precisa de ajuda?</span>
+      <img src="/assets/logo-personagem.webp" alt="" />
+    </button>
+
+    <section class="panel-ai-window" id="panel-ai-window" role="dialog" aria-label="Ajuda da Alice" aria-hidden="true">
+      <header class="panel-ai-head">
+        <div class="panel-ai-identity">
+          <img src="/assets/logo-personagem.webp" alt="" />
+          <div>
+            <strong>Ajuda da Alice</strong>
+            <span>Assistente do painel · responde na hora</span>
+          </div>
+        </div>
+        <button class="panel-ai-close" id="panel-ai-close" type="button" aria-label="Fechar ajuda">&times;</button>
+      </header>
+      <div class="panel-ai-messages" id="panel-ai-messages" aria-live="polite"></div>
+      <form class="panel-ai-form" id="panel-ai-form">
+        <input id="panel-ai-text" type="text" placeholder="Como posso usar a Alice?" autocomplete="off" maxlength="500" />
+        <button type="submit">Enviar</button>
+      </form>
+      <p class="panel-ai-note">Ajuda automática sobre configuração e uso do painel.</p>
+    </section>
+
   </div>
 
   <script src="/admin/app.js"></script>
