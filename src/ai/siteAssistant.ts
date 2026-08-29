@@ -24,7 +24,7 @@ O QUE A ALICE FAZ NO ATENDIMENTO
 - Nao se apresenta como robo pro paciente: a clinica escolhe se ela fala como "parte da equipe", "secretaria da clinica" ou "secretaria de um profissional". O paciente sente que fala com a recepcao.
 
 COMO FUNCIONA / CONFIGURACAO
-- A conexao usa uma instancia UAZAPI por clinica. Um administrador cadastra a URL e o token da instancia em Canais; depois a clinica escaneia o QR Code no painel, igual ao WhatsApp Web.
+- Um administrador ativa a conexao da clinica em Canais; depois a clinica escaneia o QR Code no painel, igual ao WhatsApp Web.
 - Usa o mesmo numero de WhatsApp que a clinica ja tem. Nao precisa de chip novo nem app novo.
 - A configuracao e guiada e leva cerca de 30 minutos: procedimentos, valores, formas de pagamento, horarios e o jeito da clinica falar.
 - Tem um painel onde a clinica acompanha todas as conversas em tempo real e pode assumir qualquer atendimento manualmente quando quiser (a Alice para de responder aquele paciente ate a equipe devolver).
@@ -40,7 +40,7 @@ COMO USAR O PAINEL
 - Em Profissionais, cada profissional pode ser vinculado aos procedimentos e aos agendamentos.
 - Em Produtos, a clinica mantem o catalogo comercial com imagem e informacoes do produto.
 - Em Personalizar Alice, a clinica ajusta identidade, regras, mensagens prontas, FAQ, comportamento e roteiros de conversa.
-- Em Canais, o administrador configura e valida a instancia UAZAPI; a clinica gera o QR Code, acompanha o estado da conexao e desconecta o WhatsApp quando necessario.
+- Em Canais, o administrador ativa e valida a conexao; a clinica gera o QR Code, acompanha o estado da conexao e desconecta o WhatsApp quando necessario.
 - Em Clinicas, o administrador cadastra unidades e alterna entre elas pelo seletor do painel.
 - Em Historico, ficam registradas as atividades importantes da clinica e quem realizou cada acao.
 
@@ -53,7 +53,7 @@ AUTOMACOES E CAMPANHAS
 - Aniversario envia uma mensagem automatica na data cadastrada do paciente.
 
 DUVIDAS E PROBLEMAS COMUNS
-- Se aparecer "UAZAPI nao configurada", um administrador precisa salvar a URL e o token da instancia em Personalizar Alice > Canais. Se o QR Code nao aparecer ou a conexao cair, confira o status da instancia UAZAPI e tente novamente. Erro 401 indica token invalido. Problemas persistentes precisam da equipe de suporte.
+- Se aparecer "API nao configurada", um administrador precisa ativar a conexao em Personalizar Alice > Canais. Se o QR Code nao aparecer ou a conexao cair, tente gerar o QR Code de novo; se persistir, um administrador ou a equipe de suporte precisa verificar.
 - Se a Alice responder algo incompleto, confira primeiro se procedimentos, FAQ, mensagens prontas e regras foram preenchidos no painel.
 - Se a equipe quiser responder pessoalmente, deve abrir a conversa e assumir o atendimento antes de mandar a mensagem.
 - Questoes especificas de conta, cobranca, cancelamento, falha persistente, acesso bloqueado ou dados de uma clinica dependem da equipe responsavel pela conta. Diga isso com transparencia e nao invente uma solucao.

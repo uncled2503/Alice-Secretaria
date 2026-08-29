@@ -3099,6 +3099,12 @@ async function loadUazapiConfig() {
   statusEl.textContent = config.configured ? "Credenciais configuradas." : "Ainda não configurada.";
 }
 
+// Admin vê o erro real (pode citar o provedor, a URL ou o token); conta de
+// clínica vê só uma orientação genérica.
+function channelErrorText(error, fallback) {
+  return state.staff?.role === "admin" && error.detail ? error.detail : fallback;
+}
+
 async function loadChannelStatus() {
   const status = await api("/whatsapp/status");
   const badge = document.getElementById("channel-status-badge");
@@ -3111,7 +3117,7 @@ async function loadChannelStatus() {
   state.channelConnected = !!status.connected;
 
   if (!status.configured) {
-    badge.textContent = "UAZAPI não configurada";
+    badge.textContent = "API não configurada";
     badge.className = "badge badge-red";
     qrWrap.style.display = "none";
     qrLoading.style.display = "none";
@@ -3143,8 +3149,23 @@ async function loadChannelStatus() {
     disconnectBtn.style.display = "none";
   }
 
+  // Contas de clínica não veem detalhes do provedor (URL/token/erros crus da
+  // API): só uma orientação genérica. Admin vê a mensagem real pra diagnóstico.
   const errorEl = document.getElementById("channel-last-error");
-  if (errorEl) errorEl.textContent = !status.connecting && !status.connected ? status.lastError || "" : "";
+  if (errorEl) {
+    const isAdmin = state.staff?.role === "admin";
+    if (!status.configured) {
+      errorEl.textContent = isAdmin
+        ? "Configure as credenciais da UAZAPI acima."
+        : "Peça a um administrador para configurar.";
+    } else if (!status.connecting && !status.connected && status.lastError) {
+      errorEl.textContent = isAdmin
+        ? status.lastError
+        : "Não foi possível conectar. Um administrador precisa verificar a conexão.";
+    } else {
+      errorEl.textContent = "";
+    }
+  }
 
   await loadImportStatus();
 }
@@ -3190,7 +3211,7 @@ async function loadImportStatus() {
 }
 
 document.getElementById("btn-channel-import").addEventListener("click", async () => {
-  const msg = "Importar os contatos e as conversas dos últimos 7 dias armazenados pela UAZAPI? O WhatsApp continuará conectado.";
+  const msg = "Importar os contatos e as conversas dos últimos 7 dias do WhatsApp? A conexão continuará ativa.";
   if (!(await showConfirm(msg))) return;
   const statusEl = document.getElementById("channel-import-status");
   try {
@@ -3203,7 +3224,7 @@ document.getElementById("btn-channel-import").addEventListener("click", async ()
     await loadChannelStatus();
   } catch (error) {
     if (error.status !== 400) throw error;
-    statusEl.textContent = error.detail || "Não foi possível iniciar a importação.";
+    statusEl.textContent = channelErrorText(error, "Não foi possível iniciar a importação.");
   }
 });
 
@@ -3236,7 +3257,7 @@ document.getElementById("btn-channel-connect").addEventListener("click", async (
     await loadChannelStatus();
   } catch (error) {
     if (error.status !== 400) throw error;
-    errorEl.textContent = error.detail || "Não foi possível gerar o QR Code.";
+    errorEl.textContent = channelErrorText(error, "Não foi possível gerar o QR Code. Um administrador precisa verificar a conexão.");
   } finally {
     btn.disabled = false;
   }
@@ -3256,7 +3277,7 @@ document.getElementById("btn-channel-disconnect").addEventListener("click", asyn
     await loadChannelStatus();
   } catch (error) {
     if (error.status !== 400) throw error;
-    errorEl.textContent = error.detail || "Não foi possível desconectar.";
+    errorEl.textContent = channelErrorText(error, "Não foi possível desconectar.");
   }
 });
 
@@ -3357,7 +3378,7 @@ const TOUR_STEPS = [
   { tab: "settings", sub: "broadcasts", target: "#sub-broadcasts", title: "Mensagens Programadas", desc: "Campanhas avulsas pra base de contatos ou um estágio específico do funil, enviadas aos poucos dentro do horário comercial." },
   { tab: "settings", sub: "followup", target: "#sub-followup", title: "Recontato", desc: "Cascata de mensagens automáticas quando um lead fica dias sem responder — reinicia sozinha se ele voltar a falar." },
   { tab: "settings", sub: "funnel", target: "#sub-funnel", title: "Funil", desc: "Configure as etapas do CRM: adicione, renomeie, recolorir ou remova." },
-  { tab: "settings", sub: "channels", target: "#sub-channels", title: "Canais", desc: "Configure a instância UAZAPI da clínica, acompanhe o status e gere o QR Code para conectar o WhatsApp." },
+  { tab: "settings", sub: "channels", target: "#sub-channels", title: "Canais", desc: "Conecte o WhatsApp da clínica: acompanhe o status e gere o QR Code para parear o número." },
   { tab: "settings", sub: "clinics", target: "#sub-clinics", title: "Clínicas", desc: "Cadastre mais clínicas, cada uma com seu próprio WhatsApp — o seletor no topo da sidebar troca entre elas." },
   { tab: "dashboard", target: "#theme-toggle", title: "Tour concluído", desc: "É só isso! Clique em \"Guia\" a qualquer momento pra rever esse tour." },
 ];

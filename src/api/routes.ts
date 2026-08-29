@@ -265,8 +265,8 @@ apiRouter.put(
         clinicId: req.params.id,
         type: "clinic_updated",
         area: "clinica",
-        title: "Credenciais UAZAPI alteradas",
-        description: "A instancia de WhatsApp da clinica foi validada pelo painel administrativo.",
+        title: "Conexão do WhatsApp atualizada",
+        description: "As credenciais de conexão do WhatsApp da clínica foram validadas pelo painel administrativo.",
         actorName: req.staff?.name ?? null,
       });
       res.json(result);
