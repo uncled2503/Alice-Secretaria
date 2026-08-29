@@ -17,6 +17,12 @@ import { prisma } from "./db/client.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
+// Em producao a Alice roda atras de um proxy reverso (EasyPanel/Traefik), que
+// injeta X-Forwarded-For/Proto. Sem isto o Express ignora esses headers e o
+// express-rate-limit reclama (ERR_ERL_UNEXPECTED_X_FORWARDED_FOR) e passa a
+// contar todo mundo pelo mesmo IP. "1" = confia so no primeiro hop (o proxy).
+app.set("trust proxy", 1);
+
 // O painel ainda usa estilos inline para componentes dinamicos, por isso
 // style-src permite unsafe-inline. Scripts continuam restritos aos arquivos
 // servidos pela propria aplicacao; a landing nao depende mais de JS inline.
