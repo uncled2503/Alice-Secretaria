@@ -15,6 +15,8 @@ import {
   enqueueWebhook,
 } from "../uazapi/client.js";
 import { getFunnelStages, generateStageId } from "../crm/stages.js";
+import { movePatientToKind, movePatientToRecovery, movePatientToStage } from "../crm/stageAutomation.js";
+import { offerFreedSlotToWaitlist } from "../scheduling/waitlist.js";
 import { logActivity, ACTIVITY_AREAS, ACTIVITY_TYPES } from "../crm/activity.js";
 import { createRuleDraft, RULE_CATEGORIES, seedDefaultRules } from "../ai/rules.js";
 import { answerSiteQuestion, type SiteMessage } from "../ai/siteAssistant.js";
@@ -768,13 +770,16 @@ apiRouter.get(
 apiRouter.post(
   "/professionals",
   asyncRoute(async (req, res) => {
-    const { name, instagram, bio, color, photoUrl, procedureIds } = req.body as {
+    const { name, instagram, bio, color, photoUrl, procedureIds, workDays, workStartHour, workEndHour } = req.body as {
       name?: string;
       instagram?: string;
       bio?: string;
       color?: string;
       photoUrl?: string;
       procedureIds?: string[];
+      workDays?: string | null;
+      workStartHour?: number | null;
+      workEndHour?: number | null;
     };
     if (!name) {
       res.status(400).json({ error: "name obrigatorio" });
@@ -790,6 +795,9 @@ apiRouter.post(
         bio: bio || null,
         color: color || null,
         photoUrl: photoUrl || null,
+        workDays: workDays || null,
+        workStartHour: workStartHour ?? null,
+        workEndHour: workEndHour ?? null,
         ...(procedureIds ? { procedures: { connect: procedureIds.map((id) => ({ id })) } } : {}),
       },
       include: { procedures: { select: { id: true, name: true } } },
@@ -804,7 +812,7 @@ apiRouter.put(
     const existing = await prisma.professional.findUniqueOrThrow({ where: { id: req.params.id } });
     if (!assertClinicAccess(req, res, existing.clinicId)) return;
 
-    const { name, instagram, bio, color, photoUrl, active, procedureIds } = req.body as {
+    const { name, instagram, bio, color, photoUrl, active, procedureIds, workDays, workStartHour, workEndHour } = req.body as {
       name?: string;
       instagram?: string;
       bio?: string;
@@ -812,6 +820,9 @@ apiRouter.put(
       photoUrl?: string;
       active?: boolean;
       procedureIds?: string[];
+      workDays?: string | null;
+      workStartHour?: number | null;
+      workEndHour?: number | null;
     };
 
     const professional = await prisma.professional.update({
@@ -823,6 +834,9 @@ apiRouter.put(
         ...(color !== undefined ? { color: color || null } : {}),
         ...(photoUrl !== undefined ? { photoUrl: photoUrl || null } : {}),
         ...(active !== undefined ? { active } : {}),
+        ...(workDays !== undefined ? { workDays: workDays || null } : {}),
+        ...(workStartHour !== undefined ? { workStartHour: workStartHour ?? null } : {}),
+        ...(workEndHour !== undefined ? { workEndHour: workEndHour ?? null } : {}),
         ...(procedureIds !== undefined ? { procedures: { set: procedureIds.map((id) => ({ id })) } } : {}),
       },
       include: { procedures: { select: { id: true, name: true } } },
@@ -1114,14 +1128,16 @@ apiRouter.post(
     const { stage } = req.body as { stage?: string };
     const patient = await prisma.patient.findUniqueOrThrow({ where: { id: req.params.id } });
     if (!assertClinicAccess(req, res, patient.clinicId)) return;
-    const stages = await getFunnelStages(patient.clinicId);
 
-    if (!stage || !stages.some((s) => s.stageId === stage)) {
+    const result = await movePatientToStage(patient.clinicId, patient.id, String(stage ?? ""), {
+      actorName: req.staff?.name ?? null,
+      note: "movido no painel",
+    });
+    if (!result.ok) {
+      const stages = await getFunnelStages(patient.clinicId);
       res.status(400).json({ error: `stage invalido, use um de: ${stages.map((s) => s.stageId).join(", ")}` });
       return;
     }
-
-    await prisma.patient.update({ where: { id: req.params.id }, data: { funnelStage: stage } });
     res.json({ ok: true });
   })
 );
@@ -1228,6 +1244,7 @@ apiRouter.get(
         id: a.id,
         scheduledAt: a.scheduledAt,
         status: a.status,
+        patientConfirmed: a.patientConfirmed,
         patient: { name: a.patient.name, phone: a.patient.phone },
         procedure: { id: a.procedureId, name: a.procedure.name, durationMin: a.procedure.durationMin },
         professional: a.professional ? { id: a.professional.id, name: a.professional.name, color: a.professional.color } : null,
@@ -1271,6 +1288,10 @@ apiRouter.post(
       "new_appointment",
       `Novo agendamento: ${patient.name ?? patient.phone} - ${appointment.procedure.name} em ${appointment.scheduledAt.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}.`
     );
+    await movePatientToKind(clinic.id, patient.id, "avaliacao_agendada", {
+      actorName: req.staff?.name ?? null,
+      note: "agendamento criado no painel",
+    });
     await logActivity({
       clinicId: clinic.id,
       type: "appointment_booked",
@@ -1290,11 +1311,12 @@ apiRouter.put(
     const existing = await prisma.appointment.findUniqueOrThrow({ where: { id: req.params.id }, include: { patient: true } });
     if (!assertClinicAccess(req, res, existing.clinicId)) return;
 
-    const { procedureId, professionalId, scheduledAt, status } = req.body as {
+    const { procedureId, professionalId, scheduledAt, status, patientConfirmed } = req.body as {
       procedureId?: string;
       professionalId?: string | null;
       scheduledAt?: string;
       status?: string;
+      patientConfirmed?: boolean;
     };
 
     const appointment = await prisma.appointment.update({
@@ -1304,17 +1326,55 @@ apiRouter.put(
         ...(professionalId !== undefined ? { professionalId: professionalId || null } : {}),
         ...(scheduledAt !== undefined ? { scheduledAt: new Date(scheduledAt) } : {}),
         ...(status !== undefined ? { status } : {}),
+        ...(patientConfirmed !== undefined
+          ? { patientConfirmed, confirmedAt: patientConfirmed ? new Date() : null }
+          : {}),
       },
       include: { procedure: true },
     });
 
     const patientLabel = existing.patient.name ?? existing.patient.phone;
     const actorName = req.staff?.name ?? null;
+    // Horario que ficou livre (cancelamento ou remarcacao) -> oferece pra lista de espera.
+    const freeUpSlot = () =>
+      offerFreedSlotToWaitlist({
+        clinicId: existing.clinicId,
+        procedureId: existing.procedureId,
+        professionalId: existing.professionalId,
+        freedAt: existing.scheduledAt,
+      });
+
     if (status === "cancelled" && existing.status !== "cancelled") {
       await notifyStaff(existing.clinicId, "cancel", `Agendamento cancelado: ${patientLabel} - ${appointment.procedure.name}.`);
       await logActivity({
         clinicId: existing.clinicId, type: "appointment_cancelled", area: "agenda",
         title: "Agendamento cancelado",
+        description: `${patientLabel} — ${appointment.procedure.name}.`, actorName,
+      });
+      // Sem outro horario futuro confirmado, o paciente volta pra recuperacao
+      // (nunca "perdido" automaticamente - cancelar nao e perder).
+      const upcoming = await prisma.appointment.findFirst({
+        where: { patientId: existing.patientId, status: "confirmed", scheduledAt: { gte: new Date() } },
+      });
+      if (!upcoming) {
+        await movePatientToRecovery(existing.clinicId, existing.patientId, { actorName, note: "agendamento cancelado" });
+      }
+      await freeUpSlot();
+    } else if (patientConfirmed === true && !existing.patientConfirmed) {
+      await notifyStaff(existing.clinicId, "confirmed", `Presenca confirmada: ${patientLabel} - ${appointment.procedure.name}.`);
+      await logActivity({
+        clinicId: existing.clinicId, type: "appointment_confirmed", area: "agenda",
+        title: "Presença confirmada pelo paciente",
+        description: `${patientLabel} — ${appointment.procedure.name}.`, actorName,
+      });
+    } else if (status === "completed" && existing.status !== "completed") {
+      await movePatientToKind(existing.clinicId, existing.patientId, "pos_procedimento", {
+        actorName,
+        note: `${appointment.procedure.name} concluído`,
+      });
+      await logActivity({
+        clinicId: existing.clinicId, type: "appointment_completed", area: "agenda",
+        title: "Atendimento concluído",
         description: `${patientLabel} — ${appointment.procedure.name}.`, actorName,
       });
     } else if (scheduledAt !== undefined && new Date(scheduledAt).getTime() !== existing.scheduledAt.getTime()) {
@@ -1329,6 +1389,7 @@ apiRouter.put(
         description: `${patientLabel} — ${appointment.procedure.name} agora em ${appointment.scheduledAt.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}.`,
         actorName,
       });
+      await freeUpSlot();
     }
 
     res.json(appointment);
@@ -1341,7 +1402,163 @@ apiRouter.delete(
     const existing = await prisma.appointment.findUniqueOrThrow({ where: { id: req.params.id } });
     if (!assertClinicAccess(req, res, existing.clinicId)) return;
 
+    const wasFutureConfirmed = existing.status === "confirmed" && existing.scheduledAt.getTime() > Date.now();
     await prisma.appointment.delete({ where: { id: req.params.id } });
+    if (wasFutureConfirmed) {
+      await offerFreedSlotToWaitlist({
+        clinicId: existing.clinicId,
+        procedureId: existing.procedureId,
+        professionalId: existing.professionalId,
+        freedAt: existing.scheduledAt,
+      });
+    }
+    res.json({ ok: true });
+  })
+);
+
+// ---- Bloqueios de agenda (feriado, folga, almoco, manutencao) ----
+apiRouter.get(
+  "/schedule-blocks",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const blocks = await prisma.scheduleBlock.findMany({
+      where: { clinicId: clinic.id },
+      orderBy: { startsAt: "asc" },
+      include: { professional: { select: { id: true, name: true } } },
+    });
+    res.json(blocks);
+  })
+);
+
+apiRouter.post(
+  "/schedule-blocks",
+  asyncRoute(async (req, res) => {
+    const { professionalId, startsAt, endsAt, reason } = req.body as {
+      professionalId?: string | null;
+      startsAt?: string;
+      endsAt?: string;
+      reason?: string;
+    };
+    if (!startsAt || !endsAt) {
+      res.status(400).json({ error: "startsAt e endsAt sao obrigatorios" });
+      return;
+    }
+    const start = new Date(startsAt);
+    const end = new Date(endsAt);
+    if (isNaN(start.getTime()) || isNaN(end.getTime()) || end <= start) {
+      res.status(400).json({ error: "intervalo invalido" });
+      return;
+    }
+
+    const clinic = await getClinic(req);
+    const block = await prisma.scheduleBlock.create({
+      data: {
+        clinicId: clinic.id,
+        professionalId: professionalId || null,
+        startsAt: start,
+        endsAt: end,
+        reason: (reason || "").slice(0, 200),
+      },
+      include: { professional: { select: { id: true, name: true } } },
+    });
+    await logActivity({
+      clinicId: clinic.id, type: "schedule_block_added", area: "agenda",
+      title: "Bloqueio de agenda criado",
+      description: `${block.professional?.name ?? "Clínica toda"} — ${start.toLocaleString("pt-BR", { timeZone: clinic.timezone || "America/Sao_Paulo" })} até ${end.toLocaleString("pt-BR", { timeZone: clinic.timezone || "America/Sao_Paulo" })}${reason ? ` (${reason})` : ""}.`,
+      actorName: req.staff?.name ?? null,
+    });
+    res.json(block);
+  })
+);
+
+apiRouter.delete(
+  "/schedule-blocks/:id",
+  asyncRoute(async (req, res) => {
+    const existing = await prisma.scheduleBlock.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, existing.clinicId)) return;
+    await prisma.scheduleBlock.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  })
+);
+
+// ---- Lista de espera ----
+apiRouter.get(
+  "/waitlist",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const entries = await prisma.waitlistEntry.findMany({
+      where: { clinicId: clinic.id, status: { in: ["waiting", "notified"] } },
+      orderBy: { createdAt: "asc" },
+      include: {
+        patient: { select: { id: true, name: true, phone: true } },
+        procedure: { select: { id: true, name: true } },
+        professional: { select: { id: true, name: true } },
+      },
+    });
+    res.json(entries);
+  })
+);
+
+apiRouter.post(
+  "/waitlist",
+  asyncRoute(async (req, res) => {
+    const { patientPhone, patientName, procedureId, professionalId, preferredNote } = req.body as {
+      patientPhone?: string;
+      patientName?: string;
+      procedureId?: string | null;
+      professionalId?: string | null;
+      preferredNote?: string;
+    };
+    if (!patientPhone) {
+      res.status(400).json({ error: "patientPhone obrigatorio" });
+      return;
+    }
+    const clinic = await getClinic(req);
+    const phone = patientPhone.replace(/\D/g, "");
+    const patient = await prisma.patient.upsert({
+      where: { clinicId_phone: { clinicId: clinic.id, phone } },
+      update: { name: patientName || undefined },
+      create: { clinicId: clinic.id, phone, name: patientName || null },
+    });
+    const entry = await prisma.waitlistEntry.create({
+      data: {
+        clinicId: clinic.id,
+        patientId: patient.id,
+        procedureId: procedureId || null,
+        professionalId: professionalId || null,
+        preferredNote: (preferredNote || "").slice(0, 200),
+      },
+      include: {
+        patient: { select: { id: true, name: true, phone: true } },
+        procedure: { select: { id: true, name: true } },
+        professional: { select: { id: true, name: true } },
+      },
+    });
+    res.json(entry);
+  })
+);
+
+apiRouter.put(
+  "/waitlist/:id",
+  asyncRoute(async (req, res) => {
+    const existing = await prisma.waitlistEntry.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, existing.clinicId)) return;
+    const { status } = req.body as { status?: string };
+    if (!status || !["waiting", "notified", "converted", "cancelled"].includes(status)) {
+      res.status(400).json({ error: "status invalido" });
+      return;
+    }
+    await prisma.waitlistEntry.update({ where: { id: req.params.id }, data: { status } });
+    res.json({ ok: true });
+  })
+);
+
+apiRouter.delete(
+  "/waitlist/:id",
+  asyncRoute(async (req, res) => {
+    const existing = await prisma.waitlistEntry.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, existing.clinicId)) return;
+    await prisma.waitlistEntry.delete({ where: { id: req.params.id } });
     res.json({ ok: true });
   })
 );

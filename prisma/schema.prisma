@@ -68,6 +68,8 @@ model Clinic {
   messageTemplates MessageTemplate[]
   faqs          ClinicFaq[]
   playbooks     Playbook[]
+  scheduleBlocks ScheduleBlock[]
+  waitlist       WaitlistEntry[]
   uazapiWebhookEvents UazapiWebhookEvent[]
 }
 
@@ -215,6 +217,7 @@ model Procedure {
 
   appointments  Appointment[]
   professionals Professional[] @relation("ProfessionalProcedures")
+  waitlist      WaitlistEntry[]
 }
 
 // Diretorio simples de profissionais da clinica (nome, foto, bio, quais
@@ -230,10 +233,16 @@ model Professional {
   color     String?  // cor de identificacao (ex: na agenda), hex
   photoUrl  String?  // data URI (base64) da foto enviada
   active    Boolean  @default(true)
+  // Agenda propria do profissional. null = herda o expediente da clinica.
+  workDays      String? // dias de atendimento (0=domingo..6=sabado), separados por virgula
+  workStartHour Int?
+  workEndHour   Int?
   createdAt DateTime @default(now())
 
-  procedures   Procedure[]   @relation("ProfessionalProcedures")
-  appointments Appointment[]
+  procedures     Procedure[]   @relation("ProfessionalProcedures")
+  appointments   Appointment[]
+  scheduleBlocks ScheduleBlock[]
+  waitlist       WaitlistEntry[]
 }
 
 // Produto fisico vendido pela clinica (ex: home care), separado de procedimentos.
@@ -257,12 +266,15 @@ model Patient {
   name          String?
   birthDate     DateTime? // data de nascimento (so dia/mes importa pro aniversario)
   funnelStage   String    @default("novo_lead") // ver src/crm/stages.ts para a lista de etapas
+  optedOut      Boolean   @default(false) // paciente pediu pra nao receber mensagens (LGPD) - trava automacoes
+  optedOutAt    DateTime?
   createdAt     DateTime  @default(now())
 
   conversations Conversation[]
   appointments  Appointment[]
   broadcastRecipients BroadcastRecipient[]
   birthdaySent  BirthdaySent[]
+  waitlist      WaitlistEntry[]
 
   @@unique([clinicId, phone])
 }
@@ -405,11 +417,49 @@ model Appointment {
   professional   Professional? @relation(fields: [professionalId], references: [id])
   scheduledAt    DateTime
   status         String        @default("confirmed") // confirmed | cancelled | completed
+  patientConfirmed Boolean     @default(false) // paciente confirmou presenca (resposta ao lembrete)
+  confirmedAt    DateTime?
   createdAt      DateTime      @default(now())
 
   reminders      ReminderSent[]
   postProcedureSent PostProcedureSent[]
   renewalSent    RenewalSent[]
+}
+
+// Bloqueio de agenda: feriado, almoco, folga, manutencao de equipamento.
+// professionalId null = bloqueia a clinica inteira nesse intervalo.
+model ScheduleBlock {
+  id             String        @id @default(cuid())
+  clinicId       String
+  clinic         Clinic        @relation(fields: [clinicId], references: [id])
+  professionalId String?
+  professional   Professional? @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+  startsAt       DateTime
+  endsAt         DateTime
+  reason         String        @default("")
+  createdAt      DateTime      @default(now())
+
+  @@index([clinicId, startsAt])
+}
+
+// Lista de espera: paciente que quis um horario indisponivel. Quando abre uma
+// vaga (cancelamento) a Alice avisa o primeiro da fila compativel.
+model WaitlistEntry {
+  id             String        @id @default(cuid())
+  clinicId       String
+  clinic         Clinic        @relation(fields: [clinicId], references: [id])
+  patientId      String
+  patient        Patient       @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  procedureId    String?
+  procedure      Procedure?    @relation(fields: [procedureId], references: [id], onDelete: SetNull)
+  professionalId String?
+  professional   Professional? @relation(fields: [professionalId], references: [id], onDelete: SetNull)
+  preferredNote  String        @default("") // "quinta de manha" - texto livre do paciente
+  status         String        @default("waiting") // waiting | notified | converted | cancelled
+  createdAt      DateTime      @default(now())
+  notifiedAt     DateTime?
+
+  @@index([clinicId, status])
 }
 
 // Lembrete automatico de consulta, configuravel (pode ter mais de um, ex: 24h

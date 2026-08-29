@@ -824,7 +824,9 @@ function renderAgendaGrid(appointments, days) {
       "div",
       { class: "agenda-appt", style: apptStyle },
       [
-        el("div", { class: "t" }, [when.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })]),
+        el("div", { class: "t" }, [
+          when.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) + (a.patientConfirmed ? " ✓" : ""),
+        ]),
         el("div", {}, [a.patient.name ?? a.patient.phone]),
         el("div", {}, [a.procedure.name]),
         a.professional ? el("div", { class: "hint", style: "margin:0" }, [a.professional.name]) : "",
@@ -868,7 +870,7 @@ async function loadAgenda() {
       el("td", {}, [a.patient.name ?? a.patient.phone]),
       el("td", {}, [a.procedure.name]),
       el("td", {}, [a.professional?.name || "-"]),
-      el("td", {}, [a.status]),
+      el("td", {}, [a.status + (a.patientConfirmed ? " · confirmado" : "")]),
     ]);
     row.addEventListener("click", () => openApptEditModal(a));
     body.appendChild(row);
@@ -885,6 +887,7 @@ function openApptEditModal(appt) {
   document.getElementById("appt-edit-when").value =
     `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}T${pad(when.getHours())}:${pad(when.getMinutes())}`;
   document.getElementById("appt-edit-status").value = appt.status;
+  document.getElementById("appt-edit-confirmed").checked = !!appt.patientConfirmed;
 
   const select = document.getElementById("appt-edit-procedure");
   select.innerHTML = "";
@@ -927,10 +930,11 @@ document.getElementById("appt-edit-form").addEventListener("submit", async (e) =
   const professionalId = document.getElementById("appt-edit-professional").value;
   const when = document.getElementById("appt-edit-when").value;
   const status = document.getElementById("appt-edit-status").value;
+  const patientConfirmed = document.getElementById("appt-edit-confirmed").checked;
   await api(`/appointments/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ procedureId, professionalId, scheduledAt: new Date(when).toISOString(), status }),
+    body: JSON.stringify({ procedureId, professionalId, scheduledAt: new Date(when).toISOString(), status, patientConfirmed }),
   });
   closeApptEditModal();
   await loadAgenda();
@@ -2576,6 +2580,10 @@ async function openProfessionalModal(prof) {
   document.getElementById("pf-instagram").value = prof?.instagram || "";
   document.getElementById("pf-bio").value = prof?.bio || "";
   document.getElementById("pf-active").checked = prof ? !!prof.active : true;
+  document.getElementById("pf-start-hour").value = prof?.workStartHour ?? "";
+  document.getElementById("pf-end-hour").value = prof?.workEndHour ?? "";
+  const profDays = new Set((prof?.workDays || "").split(",").filter(Boolean));
+  document.querySelectorAll("#pf-workdays input").forEach((c) => { c.checked = profDays.has(c.value); });
   pendingProfessionalPhoto = prof?.photoUrl || null;
   updateProfessionalPhotoPreview();
 
@@ -2642,6 +2650,9 @@ document.getElementById("professional-form").addEventListener("submit", async (e
   e.preventDefault();
   const id = document.getElementById("pf-id").value;
   const activeColor = document.querySelector("#pf-color-grid .color-swatch.active");
+  const startHour = document.getElementById("pf-start-hour").value;
+  const endHour = document.getElementById("pf-end-hour").value;
+  const workDays = Array.from(document.querySelectorAll("#pf-workdays input:checked")).map((c) => c.value).join(",");
   const payload = {
     name: document.getElementById("pf-name").value.trim(),
     instagram: document.getElementById("pf-instagram").value.trim(),
@@ -2649,6 +2660,9 @@ document.getElementById("professional-form").addEventListener("submit", async (e
     color: activeColor ? activeColor.dataset.color : "",
     photoUrl: pendingProfessionalPhoto,
     active: document.getElementById("pf-active").checked,
+    workDays: workDays || null,
+    workStartHour: startHour === "" ? null : Number(startHour),
+    workEndHour: endHour === "" ? null : Number(endHour),
     procedureIds: Array.from(document.querySelectorAll("#pf-procedures-list input:checked")).map((c) => c.value),
   };
   if (!payload.name) return;
@@ -3320,6 +3334,90 @@ document.getElementById("btn-channel-uazapi-save").addEventListener("click", asy
   }
 });
 
+// --- Bloqueios de agenda ---
+async function loadScheduleBlocks() {
+  const [blocks, professionals] = await Promise.all([api("/schedule-blocks"), api("/professionals")]);
+
+  const profSelect = document.getElementById("bk-professional");
+  profSelect.innerHTML = '<option value="">Clínica toda</option>';
+  for (const p of professionals) profSelect.appendChild(el("option", { value: p.id }, [p.name]));
+
+  const body = document.getElementById("blocks-body");
+  body.innerHTML = "";
+  const fmt = (d) => new Date(d).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  for (const b of blocks) {
+    const del = el("button", { type: "button", class: "btn-icon-danger", title: "Remover bloqueio" }, [
+      el("span", { class: "nav-icon", "data-icon": "trash" }, []),
+    ]);
+    del.addEventListener("click", async () => {
+      if (!await showConfirm("Remover esse bloqueio?")) return;
+      await api(`/schedule-blocks/${b.id}`, { method: "DELETE" });
+      loadScheduleBlocks();
+    });
+    body.appendChild(
+      el("tr", {}, [
+        el("td", {}, [`${fmt(b.startsAt)} — ${fmt(b.endsAt)}`]),
+        el("td", {}, [b.professional?.name || "Clínica toda"]),
+        el("td", {}, [b.reason || "—"]),
+        el("td", {}, [del]),
+      ])
+    );
+  }
+  document.getElementById("blocks-empty").style.display = blocks.length ? "none" : "block";
+}
+
+document.getElementById("block-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const start = document.getElementById("bk-start").value;
+  const end = document.getElementById("bk-end").value;
+  if (!start || !end) return;
+  if (new Date(end) <= new Date(start)) {
+    showError("O fim do bloqueio precisa ser depois do início.");
+    return;
+  }
+  await api("/schedule-blocks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      professionalId: document.getElementById("bk-professional").value || null,
+      startsAt: new Date(start).toISOString(),
+      endsAt: new Date(end).toISOString(),
+      reason: document.getElementById("bk-reason").value.trim(),
+    }),
+  });
+  e.target.reset();
+  loadScheduleBlocks();
+});
+
+// --- Lista de espera ---
+async function loadWaitlist() {
+  const entries = await api("/waitlist");
+  const body = document.getElementById("waitlist-body");
+  body.innerHTML = "";
+  const STATUS_LABEL = { waiting: "Aguardando", notified: "Vaga oferecida" };
+  for (const w of entries) {
+    const del = el("button", { type: "button", class: "btn-icon-danger", title: "Remover da lista" }, [
+      el("span", { class: "nav-icon", "data-icon": "trash" }, []),
+    ]);
+    del.addEventListener("click", async () => {
+      if (!await showConfirm("Tirar esse paciente da lista de espera?")) return;
+      await api(`/waitlist/${w.id}`, { method: "DELETE" });
+      loadWaitlist();
+    });
+    body.appendChild(
+      el("tr", {}, [
+        el("td", {}, [`${w.patient.name || w.patient.phone}`]),
+        el("td", {}, [w.procedure?.name || "Qualquer"]),
+        el("td", {}, [w.preferredNote || "—"]),
+        el("td", {}, [STATUS_LABEL[w.status] || w.status]),
+        el("td", {}, [new Date(w.createdAt).toLocaleDateString("pt-BR")]),
+        el("td", {}, [del]),
+      ])
+    );
+  }
+  document.getElementById("waitlist-empty").style.display = entries.length ? "none" : "block";
+}
+
 // --- Navegacao das sub-abas de "Personalizar Alice" ---
 const SETTINGS_SUB_LOADERS = {
   "clinic-data": () => {
@@ -3338,6 +3436,8 @@ const SETTINGS_SUB_LOADERS = {
   renewal: loadRenewalRules,
   birthday: loadBirthdayRules,
   followup: loadFollowUpRules,
+  blocks: loadScheduleBlocks,
+  waitlist: loadWaitlist,
   history: () => loadActivityLog(true),
   funnel: loadStagesConfig,
   rules: loadPersonalize,
@@ -3373,22 +3473,80 @@ document.getElementById("btn-goto-funnel-config").addEventListener("click", () =
 
 // --- Tour guiado ---
 const TOUR_STEPS = [
-  { tab: "dashboard", target: ".brand", title: "Bem-vindo(a) à Alice", desc: "Esse tour mostra rapidinho onde fica cada função do painel. Dá pra sair a qualquer momento em \"Encerrar tour\"." },
-  { tab: "dashboard", target: "#period-row", title: "Filtro de período", desc: "Escolha o intervalo (hoje, 7 dias, 30 dias...) pra recalcular os indicadores abaixo." },
-  { tab: "dashboard", target: ".stat-grid", title: "Métricas rápidas", desc: "Quantos contatos a Alice atendeu, quantos agendamentos e quantos atendimentos concluídos no período escolhido." },
-  { tab: "dashboard", target: ".dash-columns", title: "Gráfico e calendário", desc: "Volume de atendimentos por dia, e um calendário do mês com os dias que têm agendamento marcado." },
-  { tab: "contacts", target: "#tab-contacts .toolbar", title: "Contatos", desc: "Base de pacientes/leads. Busque por nome ou telefone, ou adicione um contato manualmente (ex: alguém que ligou)." },
-  { tab: "crm", target: "#crm-board", title: "CRM", desc: "Funil kanban do paciente. Arraste o card entre as colunas pra mudar a etapa, ou use o dropdown dentro do card." },
-  { tab: "chat", target: "#chat-window", title: "Chat", desc: "Veja as conversas em andamento. Dá pra assumir uma conversa manualmente e a Alice para de responder ali até você devolver o controle." },
-  { tab: "agenda", target: "#agenda-grid-wrap", title: "Agenda", desc: "Calendário com os agendamentos por horário. Use Hoje/Semana/Mês pra mudar a visão, ou agende manualmente pelo botão no topo." },
-  { tab: "settings", sub: "clinic-data", target: "#sub-clinic-data", title: "Personalizar Alice", desc: "Essa área reúne toda a configuração da clínica. Aqui em \"Dados da clínica\" ficam nome e horário de funcionamento — usado pelas mensagens automáticas." },
-  { tab: "settings", sub: "procedures", target: "#sub-procedures", title: "Procedimentos", desc: "O catálogo que a Alice usa pra saber o que oferecer e agendar." },
-  { tab: "settings", sub: "broadcasts", target: "#sub-broadcasts", title: "Mensagens Programadas", desc: "Campanhas avulsas pra base de contatos ou um estágio específico do funil, enviadas aos poucos dentro do horário comercial." },
-  { tab: "settings", sub: "followup", target: "#sub-followup", title: "Recontato", desc: "Cascata de mensagens automáticas quando um lead fica dias sem responder — reinicia sozinha se ele voltar a falar." },
-  { tab: "settings", sub: "funnel", target: "#sub-funnel", title: "Funil", desc: "Configure as etapas do CRM: adicione, renomeie, recolorir ou remova." },
-  { tab: "settings", sub: "channels", target: "#sub-channels", title: "Canais", desc: "Conecte o WhatsApp da clínica: acompanhe o status e gere o QR Code para parear o número." },
-  { tab: "settings", sub: "clinics", target: "#sub-clinics", title: "Clínicas", desc: "Cadastre mais clínicas, cada uma com seu próprio WhatsApp — o seletor no topo da sidebar troca entre elas." },
-  { tab: "dashboard", target: "#theme-toggle", title: "Tour concluído", desc: "É só isso! Clique em \"Guia\" a qualquer momento pra rever esse tour." },
+  // ===== Visão geral =====
+  { section: "Visão geral", tab: "dashboard", target: ".brand", title: "Bem-vindo(a) à Alice", desc: "Este guia percorre o painel inteiro, área por área, explicando o que cada função faz e como ela se conecta ao atendimento no WhatsApp. Leva uns 3 minutos. Use \"Anterior\" e \"Próximo\" para navegar e \"Encerrar tour\" para sair quando quiser — dá pra retomar depois clicando em \"Guia\", aqui embaixo na barra lateral." },
+  { section: "Visão geral", tab: "dashboard", target: "#clinic-select", title: "Seletor de clínica", desc: "Se a sua conta tem mais de uma clínica, é aqui que você escolhe qual está gerenciando. Cada clínica tem WhatsApp, agenda, contatos, catálogo e regras próprios — nada é compartilhado. O nome da clínica ativa aparece logo acima, abaixo de \"Alice IA\"." },
+  { section: "Visão geral", tab: "dashboard", target: ".side-nav", title: "Menu de navegação", desc: "O painel é dividido em quatro grupos: Início (a visão do dia), Clientes (Contatos, CRM e Chat), Operação (Agenda) e Conta (Personalizar Alice, onde fica toda a configuração). O menu fica sempre visível à esquerda — você vai voltar bastante a ele." },
+  { section: "Visão geral", tab: "dashboard", target: "#btn-staff-session", title: "Quem está usando o painel", desc: "Marque aqui qual atendente está logado. Isso não substitui a senha do painel: serve para identificar quem assumiu cada conversa. Ao transferir um atendimento para uma pessoa no Chat, o nome que a equipe vê é o que estiver selecionado aqui. As contas da equipe são criadas em Personalizar Alice → Equipe." },
+  { section: "Visão geral", tab: "dashboard", target: "#panel-ai-fab", title: "Ajuda da Alice", desc: "Dúvida sobre alguma função do painel? Clique em \"Precisa de ajuda?\" e pergunte com suas palavras. É uma assistente separada, só sobre como usar o painel — ela não responde pacientes nem altera a configuração." },
+  { section: "Visão geral", tab: "dashboard", target: "#theme-toggle", title: "Tema claro e escuro", desc: "Alterna o painel entre o modo claro e o escuro. A preferência fica salva neste navegador." },
+
+  // ===== Início =====
+  { section: "Início", tab: "dashboard", target: "#dash-greeting", title: "Painel de Início", desc: "A primeira tela ao entrar: um resumo rápido de como o atendimento está indo. O selo \"Ativa\" à direita confirma que a Alice está no ar. Se aparecer outro status, verifique a conexão do WhatsApp em Personalizar Alice → Canais." },
+  { section: "Início", tab: "dashboard", target: "#period-row", title: "Filtro de período", desc: "Escolha o intervalo — Hoje, Ontem, 7, 30 ou 90 dias. Os três indicadores e o gráfico logo abaixo se recalculam na hora para o período selecionado. O padrão é 30 dias." },
+  { section: "Início", tab: "dashboard", target: ".stat-grid", title: "Indicadores do período", desc: "Três números lado a lado: contatos que a Alice atendeu, agendamentos que ela marcou e atendimentos concluídos. Dão a sensação de volume e de conversão sem precisar abrir relatório. \"Concluídos\" conta os agendamentos marcados como concluídos na Agenda." },
+  { section: "Início", tab: "dashboard", target: ".dash-chart-card", title: "Atendimentos por dia", desc: "O volume de conversas dia a dia dentro do período escolhido. Picos e vales ajudam a enxergar os dias mais movimentados e planejar equipe e campanhas." },
+  { section: "Início", tab: "dashboard", target: ".dash-calendar-card", title: "Calendário operacional", desc: "O mês em miniatura, com destaque nos dias que já têm agendamento. É só uma prévia — a agenda completa, com horários e edição, fica na aba Agenda." },
+
+  // ===== Contatos =====
+  { section: "Contatos", tab: "contacts", target: "#tab-contacts .page-header", title: "Base de contatos", desc: "Todo mundo que já falou com o WhatsApp da clínica entra aqui automaticamente, com nome, telefone, origem e data de entrada. É a lista mestre de pacientes e leads, e a fonte das campanhas e automações." },
+  { section: "Contatos", tab: "contacts", target: "#btn-toggle-contact-form", title: "Adicionar contato manualmente", desc: "Para quem chegou por fora do WhatsApp — ligou, veio pelo balcão, indicação. Informe nome e telefone com DDI e DDD (ex: 5511999999999). A partir daí ele participa das campanhas e automações como qualquer outro contato." },
+  { section: "Contatos", tab: "contacts", target: "#contacts-search", title: "Buscar contato", desc: "Filtra a lista por nome ou por telefone conforme você digita." },
+  { section: "Contatos", tab: "contacts", target: "#tab-contacts .toolbar + .card", title: "Lista e ações", desc: "Cada linha é um contato. A coluna \"Origem\" mostra se ele veio do WhatsApp, de importação ou foi cadastrado à mão. O ícone de lixeira remove o contato — cuidado, isso apaga também o histórico dele." },
+
+  // ===== CRM =====
+  { section: "CRM", tab: "crm", target: "#crm-board", title: "Funil de vendas (kanban)", desc: "Cada card é um paciente; cada coluna é uma etapa da negociação. A Alice move os cards sozinha conforme a conversa evolui (por exemplo para \"Avaliação agendada\" quando marca um horário). Você também pode arrastar o card entre colunas ou trocar a etapa pelo seletor dentro dele." },
+  { section: "CRM", tab: "crm", target: "#crm-search", title: "Buscar no funil", desc: "Encontra um card específico por nome ou telefone sem precisar varrer todas as colunas." },
+  { section: "CRM", tab: "crm", target: "#btn-goto-funnel-config", title: "Configurar o funil", desc: "Atalho para a tela onde você cria, renomeia, recolore e reordena as colunas do funil. Vamos passar por ela mais adiante, em Personalizar Alice → Funil." },
+
+  // ===== Chat =====
+  { section: "Chat", tab: "chat", target: "#chat-filter-tabs", title: "Conversas por responsável", desc: "\"Alice\" mostra o que a IA está conduzindo sozinha; \"Humano\" mostra o que já foi assumido pela equipe; \"Todos\" junta tudo. Serve para ver rápido o que precisa de gente. Os números entre parênteses são a contagem de cada fila." },
+  { section: "Chat", tab: "chat", target: ".chat-list-pane", title: "Lista de conversas", desc: "As conversas em andamento, mais recentes no topo. Clique em uma para abrir as mensagens ao lado." },
+  { section: "Chat", tab: "chat", target: "#chat-window", title: "Assumir e devolver a conversa", desc: "Ao abrir uma conversa aparece o botão de assumir o atendimento: enquanto você está no controle, a Alice para de responder aquele paciente e você digita direto pelo campo de mensagem. Ao devolver, a Alice retoma de onde parou. Pelo cabeçalho da conversa também dá pra abrir o cadastro do contato e preencher dados como a data de nascimento (usada na automação de aniversário)." },
+
+  // ===== Agenda =====
+  { section: "Agenda", tab: "agenda", target: "#agenda-view-toggle", title: "Visões da agenda", desc: "Alterna entre Hoje, Semana e Mês. \"Hoje\" e \"Semana\" mostram a grade por horário; \"Mês\" mostra a lista de todos os agendamentos do período." },
+  { section: "Agenda", tab: "agenda", target: "#btn-toggle-appt-form", title: "Agendar manualmente", desc: "Marque um horário na mão informando paciente, telefone, procedimento e data/hora — útil para encaixes feitos por telefone. Os agendamentos que a Alice fecha no WhatsApp aparecem aqui automaticamente." },
+  { section: "Agenda", tab: "agenda", target: "#agenda-grid-wrap", title: "Grade de horários", desc: "Cada bloco é um atendimento. Clique num bloco para editar procedimento, profissional responsável, data/hora ou status. É o status \"Concluído\" que alimenta o indicador de atendimentos concluídos no Início e libera as automações de pós-procedimento e renovação; \"Cancelado\" tira o horário da agenda." },
+
+  // ===== Personalizar Alice =====
+  { section: "Personalizar Alice", tab: "settings", sub: "clinic-data", target: "#settings-tabs", title: "Central de configuração", desc: "Tudo o que a Alice sabe e faz é ajustado nessas abas. Vamos passar pelas principais em ordem. Não precisa preencher tudo de uma vez — o mínimo para começar é: Dados da clínica, Procedimentos e Canais. O resto pode vir depois." },
+
+  { section: "Dados da clínica", tab: "settings", sub: "clinic-data", target: "#clinic-data-form", title: "Dados e horário de funcionamento", desc: "Nome, fuso horário, horário e dias de expediente. É a base de tudo: as automações só disparam dentro desse horário, e a Alice usa os dias de atendimento para não oferecer agendamento com a clínica fechada. O número do WhatsApp se preenche sozinho quando você conecta o aparelho em Canais." },
+  { section: "Dados da clínica", tab: "settings", sub: "clinic-data", target: "#cd-persona", title: "Como a Alice se apresenta", desc: "A Alice nunca diz que é robô, IA ou atendimento automático. Aqui você escolhe a identidade dela: parte da equipe da clínica, secretária da clínica ou secretária de um profissional específico (nesse caso, informe o nome ao lado)." },
+  { section: "Dados da clínica", tab: "settings", sub: "clinic-data", target: "#cd-notify-phone", title: "Avisos no seu WhatsApp", desc: "Informe um número para receber alertas de agendamento novo, remarcação, cancelamento e transferência para humano, e marque quais desses eventos quer receber. Os avisos saem pelo próprio WhatsApp conectado. Deixe em branco para desativar." },
+  { section: "Dados da clínica", tab: "settings", sub: "clinic-data", target: "#clinic-locations-list", title: "Endereço e unidades", desc: "Preencha o endereço que a Alice envia ao paciente. Se a operação tem mais de um endereço, use \"Adicionar outra unidade\"." },
+
+  { section: "Catálogo", tab: "settings", sub: "procedures", target: "#sub-procedures", title: "Procedimentos", desc: "O catálogo de serviços é o coração do atendimento: a Alice só oferece, explica e agenda o que está cadastrado aqui. Em cada procedimento você define valor, formas de pagamento, duração e — importante — objetivos/queixas atendidas e benefícios que podem ser afirmados, que ensinam a Alice a ligar frases como \"meu rosto parece cansado\" ao serviço certo sem inventar indicação." },
+  { section: "Catálogo", tab: "settings", sub: "products", target: "#sub-products", title: "Produtos", desc: "Itens vendidos além dos procedimentos (dermocosméticos, pacotes): nome, valor, foto e descrição. A Alice usa para responder dúvidas de preço e indicação de produto." },
+  { section: "Catálogo", tab: "settings", sub: "staff", target: "#sub-staff", title: "Profissionais", desc: "Quem atende, com foto, bio, Instagram, cor de identificação na agenda e a lista de procedimentos que cada um realiza. A Alice usa isso para encaixar o agendamento com o profissional certo." },
+
+  { section: "Canais", tab: "settings", sub: "channels", target: ".channel-card", title: "Conexão do WhatsApp", desc: "É aqui que você conecta o número da clínica: clique em \"Gerar QR Code\" e escaneie pelo celular em WhatsApp → Aparelhos conectados → Conectar um aparelho. O selo mostra o status da conexão; se cair, é aqui que você reconecta. O pareamento expira em cerca de 2 minutos — gere um novo QR se precisar." },
+  { section: "Canais", tab: "settings", sub: "channels", target: "#btn-channel-import", title: "Importar histórico do WhatsApp", desc: "Traz contatos e conversas dos últimos 7 dias do número conectado. As mensagens antigas entram como lidas e a Alice não responde a elas — serve só para você ter o contexto de quem já vinha conversando antes da conexão." },
+
+  { section: "Automações", tab: "settings", sub: "broadcasts", target: "#sub-broadcasts", title: "Mensagens Programadas", desc: "Disparos pontuais para toda a base, para uma etapa do funil ou para contatos escolhidos a dedo. O envio é feito aos poucos e só dentro do horário comercial, para não queimar o número. Use variáveis como {primeiro_nome} para personalizar o texto." },
+  { section: "Automações", tab: "settings", sub: "appt-reminder", target: "#sub-appt-reminder", title: "Lembrete de Consulta", desc: "Mensagens automáticas antes do horário marcado (1h, 24h, 48h antes...) para reduzir faltas. É possível manter vários lembretes ativos ao mesmo tempo, em janelas diferentes." },
+  { section: "Automações", tab: "settings", sub: "post-procedure", target: "#sub-post-procedure", title: "Pós-procedimento", desc: "Contato de cuidados e acompanhamento até 30 dias depois do atendimento. Dá para restringir a procedimentos específicos e disparar somente quando o atendimento estiver marcado como concluído." },
+  { section: "Automações", tab: "settings", sub: "renewal", target: "#sub-renewal", title: "Renovação", desc: "Retoma o contato meses ou anos depois (3 meses, 1 ano, 2 anos...) para reagendar procedimentos com validade, como toxina botulínica. É o que traz o paciente de volta sem você precisar lembrar de cada um." },
+  { section: "Automações", tab: "settings", sub: "birthday", target: "#sub-birthday", title: "Aniversário", desc: "Mensagem de parabéns automática no dia, no horário que você escolher. Depende da data de nascimento preenchida no cadastro do contato (você preenche isso pelo cabeçalho da conversa, na aba Chat)." },
+  { section: "Automações", tab: "settings", sub: "followup", target: "#sub-followup", title: "Recontato", desc: "Quando um lead some no meio da conversa, a Alice cutuca depois de um tempo sem resposta. Reinicia sozinho se ele voltar a falar e não incomoda quem já fechou, já foi dado como perdido ou já tem horário marcado. Você define o tempo de silêncio, a janela de horário e se repete a cada novo silêncio ou só uma vez." },
+  { section: "Automações", tab: "settings", sub: "funnel", target: "#sub-funnel", title: "Funil", desc: "As colunas do CRM. Cada etapa tem nome, cor e um \"tipo\" (aberta, avaliação agendada, ganho, pós-procedimento, perdido) — é o tipo que diz à Alice e às automações o que aquela etapa significa. Adicione, renomeie, recolore, reordene ou remova etapas por aqui." },
+  { section: "Agenda", tab: "settings", sub: "blocks", target: "#sub-blocks", title: "Bloqueios de agenda", desc: "Feriado, folga de um profissional, almoço, congresso, manutenção de equipamento. A Alice não oferece nem aceita agendamento nos períodos bloqueados. Pode bloquear a clínica inteira ou só um profissional." },
+  { section: "Agenda", tab: "settings", sub: "waitlist", target: "#sub-waitlist", title: "Lista de espera", desc: "Quando o paciente pede um horário lotado e topa esperar, a Alice o coloca aqui. Se abrir vaga por cancelamento, ela avisa automaticamente o primeiro da fila compatível (mesmo procedimento e, quando faz sentido, mesmo profissional)." },
+
+  { section: "Inteligência da Alice", tab: "settings", sub: "rules", rt: "home", target: "#rule-form", title: "Ensinar a Alice em uma frase", desc: "A forma mais rápida de ajustar o comportamento: escreva o que você quer (\"nunca passe preço de preenchimento antes da avaliação\"), a Alice entende, classifica e monta a regra, e você só revisa e aprova. As sugestões pendentes aparecem logo abaixo do campo." },
+  { section: "Inteligência da Alice", tab: "settings", sub: "rules", rt: "global", target: "#rt-global", title: "Regras globais", desc: "O que a Alice deve respeitar em toda conversa: tom de voz, política de preço, quando chamar a equipe, o que nunca fazer. Já vêm algumas recomendadas prontas — o botão \"Restaurar recomendadas\" traz elas de volta caso você apague sem querer." },
+  { section: "Inteligência da Alice", tab: "settings", sub: "rules", rt: "templates", target: "#rt-templates", title: "Mensagens prontas", desc: "Textos que a Alice reaproveita no atendimento (boas-vindas, confirmação, orientações). Você escolhe se ela pode adaptar o texto ao contexto ou se deve enviar exatamente como está. Aceita variáveis como {primeiro_nome}." },
+  { section: "Inteligência da Alice", tab: "settings", sub: "rules", rt: "faq", target: "#rt-faq", title: "FAQ da clínica", desc: "Perguntas operacionais e suas respostas oficiais: estacionamento, acesso, documentos, políticas. Preço, agenda e catálogo continuam vindo das fontes oficiais — a FAQ cobre o resto." },
+  { section: "Inteligência da Alice", tab: "settings", sub: "rules", rt: "settings", target: "#alice-settings-form", title: "Ajustes da Alice", desc: "Nome da secretária, área de atuação da clínica, a frase usada ao passar a conversa para uma pessoa, se ela divide respostas longas em várias bolhas e se exige comprovante do sinal antes de confirmar o horário." },
+  { section: "Inteligência da Alice", tab: "settings", sub: "rules", rt: "playbooks", target: "#rt-playbooks", title: "Roteiros", desc: "Sequências passo a passo que a Alice segue em situações específicas (primeiro atendimento, objeções, remarcação...). Você define o gatilho, o objetivo e os passos, e ela conduz a conversa nessa ordem." },
+
+  { section: "Conta", tab: "settings", sub: "history", target: "#sub-history", title: "Histórico de atividades", desc: "Registro do que mudou na clínica: o que aconteceu, quem fez e quando. Filtre por tipo de evento ou por área. Útil para auditar mudanças e entender um comportamento novo da Alice." },
+  { section: "Conta", tab: "settings", sub: "clinics", target: "#sub-clinics", title: "Clínicas", desc: "Cadastre outras clínicas, cada uma com sua própria conexão de WhatsApp e configuração independente. O seletor no topo da barra lateral troca entre elas." },
+  { section: "Conta", tab: "settings", sub: "team", target: "#sub-team", title: "Equipe", desc: "Contas individuais para os atendentes. Quando alguém está logado com a própria conta, as transferências no Chat mostram o nome certo. Não substitui a senha principal do painel." },
+
+  // ===== Fim =====
+  { section: "Fim", tab: "dashboard", target: "#btn-guide", title: "Pronto, você viu o painel inteiro", desc: "Um caminho sugerido para começar: 1) Dados da clínica e horário; 2) Procedimentos; 3) conectar o WhatsApp em Canais; 4) revisar as Regras globais; 5) ligar as automações que fizerem sentido. Clique em \"Guia\" quando quiser rever qualquer parte." },
 ];
 
 let tourIndex = 0;
@@ -3403,41 +3561,70 @@ function positionTour(target) {
   spot.style.height = `${rect.height + pad * 2}px`;
 
   const pop = document.getElementById("tour-popover");
-  const popWidth = 300;
-  let top = rect.bottom + 14;
-  if (top + 160 > window.innerHeight) top = Math.max(12, rect.top - 174);
-  let left = Math.min(rect.left, window.innerWidth - popWidth - 16);
-  left = Math.max(12, left);
+  const pr = pop.getBoundingClientRect();
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const gap = 14;
+  const margin = 12;
+
+  let top;
+  let left;
+  if (vh - rect.bottom >= pr.height + gap + margin) {
+    top = rect.bottom + gap;
+    left = rect.left;
+  } else if (rect.top >= pr.height + gap + margin) {
+    top = rect.top - gap - pr.height;
+    left = rect.left;
+  } else if (vw - rect.right >= pr.width + gap + margin) {
+    left = rect.right + gap;
+    top = rect.top;
+  } else {
+    left = rect.left - gap - pr.width;
+    top = (vh - pr.height) / 2;
+  }
+
+  left = Math.max(margin, Math.min(left, vw - pr.width - margin));
+  top = Math.max(margin, Math.min(top, vh - pr.height - margin));
   pop.style.top = `${top}px`;
   pop.style.left = `${left}px`;
 }
 
-function showTourStep(i) {
+function showTourStep(i, dir = 1) {
   const step = TOUR_STEPS[i];
   if (!step) {
     endTour();
     return;
   }
+  tourIndex = i;
 
   goToTab(step.tab);
   if (step.sub) openSettingsSub(step.sub);
+  if (step.rt) {
+    document.querySelector(`#rules-tabs button[data-rt="${step.rt}"]`)?.click();
+  }
 
-  requestAnimationFrame(() => {
+  const render = () => {
     const target = document.querySelector(step.target);
     if (!target) {
-      tourIndex = i + 1;
-      showTourStep(tourIndex);
+      const next = i + (dir < 0 ? -1 : 1);
+      if (next >= 0 && next < TOUR_STEPS.length) showTourStep(next, dir);
+      else endTour();
       return;
     }
     target.scrollIntoView({ block: "center" });
-    positionTour(target);
 
-    document.getElementById("tour-step-label").textContent = `PASSO ${i + 1}/${TOUR_STEPS.length}`;
+    document.getElementById("tour-step-label").textContent = `${step.section} · Passo ${i + 1}/${TOUR_STEPS.length}`;
     document.getElementById("tour-title").textContent = step.title;
     document.getElementById("tour-desc").textContent = step.desc;
     document.getElementById("tour-prev").style.visibility = i === 0 ? "hidden" : "visible";
     document.getElementById("tour-next").textContent = i === TOUR_STEPS.length - 1 ? "Concluir" : "Próximo";
-  });
+    const bar = document.getElementById("tour-progress-bar");
+    if (bar) bar.style.width = `${((i + 1) / TOUR_STEPS.length) * 100}%`;
+
+    requestAnimationFrame(() => positionTour(target));
+  };
+
+  requestAnimationFrame(() => requestAnimationFrame(render));
 }
 
 function startTour() {
@@ -3456,13 +3643,11 @@ document.getElementById("tour-next").addEventListener("click", () => {
     endTour();
     return;
   }
-  tourIndex++;
-  showTourStep(tourIndex);
+  showTourStep(tourIndex + 1, 1);
 });
 document.getElementById("tour-prev").addEventListener("click", () => {
   if (tourIndex <= 0) return;
-  tourIndex--;
-  showTourStep(tourIndex);
+  showTourStep(tourIndex - 1, -1);
 });
 document.getElementById("tour-end").addEventListener("click", endTour);
 window.addEventListener("resize", () => {

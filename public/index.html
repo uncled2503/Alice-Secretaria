@@ -89,6 +89,7 @@
     <div id="tour-overlay" class="tour-overlay" style="display:none">
       <div id="tour-spotlight" class="tour-spotlight"></div>
       <div id="tour-popover" class="tour-popover">
+        <div class="tour-progress"><div class="tour-progress-bar" id="tour-progress-bar"></div></div>
         <div class="tour-step-label" id="tour-step-label">PASSO 1/1</div>
         <h4 id="tour-title"></h4>
         <p id="tour-desc"></p>
@@ -293,6 +294,8 @@
           <button data-sub="birthday">Aniversário</button>
           <button data-sub="followup">Recontato</button>
           <button data-sub="funnel">Funil</button>
+          <button data-sub="blocks">Bloqueios de agenda</button>
+          <button data-sub="waitlist">Lista de espera</button>
           <button data-sub="history">Histórico</button>
           <button data-sub="rules">Personalizar Alice</button>
           <button data-sub="clinics">Clínicas</button>
@@ -384,6 +387,7 @@
                   <label><input type="checkbox" value="new_appointment" />Novo agendamento</label>
                   <label><input type="checkbox" value="reschedule" />Remarcação</label>
                   <label><input type="checkbox" value="cancel" />Cancelamento</label>
+                  <label><input type="checkbox" value="confirmed" />Presença confirmada pelo paciente</label>
                   <label><input type="checkbox" value="human_handoff" />Transferência para humano</label>
                 </div>
               </label>
@@ -649,6 +653,45 @@
           </div>
         </div>
 
+        <div id="sub-blocks" class="settings-subpanel">
+          <p class="hint" style="margin-top:0">Bloqueie feriados, folgas, almoço ou manutenção de equipamento. A Alice não oferece nem aceita agendamento nesses períodos.</p>
+          <form id="block-form" class="broadcast-form card">
+            <div class="broadcast-form-row">
+              <label>Profissional
+                <select id="bk-professional"><option value="">Clínica toda</option></select>
+              </label>
+              <label>Início
+                <input id="bk-start" type="datetime-local" required />
+              </label>
+              <label>Fim
+                <input id="bk-end" type="datetime-local" required />
+              </label>
+            </div>
+            <div class="broadcast-form-row">
+              <input id="bk-reason" type="text" placeholder="Motivo (ex: feriado, congresso, almoço)" style="flex:1" />
+              <button type="submit">Adicionar bloqueio</button>
+            </div>
+          </form>
+          <div class="card">
+            <table>
+              <thead><tr><th>Período</th><th>Profissional</th><th>Motivo</th><th></th></tr></thead>
+              <tbody id="blocks-body"></tbody>
+            </table>
+            <div id="blocks-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Nenhum bloqueio cadastrado.</div>
+          </div>
+        </div>
+
+        <div id="sub-waitlist" class="settings-subpanel">
+          <p class="hint" style="margin-top:0">Pacientes que quiseram um horário lotado. Quando abre uma vaga por cancelamento, a Alice avisa automaticamente o primeiro da fila compatível.</p>
+          <div class="card">
+            <table>
+              <thead><tr><th>Paciente</th><th>Procedimento</th><th>Preferência</th><th>Status</th><th>Desde</th><th></th></tr></thead>
+              <tbody id="waitlist-body"></tbody>
+            </table>
+            <div id="waitlist-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Ninguém na lista de espera.</div>
+          </div>
+        </div>
+
         <div id="sub-history" class="settings-subpanel">
           <p class="hint" style="margin-top:0">Acompanhe as mudanças importantes da clínica: o que aconteceu, quem fez e quando.</p>
           <div class="list-toolbar">
@@ -875,6 +918,7 @@
               <option value="cancelled">Cancelado</option>
             </select>
           </label>
+          <label class="checkbox-row"><input type="checkbox" id="appt-edit-confirmed" /> Presença confirmada pelo paciente</label>
           <div class="modal-actions">
             <button type="button" id="appt-edit-delete" class="btn-cancel">Excluir</button>
             <button type="submit">Salvar</button>
@@ -1470,6 +1514,32 @@
           <label>Procedimentos que atende
             <div id="pf-procedures-list" class="procedures-checklist"></div>
           </label>
+
+          <div class="modal-section">
+            <div class="section-header-sm">Agenda do profissional</div>
+            <p class="hint" style="margin-top:0">Deixe em branco para herdar o expediente da clínica.</p>
+            <div class="modal-form-row">
+              <label>Início do expediente
+                <input id="pf-start-hour" type="number" min="0" max="23" placeholder="clínica" />
+              </label>
+              <label>Fim do expediente
+                <input id="pf-end-hour" type="number" min="0" max="23" placeholder="clínica" />
+              </label>
+            </div>
+            <label>Dias de atendimento
+              <div id="pf-workdays" class="weekday-picker">
+                <label><input type="checkbox" value="0" />Dom</label>
+                <label><input type="checkbox" value="1" />Seg</label>
+                <label><input type="checkbox" value="2" />Ter</label>
+                <label><input type="checkbox" value="3" />Qua</label>
+                <label><input type="checkbox" value="4" />Qui</label>
+                <label><input type="checkbox" value="5" />Sex</label>
+                <label><input type="checkbox" value="6" />Sáb</label>
+              </div>
+            </label>
+            <p class="hint" style="margin-top:0">Nenhum dia marcado = herda os dias da clínica.</p>
+          </div>
+
           <label class="checkbox-row"><input type="checkbox" id="pf-active" checked /> Ativo</label>
           <div class="modal-actions">
             <button type="button" id="professional-delete-btn" class="btn-cancel" style="display:none">Excluir</button>

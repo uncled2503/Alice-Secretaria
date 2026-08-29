@@ -1,9 +1,17 @@
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
 import { prisma } from "../db/client.js";
-import { findAvailableSlots } from "../scheduling/slots.js";
+import {
+  findAvailableSlots,
+  checkSpecificTime,
+  createBooking,
+  professionalsForProcedure,
+} from "../scheduling/slots.js";
+import { offerFreedSlotToWaitlist } from "../scheduling/waitlist.js";
+import { formatInZone, formatDateTimeInZone } from "../scheduling/time.js";
 import { getActiveRulesPrompt } from "./rules.js";
 import { getFunnelStages } from "../crm/stages.js";
+import { movePatientToKind, movePatientToStage, movePatientToRecovery } from "../crm/stageAutomation.js";
 import { notifyStaff } from "../crm/notify.js";
 import { logActivity } from "../crm/activity.js";
 import type { Procedure } from "@prisma/client";
@@ -18,11 +26,13 @@ const tools: ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "check_availability",
-      description: "Consulta horarios livres para um procedimento da clinica.",
+      description:
+        "Lista os proximos horarios livres para um procedimento. Use quando o paciente quer agendar mas nao citou um dia/hora especifico. Se a clinica tem mais de um profissional pra esse procedimento, cada horario vem com o profissional.",
       parameters: {
         type: "object",
         properties: {
-          procedure_name: { type: "string", description: "Nome do procedimento, deve bater com um dos cadastrados na clinica" },
+          procedure_name: { type: "string", description: "Nome do procedimento, deve bater com um dos cadastrados na clinica." },
+          professional_name: { type: "string", description: "Opcional: nome do profissional, se o paciente escolheu um." },
         },
         required: ["procedure_name"],
       },
@@ -31,79 +41,347 @@ const tools: ChatCompletionTool[] = [
   {
     type: "function",
     function: {
-      name: "book_appointment",
-      description: "Confirma o agendamento de um horario especifico para o paciente. So chame depois que o paciente confirmar o horario escolhido.",
+      name: "check_specific_time",
+      description:
+        "Verifica se um dia e horario especifico que o paciente pediu esta livre. SEMPRE chame isto quando o paciente citar um dia/hora (ex: 'quinta as 10h', 'amanha de tarde'). Retorna se esta disponivel e com quais profissionais; se nao estiver, retorna o motivo e alternativas.",
       parameters: {
         type: "object",
         properties: {
           procedure_name: { type: "string" },
-          start_iso: { type: "string", description: "Data/hora ISO 8601 do horario escolhido, deve ser um dos horarios retornados por check_availability" },
+          date: { type: "string", description: "Data no formato AAAA-MM-DD, no fuso da clinica. Resolva 'hoje'/'amanha' a partir da data atual informada no contexto." },
+          time: { type: "string", description: "Hora no formato HH:MM em 24h, no fuso da clinica." },
+          professional_name: { type: "string", description: "Opcional: nome do profissional, se o paciente escolheu um." },
+        },
+        required: ["procedure_name", "date", "time"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "book_appointment",
+      description:
+        "Confirma o agendamento. So chame depois que o paciente confirmar explicitamente o horario, e SO com um start_iso que veio do campo 'iso' de check_availability ou check_specific_time. Nunca invente o start_iso.",
+      parameters: {
+        type: "object",
+        properties: {
+          procedure_name: { type: "string" },
+          start_iso: { type: "string", description: "O valor exato do campo 'iso' retornado pelas ferramentas de disponibilidade." },
+          professional_id: { type: "string", description: "Opcional: o 'profissional_id' retornado junto com o horario escolhido." },
         },
         required: ["procedure_name", "start_iso"],
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "manage_my_appointment",
+      description:
+        "Gerencia o proximo agendamento futuro do proprio paciente. Use 'confirm' quando ele confirmar presenca (ex: 'confirmado', 'pode confirmar', 'sim vou'), 'cancel' quando pedir pra cancelar, 'reschedule' quando pedir pra remarcar (informe new_date e new_time).",
+      parameters: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["confirm", "cancel", "reschedule"] },
+          new_date: { type: "string", description: "So para reschedule: AAAA-MM-DD no fuso da clinica." },
+          new_time: { type: "string", description: "So para reschedule: HH:MM em 24h." },
+        },
+        required: ["action"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "join_waitlist",
+      description:
+        "Coloca o paciente na lista de espera quando o horario que ele queria nao esta disponivel e ele topa ser avisado se abrir uma vaga. So chame se o paciente concordar.",
+      parameters: {
+        type: "object",
+        properties: {
+          procedure_name: { type: "string" },
+          note: { type: "string", description: "Preferencia do paciente em texto livre, ex: 'quinta de manha', 'qualquer dia a tarde'." },
+        },
+        required: ["procedure_name"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "update_crm_stage",
+      description:
+        "Atualiza a etapa do paciente no funil de vendas conforme a conversa evolui (ex: demonstrou interesse real -> 'interesse confirmado'; recebeu orcamento -> 'proposta enviada'). NAO use para agendamento, venda fechada, pos-procedimento ou perdido - essas etapas sao automaticas.",
+      parameters: {
+        type: "object",
+        properties: {
+          stage_id: { type: "string", description: "O id (slug) de uma das etapas 'abertas' listadas no contexto." },
+          reason: { type: "string", description: "Frase curta do porque da mudanca (aparece no historico da clinica)." },
+        },
+        required: ["stage_id"],
+      },
+    },
+  },
 ];
 
+async function findProcedure(clinicId: string, name: unknown): Promise<Procedure | null> {
+  const raw = String(name ?? "").trim();
+  if (!raw) return null;
+  return (
+    (await prisma.procedure.findFirst({ where: { clinicId, name: { equals: raw } } })) ??
+    (await prisma.procedure.findFirst({ where: { clinicId, name: { contains: raw } } }))
+  );
+}
+
+// Resolve quais profissionais considerar para um procedimento. Se o paciente
+// citou um nome, tenta so ele; senao, todos os que atendem o procedimento
+// (lista vazia = usa a agenda da clinica toda).
+async function resolveProfessionalIds(
+  clinicId: string,
+  procedureId: string,
+  professionalName: unknown,
+): Promise<string[]> {
+  const pros = await professionalsForProcedure(clinicId, procedureId);
+  const named = String(professionalName ?? "").trim().toLowerCase();
+  if (named) {
+    const match = pros.find((p) => p.name.toLowerCase().includes(named));
+    if (match) return [match.id];
+  }
+  return pros.map((p) => p.id);
+}
+
+function parseRequestedDateTime(date: unknown, time: unknown) {
+  const d = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(String(date ?? "").trim());
+  const t = /^(\d{1,2}):(\d{2})$/.exec(String(time ?? "").trim());
+  if (!d || !t) return null;
+  const parsed = { year: +d[1], month: +d[2], day: +d[3], hour: +t[1], minute: +t[2] };
+  if (parsed.month < 1 || parsed.month > 12 || parsed.day < 1 || parsed.day > 31) return null;
+  if (parsed.hour > 23 || parsed.minute > 59) return null;
+  return parsed;
+}
+
+const SLOT_REASON_PT: Record<string, string> = {
+  past: "esse horario ja passou",
+  closed_day: "a clinica nao atende nesse dia da semana",
+  outside_hours: "esse horario esta fora do expediente da clinica",
+  conflict: "ja tem outro paciente marcado nesse horario",
+  blocked: "a agenda esta bloqueada nesse horario (folga/feriado)",
+  procedure_not_found: "procedimento nao encontrado",
+  invalid_datetime: "o horario informado e invalido; use um valor 'iso' retornado pelas ferramentas de disponibilidade",
+};
+
 async function runTool(clinicId: string, patientId: string, name: string, input: any): Promise<string> {
+  const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId } });
+  const tz = clinic.timezone || "America/Sao_Paulo";
+  const patientLabelOf = (p: { name: string | null; phone: string } | null) => p?.name ?? p?.phone ?? "paciente";
+
   if (name === "check_availability") {
-    const procedure = await prisma.procedure.findFirst({
-      where: { clinicId, name: { contains: input.procedure_name } },
-    });
+    const procedure = await findProcedure(clinicId, input.procedure_name);
     if (!procedure) return `Procedimento "${input.procedure_name}" nao encontrado na clinica.`;
 
-    const slots = await findAvailableSlots(clinicId, procedure.durationMin);
-    if (slots.length === 0) return "Nenhum horario livre nos proximos dias.";
+    const professionalIds = await resolveProfessionalIds(clinicId, procedure.id, input.professional_name);
+    const slots = await findAvailableSlots(clinicId, procedure.id, { professionalIds, limit: 6 });
+    if (slots.length === 0) {
+      return JSON.stringify({ procedimento: procedure.name, horarios: [], observacao: "Nenhum horario livre nos proximos dias." });
+    }
+    return JSON.stringify({
+      procedimento: procedure.name,
+      horarios: slots.map((s) => ({
+        iso: s.start.toISOString(),
+        quando: formatInZone(s.start, tz),
+        ...(s.professionalName ? { profissional: s.professionalName, profissional_id: s.professionalId } : {}),
+      })),
+    });
+  }
 
-    return slots
-      .slice(0, 6)
-      .map((s) => s.start.toISOString())
-      .join(", ");
+  if (name === "check_specific_time") {
+    const procedure = await findProcedure(clinicId, input.procedure_name);
+    if (!procedure) return `Procedimento "${input.procedure_name}" nao encontrado.`;
+
+    const requested = parseRequestedDateTime(input.date, input.time);
+    if (!requested) return "Nao entendi a data/hora. Peca ao paciente pra confirmar o dia e o horario.";
+
+    const professionalIds = await resolveProfessionalIds(clinicId, procedure.id, input.professional_name);
+    const check = await checkSpecificTime(clinicId, procedure.id, requested, { professionalIds });
+
+    if (check.available) {
+      return JSON.stringify({
+        disponivel: true,
+        iso: check.requestedIso,
+        quando: check.requestedLabel,
+        profissionais: check.availableProfessionals.map((p) => ({ id: p.id, nome: p.name })),
+      });
+    }
+    return JSON.stringify({
+      disponivel: false,
+      motivo: SLOT_REASON_PT[check.reason ?? "conflict"],
+      horario_pedido: check.requestedLabel,
+      alternativas: check.alternatives.map((a) => ({
+        iso: a.iso,
+        quando: a.label,
+        ...(a.professionalName ? { profissional: a.professionalName, profissional_id: a.professionalId } : {}),
+      })),
+    });
   }
 
   if (name === "book_appointment") {
-    const procedure = await prisma.procedure.findFirst({
-      where: { clinicId, name: { contains: input.procedure_name } },
-    });
+    const procedure = await findProcedure(clinicId, input.procedure_name);
     if (!procedure) return `Procedimento "${input.procedure_name}" nao encontrado.`;
 
-    const scheduledAt = new Date(input.start_iso);
-    if (isNaN(scheduledAt.getTime())) return "Data/hora invalida.";
-
-    await prisma.appointment.create({
-      data: { clinicId, patientId, procedureId: procedure.id, scheduledAt },
-    });
-    await prisma.conversation.updateMany({
-      where: { patientId },
-      data: { status: "scheduled" },
-    });
-    // Usa o "kind" (nao um stageId fixo) pra funcionar mesmo se a clinica
-    // renomeou a etapa padrao "Avaliacao agendada" pra outro nome.
-    const stages = await getFunnelStages(clinicId);
-    const scheduledStage = stages.find((s) => s.kind === "avaliacao_agendada");
-    if (scheduledStage) {
-      await prisma.patient.update({
-        where: { id: patientId },
-        data: { funnelStage: scheduledStage.stageId },
-      });
+    let professionalId: string | null = input.professional_id ? String(input.professional_id) : null;
+    if (!professionalId) {
+      const pros = await professionalsForProcedure(clinicId, procedure.id);
+      if (pros.length === 1) professionalId = pros[0].id;
     }
 
+    const booking = await createBooking({
+      clinicId,
+      patientId,
+      procedureId: procedure.id,
+      professionalId,
+      startUtc: new Date(String(input.start_iso ?? "")),
+    });
+
+    if (!booking.ok) {
+      const motivo =
+        booking.error === "conflict"
+          ? "esse horario acabou de ser ocupado por outro paciente; ofereca outro horario"
+          : SLOT_REASON_PT[booking.error] ?? "nao foi possivel agendar";
+      return JSON.stringify({ agendado: false, motivo });
+    }
+
+    await prisma.conversation.updateMany({ where: { patientId }, data: { status: "scheduled" } });
+    await movePatientToKind(clinicId, patientId, "avaliacao_agendada", { note: "agendou pela Alice" });
+
     const patient = await prisma.patient.findUnique({ where: { id: patientId } });
+    const whenLabel = formatDateTimeInZone(booking.scheduledAt, tz);
+    const withPro = booking.professionalName ? ` com ${booking.professionalName}` : "";
     await notifyStaff(
       clinicId,
       "new_appointment",
-      `Novo agendamento (via Alice): ${patient?.name ?? patient?.phone ?? "paciente"} - ${procedure.name} em ${scheduledAt.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}.`
+      `Novo agendamento (via Alice): ${patientLabelOf(patient)} - ${booking.procedureName}${withPro} em ${whenLabel}.`,
     );
     await logActivity({
       clinicId,
       type: "appointment_booked",
       area: "agenda",
       title: "Agendamento criado pela Alice",
-      description: `${patient?.name ?? patient?.phone ?? "paciente"} — ${procedure.name} em ${scheduledAt.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}.`,
+      description: `${patientLabelOf(patient)} — ${booking.procedureName}${withPro} em ${whenLabel}.`,
       actorName: null,
     });
 
-    return `Agendado com sucesso para ${scheduledAt.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}.`;
+    return JSON.stringify({ agendado: true, quando: booking.label, profissional: booking.professionalName ?? undefined });
+  }
+
+  if (name === "manage_my_appointment") {
+    const action = String(input.action ?? "");
+    const appt = await prisma.appointment.findFirst({
+      where: { patientId, status: "confirmed", scheduledAt: { gte: new Date() } },
+      orderBy: { scheduledAt: "asc" },
+      include: { procedure: true, professional: true, patient: true },
+    });
+    if (!appt) return JSON.stringify({ ok: false, motivo: "nao encontrei um agendamento futuro pra esse paciente" });
+
+    const label = formatDateTimeInZone(appt.scheduledAt, tz);
+    const who = patientLabelOf(appt.patient);
+
+    if (action === "confirm") {
+      await prisma.appointment.update({
+        where: { id: appt.id },
+        data: { patientConfirmed: true, confirmedAt: new Date() },
+      });
+      await notifyStaff(clinicId, "confirmed", `Presenca confirmada: ${who} - ${appt.procedure.name} em ${label}.`);
+      await logActivity({
+        clinicId, type: "appointment_confirmed", area: "agenda",
+        title: "Presença confirmada pelo paciente",
+        description: `${who} — ${appt.procedure.name} em ${label}.`, actorName: null,
+      });
+      return JSON.stringify({ ok: true, confirmado: label });
+    }
+
+    if (action === "cancel") {
+      await prisma.appointment.update({ where: { id: appt.id }, data: { status: "cancelled" } });
+      await notifyStaff(clinicId, "cancel", `Agendamento cancelado pelo paciente: ${who} - ${appt.procedure.name} em ${label}.`);
+      await logActivity({
+        clinicId, type: "appointment_cancelled", area: "agenda",
+        title: "Agendamento cancelado pelo paciente",
+        description: `${who} — ${appt.procedure.name} em ${label}.`, actorName: null,
+      });
+      await movePatientToRecovery(clinicId, patientId, { note: "cancelou o agendamento" });
+      await offerFreedSlotToWaitlist({
+        clinicId,
+        procedureId: appt.procedureId,
+        professionalId: appt.professionalId,
+        freedAt: appt.scheduledAt,
+      });
+      return JSON.stringify({ ok: true, cancelado: label });
+    }
+
+    if (action === "reschedule") {
+      const requested = parseRequestedDateTime(input.new_date, input.new_time);
+      if (!requested) return JSON.stringify({ ok: false, motivo: "preciso da nova data e hora (new_date e new_time)" });
+
+      const professionalIds = appt.professionalId ? [appt.professionalId] : [];
+      const check = await checkSpecificTime(clinicId, appt.procedureId, requested, { professionalIds });
+      if (!check.available) {
+        return JSON.stringify({
+          ok: false,
+          motivo: SLOT_REASON_PT[check.reason ?? "conflict"],
+          alternativas: check.alternatives.map((a) => ({ iso: a.iso, quando: a.label })),
+        });
+      }
+
+      const oldSlot = { procedureId: appt.procedureId, professionalId: appt.professionalId, freedAt: appt.scheduledAt };
+      await prisma.appointment.update({
+        where: { id: appt.id },
+        data: { scheduledAt: new Date(check.requestedIso), patientConfirmed: false, confirmedAt: null },
+      });
+      await notifyStaff(clinicId, "reschedule", `Agendamento remarcado pelo paciente: ${who} - ${appt.procedure.name} agora em ${check.requestedLabel}.`);
+      await logActivity({
+        clinicId, type: "appointment_rescheduled", area: "agenda",
+        title: "Agendamento remarcado pelo paciente",
+        description: `${who} — ${appt.procedure.name} agora em ${check.requestedLabel}.`, actorName: null,
+      });
+      await offerFreedSlotToWaitlist({ clinicId, ...oldSlot });
+      return JSON.stringify({ ok: true, remarcado: check.requestedLabel });
+    }
+
+    return JSON.stringify({ ok: false, motivo: "acao invalida" });
+  }
+
+  if (name === "join_waitlist") {
+    const procedure = await findProcedure(clinicId, input.procedure_name);
+    const procedureId = procedure?.id ?? null;
+    const existing = await prisma.waitlistEntry.findFirst({
+      where: { clinicId, patientId, status: { in: ["waiting", "notified"] }, procedureId },
+    });
+    if (existing) return JSON.stringify({ ok: true, ja_estava: true });
+
+    await prisma.waitlistEntry.create({
+      data: {
+        clinicId,
+        patientId,
+        procedureId,
+        preferredNote: String(input.note ?? "").slice(0, 200),
+      },
+    });
+    const patient = await prisma.patient.findUnique({ where: { id: patientId } });
+    await logActivity({
+      clinicId, type: "waitlist_added", area: "agenda",
+      title: "Paciente entrou na lista de espera",
+      description: `${patientLabelOf(patient)}${procedure ? ` — ${procedure.name}` : ""}${input.note ? ` (${input.note})` : ""}.`,
+      actorName: null,
+    });
+    return JSON.stringify({ ok: true });
+  }
+
+  if (name === "update_crm_stage") {
+    const result = await movePatientToStage(clinicId, patientId, String(input.stage_id ?? ""), {
+      note: input.reason ? String(input.reason).slice(0, 200) : "atualizado pela Alice no atendimento",
+      restrictToKinds: ["aberta"],
+    });
+    if (!result.ok) return JSON.stringify({ atualizado: false, motivo: result.error });
+    return JSON.stringify({ atualizado: true, etapa: result.label });
   }
 
   return "Ferramenta desconhecida.";
@@ -168,7 +446,7 @@ async function buildSystemPrompt(clinicId: string): Promise<string> {
   const clinic = await prisma.clinic.findUniqueOrThrow({
     where: { id: clinicId },
     include: {
-      procedures: true,
+      procedures: { include: { professionals: { where: { active: true }, select: { name: true } } } },
       messageTemplates: { where: { active: true } },
       faqs: { where: { active: true } },
       playbooks: { where: { active: true } },
@@ -208,6 +486,39 @@ async function buildSystemPrompt(clinicId: string): Promise<string> {
         .join("\n")}`
     : "";
 
+  const tz = clinic.timezone || "America/Sao_Paulo";
+  const DOW = ["domingo", "segunda", "terça", "quarta", "quinta", "sexta", "sábado"];
+  const workDayLabels = clinic.workDays
+    .split(",")
+    .map((n) => Number(n.trim()))
+    .filter((n) => Number.isInteger(n) && n >= 0 && n <= 6)
+    .sort((x, y) => x - y)
+    .map((n) => DOW[n])
+    .join(", ");
+  const prosByProcedure = clinic.procedures
+    .filter((p) => p.professionals.length > 0)
+    .map((p) => `- ${p.name}: ${p.professionals.map((pr) => pr.name).join(", ")}`)
+    .join("\n");
+  const professionalsBlock = prosByProcedure
+    ? `\n\nProfissionais por procedimento:\n${prosByProcedure}\nSe houver mais de um profissional, pergunte a preferencia do paciente (ou ofereca o primeiro horario livre de qualquer um). Passe professional_name/professional_id nas ferramentas de agenda.`
+    : "";
+
+  const scheduleBlock = `\n\nAGENDA E HORARIOS (regras rigidas):
+- Data e hora agora: ${formatInZone(new Date(), tz)} (fuso ${tz}). Use isto pra resolver "hoje", "amanha", "semana que vem".
+- Expediente da clinica: ${workDayLabels || "(nao definido)"}, das ${clinic.workStartHour}h as ${clinic.workEndHour}h. Cada profissional pode ter um expediente proprio - as ferramentas ja consideram isso.
+- Se o paciente citar um dia/hora, chame check_specific_time ANTES de responder. Se estiver livre, confirme com ele e so entao chame book_appointment com o "iso" (e o profissional_id, quando houver) retornado.
+- Se o horario pedido NAO estiver livre, diga com naturalidade que aquele horario nao esta disponivel (ex: "esse horario ja esta ocupado") e ofereca as alternativas retornadas. Se o paciente nao gostar das alternativas e quiser esperar uma vaga, use join_waitlist.
+- Se o paciente nao citou horario, use check_availability e ofereca no maximo 2 ou 3 opcoes.
+- Nunca confirme, prometa ou invente um horario sem passar pelas ferramentas.
+- Se o paciente confirmar presenca numa consulta ja marcada, cancelar ou pedir pra remarcar, use manage_my_appointment.${professionalsBlock}`;
+
+  const openStages = (await getFunnelStages(clinicId)).filter((s) => s.kind === "aberta");
+  const stagesBlock = openStages.length
+    ? `\n\nFUNIL DE VENDAS - atualize a etapa do paciente com update_crm_stage conforme a conversa avanca. Etapas disponiveis (use o id):\n${openStages
+        .map((s) => `- ${s.stageId} — ${s.label}`)
+        .join("\n")}\nAgendamento, venda fechada, pos-procedimento e "perdido" sao automaticos: nao tente defini-los.`
+    : "";
+
   return `Voce e a ${a}, atendente da clinica de estetica "${clinic.name}".${areaLine}
 Atenda pelo WhatsApp de forma humanizada, calorosa e objetiva, como uma recepcionista experiente.
 
@@ -217,14 +528,15 @@ NUNCA se apresente nem se descreva como IA, inteligencia artificial, assistente 
 
 Seu trabalho:
 1. Entender o interesse do paciente e qualificar (procedimento desejado, se e novo paciente).
-2. Usar a ferramenta check_availability para consultar horarios reais antes de sugerir qualquer data.
-3. Confirmar o horario escolhido com o paciente e so entao usar book_appointment.
-4. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${handoffLine}
+2. Manter a etapa do paciente no funil atualizada (update_crm_stage) conforme a conversa avanca.
+3. Checar disponibilidade real (check_specific_time / check_availability) antes de falar de qualquer data.
+4. Confirmar o horario escolhido com o paciente e so entao usar book_appointment.
+5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${handoffLine}
 
 Procedimentos oferecidos pela clinica:
 ${procedureList || "(nenhum procedimento cadastrado ainda)"}
 
-Use so os dados de valor, beneficio, indicacao e prazo que estao cadastrados acima em cada procedimento. Se o paciente perguntar algo que nao esta ali (preco de um item sem valor, prazo de um item sem prazo cadastrado, etc.), diga que precisa confirmar na avaliacao/com a equipe - nunca invente numero, garantia ou prazo.${templatesBlock}${faqBlock}${playbookBlock}
+Use so os dados de valor, beneficio, indicacao e prazo que estao cadastrados acima em cada procedimento. Se o paciente perguntar algo que nao esta ali (preco de um item sem valor, prazo de um item sem prazo cadastrado, etc.), diga que precisa confirmar na avaliacao/com a equipe - nunca invente numero, garantia ou prazo.${scheduleBlock}${stagesBlock}${templatesBlock}${faqBlock}${playbookBlock}
 
 Responda sempre em portugues do Brasil, em mensagens curtas como quem digita no WhatsApp.${await getActiveRulesPrompt(clinicId)}`;
 }
@@ -281,7 +593,7 @@ export async function handleIncomingMessage(params: {
   ];
 
   let finalText = "";
-  for (let turn = 0; turn < 4; turn++) {
+  for (let turn = 0; turn < 6; turn++) {
     const response = await openai.chat.completions.create({
       model: MODEL,
       messages,
@@ -297,8 +609,14 @@ export async function handleIncomingMessage(params: {
 
     for (const toolCall of choice.tool_calls) {
       if (toolCall.type !== "function") continue;
-      const input = JSON.parse(toolCall.function.arguments || "{}");
-      const result = await runTool(clinicId, patient.id, toolCall.function.name, input);
+      let result: string;
+      try {
+        const input = JSON.parse(toolCall.function.arguments || "{}");
+        result = await runTool(clinicId, patient.id, toolCall.function.name, input);
+      } catch (err) {
+        console.error(`Falha na ferramenta ${toolCall.function.name}:`, err);
+        result = "Ocorreu um erro ao executar essa acao. Nao invente o resultado; peca desculpas e diga que vai confirmar com a equipe.";
+      }
       messages.push({ role: "tool", tool_call_id: toolCall.id, content: result });
     }
   }

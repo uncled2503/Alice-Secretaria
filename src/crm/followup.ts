@@ -2,11 +2,29 @@ import cron from "node-cron";
 import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 import { getFunnelStages } from "./stages.js";
+import { movePatientToKind } from "./stageAutomation.js";
 import { renderMessageTemplate, getClinicTemplateInfo, type ClinicTemplateInfo } from "./template.js";
 
 // Cache simples por execucao do job.
 const stagesCache = new Map<string, Awaited<ReturnType<typeof getFunnelStages>>>();
 const clinicCache = new Map<string, { timezone: string; info: ClinicTemplateInfo }>();
+const rulesCache = new Map<string, Awaited<ReturnType<typeof prisma.followUpRule.findMany>>>();
+
+async function cachedRules(clinicId: string) {
+  let rules = rulesCache.get(clinicId);
+  if (!rules) {
+    rules = await prisma.followUpRule.findMany({
+      where: { clinicId, active: true },
+      orderBy: { order: "asc" },
+    });
+    rulesCache.set(clinicId, rules);
+  }
+  return rules;
+}
+
+function ruleThresholdMin(rule: { afterMinutes: number; afterDays: number }): number {
+  return rule.afterMinutes > 0 ? rule.afterMinutes : rule.afterDays * 1440;
+}
 
 async function cachedStages(clinicId: string) {
   let stages = stagesCache.get(clinicId);
@@ -43,6 +61,7 @@ function withinWindow(hour: number, start: number | null, end: number | null): b
 export async function runFollowUpCheck(): Promise<void> {
   stagesCache.clear();
   clinicCache.clear();
+  rulesCache.clear();
 
   const conversations = await prisma.conversation.findMany({
     where: { status: "active", humanTakeover: false },
@@ -67,11 +86,30 @@ export async function runFollowUpCheck(): Promise<void> {
       continue; // ja ganhou, perdeu, ou esta em pos-procedimento - nao e recontato
     }
 
+    const rules = await cachedRules(clinicId);
     const nextOrder = conversation.lastFollowUpOrder + 1;
-    const rule = await prisma.followUpRule.findFirst({
-      where: { clinicId, order: nextOrder, active: true },
-    });
-    if (!rule) continue;
+    const rule = rules.find((r) => r.order === nextOrder);
+    if (!rule) {
+      // Cascata esgotada. Se o paciente continua em silencio, sem agendamento
+      // futuro, e a clinica tem recontatos configurados, marca como perdido e
+      // fecha a conversa (uma vez).
+      if (rules.length === 0) continue;
+      const lastRule = rules[rules.length - 1];
+      const graceMin = Math.max(ruleThresholdMin(lastRule), 2 * 1440);
+      const silenceMin = (Date.now() - lastPatientMessage.createdAt.getTime()) / 60_000;
+      if (silenceMin < graceMin) continue;
+
+      const upcoming = await prisma.appointment.findFirst({
+        where: { patientId: conversation.patientId, status: "confirmed", scheduledAt: { gte: new Date() } },
+      });
+      if (upcoming) continue;
+
+      await movePatientToKind(clinicId, conversation.patientId, "perdido", {
+        note: "sem resposta apos toda a cascata de recontato",
+      });
+      await prisma.conversation.update({ where: { id: conversation.id }, data: { status: "closed" } });
+      continue;
+    }
 
     if (rule.skipIfUpcomingAppt) {
       const upcoming = await prisma.appointment.findFirst({

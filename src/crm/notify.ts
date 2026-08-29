@@ -1,7 +1,7 @@
 import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 
-export type NotifyEvent = "new_appointment" | "reschedule" | "cancel" | "human_handoff";
+export type NotifyEvent = "new_appointment" | "reschedule" | "cancel" | "human_handoff" | "confirmed";
 
 // Avisa a equipe (notifyPhone da clinica) sobre um evento, pelo proprio
 // WhatsApp da clinica - so manda se a clinica tiver um numero configurado E
