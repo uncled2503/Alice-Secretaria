@@ -9,7 +9,7 @@ import { startRenewalJob } from "./reminders/renewal.js";
 import { startBirthdayJob } from "./reminders/birthday.js";
 import { startFollowUpJob } from "./crm/followup.js";
 import { startBroadcastJob } from "./crm/broadcast.js";
-import { restoreAllConnections } from "./whatsapp/manager.js";
+import { startUazapiWebhookWorker } from "./uazapi/client.js";
 import { apiRouter } from "./api/routes.js";
 import { readStaffSession } from "./api/staffSession.js";
 import { prisma } from "./db/client.js";
@@ -89,7 +89,8 @@ app.use(
   "/api",
   async (req, res, next) => {
     req.staff = readStaffSession(req.headers.cookie);
-    if (!req.staff && !PUBLIC_API_PATHS.has(req.path)) {
+    const isUazapiWebhook = req.method === "POST" && req.path.startsWith("/uazapi/webhook/");
+    if (!req.staff && !PUBLIC_API_PATHS.has(req.path) && !isUazapiWebhook) {
       res.status(401).json({ error: "Login necessario" });
       return;
     }
@@ -137,5 +138,5 @@ app.listen(port, () => {
   startBirthdayJob();
   startFollowUpJob();
   startBroadcastJob();
-  restoreAllConnections().catch((err) => console.error("Falha ao restaurar conexoes do WhatsApp:", err));
+  startUazapiWebhookWorker().catch((err) => console.error("Falha ao iniciar fila de webhooks UAZAPI:", err));
 });

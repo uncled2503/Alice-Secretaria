@@ -446,7 +446,23 @@
         </div>
 
         <div id="sub-channels" class="settings-subpanel">
-          <p class="hint">Conexão direta com o WhatsApp — sem gateway externo. Escaneie o QR Code pelo WhatsApp do celular (Aparelhos conectados → Conectar um aparelho).</p>
+          <p class="hint">Conexão pela UAZAPI. Cada clínica usa uma instância própria; escaneie o QR Code pelo WhatsApp do celular (Aparelhos conectados → Conectar um aparelho).</p>
+          <div id="channel-uazapi-config" class="card" style="display:none;margin-bottom:1rem">
+            <div class="section-header" style="margin-top:0"><span class="nav-icon" data-icon="guide"></span> Credenciais da UAZAPI</div>
+            <p class="hint" style="margin-top:0">Use a URL do seu servidor UAZAPI e o <strong>token da instância</strong> (não o admintoken). O token salvo nunca volta para o navegador.</p>
+            <div class="uazapi-config-grid">
+              <label>URL da UAZAPI
+                <input id="channel-uazapi-url" type="url" placeholder="https://seuservidor.uazapi.com" autocomplete="off" />
+              </label>
+              <label>Token da instância
+                <input id="channel-uazapi-token" type="password" placeholder="Cole para configurar ou trocar" autocomplete="new-password" />
+              </label>
+            </div>
+            <div class="broadcast-form-row" style="align-items:center;margin-top:0.8rem">
+              <button id="btn-channel-uazapi-save" type="button">Salvar e validar</button>
+              <span id="channel-uazapi-config-status" class="hint" style="margin:0"></span>
+            </div>
+          </div>
           <div class="card channel-card">
             <div id="channel-status-badge" class="badge badge-neutral">Verificando…</div>
             <p id="channel-last-error" class="hint" style="color:#b91c1c;margin:0.5rem 0 0"></p>
@@ -456,7 +472,7 @@
             </div>
             <div id="channel-qr-wrap" style="display:none">
               <img id="channel-qr-img" alt="QR Code do WhatsApp" />
-              <p class="hint" style="margin:0.6rem 0 0">Expira em cerca de 1 minuto — clique em "Gerar novo QR Code" se passar do tempo.</p>
+              <p class="hint" style="margin:0.6rem 0 0">A UAZAPI mantém o pareamento por até 2 minutos — clique em "Gerar novo QR Code" se expirar.</p>
             </div>
             <div class="broadcast-form-row" style="margin-top:0.8rem">
               <button id="btn-channel-connect" type="button">Gerar QR Code</button>
@@ -465,7 +481,7 @@
           </div>
 
           <div class="section-header" style="margin-top:1.2rem"><span class="nav-icon" data-icon="repeat"></span> Importar dados do WhatsApp</div>
-          <p class="hint" style="margin-top:0">Traga sua agenda de contatos e até 30 dias de conversas. Mensagens antigas entram como lidas e a Alice não responde a essas conversas importadas.</p>
+          <p class="hint" style="margin-top:0">Traga os contatos e as conversas dos últimos 7 dias armazenados pela UAZAPI. Mensagens antigas entram como lidas e a Alice não responde a essas conversas importadas.</p>
           <div class="card">
             <div class="broadcast-form-row" style="align-items:center">
               <button id="btn-channel-import" type="button">Importar do WhatsApp</button>

@@ -749,6 +749,16 @@ td.actions { display: flex; gap: 0.4rem; }
   display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 0.8rem;
   margin: 1rem 0; padding: 0.9rem; border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
 }
+
+.uazapi-config-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.8rem;
+}
+
+@media (max-width: 720px) {
+  .uazapi-config-grid { grid-template-columns: 1fr; }
+}
 .import-stats-grid div { display: flex; flex-direction: column; gap: 0.1rem; }
 .import-stats-grid span { font-size: 1.4rem; font-weight: 700; color: var(--accent-dark); }
 .import-stats-grid label { font-size: 0.72rem; color: var(--text-muted); }

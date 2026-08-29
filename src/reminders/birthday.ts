@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import { prisma } from "../db/client.js";
-import { sendText } from "../whatsapp/manager.js";
+import { sendText } from "../uazapi/client.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js";
 
 // { hour, month (1-12), day } na timezone informada, no instante `at`.

@@ -1,5 +1,5 @@
 import { prisma } from "../db/client.js";
-import { sendText } from "../whatsapp/manager.js";
+import { sendText } from "../uazapi/client.js";
 
 export type NotifyEvent = "new_appointment" | "reschedule" | "cancel" | "human_handoff";
 

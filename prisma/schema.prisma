@@ -22,6 +22,11 @@ model Clinic {
   notifyPhone   String?   // numero (com DDI/DDD) que recebe avisos de agendamento/cancelamento/handoff via WhatsApp
   notifyEvents  String    @default("") // quais avisos mandar pro notifyPhone, separados por virgula: new_appointment,reschedule,cancel,human_handoff
 
+  // Credenciais da instancia UAZAPI desta clinica. O token nunca e enviado
+  // ao navegador; fica restrito ao backend e aos backups protegidos do banco.
+  uazapiBaseUrl String?
+  uazapiToken   String?   @unique
+
   // Como a Alice se apresenta no atendimento ao paciente. Ela NUNCA se
   // identifica como IA/assistente virtual - so como:
   //   team                   -> "da equipe da {clinica}"
@@ -63,6 +68,25 @@ model Clinic {
   messageTemplates MessageTemplate[]
   faqs          ClinicFaq[]
   playbooks     Playbook[]
+  uazapiWebhookEvents UazapiWebhookEvent[]
+}
+
+// Fila duravel dos webhooks da UAZAPI. A rota confirma o recebimento rapido
+// e o worker processa depois, com idempotencia e novas tentativas.
+model UazapiWebhookEvent {
+  id         String   @id @default(cuid())
+  clinicId   String
+  clinic     Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  externalId String
+  payload    String
+  status     String   @default("pending") // pending | processing | done | failed
+  attempts   Int      @default(0)
+  error      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([clinicId, externalId])
+  @@index([status, createdAt])
 }
 
 // "Mensagens prontas": textos que a Alice reaproveita no atendimento

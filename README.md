@@ -7,9 +7,9 @@ peça conforme os leads forem aparecendo.
 - **Node.js + TypeScript**, um único processo (servidor HTTP + cron no mesmo processo).
 - **SQLite** via Prisma — banco em arquivo, zero custo de hospedagem de DB. Trocar para Postgres depois é só mudar `provider` no `prisma/schema.prisma`.
 - **OpenAI** (`gpt-4o-mini` por padrão) como modelo de IA — barato, dá conta de qualificar lead e agendar. Troque via `OPENAI_MODEL` no `.env` se quiser mais qualidade ou não tiver acesso a esse modelo na sua conta.
-- **Baileys** (`@whiskeysockets/baileys`) para conectar o WhatsApp direto via QR Code — biblioteca open-source que fala o mesmo protocolo do WhatsApp Web, rodando dentro do próprio processo da Alice. Sem gateway pago (UazAPI/Z-API) no meio: zero custo por mensagem, zero dependência de um serviço terceiro pra ficar no ar.
+- **UAZAPI** como gateway do WhatsApp — uma instância por clínica, com QR Code, status, envio e webhook gerenciados pelo provedor.
 
-Custo variável: você só paga por token de IA conforme o uso real — não há infraestrutura fixa além de onde hospedar o processo (pode rodar num VPS de ~R$20-25/mês, ou até local pra validar antes de colocar em produção).
+Custo variável: uso da OpenAI + plano/instâncias da UAZAPI, além da hospedagem da Alice.
 
 ## Setup
 
@@ -19,10 +19,11 @@ Custo variável: você só paga por token de IA conforme o uso real — não há
    ```
 2. Copiar `.env.example` para `.env` e preencher:
    - `OPENAI_API_KEY` (platform.openai.com)
-   - `WHATSAPP_AUTH_DIR`: pasta onde fica a sessão (credenciais do "aparelho conectado") de cada clínica — em produção **precisa** estar num volume persistente, senão perde a conexão a cada deploy
+   - `PUBLIC_BASE_URL`: URL HTTPS pública da Alice, usada pela UAZAPI para entregar webhooks
+   - `UAZAPI_WEBHOOK_SECRET`: segredo aleatório com pelo menos 32 caracteres, diferente das outras chaves
    - `SESSION_SECRET`: chave aleatória forte usada para assinar os cookies de login; o servidor não sobe sem ela
    - `ADMIN_BOOTSTRAP_TOKEN`: outro valor aleatório, usado uma única vez para autorizar a criação do primeiro administrador
-   - `BACKUP_DIR`: destino dos backups do SQLite e das sessões do WhatsApp
+   - `BACKUP_DIR`: destino dos backups do SQLite
 3. Criar o banco e rodar as migrações:
    ```
    npx prisma migrate dev --name init
@@ -40,13 +41,15 @@ Custo variável: você só paga por token de IA conforme o uso real — não há
    curl.exe -X POST http://localhost:3010/api/staff/bootstrap-admin -H "Content-Type: application/json" -H "X-Bootstrap-Token: VALOR-DE-ADMIN_BOOTSTRAP_TOKEN" -d "{\"name\":\"Administrador\",\"username\":\"admin\",\"password\":\"USE-UMA-SENHA-FORTE\"}"
    ```
    Depois da criação, remova `ADMIN_BOOTSTRAP_TOKEN` do ambiente; a rota também se desativa automaticamente porque já existe um admin.
-7. Acessar `http://localhost:3010/admin`, entrar com a conta criada, ir em **Personalizar Alice → Canais** e clicar em "Gerar QR Code".
-8. Escanear o QR Code pelo WhatsApp do celular (Aparelhos conectados → Conectar um aparelho). Não precisa de túnel/webhook — a conexão é direta, o próprio processo da Alice fala com os servidores do WhatsApp.
+7. Acessar `http://localhost:3010/admin`, entrar como admin e ir em **Personalizar Alice → Canais**.
+8. Informar a URL do servidor UAZAPI e o **token da instância**, clicar em **Salvar e validar** e depois em **Gerar QR Code**.
+9. Escanear o QR Code pelo WhatsApp do celular (Aparelhos conectados → Conectar um aparelho). A Alice configura o webhook da instância automaticamente.
 
 ## Múltiplas clínicas
 O sistema atende quantas clínicas você quiser, cada uma com seu próprio número de WhatsApp:
-- Cada clínica tem sua própria sessão do WhatsApp (pasta separada dentro de `WHATSAPP_AUTH_DIR`), conectada individualmente pela aba **Canais** depois de selecionar a clínica no seletor do topo do painel.
-- Mensagens recebidas são roteadas em memória (cada clínica tem seu próprio socket Baileys) — não depende de token de gateway nem de número de telefone mascarado.
+- Cada clínica precisa de uma instância UAZAPI própria e de um token de instância diferente.
+- A URL/token são salvos por clínica no SQLite. O token nunca é retornado pela API do painel nem enviado ao navegador depois de salvo.
+- A URL de webhook inclui uma assinatura HMAC específica da clínica; eventos recebidos entram numa fila durável e idempotente antes de serem processados.
 - Pra cadastrar uma segunda clínica: aba **Clínicas** no painel (nome e telefone — o telefone é atualizado sozinho assim que o QR é escaneado). Depois disso, o seletor de clínica no topo do painel troca todo o contexto (contatos, CRM, chat, agenda, recontato, mensagens, regras) pra clínica escolhida.
 - Cada clínica tem seus próprios procedimentos, funil, regras e mensagens — totalmente isolados. Depois de cadastrar uma clínica nova, adicione os procedimentos dela na aba **Procedimentos** antes de conectar o WhatsApp — sem isso, a Alice não tem o que oferecer.
 
@@ -78,26 +81,56 @@ O painel usa contas individuais. `admin` pode operar todas as clínicas; `client
 
 Mensagens de voz também funcionam: a Alice manda o áudio direto pro Whisper da OpenAI (mesma `OPENAI_API_KEY`) pra transcrever — só paga quando alguém realmente manda áudio, custo zero em silêncio. Imagem/vídeo/documento ainda são ignorados (não tem transcrição pra eles).
 
-## Conexão com o WhatsApp (Baileys) e risco de banimento
-A conexão roda direto no processo da Alice via `@whiskeysockets/baileys`, sem gateway pago no meio. Medidas tomadas pra manter o número estável e reduzir risco de ban:
-- **Fingerprint de dispositivo real** (`Browsers.macOS("Desktop")`) em vez do identificador padrão da biblioteca.
-- **Simulação de digitação** antes de cada resposta (tempo proporcional ao tamanho da mensagem) — evita respostas instantâneas, que são o padrão mais fácil de detectar como bot.
-- **Não fica "online" o tempo todo** (`markOnlineOnConnect: false`) e não sincroniza o histórico antigo de conversas (`syncFullHistory: false`) — menos tráfego, menos coisa fora do padrão de uso humano.
-- **Envio em massa (mensagens programadas) em lotes de 20**, só dentro do horário comercial da clínica — nunca dispara centenas de mensagens de uma vez.
-- **Reconexão automática com backoff** quando a conexão cai por instabilidade; se o WhatsApp encerrar a sessão de propósito (logout), a sessão salva é apagada e pede um novo QR Code — não fica tentando reconectar uma sessão inválida.
+## Conexão com o WhatsApp pela UAZAPI
 
-Mesmo assim, qualquer automação de WhatsApp não-oficial carrega algum risco. Recomendado: usar um número que já tenha histórico de uso normal (não um chip novo), evitar mandar mensagem pra quem nunca conversou com a clínica, e não reduzir os intervalos/lotes acima sem necessidade.
+A integração segue a [documentação oficial uazapiGO](https://docs.uazapi.com/) v2.1.1:
 
-### QR Code não aparece no EasyPanel
+- `GET /instance/status`: consulta conexão, telefone, perfil e QR atual.
+- `POST /instance/connect`: inicia o pareamento por QR Code.
+- `POST /instance/disconnect`: encerra a sessão e exige novo QR.
+- `POST /send/text`: envia mensagens; o campo `delay` mostra “digitando…” durante o atraso humanizado.
+- `POST /chat/details`: consulta a foto de perfil usada na lista de conversas.
+- `POST /chat/find` e `POST /message/find`: importam os chats/mensagens retidos pela UAZAPI (até 7 dias).
+- `POST /message/download`: baixa áudio em base64; a transcrição continua sendo feita diretamente pela Alice, sem entregar a chave OpenAI à UAZAPI.
+- `POST /webhook`: a Alice configura automaticamente eventos `messages` e `connection`, excluindo mensagens da própria API, mensagens enviadas pelo número e grupos.
 
-Algumas faixas de IP de datacenter são recusadas pelo WhatsApp antes mesmo da geração do QR (`statusCode=428`). A mesma versão do código pode funcionar normalmente em uma rede residencial e falhar na VPS. Nesse caso:
+### Criar e cadastrar uma instância
 
-1. Configure `WHATSAPP_PROXY_URL` no EasyPanel com uma proxy residencial ou móvel estável (`http://`, `https://` ou `socks5://`).
-2. Não use proxy rotativa: uma mesma clínica precisa manter o mesmo IP. Quando houver várias proxies, o sistema fixa cada clínica em uma delas.
-3. Reinicie o serviço e clique em **Gerar QR Code** novamente.
-4. Confira os logs: eles informam se a tentativa saiu por IP direto ou proxy e mostram claramente os erros `428`, `408`, `401` e `515`.
+1. No painel da UAZAPI, crie uma instância para a clínica.
+2. Copie a URL do servidor, por exemplo `https://seusubdominio.uazapi.com`.
+3. Copie o **token da instância**. Não use `admintoken`: ele serve para administração do servidor e é mais sensível.
+4. Na Alice, selecione a clínica e abra **Personalizar Alice → Canais**.
+5. Cole URL e token, clique em **Salvar e validar**. A Alice consulta `/instance/status` antes de aceitar as credenciais.
+6. Clique em **Gerar QR Code** e escaneie pelo celular.
+7. O painel passa a consultar o status remoto. Não existe mais pasta de sessão nem proxy no servidor da Alice; a sessão fica na UAZAPI.
 
-O painel encerra tentativas sem QR após 30 segundos, em vez de permanecer para sempre em “Conectando”. Um erro 428 não é repetido automaticamente para evitar aumentar o bloqueio temporário.
+### Webhook e segurança
+
+Defina no ambiente da Alice:
+
+```env
+PUBLIC_BASE_URL=https://alice.seudominio.com.br
+UAZAPI_WEBHOOK_SECRET=gere-um-segredo-aleatorio-de-pelo-menos-32-caracteres
+```
+
+Ao salvar as credenciais, a Alice registra na UAZAPI uma URL no formato:
+
+```text
+https://alice.seudominio.com.br/api/uazapi/webhook/{clinicId}/{assinatura-hmac}
+```
+
+A rota é pública porque precisa ser chamada pela UAZAPI, mas exige assinatura HMAC. Se o payload trouxer o token da instância, ele também é comparado de forma segura. O evento é gravado no SQLite antes da resposta `200`; duplicatas são ignoradas e falhas têm até três tentativas internas.
+
+### Diagnóstico
+
+- **“UAZAPI não configurada”**: salve URL e token na aba Canais.
+- **UAZAPI HTTP 401**: token de instância inválido ou pertencente a outro servidor.
+- **Credenciais salvas, mas webhook pendente**: confira `PUBLIC_BASE_URL` e `UAZAPI_WEBHOOK_SECRET`, faça novo deploy e salve novamente.
+- **QR não aparece**: consulte a própria instância no painel UAZAPI; a Alice apenas exibe o `qrcode` retornado por `/instance/status`.
+- **Mensagens chegam na UAZAPI, mas não na Alice**: veja `GET /webhook/errors` na UAZAPI e confirme que a URL pública responde HTTPS.
+- **HTTP 429/503**: limite/capacidade da UAZAPI; aguarde e consulte seu plano ou suporte.
+
+A UAZAPI continua sendo uma integração não oficial do WhatsApp. Use preferencialmente WhatsApp Business, números com histórico normal, consentimento dos destinatários e volumes moderados.
 
 ## Rodando em produção
 
@@ -109,13 +142,13 @@ O painel encerra tentativas sem QR após 30 segundos, em vez de permanecer para 
    ```
 2. **Criar o App no EasyPanel**: Novo serviço → App → Source = GitHub (aponte pro repo/branch) → Builder = Railpack (detecta Node.js sozinho, não precisa de Dockerfile).
 3. **Banco persistente (importante!)**: na aba **Storage/Mounts**, adicione um **Volume** montado em `/app/data`. Sem isso, o SQLite é apagado a cada deploy. Aponte `DATABASE_URL` pra dentro dele: `file:/app/data/prod.db`.
-4. **Sessão do WhatsApp persistente (importante!)**: adicione um **segundo Volume** montado em `/app/whatsapp-auth`, e aponte `WHATSAPP_AUTH_DIR=/app/whatsapp-auth`. Sem isso, cada deploy derruba a conexão de todas as clínicas e exige escanear o QR Code de novo.
-5. **Backup persistente**: adicione um terceiro volume em `/app/backups` e configure `BACKUP_DIR=/app/backups`. O comando `npm run backup` cria uma cópia consistente do SQLite junto das sessões do WhatsApp.
-6. **Variáveis de ambiente**: aba Environment, cole o conteúdo do `.env` (com os valores reais, não os de exemplo) — incluindo `DATABASE_URL`, `WHATSAPP_AUTH_DIR`, `BACKUP_DIR`, `SESSION_SECRET`, `ADMIN_BOOTSTRAP_TOKEN` e `NODE_ENV=production`.
-7. **Domínio**: aba Domains, adicione o domínio/subdomínio (DNS já apontando pro IP da VPS antes disso), ative HTTPS — o EasyPanel emite o certificado Let's Encrypt sozinho.
-8. **Réplicas**: deixe em **1** na aba Advanced — SQLite não aguenta mais de um processo escrevendo ao mesmo tempo, e cada clínica só pode ter uma sessão do WhatsApp ativa por vez.
-9. Deploy. O `npm start` já roda `prisma migrate deploy` antes de subir o servidor, então o banco no volume é migrado automaticamente a cada deploy.
-10. Crie a primeira conta admin pela rota de bootstrap descrita no Setup e depois escaneie o QR Code de cada clínica.
+4. **Backup persistente**: adicione outro volume em `/app/backups` e configure `BACKUP_DIR=/app/backups`.
+5. **Variáveis de ambiente**: inclua `DATABASE_URL`, `BACKUP_DIR`, `PUBLIC_BASE_URL`, `UAZAPI_WEBHOOK_SECRET`, `SESSION_SECRET` e `NODE_ENV=production`. `ADMIN_BOOTSTRAP_TOKEN` só é necessário até criar o primeiro admin.
+6. **Domínio**: adicione o domínio/subdomínio, ative HTTPS e use exatamente essa origem em `PUBLIC_BASE_URL`.
+7. **Réplicas**: deixe em **1** — SQLite e o worker da fila de webhook pressupõem um único processo.
+8. Deploy. O `npm start` roda `prisma migrate deploy` antes de iniciar a aplicação.
+9. Entre como admin, selecione cada clínica e cadastre URL/token da instância em **Canais**.
+10. Gere e leia o QR. A UAZAPI preserva a sessão; deploys da Alice não exigem novo pareamento.
 
 Dentro do EasyPanel **não precisa do pm2** — o próprio Docker/EasyPanel reinicia o container se o processo cair.
 
@@ -133,19 +166,19 @@ Testado matando o processo Node manualmente: o pm2 detectou a queda e subiu de n
 ## Operação, testes e backup
 
 - `npm run check`: compila o TypeScript e executa os testes automatizados.
-- `npm run backup`: cria em `BACKUP_DIR` uma cópia consistente do SQLite e uma cópia de `WHATSAPP_AUTH_DIR`, com manifesto e data.
+- `npm run backup`: cria em `BACKUP_DIR` uma cópia consistente do SQLite, com manifesto e data. O banco contém tokens UAZAPI; proteja e criptografe as cópias fora do servidor.
 - Agende `npm run backup` diariamente no host/EasyPanel e copie os arquivos para outro servidor ou armazenamento de objetos. O projeto não apaga backups antigos automaticamente; configure retenção fora da aplicação.
 - Configure um monitor externo para consultar `https://SEU-DOMINIO/health` e avisar quando houver respostas diferentes de `200`. O health check do Docker detecta falhas, mas não envia alertas para pessoas.
 - Faça periodicamente um teste de restauração. Um backup que nunca foi restaurado ainda não é uma garantia operacional.
-- `.env`, `whatsapp-auth/`, `.relay-sessions/` e `backups/` são sensíveis e estão excluídos do Git e da imagem Docker.
+- `.env` e `backups/` são sensíveis e estão excluídos do Git e da imagem Docker.
 
 ## Estrutura
 ```
 src/
-  server.ts             # Express: monta painel e API, restaura conexoes do WhatsApp ao subir
+  server.ts             # Express: monta painel/API e inicia a fila de webhooks
   ai/alice.ts           # Prompt da Alice + function calling (OpenAI) pra consultar agenda e agendar
   scheduling/slots.ts   # Calcula horários livres a partir dos agendamentos existentes
-  whatsapp/manager.ts   # Conexao direta com o WhatsApp via Baileys (QR, envio/recebimento, transcricao de audio, reconexao, anti-ban)
+  uazapi/client.ts      # Cliente UAZAPI, status/QR, envio, webhook, fila, áudio e importação
   reminders/cron.ts     # Regras configuráveis de lembrete de agendamento
   crm/stages.ts         # Etapas do funil kanban por clinica (auto-cria as 10 padrao na 1a vez)
   crm/followup.ts       # Sequência de recontato por silêncio (roda a cada 15 min)
@@ -155,12 +188,11 @@ src/
   api/staffSession.ts   # Cookie assinado e identidade da conta logada
   api/passwords.ts      # Hash e validação de senhas com scrypt
   db/client.ts          # Prisma client
-  maintenance/backup.ts # Backup consistente do SQLite e das sessões
+  maintenance/backup.ts # Backup consistente do SQLite
 public/                 # Painel administrativo (HTML/CSS/JS puro, sem build)
 prisma/schema.prisma    # Modelo de dados (Clinic, Procedure, Patient, Conversation, Appointment, FunnelStage)
-whatsapp-auth/          # Sessao do WhatsApp de cada clinica (gerado em runtime — NUNCA commitar, equivale a login/senha da conta)
 tests/                  # Testes automatizados executados sobre o build de produção
 ```
 
 ## Projeto em ESM
-O `package.json` tem `"type": "module"` — necessário porque o Baileys (a partir da v7) é publicado como ESM puro e uma de suas dependências não tem build CommonJS. Por isso todo import relativo dentro de `src/` usa extensão `.js` explícita (ex: `from "../db/client.js"`, mesmo o arquivo sendo `client.ts`) — é assim que o Node resolve módulos ESM. Ao criar um arquivo novo, siga o mesmo padrão.
+O `package.json` tem `"type": "module"`. Todo import relativo dentro de `src/` usa extensão `.js` (ex.: `from "../db/client.js"`, mesmo o arquivo-fonte sendo `.ts`) para seguir a resolução `NodeNext`.

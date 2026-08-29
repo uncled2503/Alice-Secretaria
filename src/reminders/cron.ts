@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import { prisma } from "../db/client.js";
-import { sendText } from "../whatsapp/manager.js";
+import { sendText } from "../uazapi/client.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js";
 
 // Roda a cada 15min. Cada regra ativa dispara uma vez por agendamento (marca

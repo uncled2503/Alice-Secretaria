@@ -2,7 +2,18 @@ import { Router, type Request, type Response, type RequestHandler } from "expres
 import { rateLimit } from "express-rate-limit";
 import { timingSafeEqual } from "crypto";
 import { prisma } from "../db/client.js";
-import { sendText, connectClinic, disconnectClinic, getStatus, getQrDataUrl, getProfilePicUrl, triggerHistoryImport } from "../whatsapp/manager.js";
+import {
+  sendText,
+  connectClinic,
+  disconnectClinic,
+  getStatus,
+  getProfilePicUrl,
+  triggerHistoryImport,
+  getUazapiConfig,
+  saveUazapiConfig,
+  verifyWebhookSignature,
+  enqueueWebhook,
+} from "../uazapi/client.js";
 import { getFunnelStages, generateStageId } from "../crm/stages.js";
 import { logActivity, ACTIVITY_AREAS, ACTIVITY_TYPES } from "../crm/activity.js";
 import { createRuleDraft, RULE_CATEGORIES, seedDefaultRules } from "../ai/rules.js";
@@ -12,6 +23,26 @@ import { hashPassword, verifyPassword } from "./passwords.js";
 import { createSessionCookie, clearSessionCookie } from "./staffSession.js";
 
 export const apiRouter = Router();
+
+// Webhook publico da UAZAPI. Nao usa a sessao do painel: a autenticacao e
+// feita por assinatura HMAC especifica da clinica e, quando presente, pelo
+// token da instancia contido no payload.
+apiRouter.post(
+  "/uazapi/webhook/:clinicId/:signature",
+  asyncRoute(async (req, res) => {
+    if (!verifyWebhookSignature(req.params.clinicId, req.params.signature)) {
+      res.status(401).json({ error: "Assinatura de webhook invalida" });
+      return;
+    }
+    try {
+      const result = await enqueueWebhook(req.params.clinicId, req.body);
+      res.status(200).json({ ok: true, result });
+    } catch (error) {
+      console.error("[UAZAPI] Falha ao receber webhook:", error);
+      res.status(400).json({ error: "Webhook rejeitado" });
+    }
+  })
+);
 
 // --- Assistente de ajuda do painel (somente usuario autenticado) ---
 // Mesmo protegido por login, mantem limite por IP para conter abuso acidental
@@ -116,7 +147,8 @@ apiRouter.get(
         requireDepositProof: true,
       },
     });
-    res.json(clinics.map((c) => ({ ...c, ...getStatus(c.id) })));
+    const withStatus = await Promise.all(clinics.map(async (clinic) => ({ ...clinic, ...(await getStatus(clinic.id)) })));
+    res.json(withStatus);
   })
 );
 
@@ -366,14 +398,39 @@ apiRouter.delete(
   })
 );
 
-// Conexao do WhatsApp direto pelo painel (sem depender de gateway externo).
+// Configuracao e conexao da instancia UAZAPI da clinica.
+apiRouter.get(
+  "/whatsapp/config",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    res.json(await getUazapiConfig(clinic.id));
+  })
+);
+
+apiRouter.put(
+  "/whatsapp/config",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await getClinic(req);
+    const { baseUrl, token } = req.body as { baseUrl?: string; token?: string };
+    if (!baseUrl) {
+      res.status(400).json({ error: "baseUrl obrigatoria" });
+      return;
+    }
+    try {
+      res.json(await saveUazapiConfig(clinic.id, { baseUrl, token }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Falha ao validar a UAZAPI";
+      res.status(400).json({ error: message });
+    }
+  })
+);
+
 apiRouter.get(
   "/whatsapp/status",
   asyncRoute(async (req, res) => {
     const clinic = await getClinic(req);
-    const status = getStatus(clinic.id);
-    const qr = status.connecting ? await getQrDataUrl(clinic.id) : null;
-    res.json({ ...status, qr });
+    res.json(await getStatus(clinic.id));
   })
 );
 
@@ -381,12 +438,6 @@ apiRouter.post(
   "/whatsapp/connect",
   asyncRoute(async (req, res) => {
     const clinic = await getClinic(req);
-    // "Gerar QR Code" so aparece no painel quando NAO esta conectado - clicar
-    // aqui significa "quero parear de novo", entao apaga qualquer sessao
-    // salva antes de tentar. Sem isso, uma sessao antiga invalida no disco
-    // fica sendo retentada (e rejeitada pelo WhatsApp) pra sempre, sem nunca
-    // chegar a oferecer um QR novo pra escanear.
-    if (!getStatus(clinic.id).connected) await disconnectClinic(clinic.id, { logout: false });
     await connectClinic(clinic.id);
     res.json({ ok: true });
   })
@@ -396,7 +447,7 @@ apiRouter.post(
   "/whatsapp/disconnect",
   asyncRoute(async (req, res) => {
     const clinic = await getClinic(req);
-    await disconnectClinic(clinic.id, { logout: true });
+    await disconnectClinic(clinic.id);
     res.json({ ok: true });
   })
 );

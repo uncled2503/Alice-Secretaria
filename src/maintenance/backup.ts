@@ -41,26 +41,15 @@ async function main(): Promise<void> {
   // aplicacao esta recebendo mensagens e gravando no SQLite.
   await prisma.$executeRawUnsafe(`VACUUM INTO '${escapedBackupPath}'`);
 
-  const authRoot = path.resolve(process.env.WHATSAPP_AUTH_DIR ?? path.join(process.cwd(), "whatsapp-auth"));
-  let whatsappSessionsIncluded = false;
-  if (fs.existsSync(authRoot)) {
-    fs.cpSync(authRoot, path.join(destination, "whatsapp-auth"), {
-      recursive: true,
-      errorOnExist: true,
-    });
-    whatsappSessionsIncluded = true;
-  }
-
   const manifest = {
     createdAt: new Date().toISOString(),
     databaseFile: "database.db",
-    whatsappSessionsIncluded,
+    whatsappProvider: "uazapi",
     nodeVersion: process.version,
   };
   fs.writeFileSync(path.join(destination, "manifest.json"), JSON.stringify(manifest, null, 2));
 
   console.log(`Backup criado em ${destination}`);
-  if (!whatsappSessionsIncluded) console.warn("WHATSAPP_AUTH_DIR nao existe; o backup contem somente o banco.");
 }
 
 main()

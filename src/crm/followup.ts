@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import { prisma } from "../db/client.js";
-import { sendText } from "../whatsapp/manager.js";
+import { sendText } from "../uazapi/client.js";
 import { getFunnelStages } from "./stages.js";
 import { renderMessageTemplate, getClinicTemplateInfo, type ClinicTemplateInfo } from "./template.js";
 

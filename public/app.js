@@ -2989,7 +2989,23 @@ document.getElementById("btn-add-location").addEventListener("click", async () =
   await loadClinicLocations();
 });
 
-// --- Canais (conexao WhatsApp direta, sem gateway externo) ---
+// --- Canais (UAZAPI) ---
+async function loadUazapiConfig() {
+  const wrap = document.getElementById("channel-uazapi-config");
+  const statusEl = document.getElementById("channel-uazapi-config-status");
+  wrap.style.display = state.staff?.role === "admin" ? "block" : "none";
+  if (state.staff?.role !== "admin") return;
+
+  const config = await api("/whatsapp/config");
+  document.getElementById("channel-uazapi-url").value = config.baseUrl || "https://api.uazapi.com";
+  const tokenInput = document.getElementById("channel-uazapi-token");
+  tokenInput.value = "";
+  tokenInput.placeholder = config.configured && config.tokenHint
+    ? `Token configurado (${config.tokenHint}); deixe vazio para manter`
+    : "Cole o token da instância";
+  statusEl.textContent = config.configured ? "Credenciais configuradas." : "Ainda não configurada.";
+}
+
 async function loadChannelStatus() {
   const status = await api("/whatsapp/status");
   const badge = document.getElementById("channel-status-badge");
@@ -2999,7 +3015,16 @@ async function loadChannelStatus() {
   const disconnectBtn = document.getElementById("btn-channel-disconnect");
   const qrLoading = document.getElementById("channel-qr-loading");
 
-  if (status.connected) {
+  state.channelConnected = !!status.connected;
+
+  if (!status.configured) {
+    badge.textContent = "UAZAPI não configurada";
+    badge.className = "badge badge-red";
+    qrWrap.style.display = "none";
+    qrLoading.style.display = "none";
+    connectBtn.style.display = "none";
+    disconnectBtn.style.display = "none";
+  } else if (status.connected) {
     badge.textContent = "Conectado";
     badge.className = "badge badge-green";
     qrWrap.style.display = "none";
@@ -3060,8 +3085,11 @@ async function loadImportStatus() {
   if (info.status === "running") {
     statusEl.textContent = "Importando… isso pode levar alguns minutos.";
     importBtn.disabled = true;
+  } else if (info.status === "failed") {
+    importBtn.disabled = !state.channelConnected;
+    statusEl.textContent = "A importação falhou. Verifique a conexão e tente novamente.";
   } else {
-    if (!importBtn.disabled) importBtn.disabled = false;
+    importBtn.disabled = !state.channelConnected;
     statusEl.textContent = info.status === "completed" ? "Importação concluída." : "";
   }
 
@@ -3069,7 +3097,7 @@ async function loadImportStatus() {
 }
 
 document.getElementById("btn-channel-import").addEventListener("click", async () => {
-  const msg = "O WhatsApp só reenvia contatos e conversas antigas numa conexão nova. Isso vai desconectar o WhatsApp atual (se estiver conectado) e gerar um novo QR Code - assim que escanear, a importação roda automaticamente. Continuar?";
+  const msg = "Importar os contatos e as conversas dos últimos 7 dias armazenados pela UAZAPI? O WhatsApp continuará conectado.";
   if (!(await showConfirm(msg))) return;
   await api("/whatsapp/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
   await loadChannelStatus();
@@ -3077,8 +3105,9 @@ document.getElementById("btn-channel-import").addEventListener("click", async ()
 
 function startChannelPolling() {
   stopChannelPolling();
+  loadUazapiConfig();
   loadChannelStatus();
-  state.channelPollHandle = setInterval(loadChannelStatus, 2500);
+  state.channelPollHandle = setInterval(loadChannelStatus, 5000);
 }
 
 function stopChannelPolling() {
@@ -3097,6 +3126,33 @@ document.getElementById("btn-channel-disconnect").addEventListener("click", asyn
   if (!await showConfirm("Desconectar o WhatsApp dessa clínica? Vai precisar escanear o QR Code de novo pra reconectar.")) return;
   await api("/whatsapp/disconnect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
   await loadChannelStatus();
+});
+
+document.getElementById("btn-channel-uazapi-save").addEventListener("click", async () => {
+  const button = document.getElementById("btn-channel-uazapi-save");
+  const statusEl = document.getElementById("channel-uazapi-config-status");
+  const baseUrl = document.getElementById("channel-uazapi-url").value.trim();
+  const token = document.getElementById("channel-uazapi-token").value.trim();
+  if (!baseUrl) return showError("Informe a URL da UAZAPI.");
+
+  button.disabled = true;
+  button.textContent = "Validando…";
+  statusEl.textContent = "Consultando a instância…";
+  try {
+    const result = await api("/whatsapp/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ baseUrl, ...(token ? { token } : {}) }),
+    });
+    statusEl.textContent = result.webhookConfigured
+      ? "Credenciais e webhook configurados."
+      : "Credenciais salvas; falta configurar PUBLIC_BASE_URL/UAZAPI_WEBHOOK_SECRET no servidor.";
+    await loadUazapiConfig();
+    await loadChannelStatus();
+  } finally {
+    button.disabled = false;
+    button.textContent = "Salvar e validar";
+  }
 });
 
 // --- Navegacao das sub-abas de "Personalizar Alice" ---
@@ -3165,7 +3221,7 @@ const TOUR_STEPS = [
   { tab: "settings", sub: "broadcasts", target: "#sub-broadcasts", title: "Mensagens Programadas", desc: "Campanhas avulsas pra base de contatos ou um estágio específico do funil, enviadas aos poucos dentro do horário comercial." },
   { tab: "settings", sub: "followup", target: "#sub-followup", title: "Recontato", desc: "Cascata de mensagens automáticas quando um lead fica dias sem responder — reinicia sozinha se ele voltar a falar." },
   { tab: "settings", sub: "funnel", target: "#sub-funnel", title: "Funil", desc: "Configure as etapas do CRM: adicione, renomeie, recolorir ou remova." },
-  { tab: "settings", sub: "channels", target: "#sub-channels", title: "Canais", desc: "Status da conexão do WhatsApp dessa clínica. Gere o QR Code aqui mesmo e escaneie com o celular pra conectar." },
+  { tab: "settings", sub: "channels", target: "#sub-channels", title: "Canais", desc: "Configure a instância UAZAPI da clínica, acompanhe o status e gere o QR Code para conectar o WhatsApp." },
   { tab: "settings", sub: "clinics", target: "#sub-clinics", title: "Clínicas", desc: "Cadastre mais clínicas, cada uma com seu próprio WhatsApp — o seletor no topo da sidebar troca entre elas." },
   { tab: "dashboard", target: "#theme-toggle", title: "Tour concluído", desc: "É só isso! Clique em \"Guia\" a qualquer momento pra rever esse tour." },
 ];

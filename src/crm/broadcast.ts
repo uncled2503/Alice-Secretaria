@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import { prisma } from "../db/client.js";
-import { sendText } from "../whatsapp/manager.js";
+import { sendText } from "../uazapi/client.js";
 
 // Envia aos poucos pra nao estourar limite de taxa do WhatsApp e nao
 // disparar centenas de mensagens de uma vez so (risco real de banimento).

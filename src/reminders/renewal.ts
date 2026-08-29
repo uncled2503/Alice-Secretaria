@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import { prisma } from "../db/client.js";
-import { sendText } from "../whatsapp/manager.js";
+import { sendText } from "../uazapi/client.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js";
 
 const DAY_MS = 24 * 60 * 60_000;
