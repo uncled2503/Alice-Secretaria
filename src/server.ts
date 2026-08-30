@@ -12,6 +12,7 @@ import { startFollowUpJob } from "./crm/followup.js";
 import { startBroadcastJob } from "./crm/broadcast.js";
 import { startUazapiWebhookWorker } from "./uazapi/client.js";
 import { apiRouter } from "./api/routes.js";
+import { externalApiRouter } from "./api/external/router.js";
 import { readStaffSession } from "./api/staffSession.js";
 import { prisma } from "./db/client.js";
 
@@ -136,6 +137,10 @@ app.use(
     setHeaders: (res) => res.set("Cache-Control", "no-store"),
   })
 );
+
+// API Externa (integracao server-to-server por API key). Fica fora do gate de
+// sessao do painel - a autenticacao e a propria chave. Ver src/api/external/.
+app.use("/external/v1", externalApiRouter);
 
 // So /staff/login e /staff/me passam sem sessao (o login em si e o "estou
 // logado?" do frontend); qualquer outra rota de API exige uma conta valida.

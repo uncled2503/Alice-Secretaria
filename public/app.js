@@ -3708,6 +3708,86 @@ document.getElementById("btn-briefing-apply").addEventListener("click", async ()
   }
 });
 
+// --- Chaves da API Externa ---
+async function loadApiKeys() {
+  const keys = await api("/api-keys");
+  const body = document.getElementById("api-keys-body");
+  body.innerHTML = "";
+  for (const k of keys) {
+    const revoked = !!k.revokedAt;
+    const del = el("button", { type: "button", class: "btn-icon-danger", title: "Revogar chave" }, [
+      el("span", { class: "nav-icon", "data-icon": "trash" }, []),
+    ]);
+    del.addEventListener("click", async () => {
+      if (!await showConfirm(`Revogar a chave "${k.name}"? As integrações que a usam param de funcionar.`)) return;
+      await api(`/api-keys/${k.id}`, { method: "DELETE" });
+      loadApiKeys();
+    });
+    body.appendChild(
+      el("tr", { style: revoked ? "opacity:0.5" : "" }, [
+        el("td", {}, [k.name]),
+        el("td", {}, [el("code", {}, [k.lookup + "…"])]),
+        el("td", {}, [el("span", { class: "hint", style: "margin:0" }, [k.scopes.join(", ")])]),
+        el("td", {}, [k.lastUsedAt ? new Date(k.lastUsedAt).toLocaleString("pt-BR") : "—"]),
+        el("td", {}, [revoked ? "Revogada" : "Ativa"]),
+        el("td", {}, [revoked ? "" : del]),
+      ])
+    );
+  }
+  document.getElementById("api-keys-empty").style.display = keys.length ? "none" : "block";
+  paintIcons(body);
+}
+
+document.getElementById("btn-add-api-key").addEventListener("click", async () => {
+  document.getElementById("ak-name").value = "";
+  document.getElementById("api-key-form").style.display = "";
+  document.getElementById("api-key-secret").style.display = "none";
+  document.getElementById("api-key-title").textContent = "Criar chave de API";
+  const box = document.getElementById("ak-scopes");
+  box.innerHTML = "";
+  const scopes = await api("/api-keys/scopes");
+  for (const s of scopes) {
+    box.appendChild(el("label", {}, [el("input", { type: "checkbox", value: s.id }, []), ` ${s.label}`]));
+  }
+  document.getElementById("api-key-overlay").style.display = "flex";
+});
+
+function closeApiKeyModal() {
+  document.getElementById("api-key-overlay").style.display = "none";
+}
+document.getElementById("api-key-close").addEventListener("click", closeApiKeyModal);
+document.getElementById("api-key-overlay").addEventListener("click", (e) => {
+  if (e.target.id === "api-key-overlay") closeApiKeyModal();
+});
+document.getElementById("ak-secret-done").addEventListener("click", () => {
+  closeApiKeyModal();
+  loadApiKeys();
+});
+document.getElementById("ak-secret-copy").addEventListener("click", async () => {
+  await navigator.clipboard.writeText(document.getElementById("ak-secret-value").value);
+  document.getElementById("ak-secret-copy").textContent = "Copiado";
+});
+
+document.getElementById("api-key-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = document.getElementById("ak-name").value.trim();
+  const scopes = Array.from(document.querySelectorAll("#ak-scopes input:checked")).map((c) => c.value);
+  if (!name || !scopes.length) {
+    showError("Dê um nome e selecione ao menos um escopo.");
+    return;
+  }
+  const result = await api("/api-keys", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, scopes }),
+  });
+  document.getElementById("ak-secret-value").value = result.secret;
+  document.getElementById("ak-secret-copy").textContent = "Copiar";
+  document.getElementById("api-key-form").style.display = "none";
+  document.getElementById("api-key-secret").style.display = "";
+  document.getElementById("api-key-title").textContent = "Chave criada";
+});
+
 // --- Navegacao das sub-abas de "Personalizar Alice" ---
 const SETTINGS_SUB_LOADERS = {
   "clinic-data": () => {
@@ -3735,6 +3815,7 @@ const SETTINGS_SUB_LOADERS = {
   clinics: loadClinicsList,
   channels: startChannelPolling,
   team: loadTeam,
+  "external-api": loadApiKeys,
 };
 
 function openSettingsSub(sub) {

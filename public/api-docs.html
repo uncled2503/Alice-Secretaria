@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Alice · Documentação da API Externa</title>
+<style>
+  :root {
+    --bg: #ffffff; --alt: #f7f7fb; --ink: #1c1c22; --muted: #6b6b78; --border: #e6e6ee;
+    --accent: #6d28d9; --code-bg: #1e1e2e; --code-ink: #e4e4f0;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.6 -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); background: var(--bg); }
+  a { color: var(--accent); }
+  .wrap { display: grid; grid-template-columns: 240px 1fr; max-width: 1180px; margin: 0 auto; }
+  nav.side {
+    position: sticky; top: 0; align-self: start; height: 100vh; overflow-y: auto;
+    border-right: 1px solid var(--border); padding: 1.4rem 1rem; font-size: 0.86rem;
+  }
+  nav.side .grp { text-transform: uppercase; font-size: 0.68rem; letter-spacing: 0.06em; color: var(--muted); margin: 1.1rem 0 0.4rem; }
+  nav.side a { display: block; padding: 0.22rem 0.4rem; border-radius: 6px; text-decoration: none; color: var(--ink); }
+  nav.side a:hover { background: var(--alt); }
+  main { padding: 2rem 2.4rem 6rem; min-width: 0; }
+  h1 { font-size: 1.7rem; margin: 0 0 0.3rem; }
+  h2 { font-size: 1.15rem; margin: 2.4rem 0 0.6rem; padding-top: 0.6rem; border-top: 1px solid var(--border); }
+  h3 { font-size: 0.98rem; margin: 1.4rem 0 0.4rem; }
+  p, li { color: #33333d; }
+  code { background: var(--alt); border: 1px solid var(--border); border-radius: 4px; padding: 0.08rem 0.35rem; font-size: 0.86em; }
+  pre { background: var(--code-bg); color: var(--code-ink); border-radius: 10px; padding: 1rem 1.1rem; overflow-x: auto; font-size: 0.83rem; }
+  pre code { background: none; border: none; padding: 0; color: inherit; }
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.8rem; margin: 1.2rem 0; }
+  .cards .c { border: 1px solid var(--border); border-radius: 10px; padding: 0.8rem 0.9rem; }
+  .cards .c .k { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+  .cards .c .v { font-family: monospace; font-size: 0.82rem; margin-top: 0.2rem; word-break: break-all; }
+  .pill { display: inline-block; font-size: 0.7rem; background: var(--alt); border: 1px solid var(--border); border-radius: 999px; padding: 0.1rem 0.55rem; margin-right: 0.3rem; }
+  .ep { display: flex; align-items: center; gap: 0.5rem; font-family: monospace; font-size: 0.9rem; margin: 1.2rem 0 0.3rem; }
+  .m { font-weight: 700; border-radius: 5px; padding: 0.05rem 0.45rem; font-size: 0.78rem; color: #fff; }
+  .m.get { background: #2563eb; } .m.post { background: #16a34a; } .m.patch { background: #d97706; } .m.delete { background: #dc2626; }
+  table.params { border-collapse: collapse; width: 100%; font-size: 0.86rem; margin: 0.5rem 0 1rem; }
+  table.params th, table.params td { border: 1px solid var(--border); padding: 0.4rem 0.6rem; text-align: left; vertical-align: top; }
+  table.params th { background: var(--alt); }
+  .scope-tag { font-family: monospace; font-size: 0.78rem; background: #efe9fc; color: var(--accent); border-radius: 4px; padding: 0.05rem 0.35rem; }
+  @media (max-width: 820px) { .wrap { grid-template-columns: 1fr; } nav.side { position: static; height: auto; border-right: none; border-bottom: 1px solid var(--border); } .cards { grid-template-columns: 1fr; } main { padding: 1.4rem; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="side">
+  <strong>API Externa · Alice</strong>
+  <div class="grp">Guia</div>
+  <a href="#visao-geral">Visão geral</a>
+  <a href="#quick-start">Quick start</a>
+  <a href="#auth">Autenticação</a>
+  <a href="#escopos">Escopos</a>
+  <a href="#rate-limit">Rate limit</a>
+  <a href="#idempotencia">Idempotência</a>
+  <a href="#erros">Erros</a>
+  <a href="#paginacao">Paginação</a>
+  <div class="grp">Endpoints</div>
+  <a href="#identidade">Identidade</a>
+  <a href="#contatos">Contatos</a>
+  <a href="#crm">CRM</a>
+  <a href="#catalogo">Catálogo</a>
+  <a href="#profissionais">Profissionais</a>
+  <a href="#agenda">Agenda</a>
+  <div class="grp">Fim</div>
+  <a href="#checklist">Checklist do parceiro</a>
+</nav>
+
+<main>
+  <p><span class="pill">v1</span><span class="pill">server-to-server</span><span class="pill">JSON</span></p>
+  <h1>API Externa da Alice</h1>
+  <p>Interface HTTP autenticada por API key para integrar sistemas parceiros à Alice. Cada chave pertence a <strong>uma clínica</strong> — você nunca envia o id da clínica, a chave já resolve o tenant.</p>
+
+  <div class="cards">
+    <div class="c"><div class="k">Base URL</div><div class="v" data-base>…/external/v1</div></div>
+    <div class="c"><div class="k">Rate limit por chave</div><div class="v">60 req/min · 1000 req/h</div></div>
+    <div class="c"><div class="k">CORS</div><div class="v">desabilitado (uso server-to-server)</div></div>
+  </div>
+
+  <h2 id="visao-geral">Visão geral</h2>
+  <ul>
+    <li>Todas as respostas são JSON. Envie <code>Content-Type: application/json</code> nos corpos.</li>
+    <li>Datas de data-e-hora são ISO 8601 em UTC (ex.: <code>2026-09-10T13:00:00.000Z</code>). Datas só-dia são <code>AAAA-MM-DD</code>.</li>
+    <li>Campos no corpo e na resposta usam <code>snake_case</code>.</li>
+    <li>Ids são strings opacas. Telefones são só dígitos, com DDI e DDD (ex.: <code>5511999999999</code>).</li>
+    <li>Não há CORS: chame a partir do seu backend, nunca do navegador do usuário final.</li>
+  </ul>
+
+  <h2 id="quick-start">Quick start</h2>
+  <h3>1. Crie uma chave</h3>
+  <p>No painel da Alice, em <strong>Personalizar Alice → API Externa</strong>, clique em <strong>Criar chave</strong>, nomeie e selecione apenas os escopos necessários. O segredo aparece <strong>uma única vez</strong> — copie e guarde no cofre de credenciais.</p>
+  <h3>2. Confirme a credencial</h3>
+  <pre data-curl="/me"><code>curl -s BASE/me \
+  -H "Authorization: Bearer SUA_CHAVE"</code></pre>
+  <p>Resposta traz o nome, o <code>timezone</code> e o expediente da clínica, além dos escopos da chave.</p>
+  <h3>3. Faça a primeira chamada útil</h3>
+  <pre data-curl="/contacts?limit=5"><code>curl -s "BASE/contacts?limit=5" \
+  -H "Authorization: Bearer SUA_CHAVE"</code></pre>
+
+  <h2 id="auth">Autenticação</h2>
+  <p>Toda requisição precisa do header:</p>
+  <pre><code>Authorization: Bearer alk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</code></pre>
+  <p>Sem o header, ou com uma chave inválida/revogada, a resposta é <code>401</code> <code>unauthorized</code>. Se a chave é válida mas não tem o escopo necessário, é <code>403</code> <code>forbidden</code>.</p>
+
+  <h2 id="escopos">Escopos</h2>
+  <p>Cada chave carrega uma lista de escopos. Peça só o que a integração usa.</p>
+  <table class="params">
+    <tr><th>Escopo</th><th>Permite</th></tr>
+    <tr><td><span class="scope-tag">identity.read</span></td><td><code>GET /me</code></td></tr>
+    <tr><td><span class="scope-tag">contacts.read</span></td><td>Listar e ler contatos</td></tr>
+    <tr><td><span class="scope-tag">contacts.write</span></td><td>Criar e editar contatos e suas etiquetas</td></tr>
+    <tr><td><span class="scope-tag">crm.read</span></td><td>Ler etapas do funil e o board</td></tr>
+    <tr><td><span class="scope-tag">crm.write</span></td><td>Mover um contato de etapa</td></tr>
+    <tr><td><span class="scope-tag">catalog.read</span></td><td>Ler procedimentos e produtos</td></tr>
+    <tr><td><span class="scope-tag">professionals.read</span></td><td>Ler profissionais</td></tr>
+    <tr><td><span class="scope-tag">agenda.read</span></td><td>Ler agenda e disponibilidade</td></tr>
+    <tr><td><span class="scope-tag">agenda.write</span></td><td>Criar e alterar agendamentos</td></tr>
+  </table>
+
+  <h2 id="rate-limit">Rate limit</h2>
+  <p>Por chave: <strong>60 requisições por minuto</strong> e <strong>1000 por hora</strong>. Ao estourar, a resposta é <code>429</code> <code>rate_limited</code>. Os headers <code>RateLimit-*</code> acompanham a janela de minuto.</p>
+
+  <h2 id="idempotencia">Idempotência</h2>
+  <p>Em <code>POST</code> e <code>PATCH</code>, envie um header <code>Idempotency-Key</code> com um valor único por operação (ex.: um UUID). Se a mesma chave chegar de novo, a Alice devolve <strong>a mesma resposta</strong> da primeira vez, com o header <code>Idempotency-Replayed: true</code>, sem reexecutar a ação. Use isso para retries seguros.</p>
+  <pre><code>curl -X POST BASE/appointments \
+  -H "Authorization: Bearer SUA_CHAVE" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: 5f0b1e6a-..." \
+  -d '{ "contact": { "phone": "5511999999999" }, "procedure_id": "...", "start": "2026-09-10T13:00:00Z" }'</code></pre>
+
+  <h2 id="erros">Erros</h2>
+  <p>O corpo de erro é sempre:</p>
+  <pre><code>{ "error": { "code": "invalid_request", "message": "phone é obrigatório..." } }</code></pre>
+  <table class="params">
+    <tr><th>HTTP</th><th>code</th><th>Quando</th></tr>
+    <tr><td>400 / 422</td><td><code>invalid_request</code></td><td>Corpo ou parâmetro inválido</td></tr>
+    <tr><td>401</td><td><code>unauthorized</code></td><td>Chave ausente, inválida ou revogada</td></tr>
+    <tr><td>403</td><td><code>forbidden</code></td><td>A chave não tem o escopo</td></tr>
+    <tr><td>404</td><td><code>not_found</code></td><td>Recurso ou endpoint inexistente</td></tr>
+    <tr><td>409</td><td><code>conflict</code></td><td>Ex.: horário já ocupado</td></tr>
+    <tr><td>429</td><td><code>rate_limited</code></td><td>Limite de requisições</td></tr>
+    <tr><td>500</td><td><code>internal</code></td><td>Erro interno — pode repetir</td></tr>
+  </table>
+
+  <h2 id="paginacao">Paginação</h2>
+  <p>Listas de contatos usam cursor: a resposta traz <code>{ "data": [...], "next_cursor": "..." }</code>. Passe <code>?cursor=</code> com esse valor para a próxima página; <code>next_cursor: null</code> significa fim. <code>?limit=</code> vai de 1 a 200 (padrão 50).</p>
+
+  <h2 id="identidade">Identidade</h2>
+  <div class="ep"><span class="m get">GET</span> /me</div>
+  <p>Escopo <span class="scope-tag">identity.read</span>. Valida a chave e devolve os dados da clínica.</p>
+  <pre><code>{
+  "clinic": { "id": "...", "name": "Diamond Clinic", "timezone": "America/Sao_Paulo",
+              "work_days": "1,2,3,4,5", "work_start_hour": 9, "work_end_hour": 19 },
+  "key": { "name": "Integração site", "scopes": ["identity.read", "contacts.read"] }
+}</code></pre>
+
+  <h2 id="contatos">Contatos</h2>
+
+  <div class="ep"><span class="m get">GET</span> /contacts</div>
+  <p>Escopo <span class="scope-tag">contacts.read</span>.</p>
+  <table class="params">
+    <tr><th>Query</th><th>Descrição</th></tr>
+    <tr><td><code>search</code></td><td>Filtra por nome ou telefone</td></tr>
+    <tr><td><code>limit</code></td><td>1–200 (padrão 50)</td></tr>
+    <tr><td><code>cursor</code></td><td>Da página anterior</td></tr>
+  </table>
+
+  <div class="ep"><span class="m get">GET</span> /contacts/:id</div>
+  <p>Escopo <span class="scope-tag">contacts.read</span>. Objeto do contato:</p>
+  <pre><code>{
+  "id": "...", "name": "Odete", "phone": "5514999...", "email": null, "cpf": null,
+  "notes": null, "birth_date": "1980-04-12", "funnel_stage": "novo_lead",
+  "tags": [{ "id": "...", "label": "Indicação", "color": "#16a34a" }],
+  "created_at": "2026-08-30T19:25:00.000Z"
+}</code></pre>
+
+  <div class="ep"><span class="m post">POST</span> /contacts</div>
+  <p>Escopo <span class="scope-tag">contacts.write</span>. Cria ou atualiza pelo telefone (upsert).</p>
+  <table class="params">
+    <tr><th>Campo</th><th></th></tr>
+    <tr><td><code>phone</code> *</td><td>Só dígitos, DDI+DDD</td></tr>
+    <tr><td><code>name</code>, <code>email</code>, <code>cpf</code>, <code>notes</code></td><td>Opcionais</td></tr>
+    <tr><td><code>birth_date</code></td><td><code>AAAA-MM-DD</code></td></tr>
+    <tr><td><code>tags</code></td><td>Array de rótulos (texto). Cria a etiqueta se não existir e substitui as do contato.</td></tr>
+  </table>
+
+  <div class="ep"><span class="m patch">PATCH</span> /contacts/:id</div>
+  <p>Escopo <span class="scope-tag">contacts.write</span>. Atualiza só os campos enviados.</p>
+
+  <h2 id="crm">CRM</h2>
+  <div class="ep"><span class="m get">GET</span> /crm/stages</div>
+  <p>Escopo <span class="scope-tag">crm.read</span>. Etapas do funil: <code>{ id, label, color, kind, order }</code>. <code>kind</code> ∈ <code>aberta | avaliacao_agendada | ganho | pos_procedimento | perdido</code>.</p>
+
+  <div class="ep"><span class="m get">GET</span> /crm/board</div>
+  <p>Escopo <span class="scope-tag">crm.read</span>. Etapas com a lista de contatos em cada uma.</p>
+
+  <div class="ep"><span class="m post">POST</span> /contacts/:id/stage</div>
+  <p>Escopo <span class="scope-tag">crm.write</span>. Corpo <code>{ "stage": "interesse_confirmado" }</code> (um <code>id</code> de <code>/crm/stages</code>).</p>
+
+  <h2 id="catalogo">Catálogo</h2>
+  <div class="ep"><span class="m get">GET</span> /procedures</div>
+  <p>Escopo <span class="scope-tag">catalog.read</span>. <code>{ id, name, duration_min, price, price_variable, payment_methods, description }</code>.</p>
+  <div class="ep"><span class="m get">GET</span> /products</div>
+  <p>Escopo <span class="scope-tag">catalog.read</span>. <code>{ id, name, price, description }</code>.</p>
+
+  <h2 id="profissionais">Profissionais</h2>
+  <div class="ep"><span class="m get">GET</span> /professionals</div>
+  <p>Escopo <span class="scope-tag">professionals.read</span>. <code>{ id, name, bio, instagram, procedures: [{ id, name }] }</code>.</p>
+
+  <h2 id="agenda">Agenda</h2>
+
+  <div class="ep"><span class="m get">GET</span> /appointments</div>
+  <p>Escopo <span class="scope-tag">agenda.read</span>. Query: <code>from</code>, <code>to</code> (ISO; padrão -7d a +30d), <code>status</code>.</p>
+  <pre><code>{
+  "data": [{
+    "id": "...", "start": "2026-09-10T13:00:00.000Z", "start_local": "quinta-feira, 10/09 às 10:00",
+    "status": "confirmed", "patient_confirmed": false,
+    "procedure": { "id": "...", "name": "Toxina botulínica" },
+    "professional": { "id": "...", "name": "Dra. Natieli" },
+    "contact": { "id": "...", "name": "Odete", "phone": "5514999..." }
+  }]
+}</code></pre>
+
+  <div class="ep"><span class="m get">GET</span> /availability</div>
+  <p>Escopo <span class="scope-tag">agenda.read</span>. Query: <code>procedure_id</code> * , <code>professional_id</code> (opcional), <code>days</code> (1–30, padrão 10). Retorna horários livres já considerando expediente, duração, conflitos, bloqueios e a agenda de cada profissional.</p>
+  <pre><code>{ "data": [{ "start": "2026-09-10T13:00:00.000Z", "start_local": "quinta-feira, 10/09 às 10:00",
+             "professional": { "id": "...", "name": "Dra. Natieli" } }] }</code></pre>
+
+  <div class="ep"><span class="m post">POST</span> /appointments</div>
+  <p>Escopo <span class="scope-tag">agenda.write</span>. Revalida o horário dentro de uma transação — se acabou de ser ocupado, responde <code>409 conflict</code>.</p>
+  <pre><code>{
+  "contact": { "phone": "5511999999999", "name": "Odete" },
+  "procedure_id": "...", "professional_id": null,
+  "start": "2026-09-10T13:00:00Z"
+}</code></pre>
+
+  <div class="ep"><span class="m patch">PATCH</span> /appointments/:id</div>
+  <p>Escopo <span class="scope-tag">agenda.write</span>. Corpo com <code>status</code> (<code>confirmed|completed|cancelled</code>), <code>start</code> e/ou <code>professional_id</code>. Ao cancelar, a Alice oferece a vaga liberada para a lista de espera.</p>
+
+  <h2 id="checklist">Checklist do parceiro</h2>
+  <ol>
+    <li>Crie a chave com os escopos mínimos e guarde o segredo no cofre.</li>
+    <li>Valide com <code>GET /me</code> e leia o <code>timezone</code> da clínica.</li>
+    <li>Converta horários para UTC antes de enviar (<code>start</code> sempre em ISO/UTC).</li>
+    <li>Use <code>Idempotency-Key</code> em toda escrita e trate <code>409</code>/<code>429</code> com retry.</li>
+    <li>Paginе contatos por <code>next_cursor</code>.</li>
+    <li>Nunca chame a API do navegador do cliente final — só do seu backend.</li>
+    <li>Ao desativar a integração, revogue a chave no painel.</li>
+  </ol>
+</main>
+</div>
+<script src="/admin/api-docs.js"></script>
+</body>
+</html>

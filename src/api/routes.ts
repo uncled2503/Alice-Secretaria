@@ -21,6 +21,7 @@ import { patientDossier } from "../crm/dossier.js";
 import { logActivity, ACTIVITY_AREAS, ACTIVITY_TYPES } from "../crm/activity.js";
 import { createRuleDraft, RULE_CATEGORIES, seedDefaultRules, reseedRulesForProfile } from "../ai/rules.js";
 import { BRIEFING_TEMPLATE, parseBriefing, applyBriefing, BriefingPlanSchema } from "../ai/briefing.js";
+import { API_SCOPES, API_SCOPE_IDS, generateApiKey } from "./external/keys.js";
 import { answerSiteQuestion, type SiteMessage } from "../ai/siteAssistant.js";
 import { notifyStaff } from "../crm/notify.js";
 import { hashPassword, verifyPassword } from "./passwords.js";
@@ -2249,6 +2250,72 @@ apiRouter.post(
     }
     const summary = await applyBriefing(clinic.id, parsed.data, req.staff?.name ?? null);
     res.json(summary);
+  })
+);
+
+// ---- Chaves da API Externa ----
+apiRouter.get(
+  "/api-keys/scopes",
+  asyncRoute(async (_req, res) => {
+    res.json(API_SCOPES);
+  })
+);
+
+apiRouter.get(
+  "/api-keys",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const keys = await prisma.apiKey.findMany({
+      where: { clinicId: clinic.id },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, name: true, lookup: true, scopes: true, lastUsedAt: true, revokedAt: true, createdAt: true, createdByName: true },
+    });
+    res.json(keys.map((k) => ({ ...k, scopes: k.scopes.split(",").filter(Boolean) })));
+  })
+);
+
+apiRouter.post(
+  "/api-keys",
+  asyncRoute(async (req, res) => {
+    const { name, scopes } = req.body as { name?: string; scopes?: string[] };
+    if (!name?.trim()) {
+      res.status(400).json({ error: "name obrigatorio" });
+      return;
+    }
+    const chosen = (Array.isArray(scopes) ? scopes : []).filter((s) => API_SCOPE_IDS.includes(s as (typeof API_SCOPE_IDS)[number]));
+    if (chosen.length === 0) {
+      res.status(400).json({ error: "selecione ao menos um escopo" });
+      return;
+    }
+    const clinic = await getClinic(req);
+    const gen = generateApiKey();
+    const key = await prisma.apiKey.create({
+      data: {
+        clinicId: clinic.id,
+        name: name.trim().slice(0, 60),
+        lookup: gen.lookup,
+        hash: gen.hash,
+        scopes: chosen.join(","),
+        createdByName: req.staff?.name ?? null,
+      },
+    });
+    await logActivity({
+      clinicId: clinic.id, type: "clinic_updated", area: "clinica",
+      title: "Chave de API criada", description: `${key.name} — escopos: ${chosen.join(", ")}.`,
+      actorName: req.staff?.name ?? null,
+    });
+    // O segredo so aparece aqui, uma vez.
+    res.json({ id: key.id, name: key.name, lookup: key.lookup, scopes: chosen, secret: gen.secret });
+  })
+);
+
+apiRouter.delete(
+  "/api-keys/:id",
+  asyncRoute(async (req, res) => {
+    const key = await prisma.apiKey.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, key.clinicId)) return;
+    await prisma.apiKey.update({ where: { id: req.params.id }, data: { revokedAt: new Date() } });
+    res.json({ ok: true });
   })
 );
 

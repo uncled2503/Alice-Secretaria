@@ -78,6 +78,7 @@ model Clinic {
   scheduleBlocks ScheduleBlock[]
   waitlist       WaitlistEntry[]
   tags           Tag[]
+  apiKeys        ApiKey[]
   uazapiWebhookEvents UazapiWebhookEvent[]
 }
 
@@ -429,6 +430,38 @@ model FunnelStage {
   order    Int
 
   @@unique([clinicId, stageId])
+}
+
+// Chave de API para integracao server-to-server (ver src/api/external/).
+// Cada chave pertence a UMA clinica; o parceiro nunca envia clinicId.
+model ApiKey {
+  id            String    @id @default(cuid())
+  clinicId      String
+  clinic        Clinic    @relation(fields: [clinicId], references: [id])
+  name          String
+  lookup        String    @unique // primeiros 14 chars da chave (para achar rapido)
+  hash          String              // sha-256 (hex) da chave completa
+  scopes        String              // escopos separados por virgula
+  createdByName String?
+  lastUsedAt    DateTime?
+  revokedAt     DateTime?
+  createdAt     DateTime  @default(now())
+
+  idempotencyKeys ApiIdempotencyKey[]
+}
+
+// Guarda a resposta de uma requisicao com Idempotency-Key para repetir a mesma
+// resposta se o parceiro reenviar a chamada.
+model ApiIdempotencyKey {
+  id         String   @id @default(cuid())
+  apiKeyId   String
+  apiKey     ApiKey   @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+  key        String
+  statusCode Int
+  body       String   // JSON serializado da resposta
+  createdAt  DateTime @default(now())
+
+  @@unique([apiKeyId, key])
 }
 
 model Message {
