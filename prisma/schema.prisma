@@ -44,6 +44,13 @@ model Clinic {
   splitThresholdChars  Int     @default(450) // a partir de quantos caracteres ja e "resposta longa"
   requireDepositProof  Boolean @default(false) // so confirma agendamento apos o paciente enviar comprovante do sinal
 
+  // Perfil de atendimento
+  servicePosture       String  @default("comercial") // comercial (proativo, empurra agenda) | consultivo (avaliacao primeiro, sem pressao)
+  clinicKind           String  @default("estetica")  // estetica | medica | ambas - "medica"/"ambas" ativa as travas de seguranca medica
+  evaluationFirst      Boolean @default(false) // nunca exige que o paciente saiba o procedimento; sempre oferece avaliacao
+  allowEmojis          Boolean @default(true)
+  schedulingLink       String? // link externo de auto-agendamento (fallback quando a clinica prefere que o paciente marque sozinho)
+
   importStatus    String?   // null | "running" | "completed" - importacao de contatos/historico do WhatsApp
   importStats     String?   // JSON: {found,created,merged,ignored,conversations,partialHistory,contactsInBase}
   importUpdatedAt DateTime?
@@ -285,6 +292,7 @@ model Conversation {
   patient           Patient   @relation(fields: [patientId], references: [id])
   status            String    @default("active") // active | qualified | scheduled | closed
   humanTakeover     Boolean   @default(false) // true = Alice para de responder, atendente assumiu
+  handoffReason     String?   // motivo curto do ultimo handoff para humano (ex: "pedido de desconto")
   lastFollowUpOrder Int       @default(0) // ultima etapa de recontato ja enviada (0 = nenhuma)
   lastMessageAt     DateTime  @default(now())
   createdAt         DateTime  @default(now())

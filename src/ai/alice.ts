@@ -109,6 +109,26 @@ const tools: ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "transfer_to_human",
+      description:
+        "Transfere o atendimento para uma pessoa da equipe. Use quando a situacao exige uma pessoa: pedido de desconto ou negociacao, reclamacao, paciente insatisfeito, paciente pede pra falar com alguem, duvida clinica que so o profissional responde, risco medico ou situacao potencialmente urgente, problema de pagamento, exames prontos com interesse cirurgico, ou algo que voce nao consegue resolver com seguranca. Depois de chamar, escreva UMA frase curta de encerramento e PARE de responder.",
+      parameters: {
+        type: "object",
+        properties: {
+          reason: { type: "string", description: "Motivo curto do handoff (ex: 'pedido de desconto', 'reclamacao', 'duvida clinica')." },
+          summary: {
+            type: "string",
+            description:
+              "Resumo pra pessoa continuar de onde voce parou: quem e o paciente, o que procura, queixa, o que ja foi conversado, ultima duvida e o proximo passo sugerido. Nao invente dados que voce nao tem.",
+          },
+        },
+        required: ["reason", "summary"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "update_crm_stage",
       description:
         "Atualiza a etapa do paciente no funil de vendas conforme a conversa evolui (ex: demonstrou interesse real -> 'interesse confirmado'; recebeu orcamento -> 'proposta enviada'). NAO use para agendamento, venda fechada, pos-procedimento ou perdido - essas etapas sao automaticas.",
@@ -170,10 +190,50 @@ const SLOT_REASON_PT: Record<string, string> = {
   invalid_datetime: "o horario informado e invalido; use um valor 'iso' retornado pelas ferramentas de disponibilidade",
 };
 
-async function runTool(clinicId: string, patientId: string, name: string, input: any): Promise<string> {
+async function runTool(
+  clinicId: string,
+  patientId: string,
+  conversationId: string,
+  name: string,
+  input: any,
+): Promise<string> {
   const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId } });
   const tz = clinic.timezone || "America/Sao_Paulo";
   const patientLabelOf = (p: { name: string | null; phone: string } | null) => p?.name ?? p?.phone ?? "paciente";
+
+  if (name === "transfer_to_human") {
+    const reason = String(input.reason ?? "").slice(0, 120).trim() || "atendimento humano necessario";
+    const summary = String(input.summary ?? "").slice(0, 1500).trim();
+    const patient = await prisma.patient.findUnique({ where: { id: patientId } });
+    const who = patientLabelOf(patient);
+
+    await prisma.conversation.update({
+      where: { id: conversationId },
+      data: { humanTakeover: true, handoffReason: reason },
+    });
+    await prisma.message.create({
+      data: {
+        conversationId,
+        role: "system",
+        content: `Atendimento transferido pela Alice. Motivo: ${reason}.${summary ? `\n\nResumo:\n${summary}` : ""}`,
+        authorName: null,
+      },
+    });
+    await notifyStaff(
+      clinicId,
+      "human_handoff",
+      `Atendimento transferido pela Alice: ${who}\nMotivo: ${reason}.${summary ? `\n\n${summary}` : ""}`,
+    );
+    await logActivity({
+      clinicId,
+      type: "human_takeover",
+      area: "atendimento",
+      title: "Atendimento transferido pela Alice",
+      description: `${who} — ${reason}.`,
+      actorName: null,
+    });
+    return JSON.stringify({ transferido: true, instrucao: "Escreva UMA frase curta de encerramento e nao responda mais nesta conversa." });
+  }
 
   if (name === "check_availability") {
     const procedure = await findProcedure(clinicId, input.procedure_name);
@@ -464,8 +524,27 @@ async function buildSystemPrompt(clinicId: string): Promise<string> {
     ? `\nSINAL OBRIGATORIO: so confirme (book_appointment) um agendamento depois que o paciente enviar o comprovante do sinal na conversa. Antes disso, peca o pagamento e aguarde o comprovante.`
     : "";
 
-  const handoffLine = clinic.handoffPhrase?.trim()
-    ? `\nQuando precisar passar o atendimento pra equipe, escreva antes exatamente: "${clinic.handoffPhrase.trim()}". Nao anuncie que vai "transferir pra um atendente" - como voce ja se apresenta como parte da equipe, isso confunde o paciente.`
+  const handoffPhrase = clinic.handoffPhrase?.trim();
+  const handoffLine = `\nHANDOFF: quando a situacao exigir uma pessoa (pedido de desconto ou negociacao, reclamacao, paciente insatisfeito, paciente pede pra falar com alguem, duvida clinica que so o profissional responde, risco medico ou urgencia, problema de pagamento, exames prontos com interesse cirurgico, ou algo que voce nao resolve com seguranca): ${handoffPhrase ? `escreva exatamente "${handoffPhrase}" e ` : "escreva uma frase curta e acolhedora e "}chame a ferramenta transfer_to_human com o motivo e um resumo pra pessoa continuar. Depois disso pare de responder. Nao anuncie que vai "transferir pra um atendente".`;
+
+  const postureLine =
+    clinic.servicePosture === "consultivo"
+      ? `\nPOSTURA CONSULTIVA: conduza como um consultorio, sem pressao comercial. Responda a duvida atual primeiro; so pergunte de novo quando a resposta mudar o proximo passo; se ja respondeu, aguardar e uma acao valida. Nao encerre com pergunta generica so pra manter a conversa. Nao empurre o agendamento - ofereca o caminho da avaliacao quando houver interesse real.`
+      : "";
+
+  const medicalLine =
+    clinic.clinicKind && clinic.clinicKind !== "estetica"
+      ? `\nSEGURANCA MEDICA (prioridade sobre qualquer objetivo comercial): nunca diagnostique, prescreva, interprete exame, garanta cirurgia, determine quantidade de ml, nem afirme que um procedimento e o indicado sem avaliacao. "O que eu tenho?", "preciso operar?", "quantos ml?", "isso e cancer?" nao se respondem como decisao medica - de informacao geral e conduza pra avaliacao, ou transfira pra equipe. Foto nao diagnostica.`
+      : "";
+
+  const evalFirstLine = clinic.evaluationFirst
+    ? `\nAVALIACAO PRIMEIRO: nunca exija que o paciente saiba qual procedimento precisa. Sempre ofereca os dois caminhos ("voce ja tem algo em mente ou prefere uma avaliacao pra o profissional entender seu caso?"). Se ele nao sabe e quer ser avaliado, isso e intencao valida de agendamento - conduza direto, sem listar procedimentos.`
+    : "";
+
+  const emojiLine = clinic.allowEmojis === false ? `\nNao use emojis em nenhuma mensagem.` : "";
+
+  const schedulingLinkLine = clinic.schedulingLink?.trim()
+    ? `\nLINK DE AUTO-AGENDAMENTO: quando o paciente demonstrar intencao clara de agendar, voce pode enviar direto o link ${clinic.schedulingLink.trim()} (nao pergunte "quer que eu mande o link?", mande). Use este link em vez de book_appointment quando a clinica preferir que o paciente escolha o horario sozinho.`
     : "";
 
   const templatesBlock = clinic.messageTemplates.length
@@ -519,7 +598,8 @@ async function buildSystemPrompt(clinicId: string): Promise<string> {
         .join("\n")}\nAgendamento, venda fechada, pos-procedimento e "perdido" sao automaticos: nao tente defini-los.`
     : "";
 
-  return `Voce e a ${a}, atendente da clinica de estetica "${clinic.name}".${areaLine}
+  const clinicNoun = clinic.clinicKind === "medica" ? "clinica" : clinic.clinicKind === "ambas" ? "clinica" : "clinica de estetica";
+  return `Voce e a ${a}, atendente da ${clinicNoun} "${clinic.name}".${areaLine}
 Atenda pelo WhatsApp de forma humanizada, calorosa e objetiva, como uma recepcionista experiente.
 
 COMO VOCE SE APRESENTA (regra fixa, vale pra toda conversa):
@@ -531,7 +611,7 @@ Seu trabalho:
 2. Manter a etapa do paciente no funil atualizada (update_crm_stage) conforme a conversa avanca.
 3. Checar disponibilidade real (check_specific_time / check_availability) antes de falar de qualquer data.
 4. Confirmar o horario escolhido com o paciente e so entao usar book_appointment.
-5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${handoffLine}
+5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${postureLine}${evalFirstLine}${medicalLine}${emojiLine}${schedulingLinkLine}${handoffLine}
 
 Procedimentos oferecidos pela clinica:
 ${procedureList || "(nenhum procedimento cadastrado ainda)"}
@@ -612,7 +692,7 @@ export async function handleIncomingMessage(params: {
       let result: string;
       try {
         const input = JSON.parse(toolCall.function.arguments || "{}");
-        result = await runTool(clinicId, patient.id, toolCall.function.name, input);
+        result = await runTool(clinicId, patient.id, conversation.id, toolCall.function.name, input);
       } catch (err) {
         console.error(`Falha na ferramenta ${toolCall.function.name}:`, err);
         result = "Ocorreu um erro ao executar essa acao. Nao invente o resultado; peca desculpas e diga que vai confirmar com a equipe.";
@@ -621,9 +701,19 @@ export async function handleIncomingMessage(params: {
     }
   }
 
-  await prisma.message.create({
-    data: { conversationId: conversation.id, role: "assistant", content: finalText },
-  });
+  // Se a Alice transferiu pra equipe nesta rodada e nao produziu texto de
+  // encerramento, usa a frase de handoff da clinica (ou uma padrao).
+  const after = await prisma.conversation.findUnique({ where: { id: conversation.id }, select: { humanTakeover: true } });
+  if (after?.humanTakeover && !finalText.trim()) {
+    const c = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { handoffPhrase: true } });
+    finalText = c?.handoffPhrase?.trim() || "Vou pedir pra uma pessoa da equipe continuar com voce por aqui.";
+  }
+
+  if (finalText.trim()) {
+    await prisma.message.create({
+      data: { conversationId: conversation.id, role: "assistant", content: finalText },
+    });
+  }
   await prisma.conversation.update({
     where: { id: conversation.id },
     data: { lastMessageAt: new Date() },

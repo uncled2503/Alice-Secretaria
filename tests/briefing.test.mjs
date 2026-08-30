@@ -38,6 +38,17 @@ test("plano de briefing normaliza um caso realista", () => {
   assert.equal(p.rules[0].category, "pagamento");
 });
 
+test("plano de briefing aceita perfil de atendimento", () => {
+  const p = BriefingPlanSchema.parse({
+    clinic: { servicePosture: "consultivo", clinicKind: "medica", evaluationFirst: true, allowEmojis: false, schedulingLink: "https://x.com/agendar" },
+  });
+  assert.equal(p.clinic.servicePosture, "consultivo");
+  assert.equal(p.clinic.clinicKind, "medica");
+  assert.equal(p.clinic.evaluationFirst, true);
+  assert.equal(p.clinic.allowEmojis, false);
+  assert.equal(BriefingPlanSchema.safeParse({ clinic: { servicePosture: "outra" } }).success, false);
+});
+
 test("plano de briefing rejeita categoria de regra invalida e hora fora do intervalo", () => {
   assert.equal(BriefingPlanSchema.safeParse({ rules: [{ category: "xpto", instruction: "teste" }] }).success, false);
   assert.equal(BriefingPlanSchema.safeParse({ clinic: { workStartHour: 30 } }).success, false);

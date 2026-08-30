@@ -606,7 +606,10 @@ function renderConversationsList() {
           el("div", { class: "name" }, [c.patient.name ?? c.patient.phone]),
           el("div", { class: "conv-time" }, [formatConvTime(c.lastMessageAt)]),
         ]),
-        el("div", { class: "preview" }, [c.lastMessage ?? ""]),
+        el("div", { class: "preview" }, [
+          c.humanTakeover && c.handoffReason ? `⚑ ${c.handoffReason} — ` : "",
+          c.lastMessage ?? "",
+        ]),
       ]),
     ]);
     if (c.id === state.activeConversationId) li.classList.add("active");
@@ -2045,6 +2048,11 @@ function loadAliceSettings() {
   document.getElementById("as-name").value = c.assistantName || "Alice";
   document.getElementById("as-area").value = c.activityArea || "";
   document.getElementById("as-handoff").value = c.handoffPhrase || "";
+  document.getElementById("as-kind").value = c.clinicKind || "estetica";
+  document.getElementById("as-posture").value = c.servicePosture || "comercial";
+  document.getElementById("as-eval-first").checked = !!c.evaluationFirst;
+  document.getElementById("as-emojis").checked = c.allowEmojis !== false;
+  document.getElementById("as-scheduling-link").value = c.schedulingLink || "";
   document.getElementById("as-split").checked = c.splitLongMessages !== false;
   document.getElementById("as-split-max").value = c.splitMaxMessages ?? 4;
   document.getElementById("as-split-threshold").value = c.splitThresholdChars ?? 450;
@@ -2056,6 +2064,11 @@ document.getElementById("alice-settings-form").addEventListener("submit", async 
     assistantName: document.getElementById("as-name").value.trim() || "Alice",
     activityArea: document.getElementById("as-area").value.trim(),
     handoffPhrase: document.getElementById("as-handoff").value.trim(),
+    clinicKind: document.getElementById("as-kind").value,
+    servicePosture: document.getElementById("as-posture").value,
+    evaluationFirst: document.getElementById("as-eval-first").checked,
+    allowEmojis: document.getElementById("as-emojis").checked,
+    schedulingLink: document.getElementById("as-scheduling-link").value.trim(),
     splitLongMessages: document.getElementById("as-split").checked,
     splitMaxMessages: Number(document.getElementById("as-split-max").value),
     splitThresholdChars: Number(document.getElementById("as-split-threshold").value),
@@ -2064,6 +2077,7 @@ document.getElementById("alice-settings-form").addEventListener("submit", async 
   await api(`/clinics/${state.clinicId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
   await loadClinics();
   loadAliceSettings();
+  if (typeof loadRules === "function") loadRules();
 });
 
 // --- Início: stats ---

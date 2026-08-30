@@ -32,14 +32,20 @@ Para cada unidade:
 - Se for de um profissional, qual o nome (ex.: Dra. Camila Souza)
 - Nome pelo qual a secretária se apresenta (padrão: Alice)
 - Área de atuação da clínica em uma frase (ex.: harmonização facial, corporal e íntima)
+- A clínica é: **só estética** / **só médica** / **as duas**
+- Estilo de atendimento: **mais direto/comercial** (oferece horário, conduz para a agenda) ou **mais consultivo** (avaliação primeiro, sem pressão, no ritmo do paciente)
+- O paciente precisa saber qual procedimento quer, ou a clínica prefere que ele passe por avaliação para o profissional indicar?
+- A Alice pode usar emojis?
+- Tem link de auto-agendamento (o paciente marca sozinho num site)? Qual?
 
 ## 4. Tom de voz e regras
 - Como vocês gostam de falar com o paciente (formal, próximo, leve…)
 - A Alice **pode informar preço pelo WhatsApp**, ou só na avaliação?
 - Vocês exigem **sinal/entrada** para confirmar o agendamento? Como funciona (valor, precisa mandar comprovante)?
 - O que a Alice **nunca** deve fazer ou dizer
-- Quando a Alice deve **chamar uma pessoa da equipe** (reclamação, dúvida clínica, paciente diz que combinou preço com a doutora…)
+- Quando a Alice deve **chamar uma pessoa da equipe** (pedido de desconto, negociação, reclamação, dúvida clínica que só o profissional responde, risco médico, paciente pede uma pessoa, exames prontos com interesse cirúrgico, problema de pagamento)
 - Frase que a Alice usa antes de passar para uma pessoa (ex.: "Só um instante que já verifico isso pra você")
+- Quem assume quando a Alice transfere (nome da pessoa)
 
 ## 5. Procedimentos / serviços
 Para **cada** procedimento:

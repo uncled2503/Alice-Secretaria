@@ -18,7 +18,7 @@ import { getFunnelStages, generateStageId } from "../crm/stages.js";
 import { movePatientToKind, movePatientToRecovery, movePatientToStage } from "../crm/stageAutomation.js";
 import { offerFreedSlotToWaitlist } from "../scheduling/waitlist.js";
 import { logActivity, ACTIVITY_AREAS, ACTIVITY_TYPES } from "../crm/activity.js";
-import { createRuleDraft, RULE_CATEGORIES, seedDefaultRules } from "../ai/rules.js";
+import { createRuleDraft, RULE_CATEGORIES, seedDefaultRules, reseedRulesForProfile } from "../ai/rules.js";
 import { BRIEFING_TEMPLATE, parseBriefing, applyBriefing, BriefingPlanSchema } from "../ai/briefing.js";
 import { answerSiteQuestion, type SiteMessage } from "../ai/siteAssistant.js";
 import { notifyStaff } from "../crm/notify.js";
@@ -148,6 +148,11 @@ apiRouter.get(
         splitMaxMessages: true,
         splitThresholdChars: true,
         requireDepositProof: true,
+        servicePosture: true,
+        clinicKind: true,
+        evaluationFirst: true,
+        allowEmojis: true,
+        schedulingLink: true,
       },
     });
     const withStatus = await Promise.all(clinics.map(async (clinic) => ({ ...clinic, ...(await getStatus(clinic.id)) })));
@@ -182,6 +187,11 @@ apiRouter.put(
       splitMaxMessages?: number;
       splitThresholdChars?: number;
       requireDepositProof?: boolean;
+      servicePosture?: string;
+      clinicKind?: string;
+      evaluationFirst?: boolean;
+      allowEmojis?: boolean;
+      schedulingLink?: string | null;
     };
     const { name, whatsappPhone, timezone, workStartHour, workEndHour, workDays, active, notifyPhone, notifyEvents, assistantPersona, assistantPersonaName } = b;
 
@@ -191,6 +201,14 @@ apiRouter.put(
     const PERSONAS = ["team", "clinic_secretary", "professional_secretary"];
     if (assistantPersona !== undefined && !PERSONAS.includes(assistantPersona)) {
       res.status(400).json({ error: "assistantPersona invalido" });
+      return;
+    }
+    if (b.servicePosture !== undefined && !["comercial", "consultivo"].includes(b.servicePosture)) {
+      res.status(400).json({ error: "servicePosture invalido" });
+      return;
+    }
+    if (b.clinicKind !== undefined && !["estetica", "medica", "ambas"].includes(b.clinicKind)) {
+      res.status(400).json({ error: "clinicKind invalido" });
       return;
     }
 
@@ -221,8 +239,18 @@ apiRouter.put(
           ...(b.splitMaxMessages !== undefined ? { splitMaxMessages: Math.min(Math.max(b.splitMaxMessages, 1), 8) } : {}),
           ...(b.splitThresholdChars !== undefined ? { splitThresholdChars: Math.min(Math.max(b.splitThresholdChars, 120), 2000) } : {}),
           ...(b.requireDepositProof !== undefined ? { requireDepositProof: b.requireDepositProof } : {}),
+          ...(b.servicePosture !== undefined ? { servicePosture: b.servicePosture } : {}),
+          ...(b.clinicKind !== undefined ? { clinicKind: b.clinicKind } : {}),
+          ...(b.evaluationFirst !== undefined ? { evaluationFirst: b.evaluationFirst } : {}),
+          ...(b.allowEmojis !== undefined ? { allowEmojis: b.allowEmojis } : {}),
+          ...(b.schedulingLink !== undefined ? { schedulingLink: b.schedulingLink?.trim() || null } : {}),
         },
       });
+
+      // Mudou o perfil de atendimento -> reajusta as regras recomendadas.
+      if (b.servicePosture !== undefined || b.clinicKind !== undefined || b.evaluationFirst !== undefined) {
+        await reseedRulesForProfile(clinic.id);
+      }
       await logActivity({
         clinicId: clinic.id,
         type: "clinic_updated",
@@ -929,6 +957,7 @@ apiRouter.get(
         id: c.id,
         status: c.status,
         humanTakeover: c.humanTakeover,
+        handoffReason: c.handoffReason,
         lastMessageAt: c.lastMessageAt,
         patient: {
           id: c.patient.id,

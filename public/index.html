@@ -842,7 +842,30 @@
               <label>Frase ao passar para uma pessoa
                 <input id="as-handoff" type="text" placeholder="Ex: Só um minuto, já verifico isso para você" />
               </label>
-              <p class="hint" style="margin-top:0">O que a Alice escreve antes de entregar a conversa pra equipe. Em branco, usa a frase padrão.</p>
+              <p class="hint" style="margin-top:0">O que a Alice escreve antes de entregar a conversa pra equipe. Em branco, usa a frase padrão. A Alice transfere sozinha em pedido de desconto, reclamação, dúvida clínica, risco médico, problema de pagamento ou quando o paciente pede uma pessoa — e manda um resumo pra equipe continuar.</p>
+
+              <div class="section-header" style="margin-top:1rem">Perfil de atendimento</div>
+              <div class="broadcast-form-row">
+                <label style="flex:1">Tipo de clínica
+                  <select id="as-kind">
+                    <option value="estetica">Só estética</option>
+                    <option value="medica">Só médica</option>
+                    <option value="ambas">Médica e estética</option>
+                  </select>
+                </label>
+                <label style="flex:1">Estilo
+                  <select id="as-posture">
+                    <option value="comercial">Comercial — conduz para a agenda</option>
+                    <option value="consultivo">Consultivo — avaliação primeiro, sem pressão</option>
+                  </select>
+                </label>
+              </div>
+              <label class="checkbox-row"><input type="checkbox" id="as-eval-first" /> O paciente não precisa saber o procedimento — a Alice sempre oferece avaliação</label>
+              <label class="checkbox-row"><input type="checkbox" id="as-emojis" checked /> A Alice pode usar emojis</label>
+              <label>Link de auto-agendamento (opcional)
+                <input id="as-scheduling-link" type="url" placeholder="https://agendamento.suaclinica.com.br" />
+              </label>
+              <p class="hint" style="margin-top:0">Se preenchido, quando o paciente quiser marcar a Alice envia esse link em vez de marcar direto. Mudar o tipo ou o estilo reajusta as regras recomendadas.</p>
 
               <div class="section-header" style="margin-top:1rem">Como a Alice envia mensagens</div>
               <label class="checkbox-row"><input type="checkbox" id="as-split" checked /> Dividir respostas longas em várias bolhas</label>

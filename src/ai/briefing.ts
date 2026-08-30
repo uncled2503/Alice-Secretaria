@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { z } from "zod";
 import { prisma } from "../db/client.js";
-import { seedDefaultRules } from "./rules.js";
+import { reseedRulesForProfile } from "./rules.js";
 import { logActivity } from "../crm/activity.js";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -39,14 +39,20 @@ Para cada unidade:
 - Se for de um profissional, qual o nome (ex: Dra. Camila Souza):
 - Nome pelo qual a secretaria se apresenta (padrao: Alice):
 - Area de atuacao da clinica em uma frase (ex: harmonizacao facial, corporal e intima):
+- A clinica e: ( ) so estetica  ( ) so medica  ( ) as duas
+- Estilo de atendimento: ( ) mais direto/comercial (oferece horario, conduz pra agenda)  ( ) mais consultivo (avaliacao primeiro, sem pressao, no ritmo do paciente)
+- O paciente precisa saber qual procedimento quer, ou a clinica prefere que ele passe por avaliacao pra o profissional indicar? (SIM = pode exigir / NAO = sempre oferecer avaliacao)
+- A Alice pode usar emojis? (sim/nao)
+- Tem link de auto-agendamento (o paciente marca sozinho num site)? Qual?
 
 == 4. TOM DE VOZ E REGRAS ==
 - Como voces gostam de falar com o paciente (formal, proximo, leve...):
 - A Alice PODE informar preco pelo WhatsApp, ou so na avaliacao?
 - Voces exigem sinal/entrada pra confirmar o agendamento? Como funciona (valor, precisa mandar comprovante)?
 - O que a Alice NUNCA deve fazer ou dizer:
-- Quando a Alice deve chamar uma pessoa da equipe (reclamacao, duvida clinica, paciente diz que combinou preco com a doutora...):
+- Quando a Alice deve chamar uma pessoa da equipe? (ex: pedido de desconto, negociacao, reclamacao, duvida clinica que so o profissional responde, risco medico, paciente pede pra falar com alguem, exames prontos com interesse cirurgico, problema de pagamento):
 - Frase que a Alice usa antes de passar pra uma pessoa (ex: "So um instante que ja verifico isso pra voce"):
+- Quem assume quando a Alice transfere (nome da pessoa):
 
 == 5. PROCEDIMENTOS / SERVICOS ==
 Para CADA procedimento:
@@ -132,6 +138,11 @@ export const BriefingPlanSchema = z.object({
       requireDepositProof: z.boolean().optional(),
       notifyPhone: str.optional(),
       notifyEvents: str.optional(), // csv de new_appointment,reschedule,cancel,confirmed,human_handoff
+      servicePosture: z.enum(["comercial", "consultivo"]).optional(),
+      clinicKind: z.enum(["estetica", "medica", "ambas"]).optional(),
+      evaluationFirst: z.boolean().optional(),
+      allowEmojis: z.boolean().optional(),
+      schedulingLink: str.optional(),
     })
     .default({}),
   locations: z
@@ -272,6 +283,11 @@ Regras:
 - workDays: string com os dias 0=domingo..6=sabado separados por virgula. "segunda a sexta" = "1,2,3,4,5". "segunda a sabado" = "1,2,3,4,5,6".
 - workStartHour/workEndHour: hora inteira (ex: "das 9h as 19h" -> 9 e 19).
 - assistantPersona: "team" (parte da equipe), "clinic_secretary" (secretaria da clinica) ou "professional_secretary" (secretaria de um profissional; preencha assistantPersonaName).
+- servicePosture: "consultivo" se a clinica quer atendimento sem pressao, avaliacao primeiro, no ritmo do paciente (tipico de consultorio medico/cirurgico); "comercial" se quer atendimento proativo que conduz pra agenda. Na duvida, "comercial".
+- clinicKind: "medica" ou "ambas" ativa travas de seguranca medica (nao diagnosticar etc). Use "estetica" so se for exclusivamente estetica nao invasiva.
+- evaluationFirst: true se a clinica NAO quer que o paciente precise saber o procedimento antes da consulta.
+- allowEmojis: false se a clinica pediu para nao usar emojis.
+- schedulingLink: so preencha se houver um link real de auto-agendamento.
 - procedures.price: numero em reais, ou null se "depende de avaliacao" (nesse caso priceVariable=true).
 - paymentMethods: csv com os valores exatos dinheiro,pix,credito,debito.
 - rules: transforme cada instrucao de tom de voz / politica de preco / "nunca fazer" / "quando chamar a equipe" em uma regra objetiva na categoria certa. Instrucoes claras e acionaveis, na 3a pessoa.
@@ -305,6 +321,11 @@ const tools: ChatCompletionTool[] = [
               requireDepositProof: { type: "boolean" },
               notifyPhone: { type: "string" },
               notifyEvents: { type: "string" },
+              servicePosture: { type: "string", enum: ["comercial", "consultivo"] },
+              clinicKind: { type: "string", enum: ["estetica", "medica", "ambas"] },
+              evaluationFirst: { type: "boolean" },
+              allowEmojis: { type: "boolean" },
+              schedulingLink: { type: "string" },
             },
           },
           locations: {
@@ -548,6 +569,11 @@ export async function applyBriefing(clinicId: string, plan: BriefingPlan, actorN
   if (c.requireDepositProof !== undefined) clinicData.requireDepositProof = c.requireDepositProof;
   setIf("notifyPhone", c.notifyPhone?.replace(/\D/g, ""));
   setIf("notifyEvents", c.notifyEvents);
+  setIf("servicePosture", c.servicePosture);
+  setIf("clinicKind", c.clinicKind);
+  if (c.evaluationFirst !== undefined) clinicData.evaluationFirst = c.evaluationFirst;
+  if (c.allowEmojis !== undefined) clinicData.allowEmojis = c.allowEmojis;
+  setIf("schedulingLink", c.schedulingLink);
   const clinicFields = Object.keys(clinicData);
   if (clinicFields.length) await prisma.clinic.update({ where: { id: clinicId }, data: clinicData });
 
@@ -646,8 +672,8 @@ export async function applyBriefing(clinicId: string, plan: BriefingPlan, actorN
     bump(created, "mensagens_prontas");
   }
 
-  // 8. Regras — recomendadas padrao + as do briefing
-  const seeded = await seedDefaultRules(clinicId);
+  // 8. Regras — recomendadas do perfil atual + as do briefing
+  const { added: seeded } = await reseedRulesForProfile(clinicId);
   if (seeded) created.regras_recomendadas = seeded;
   const existingRules = await prisma.customRule.findMany({ where: { clinicId }, select: { instruction: true } });
   const ruleSet = new Set(existingRules.map((r) => norm(r.instruction ?? "")));
