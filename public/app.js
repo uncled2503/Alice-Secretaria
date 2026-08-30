@@ -924,13 +924,17 @@ document.getElementById("cp-schedule").addEventListener("click", () => {
 });
 
 document.getElementById("btn-toggle-human").addEventListener("click", async () => {
-  if (!state.activeConversationId) return;
-  const isHuman = document.getElementById("btn-toggle-human").dataset.humanTakeover === "true";
-  if (isHuman) {
-    await api(`/conversations/${state.activeConversationId}/resume`, { method: "POST" });
-    updateToggleButton(false);
-  } else {
-    updateToggleButton(true);
+  const id = state.activeConversationId;
+  if (!id) return;
+  const btn = document.getElementById("btn-toggle-human");
+  const isHuman = btn.dataset.humanTakeover === "true";
+  btn.disabled = true;
+  try {
+    await api(`/conversations/${id}/${isHuman ? "resume" : "takeover"}`, { method: "POST" });
+    await loadConversations();
+    await openConversation(id);
+  } finally {
+    btn.disabled = false;
   }
 });
 
@@ -940,13 +944,20 @@ document.getElementById("chat-form").addEventListener("submit", async (e) => {
   const text = input.value.trim();
   if (!text || !state.activeConversationId) return;
   input.value = "";
-  await api(`/conversations/${state.activeConversationId}/send`, {
+  const id = state.activeConversationId;
+  await api(`/conversations/${id}/send`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text }),
   });
-  updateToggleButton(true);
-  await loadMessages(state.activeConversationId);
+  const conv = (state.conversations || []).find((c) => c.id === id);
+  if (conv && !conv.humanTakeover) {
+    await loadConversations();
+    await openConversation(id);
+  } else {
+    updateToggleButton(true);
+    await loadMessages(id);
+  }
 });
 
 // --- Agenda ---

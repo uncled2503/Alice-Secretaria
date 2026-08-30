@@ -1055,6 +1055,41 @@ apiRouter.post(
   })
 );
 
+// Assume o atendimento sem enviar mensagem: a Alice para de responder ali.
+apiRouter.post(
+  "/conversations/:id/takeover",
+  asyncRoute(async (req, res) => {
+    const conversation = await prisma.conversation.findUniqueOrThrow({
+      where: { id: req.params.id },
+      include: { patient: true },
+    });
+    if (!assertClinicAccess(req, res, conversation.patient.clinicId)) return;
+
+    if (!conversation.humanTakeover) {
+      const authorName = req.staff?.name ?? null;
+      const patientLabel = conversation.patient.name ?? conversation.patient.phone;
+      await prisma.message.create({
+        data: { conversationId: conversation.id, role: "system", content: "Atendimento transferido para o atendente", authorName },
+      });
+      await prisma.conversation.update({ where: { id: conversation.id }, data: { humanTakeover: true } });
+      await notifyStaff(
+        conversation.patient.clinicId,
+        "human_handoff",
+        `Atendimento assumido manualmente: ${patientLabel}${authorName ? ` (por ${authorName})` : ""}.`,
+      );
+      await logActivity({
+        clinicId: conversation.patient.clinicId,
+        type: "human_takeover",
+        area: "atendimento",
+        title: "Atendimento assumido por uma pessoa",
+        description: `A Alice parou de responder a conversa com ${patientLabel} para a equipe continuar o atendimento.`,
+        actorName: authorName,
+      });
+    }
+    res.json({ ok: true });
+  })
+);
+
 apiRouter.post(
   "/conversations/:id/resume",
   asyncRoute(async (req, res) => {
