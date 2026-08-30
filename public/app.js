@@ -606,6 +606,11 @@ function renderConversationsList() {
   const list = document.getElementById("conversations-list");
   list.innerHTML = "";
   for (const c of filtered) {
+    const contactBtn = el("button", { type: "button", class: "conv-contact-btn", title: "Ver ficha do contato" }, ["Contato"]);
+    contactBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openContactPanel(c.patient);
+    });
     const li = el("li", { "data-id": c.id }, [
       avatarNode(c.patient.name, c.patient.avatarUrl, "avatar"),
       el("div", { class: "conv-text" }, [
@@ -618,6 +623,7 @@ function renderConversationsList() {
           c.lastMessage ?? "",
         ]),
       ]),
+      contactBtn,
     ]);
     if (c.id === state.activeConversationId) li.classList.add("active");
     li.addEventListener("click", () => openConversation(c.id));
@@ -843,9 +849,13 @@ function renderCpAutomations(d) {
   else sent.appendChild(el("div", { class: "hint", style: "margin:0" }, ["Nada enviado ainda."]));
 }
 
+function closeContactPanel() {
+  document.getElementById("contact-panel-overlay").hidden = true;
+}
+
 async function openContactPanel(patient) {
   cpState.patientId = patient.id;
-  document.getElementById("contact-panel").hidden = false;
+  document.getElementById("contact-panel-overlay").hidden = false;
   document.getElementById("cp-name").textContent = patient.name ?? "(sem nome)";
   document.getElementById("cp-phone").textContent = patient.phone;
   document.getElementById("cp-save-status").textContent = "";
@@ -874,8 +884,12 @@ document.getElementById("cp-tabs").addEventListener("click", (e) => {
   const btn = e.target.closest("button[data-cpt]");
   if (btn) switchCpTab(btn.dataset.cpt);
 });
-document.getElementById("cp-close").addEventListener("click", () => {
-  document.getElementById("contact-panel").hidden = true;
+document.getElementById("cp-close").addEventListener("click", closeContactPanel);
+document.getElementById("contact-panel-overlay").addEventListener("click", (e) => {
+  if (e.target.id === "contact-panel-overlay") closeContactPanel();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !document.getElementById("contact-panel-overlay").hidden) closeContactPanel();
 });
 
 document.getElementById("cp-save").addEventListener("click", async () => {
@@ -906,7 +920,7 @@ document.getElementById("cp-schedule").addEventListener("click", () => {
   document.getElementById("appointment-form").style.display = "block";
   document.getElementById("ap-name").value = name;
   document.getElementById("ap-phone").value = phone;
-  document.getElementById("contact-panel").hidden = true;
+  closeContactPanel();
 });
 
 document.getElementById("btn-toggle-human").addEventListener("click", async () => {

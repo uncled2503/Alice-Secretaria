@@ -365,6 +365,14 @@ tbody tr:hover { background: var(--accent-50); }
 #conversations-list .name { font-weight: 600; font-size: 0.88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #conversations-list .conv-time { font-size: 0.7rem; color: var(--text-faint); flex-shrink: 0; }
 #conversations-list .preview { font-size: 0.78rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.conv-contact-btn {
+  flex-shrink: 0; align-self: center; background: var(--card-bg); border: 1px solid var(--border);
+  color: var(--text-muted); border-radius: 6px; padding: 0.25rem 0.55rem; font-size: 0.72rem;
+  font-family: inherit; cursor: pointer; opacity: 0; transition: opacity 0.12s;
+}
+#conversations-list li:hover .conv-contact-btn { opacity: 1; }
+.conv-contact-btn:hover { border-color: var(--accent); color: var(--text); }
+@media (hover: none) { .conv-contact-btn { opacity: 1; } }
 
 .avatar-img { width: 100%; height: 100%; object-fit: cover; display: block; }
 #conversations-list .avatar {
@@ -392,12 +400,20 @@ tbody tr:hover { background: var(--accent-50); }
 }
 .btn-chat-action:hover { border-color: var(--accent); color: var(--text); }
 
-/* --- Painel de contato no chat --- */
-.contact-panel {
-  position: absolute; top: 0; right: 0; bottom: 0; width: 340px; max-width: 90%;
-  background: var(--card-bg); border-left: 1px solid var(--border); z-index: 20;
-  display: flex; flex-direction: column; box-shadow: -8px 0 24px rgba(0,0,0,0.14);
+/* --- Painel de contato no chat (drawer com fundo borrado) --- */
+.contact-panel-overlay {
+  position: fixed; inset: 0; z-index: 2000; display: flex; justify-content: flex-end;
+  background: rgba(15, 15, 20, 0.32);
+  -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
 }
+.contact-panel-overlay[hidden] { display: none; }
+.contact-panel {
+  position: relative; width: 380px; max-width: 92vw; height: 100%;
+  background: var(--card-bg); border-left: 1px solid var(--border);
+  display: flex; flex-direction: column; box-shadow: -14px 0 40px rgba(0,0,0,0.25);
+  animation: cp-slide-in 0.18s ease;
+}
+@keyframes cp-slide-in { from { transform: translateX(24px); opacity: 0.6; } to { transform: none; opacity: 1; } }
 .contact-panel-head { display: flex; align-items: flex-start; justify-content: space-between; padding: 0.9rem 1rem; border-bottom: 1px solid var(--border); }
 .contact-panel-title strong { display: block; font-size: 0.95rem; }
 .contact-panel-tabs { display: flex; gap: 0.3rem; padding: 0.6rem 1rem; border-bottom: 1px solid var(--border); flex-wrap: wrap; align-items: center; }
