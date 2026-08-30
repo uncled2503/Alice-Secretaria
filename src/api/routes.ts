@@ -2211,10 +2211,11 @@ apiRouter.post(
   })
 );
 
-// ---- Briefing de configuracao (onboarding de cliente novo) ----
+// ---- Briefing de configuracao (onboarding) - so administracao da Alice ----
 apiRouter.get(
   "/briefing/template",
-  asyncRoute(async (_req, res) => {
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
     res.json({ template: BRIEFING_TEMPLATE });
   })
 );
@@ -2223,6 +2224,7 @@ apiRouter.get(
 apiRouter.post(
   "/briefing/parse",
   asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
     await getClinic(req); // valida acesso/contexto
     const { text } = req.body as { text?: string };
     const result = await parseBriefing(String(text ?? ""));
@@ -2238,6 +2240,7 @@ apiRouter.post(
 apiRouter.post(
   "/briefing/apply",
   asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
     const clinic = await getClinic(req);
     const parsed = BriefingPlanSchema.safeParse(req.body?.plan);
     if (!parsed.success) {

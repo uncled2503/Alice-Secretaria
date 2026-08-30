@@ -60,13 +60,8 @@ Obs: cadastrar clinica e colar credenciais normalmente e feito pela administraca
 === IMPORTAR CONTATOS/CONVERSAS DO WHATSAPP ===
 Personalizar Alice > Canais > secao "Importar dados do WhatsApp" > botao "Importar do WhatsApp". Traz contatos e conversas dos ultimos 7 dias. As mensagens antigas entram como lidas e a Alice nao responde a elas (serve so pra ter o contexto).
 
-=== BRIEFING (configurar tudo de uma vez) ===
-Personalizar Alice > Briefing.
-1. Clique em "Copiar modelo do briefing", cole num documento e mande pro cliente responder.
-2. Cole a resposta do cliente na caixa de texto e clique em "Analisar briefing".
-3. Confira a previa (quantos procedimentos, profissionais, FAQs, regras, automacoes).
-4. Clique em "Aplicar configuracao na clinica". E aditivo: cria o que ainda nao existe (por nome) e nao apaga nada.
-Depois, revise cada aba (procedimentos, precos, etc.) e ajuste o que precisar.
+=== BRIEFING (configuracao inicial) ===
+A aba Personalizar Alice > Briefing e uma ferramenta interna da administracao da Alice, usada no onboarding pra configurar tudo de uma vez a partir de um questionario respondido pela clinica. Contas de clinica nao veem essa aba. Se a clinica quer ajustar algo depois, e nas abas normais (Procedimentos, Dados da clinica, Personalizar Alice, automacoes) ou pedindo pra administracao.
 
 === DADOS DA CLINICA ===
 Personalizar Alice > Dados da clinica:

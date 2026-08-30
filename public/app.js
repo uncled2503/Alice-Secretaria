@@ -202,8 +202,11 @@ function hideAuthGate() {
 
 function applyRoleUI() {
   const isAdmin = state.staff?.role === "admin";
-  const clinicsTab = document.querySelector('#settings-tabs button[data-sub="clinics"]');
-  if (clinicsTab) clinicsTab.style.display = isAdmin ? "" : "none";
+  // Abas visiveis so para a administracao da Alice.
+  for (const sub of ["clinics", "briefing"]) {
+    const tab = document.querySelector(`#settings-tabs button[data-sub="${sub}"]`);
+    if (tab) tab.style.display = isAdmin ? "" : "none";
+  }
 
   const label = document.getElementById("staff-session-label");
   if (label && state.staff) label.textContent = state.staff.name;
@@ -3735,6 +3738,8 @@ const SETTINGS_SUB_LOADERS = {
 };
 
 function openSettingsSub(sub) {
+  // Abas so da administracao da Alice - cliente cai em "Dados da clinica".
+  if ((sub === "briefing" || sub === "clinics") && state.staff?.role !== "admin") sub = "clinic-data";
   document.querySelectorAll("#settings-tabs button").forEach((b) => b.classList.toggle("active", b.dataset.sub === sub));
   document.querySelectorAll(".settings-subpanel").forEach((p) => p.classList.remove("active"));
   document.getElementById(`sub-${sub}`).classList.add("active");
