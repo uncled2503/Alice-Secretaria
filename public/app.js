@@ -3418,12 +3418,123 @@ async function loadWaitlist() {
   document.getElementById("waitlist-empty").style.display = entries.length ? "none" : "block";
 }
 
+// --- Briefing (onboarding do cliente) ---
+let briefingPlan = null;
+
+function loadBriefing() {
+  document.getElementById("briefing-preview").style.display = "none";
+  document.getElementById("briefing-parse-status").textContent = "";
+  document.getElementById("briefing-apply-status").textContent = "";
+  briefingPlan = null;
+}
+
+document.getElementById("btn-copy-briefing").addEventListener("click", async () => {
+  const status = document.getElementById("briefing-copy-status");
+  try {
+    const { template } = await api("/briefing/template");
+    await navigator.clipboard.writeText(template);
+    status.textContent = "Modelo copiado — cole num documento e envie ao cliente.";
+  } catch {
+    status.textContent = "Não consegui copiar. Tente de novo.";
+  }
+});
+
+function briefingCount(n, one, many) {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+function renderBriefingPreview(plan) {
+  const box = document.getElementById("briefing-preview-body");
+  box.innerHTML = "";
+  const rows = [];
+  const cf = Object.keys(plan.clinic || {}).filter((k) => plan.clinic[k] !== undefined && plan.clinic[k] !== "");
+  if (cf.length) rows.push(`Dados da clínica: ${cf.length} campo(s) — ${cf.join(", ")}`);
+  const add = (arr, one, many) => { if (arr && arr.length) rows.push(`${briefingCount(arr.length, one, many)}`); };
+  add(plan.locations, "endereço", "endereços");
+  add(plan.procedures, "procedimento", "procedimentos");
+  add(plan.products, "produto", "produtos");
+  add(plan.professionals, "profissional", "profissionais");
+  add(plan.faqs, "FAQ", "FAQs");
+  add(plan.templates, "mensagem pronta", "mensagens prontas");
+  add(plan.rules, "regra", "regras");
+  add(plan.playbooks, "roteiro", "roteiros");
+  const a = plan.automations || {};
+  const autos = [];
+  if (a.reminders?.length) autos.push(`${a.reminders.length} lembrete(s)`);
+  if (a.followups?.length) autos.push(`${a.followups.length} recontato(s)`);
+  if (a.postProcedure?.length) autos.push(`${a.postProcedure.length} pós-procedimento`);
+  if (a.renewals?.length) autos.push(`${a.renewals.length} renovação(ões)`);
+  if (a.birthday?.enabled) autos.push("aniversário");
+  if (autos.length) rows.push(`Automações: ${autos.join(", ")}`);
+
+  if (plan.procedures?.length) {
+    rows.push("— " + plan.procedures.map((p) => p.name).join(", "));
+  }
+
+  for (const r of rows) box.appendChild(el("div", { style: "padding:0.2rem 0;font-size:0.85rem" }, [r]));
+  if (!rows.length) box.appendChild(el("div", { class: "hint", style: "margin:0" }, ["Nada identificado no briefing."]));
+
+  const warnEl = document.getElementById("briefing-warnings");
+  warnEl.textContent = (plan.warnings && plan.warnings.length)
+    ? "Revisar: " + plan.warnings.join(" · ")
+    : "";
+}
+
+document.getElementById("briefing-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const text = document.getElementById("briefing-text").value.trim();
+  if (text.length < 40) return;
+  const btn = document.getElementById("btn-briefing-parse");
+  const status = document.getElementById("briefing-parse-status");
+  btn.disabled = true;
+  status.textContent = "Analisando... (pode levar até 30s)";
+  try {
+    const { plan } = await api("/briefing/parse", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+      silentStatuses: [422],
+    });
+    briefingPlan = plan;
+    renderBriefingPreview(plan);
+    document.getElementById("briefing-preview").style.display = "block";
+    status.textContent = "Confira a prévia abaixo antes de aplicar.";
+  } catch (err) {
+    status.textContent = err.detail || "Não consegui interpretar o briefing.";
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("btn-briefing-apply").addEventListener("click", async () => {
+  if (!briefingPlan) return;
+  if (!await showConfirm("Aplicar essa configuração na clínica selecionada? Itens já existentes (mesmo nome) são mantidos, nada é apagado.")) return;
+  const btn = document.getElementById("btn-briefing-apply");
+  const status = document.getElementById("briefing-apply-status");
+  btn.disabled = true;
+  status.textContent = "Aplicando...";
+  try {
+    const summary = await api("/briefing/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ plan: briefingPlan }),
+    });
+    const created = Object.entries(summary.created || {}).map(([k, v]) => `${v} ${k.replace(/_/g, " ")}`).join(", ");
+    status.textContent = created ? `Pronto! Criado: ${created}. Revise cada aba.` : "Aplicado. Nada novo a criar.";
+    document.getElementById("btn-briefing-apply").disabled = true;
+  } catch (err) {
+    status.textContent = err.detail || "Falha ao aplicar.";
+    btn.disabled = false;
+  }
+});
+
 // --- Navegacao das sub-abas de "Personalizar Alice" ---
 const SETTINGS_SUB_LOADERS = {
   "clinic-data": () => {
     loadClinicDataForm();
     loadClinicLocations();
   },
+  briefing: loadBriefing,
   products: loadProducts,
   procedures: loadProcedures,
   staff: loadProfessionals,
@@ -3695,7 +3806,7 @@ window.addEventListener("resize", () => {
       greeted = true;
       addAssistantMessage(
         "assistant",
-        "Oi! Posso explicar qualquer parte do painel da Alice: conexao do WhatsApp, agenda, CRM, mensagens, automacoes e configuracoes. Como posso ajudar?"
+        "Oi! Posso explicar passo a passo qualquer parte do painel: conectar um numero, agenda, CRM, procedimentos, automacoes, briefing e configuracoes. Qual e a sua duvida?"
       );
     }
     setTimeout(() => input.focus(), 50);

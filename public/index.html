@@ -283,6 +283,7 @@
 
         <div class="settings-tabs" id="settings-tabs">
           <button data-sub="clinic-data" class="active">Dados da clínica</button>
+          <button data-sub="briefing">Briefing</button>
           <button data-sub="products">Produtos</button>
           <button data-sub="procedures">Procedimentos</button>
           <button data-sub="staff">Profissionais</button>
@@ -401,6 +402,36 @@
           <p class="hint" style="margin-top:0">Preencha o endereço abaixo e, caso tenha mais de uma unidade, clique em adicionar unidade.</p>
           <div id="clinic-locations-list"></div>
           <button type="button" id="btn-add-location" class="btn-add-unit">+ Adicionar outra unidade</button>
+        </div>
+
+        <div id="sub-briefing" class="settings-subpanel">
+          <div class="section-header" style="margin-top:0"><span class="nav-icon" data-icon="sparkles"></span> Configurar a Alice pelo briefing</div>
+          <p class="hint" style="margin-top:0">Envie o modelo abaixo para o cliente responder. Depois cole a resposta aqui: a Alice interpreta e configura dados da clínica, procedimentos, profissionais, endereço, FAQ, regras e automações de uma vez. É aditivo — não apaga nada que já existe.</p>
+
+          <div class="broadcast-form-row" style="margin-bottom:0.8rem">
+            <button type="button" id="btn-copy-briefing" class="btn-brand btn-brand--secondary btn-brand--sm">Copiar modelo do briefing</button>
+            <span id="briefing-copy-status" class="hint" style="margin:0"></span>
+          </div>
+
+          <form id="briefing-form" class="broadcast-form card">
+            <label>Briefing respondido pelo cliente
+              <textarea id="briefing-text" rows="12" placeholder="Cole aqui o questionário respondido..." required></textarea>
+            </label>
+            <div class="broadcast-form-row" style="align-items:center">
+              <button type="submit" id="btn-briefing-parse" class="btn-brand btn-brand--primary"><span class="nav-icon" data-icon="sparkles"></span> Analisar briefing</button>
+              <span id="briefing-parse-status" class="hint" style="margin:0"></span>
+            </div>
+          </form>
+
+          <div id="briefing-preview" class="card" style="display:none;margin-top:0.8rem">
+            <div class="card-title-row"><h3>Prévia da configuração</h3></div>
+            <div id="briefing-preview-body"></div>
+            <div id="briefing-warnings" class="hint" style="margin-top:0.6rem;color:#b45309"></div>
+            <div class="broadcast-form-row" style="margin-top:0.8rem;align-items:center">
+              <button type="button" id="btn-briefing-apply" class="btn-brand btn-brand--primary">Aplicar configuração na clínica</button>
+              <span id="briefing-apply-status" class="hint" style="margin:0"></span>
+            </div>
+          </div>
         </div>
 
         <div id="sub-products" class="settings-subpanel">

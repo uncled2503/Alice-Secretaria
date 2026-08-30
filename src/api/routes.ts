@@ -19,6 +19,7 @@ import { movePatientToKind, movePatientToRecovery, movePatientToStage } from "..
 import { offerFreedSlotToWaitlist } from "../scheduling/waitlist.js";
 import { logActivity, ACTIVITY_AREAS, ACTIVITY_TYPES } from "../crm/activity.js";
 import { createRuleDraft, RULE_CATEGORIES, seedDefaultRules } from "../ai/rules.js";
+import { BRIEFING_TEMPLATE, parseBriefing, applyBriefing, BriefingPlanSchema } from "../ai/briefing.js";
 import { answerSiteQuestion, type SiteMessage } from "../ai/siteAssistant.js";
 import { notifyStaff } from "../crm/notify.js";
 import { hashPassword, verifyPassword } from "./passwords.js";
@@ -2097,6 +2098,44 @@ apiRouter.post(
     }
     await prisma.broadcastCampaign.update({ where: { id: req.params.id }, data: { status: "cancelled" } });
     res.json({ ok: true });
+  })
+);
+
+// ---- Briefing de configuracao (onboarding de cliente novo) ----
+apiRouter.get(
+  "/briefing/template",
+  asyncRoute(async (_req, res) => {
+    res.json({ template: BRIEFING_TEMPLATE });
+  })
+);
+
+// Interpreta o briefing respondido e devolve o plano pra revisao (nao grava nada).
+apiRouter.post(
+  "/briefing/parse",
+  asyncRoute(async (req, res) => {
+    await getClinic(req); // valida acesso/contexto
+    const { text } = req.body as { text?: string };
+    const result = await parseBriefing(String(text ?? ""));
+    if (!result.ok) {
+      res.status(422).json({ error: result.error });
+      return;
+    }
+    res.json({ plan: result.plan });
+  })
+);
+
+// Aplica um plano ja revisado na clinica selecionada. Aditivo e idempotente.
+apiRouter.post(
+  "/briefing/apply",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const parsed = BriefingPlanSchema.safeParse(req.body?.plan);
+    if (!parsed.success) {
+      res.status(400).json({ error: "plano invalido" });
+      return;
+    }
+    const summary = await applyBriefing(clinic.id, parsed.data, req.staff?.name ?? null);
+    res.json(summary);
   })
 );
 
