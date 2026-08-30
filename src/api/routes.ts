@@ -17,6 +17,7 @@ import {
 import { getFunnelStages, generateStageId } from "../crm/stages.js";
 import { movePatientToKind, movePatientToRecovery, movePatientToStage } from "../crm/stageAutomation.js";
 import { offerFreedSlotToWaitlist } from "../scheduling/waitlist.js";
+import { patientDossier } from "../crm/dossier.js";
 import { logActivity, ACTIVITY_AREAS, ACTIVITY_TYPES } from "../crm/activity.js";
 import { createRuleDraft, RULE_CATEGORIES, seedDefaultRules, reseedRulesForProfile } from "../ai/rules.js";
 import { BRIEFING_TEMPLATE, parseBriefing, applyBriefing, BriefingPlanSchema } from "../ai/briefing.js";
@@ -892,8 +893,9 @@ apiRouter.get(
     const patients = await prisma.patient.findMany({
       where: { clinicId: clinic.id },
       orderBy: { createdAt: "desc" },
+      include: { tags: { include: { tag: { select: { id: true, label: true, color: true } } } } },
     });
-    res.json(patients);
+    res.json(patients.map((p) => ({ ...p, tags: p.tags.map((pt) => pt.tag) })));
   })
 );
 
@@ -1091,7 +1093,11 @@ apiRouter.get(
     const clinic = await getClinic(req);
     const [stages, patients] = await Promise.all([
       getFunnelStages(clinic.id),
-      prisma.patient.findMany({ where: { clinicId: clinic.id }, orderBy: { createdAt: "desc" } }),
+      prisma.patient.findMany({
+        where: { clinicId: clinic.id },
+        orderBy: { createdAt: "desc" },
+        include: { tags: { include: { tag: { select: { id: true, label: true, color: true } } } } },
+      }),
     ]);
 
     const byStage = new Map<string, typeof patients>();
@@ -1112,6 +1118,7 @@ apiRouter.get(
           id: p.id,
           name: p.name,
           phone: p.phone,
+          tags: p.tags.map((pt) => pt.tag),
         })),
       }))
     );
@@ -1125,7 +1132,14 @@ apiRouter.put(
     const patient = await prisma.patient.findUniqueOrThrow({ where: { id: req.params.id } });
     if (!assertClinicAccess(req, res, patient.clinicId)) return;
 
-    const { name, birthDate } = req.body as { name?: string; birthDate?: string | null };
+    const { name, birthDate, email, cpf, notes, tagIds } = req.body as {
+      name?: string;
+      birthDate?: string | null;
+      email?: string | null;
+      cpf?: string | null;
+      notes?: string | null;
+      tagIds?: string[];
+    };
     let parsedBirth: Date | null | undefined;
     if (birthDate !== undefined) {
       if (!birthDate) {
@@ -1141,14 +1155,81 @@ apiRouter.put(
       }
     }
 
+    if (Array.isArray(tagIds)) {
+      const validTags = await prisma.tag.findMany({ where: { id: { in: tagIds }, clinicId: patient.clinicId }, select: { id: true } });
+      const validIds = new Set(validTags.map((t) => t.id));
+      await prisma.patientTag.deleteMany({ where: { patientId: patient.id } });
+      if (validIds.size) {
+        await prisma.patientTag.createMany({ data: [...validIds].map((tagId) => ({ patientId: patient.id, tagId })) });
+      }
+    }
+
     const updated = await prisma.patient.update({
       where: { id: req.params.id },
       data: {
         ...(name !== undefined ? { name: name.trim() || null } : {}),
         ...(parsedBirth !== undefined ? { birthDate: parsedBirth } : {}),
+        ...(email !== undefined ? { email: email?.trim() || null } : {}),
+        ...(cpf !== undefined ? { cpf: cpf?.replace(/\D/g, "") || null } : {}),
+        ...(notes !== undefined ? { notes: notes?.trim() || null } : {}),
       },
     });
     res.json({ id: updated.id, name: updated.name, birthDate: updated.birthDate });
+  })
+);
+
+// Ficha completa do contato (aba "Contato no chat").
+apiRouter.get(
+  "/patients/:id/dossier",
+  asyncRoute(async (req, res) => {
+    const patient = await prisma.patient.findUniqueOrThrow({ where: { id: req.params.id }, select: { clinicId: true } });
+    if (!assertClinicAccess(req, res, patient.clinicId)) return;
+    res.json(await patientDossier(patient.clinicId, req.params.id));
+  })
+);
+
+// --- Etiquetas ---
+apiRouter.get(
+  "/tags",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const tags = await prisma.tag.findMany({ where: { clinicId: clinic.id }, orderBy: { label: "asc" } });
+    res.json(tags);
+  })
+);
+
+apiRouter.post(
+  "/tags",
+  asyncRoute(async (req, res) => {
+    const { label, color } = req.body as { label?: string; color?: string };
+    if (!label?.trim()) {
+      res.status(400).json({ error: "label obrigatorio" });
+      return;
+    }
+    const clinic = await getClinic(req);
+    try {
+      const tag = await prisma.tag.create({
+        data: { clinicId: clinic.id, label: label.trim().slice(0, 40), color: color || "#8b5cf6" },
+      });
+      res.json(tag);
+    } catch (err: any) {
+      if (err?.code === "P2002") {
+        const existing = await prisma.tag.findFirst({ where: { clinicId: clinic.id, label: label.trim().slice(0, 40) } });
+        res.json(existing);
+        return;
+      }
+      throw err;
+    }
+  })
+);
+
+apiRouter.delete(
+  "/tags/:id",
+  asyncRoute(async (req, res) => {
+    const tag = await prisma.tag.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, tag.clinicId)) return;
+    await prisma.tag.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
   })
 );
 

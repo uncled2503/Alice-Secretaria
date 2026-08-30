@@ -77,6 +77,7 @@ model Clinic {
   playbooks     Playbook[]
   scheduleBlocks ScheduleBlock[]
   waitlist       WaitlistEntry[]
+  tags           Tag[]
   uazapiWebhookEvents UazapiWebhookEvent[]
 }
 
@@ -271,6 +272,9 @@ model Patient {
   clinic        Clinic    @relation(fields: [clinicId], references: [id])
   phone         String    // numero do paciente no WhatsApp
   name          String?
+  email         String?
+  cpf           String?
+  notes         String?   // anotacoes livres da equipe sobre o paciente
   birthDate     DateTime? // data de nascimento (so dia/mes importa pro aniversario)
   funnelStage   String    @default("novo_lead") // ver src/crm/stages.ts para a lista de etapas
   optedOut      Boolean   @default(false) // paciente pediu pra nao receber mensagens (LGPD) - trava automacoes
@@ -282,8 +286,32 @@ model Patient {
   broadcastRecipients BroadcastRecipient[]
   birthdaySent  BirthdaySent[]
   waitlist      WaitlistEntry[]
+  tags          PatientTag[]
 
   @@unique([clinicId, phone])
+}
+
+// Etiqueta colorida atribuivel a contatos (ex: "VIP", "Indicacao", "Botox").
+model Tag {
+  id        String       @id @default(cuid())
+  clinicId  String
+  clinic    Clinic       @relation(fields: [clinicId], references: [id])
+  label     String
+  color     String       @default("#8b5cf6")
+  createdAt DateTime     @default(now())
+
+  patients  PatientTag[]
+
+  @@unique([clinicId, label])
+}
+
+model PatientTag {
+  patientId String
+  tagId     String
+  patient   Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  tag       Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([patientId, tagId])
 }
 
 model Conversation {

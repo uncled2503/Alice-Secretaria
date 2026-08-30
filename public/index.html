@@ -233,6 +233,56 @@
               </div>
             </div>
           </div>
+
+          <div id="contact-panel" class="contact-panel" hidden>
+            <div class="contact-panel-head">
+              <div class="contact-panel-title">
+                <strong id="cp-name">Contato</strong>
+                <span id="cp-phone" class="hint" style="margin:0"></span>
+              </div>
+              <button type="button" id="cp-close" class="modal-close" aria-label="Fechar">&times;</button>
+            </div>
+            <div class="contact-panel-tabs" id="cp-tabs">
+              <button data-cpt="resumo" class="active">Resumo</button>
+              <button data-cpt="agendamentos">Agendamentos</button>
+              <button data-cpt="automacoes">Automações</button>
+              <button type="button" id="cp-schedule" class="btn-brand btn-brand--primary btn-brand--sm">Agendar</button>
+            </div>
+
+            <div id="cpt-resumo" class="contact-panel-body active">
+              <label>Nome<input id="cp-f-name" type="text" /></label>
+              <label>E-mail<input id="cp-f-email" type="email" placeholder="email@exemplo.com" /></label>
+              <label>CPF<input id="cp-f-cpf" type="text" inputmode="numeric" placeholder="Só números" /></label>
+              <label>Nascimento<input id="cp-f-birth" type="date" /></label>
+              <label>Observações<textarea id="cp-f-notes" rows="3" placeholder="Anotações úteis para a equipe"></textarea></label>
+              <div class="cp-tags-block">
+                <span class="hint" style="margin:0">Etiquetas</span>
+                <div id="cp-tags" class="cp-tags"></div>
+                <div class="cp-tag-add">
+                  <input id="cp-tag-input" type="text" placeholder="Buscar ou criar etiqueta" />
+                  <input id="cp-tag-color" type="color" value="#8b5cf6" title="Cor da nova etiqueta" />
+                  <button type="button" id="cp-tag-create" class="btn-brand btn-brand--secondary btn-brand--sm">Criar</button>
+                </div>
+                <div id="cp-tag-suggestions" class="cp-tag-suggestions"></div>
+              </div>
+              <button type="button" id="cp-save" class="btn-brand btn-brand--primary">Salvar contato</button>
+              <span id="cp-save-status" class="hint" style="margin:0"></span>
+            </div>
+
+            <div id="cpt-agendamentos" class="contact-panel-body">
+              <div class="cp-section-title">Próximos agendamentos</div>
+              <div id="cp-appts-upcoming"></div>
+              <div class="cp-section-title" style="margin-top:1rem">Últimos agendamentos</div>
+              <div id="cp-appts-past"></div>
+            </div>
+
+            <div id="cpt-automacoes" class="contact-panel-body">
+              <div class="cp-section-title">Vai receber</div>
+              <div id="cp-auto-pending"></div>
+              <div class="cp-section-title" style="margin-top:1rem">Já recebeu</div>
+              <div id="cp-auto-sent"></div>
+            </div>
+          </div>
         </div>
       </section>
 

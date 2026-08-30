@@ -304,7 +304,10 @@ function renderContactsTable(contacts) {
         el("td", {}, [
           el("div", { class: "contact-name-cell" }, [
             el("div", { class: "crm-avatar" }, [initials(c.name)]),
-            el("span", {}, [c.name ?? "(sem nome)"]),
+            el("div", {}, [
+              el("div", {}, [c.name ?? "(sem nome)"]),
+              tagChips(c.tags),
+            ]),
           ]),
         ]),
         el("td", {}, [c.phone]),
@@ -437,6 +440,7 @@ function renderCrmBoard(columns, query) {
           el("div", { class: "name" }, [p.name ?? "(sem nome)"]),
         ]),
         el("div", { class: "phone" }, [p.phone]),
+        ...(p.tags && p.tags.length ? [tagChips(p.tags)] : []),
         select,
       ]);
 
@@ -712,24 +716,15 @@ async function openConversation(id) {
       ])
     );
 
-    // Data de nascimento (usada pela automação de aniversário)
-    const birthInput = el("input", { type: "date", class: "chat-birthdate", title: "Data de nascimento (para a mensagem de aniversário)" });
-    if (conv.patient.birthDate) birthInput.value = String(conv.patient.birthDate).slice(0, 10);
-    birthInput.addEventListener("change", async () => {
-      await api(`/patients/${conv.patient.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ birthDate: birthInput.value || null }),
-      });
-      conv.patient.birthDate = birthInput.value || null;
-    });
-    header.appendChild(el("label", { class: "chat-birthdate-wrap" }, [el("span", {}, ["🎂"]), birthInput]));
-
-    header.appendChild(
+    const actions = el("div", { class: "chat-header-actions" }, [
       el("span", { class: `badge ${conv.humanTakeover ? "badge-neutral" : "badge-green"}` }, [
         conv.humanTakeover ? "Humano" : "Alice",
-      ])
-    );
+      ]),
+    ]);
+    const detailsBtn = el("button", { type: "button", class: "btn-chat-action" }, ["Detalhes"]);
+    detailsBtn.addEventListener("click", () => openContactPanel(conv.patient));
+    actions.appendChild(detailsBtn);
+    header.appendChild(actions);
   }
 
   document.getElementById("chat-controls").style.display = "flex";
@@ -742,6 +737,174 @@ function updateToggleButton(humanTakeover) {
   btn.textContent = humanTakeover ? "Devolver conversa para a Alice" : "Assumir conversa manualmente";
   btn.dataset.humanTakeover = String(humanTakeover);
 }
+
+// --- Painel "Contato no chat" ---
+const cpState = { patientId: null, allTags: [], selected: [] };
+
+function tagChip(t, onRemove) {
+  const chip = el("span", { class: "cp-tag", style: `background:${t.color}` }, [t.label]);
+  if (onRemove) {
+    const x = el("button", { type: "button", title: "Remover" }, ["×"]);
+    x.addEventListener("click", onRemove);
+    chip.appendChild(x);
+  }
+  return chip;
+}
+
+// Chips pequenos, só leitura (tabela de contatos e cards do CRM).
+function tagChips(tags) {
+  const wrap = el("span", { class: "contact-tags" }, []);
+  for (const t of tags || []) {
+    wrap.appendChild(el("span", { class: "contact-tag-chip", style: `background:${t.color}` }, [t.label]));
+  }
+  return wrap;
+}
+
+function renderCpTags() {
+  const box = document.getElementById("cp-tags");
+  box.innerHTML = "";
+  for (const t of cpState.selected) {
+    box.appendChild(tagChip(t, () => {
+      cpState.selected = cpState.selected.filter((x) => x.id !== t.id);
+      renderCpTags();
+    }));
+  }
+  if (!cpState.selected.length) box.appendChild(el("span", { class: "hint", style: "margin:0" }, ["Sem etiquetas"]));
+
+  const q = document.getElementById("cp-tag-input").value.trim().toLowerCase();
+  const selectedIds = new Set(cpState.selected.map((x) => x.id));
+  const sug = document.getElementById("cp-tag-suggestions");
+  sug.innerHTML = "";
+  for (const t of cpState.allTags) {
+    if (selectedIds.has(t.id)) continue;
+    if (q && !t.label.toLowerCase().includes(q)) continue;
+    const b = el("button", { type: "button" }, [
+      el("span", { class: "contact-tag-dot", style: `background:${t.color}` }, []),
+      " " + t.label,
+    ]);
+    b.addEventListener("click", () => {
+      cpState.selected.push(t);
+      document.getElementById("cp-tag-input").value = "";
+      renderCpTags();
+    });
+    sug.appendChild(b);
+  }
+}
+
+document.getElementById("cp-tag-input").addEventListener("input", renderCpTags);
+
+document.getElementById("cp-tag-create").addEventListener("click", async () => {
+  const label = document.getElementById("cp-tag-input").value.trim();
+  if (!label) return;
+  const color = document.getElementById("cp-tag-color").value;
+  const tag = await api("/tags", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label, color }),
+  });
+  if (!cpState.allTags.some((t) => t.id === tag.id)) cpState.allTags.push(tag);
+  if (!cpState.selected.some((t) => t.id === tag.id)) cpState.selected.push(tag);
+  document.getElementById("cp-tag-input").value = "";
+  renderCpTags();
+});
+
+function renderCpAppointments(d) {
+  const fmt = (a) =>
+    el("div", { class: "cp-appt-row" }, [
+      el("div", { class: "when" }, [new Date(a.scheduledAt).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })]),
+      el("div", { class: "meta" }, [`${a.procedure}${a.professional ? " · " + a.professional : ""} · ${a.status}${a.patientConfirmed ? " · confirmado" : ""}`]),
+    ]);
+  const up = document.getElementById("cp-appts-upcoming");
+  const past = document.getElementById("cp-appts-past");
+  up.innerHTML = "";
+  past.innerHTML = "";
+  if (d.appointments.upcoming.length) d.appointments.upcoming.forEach((a) => up.appendChild(fmt(a)));
+  else up.appendChild(el("div", { class: "hint", style: "margin:0" }, ["Nenhum próximo agendamento."]));
+  if (d.appointments.past.length) d.appointments.past.forEach((a) => past.appendChild(fmt(a)));
+  else past.appendChild(el("div", { class: "hint", style: "margin:0" }, ["Nenhum histórico."]));
+}
+
+function renderCpAutomations(d) {
+  const row = (x) =>
+    el("div", { class: "cp-auto-row" }, [
+      el("div", {}, [el("div", { class: "k" }, [x.kind]), el("div", {}, [x.label])]),
+      el("div", { class: "hint", style: "margin:0;white-space:nowrap" }, [x.when ? new Date(x.when).toLocaleDateString("pt-BR") : "—"]),
+    ]);
+  const pend = document.getElementById("cp-auto-pending");
+  const sent = document.getElementById("cp-auto-sent");
+  pend.innerHTML = "";
+  sent.innerHTML = "";
+  if (d.automations.pending.length) d.automations.pending.forEach((x) => pend.appendChild(row(x)));
+  else pend.appendChild(el("div", { class: "hint", style: "margin:0" }, ["Nenhum envio pendente."]));
+  if (d.automations.sent.length) d.automations.sent.forEach((x) => sent.appendChild(row(x)));
+  else sent.appendChild(el("div", { class: "hint", style: "margin:0" }, ["Nada enviado ainda."]));
+}
+
+async function openContactPanel(patient) {
+  cpState.patientId = patient.id;
+  document.getElementById("contact-panel").hidden = false;
+  document.getElementById("cp-name").textContent = patient.name ?? "(sem nome)";
+  document.getElementById("cp-phone").textContent = patient.phone;
+  document.getElementById("cp-save-status").textContent = "";
+  switchCpTab("resumo");
+
+  const [dossier, tags] = await Promise.all([api(`/patients/${patient.id}/dossier`), api("/tags")]);
+  cpState.allTags = tags;
+  cpState.selected = dossier.patient.tags.slice();
+
+  document.getElementById("cp-f-name").value = dossier.patient.name ?? "";
+  document.getElementById("cp-f-email").value = dossier.patient.email ?? "";
+  document.getElementById("cp-f-cpf").value = dossier.patient.cpf ?? "";
+  document.getElementById("cp-f-birth").value = dossier.patient.birthDate ? String(dossier.patient.birthDate).slice(0, 10) : "";
+  document.getElementById("cp-f-notes").value = dossier.patient.notes ?? "";
+  renderCpTags();
+  renderCpAppointments(dossier);
+  renderCpAutomations(dossier);
+}
+
+function switchCpTab(name) {
+  document.querySelectorAll("#cp-tabs button[data-cpt]").forEach((b) => b.classList.toggle("active", b.dataset.cpt === name));
+  document.querySelectorAll(".contact-panel-body").forEach((p) => p.classList.toggle("active", p.id === `cpt-${name}`));
+}
+
+document.getElementById("cp-tabs").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-cpt]");
+  if (btn) switchCpTab(btn.dataset.cpt);
+});
+document.getElementById("cp-close").addEventListener("click", () => {
+  document.getElementById("contact-panel").hidden = true;
+});
+
+document.getElementById("cp-save").addEventListener("click", async () => {
+  if (!cpState.patientId) return;
+  const status = document.getElementById("cp-save-status");
+  status.textContent = "Salvando...";
+  await api(`/patients/${cpState.patientId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: document.getElementById("cp-f-name").value.trim(),
+      email: document.getElementById("cp-f-email").value.trim(),
+      cpf: document.getElementById("cp-f-cpf").value.trim(),
+      notes: document.getElementById("cp-f-notes").value.trim(),
+      birthDate: document.getElementById("cp-f-birth").value || null,
+      tagIds: cpState.selected.map((t) => t.id),
+    }),
+  });
+  status.textContent = "Salvo.";
+  document.getElementById("cp-name").textContent = document.getElementById("cp-f-name").value.trim() || "(sem nome)";
+  await Promise.all([loadConversations(), loadContacts().catch(() => {})]);
+});
+
+document.getElementById("cp-schedule").addEventListener("click", () => {
+  const name = document.getElementById("cp-f-name").value.trim();
+  const phone = document.getElementById("cp-phone").textContent.replace(/\D/g, "");
+  goToTab("agenda");
+  document.getElementById("appointment-form").style.display = "block";
+  document.getElementById("ap-name").value = name;
+  document.getElementById("ap-phone").value = phone;
+  document.getElementById("contact-panel").hidden = true;
+});
 
 document.getElementById("btn-toggle-human").addEventListener("click", async () => {
   if (!state.activeConversationId) return;
@@ -3627,7 +3790,7 @@ const TOUR_STEPS = [
   // ===== Chat =====
   { section: "Chat", tab: "chat", target: "#chat-filter-tabs", title: "Conversas por responsável", desc: "\"Alice\" mostra o que a IA está conduzindo sozinha; \"Humano\" mostra o que já foi assumido pela equipe; \"Todos\" junta tudo. Serve para ver rápido o que precisa de gente. Os números entre parênteses são a contagem de cada fila." },
   { section: "Chat", tab: "chat", target: ".chat-list-pane", title: "Lista de conversas", desc: "As conversas em andamento, mais recentes no topo. Clique em uma para abrir as mensagens ao lado." },
-  { section: "Chat", tab: "chat", target: "#chat-window", title: "Assumir e devolver a conversa", desc: "Ao abrir uma conversa aparece o botão de assumir o atendimento: enquanto você está no controle, a Alice para de responder aquele paciente e você digita direto pelo campo de mensagem. Ao devolver, a Alice retoma de onde parou. Pelo cabeçalho da conversa também dá pra abrir o cadastro do contato e preencher dados como a data de nascimento (usada na automação de aniversário)." },
+  { section: "Chat", tab: "chat", target: "#chat-window", title: "Assumir e devolver a conversa", desc: "Ao abrir uma conversa aparece o botão de assumir o atendimento: enquanto você está no controle, a Alice para de responder aquele paciente e você digita direto pelo campo de mensagem. Ao devolver, a Alice retoma de onde parou. Em \"Detalhes\", no cabeçalho, você abre a ficha do contato: nome, e-mail, CPF, nascimento, observações e etiquetas, além dos agendamentos e das automações desse paciente." },
 
   // ===== Agenda =====
   { section: "Agenda", tab: "agenda", target: "#agenda-view-toggle", title: "Visões da agenda", desc: "Alterna entre Hoje, Semana e Mês. \"Hoje\" e \"Semana\" mostram a grade por horário; \"Mês\" mostra a lista de todos os agendamentos do período." },

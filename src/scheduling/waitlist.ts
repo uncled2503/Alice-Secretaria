@@ -56,7 +56,12 @@ export async function offerFreedSlotToWaitlist(params: {
     });
     if (conversation) {
       await prisma.message.create({
-        data: { conversationId: conversation.id, role: "assistant", content: text.replace(/\s+/g, " ").trim() },
+        data: {
+          conversationId: conversation.id,
+          role: "assistant",
+          content: text.replace(/\s+/g, " ").trim(),
+          authorName: "Lista de espera",
+        },
       });
       await prisma.conversation.update({
         where: { id: conversation.id },
