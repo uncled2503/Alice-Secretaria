@@ -22,6 +22,7 @@ export const ACTIVITY_TYPES: Record<string, string> = {
   appointment_no_show: "Paciente não compareceu",
   appointment_confirmed: "Presença confirmada pelo paciente",
   waitlist_added: "Paciente entrou na lista de espera",
+  satisfaction_recorded: "Pesquisa de satisfação respondida",
   waitlist_offer: "Vaga oferecida da lista de espera",
   schedule_block_added: "Bloqueio de agenda criado",
   stage_changed: "Paciente movido de etapa no funil",

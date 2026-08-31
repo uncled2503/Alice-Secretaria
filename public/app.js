@@ -136,6 +136,7 @@ const ICONS = {
   send: '<path d="M4 11l16-7-6.5 16-3-6.5L4 11z" stroke-linejoin="round"/>',
   repeat: '<path d="M4 7h11a4 4 0 0 1 4 4v1" stroke-linecap="round"/><path d="M9 4L4 7l5 3" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 17H9a4 4 0 0 1-4-4v-1" stroke-linecap="round"/><path d="M15 20l5-3-5-3" stroke-linecap="round" stroke-linejoin="round"/>',
   box: '<path d="M3 8l9-5 9 5-9 5-9-5z" stroke-linejoin="round"/><path d="M3 8v8l9 5 9-5V8" stroke-linejoin="round"/><path d="M12 13v8" />',
+  chart: '<path d="M4 20V10M10 20V4M16 20v-8M22 20H2" stroke-linecap="round" stroke-linejoin="round"/>',
   sparkles: '<path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3z" stroke-linejoin="round"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15z" stroke-linejoin="round"/>',
   building: '<rect x="4" y="3" width="16" height="18" rx="1.5"/><path d="M8 8h1M8 12h1M8 16h1M12 8h1M12 12h1M12 16h1M16 8h1M16 12h1M16 16h1" stroke-linecap="round"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2.5M12 19.5V22M4.2 4.2l1.8 1.8M18 18l1.8 1.8M2 12h2.5M19.5 12H22M4.2 19.8L6 18M18 6l1.8-1.8" stroke-linecap="round"/>',
@@ -290,6 +291,8 @@ document.querySelectorAll(".nav-item").forEach((btn) => {
     } else {
       stopChannelPolling();
     }
+    if (btn.dataset.tab === "reports") loadReports();
+    if (btn.dataset.tab === "agenda") loadAgenda();
   });
 });
 
@@ -1787,9 +1790,20 @@ document.querySelectorAll(".bc-var-btn").forEach((btn) => {
   btn.addEventListener("click", () => insertAtCursor(document.getElementById("bc-message"), btn.dataset.var));
 });
 
+async function fillBcReactProcedures() {
+  const box = document.getElementById("bc-react-procedures");
+  box.innerHTML = "";
+  for (const p of await api("/procedures")) {
+    box.appendChild(el("label", {}, [el("input", { type: "checkbox", value: p.id }, []), " " + p.name]));
+  }
+}
+
 document.getElementById("bc-target-mode").addEventListener("change", (e) => {
-  document.getElementById("bc-stage-wrap").style.display = e.target.value === "stage" ? "flex" : "none";
-  document.getElementById("bc-contacts-wrap").style.display = e.target.value === "contacts" ? "block" : "none";
+  const v = e.target.value;
+  document.getElementById("bc-stage-wrap").style.display = v === "stage" ? "flex" : "none";
+  document.getElementById("bc-contacts-wrap").style.display = v === "contacts" ? "block" : "none";
+  document.getElementById("bc-react-wrap").style.display = v === "reactivation" ? "block" : "none";
+  if (v === "reactivation") fillBcReactProcedures();
 });
 
 function renderBcContactsList() {
@@ -1820,6 +1834,7 @@ function openBroadcastModal() {
   document.getElementById("bc-target-mode").value = "all";
   document.getElementById("bc-stage-wrap").style.display = "none";
   document.getElementById("bc-contacts-wrap").style.display = "none";
+  document.getElementById("bc-react-wrap").style.display = "none";
   bcSelectedContacts = new Map();
   loadBroadcastTargetOptions();
   renderBcContactsList();
@@ -1854,6 +1869,11 @@ document.getElementById("broadcast-form").addEventListener("submit", async (e) =
       return;
     }
     payload.contactIds = Array.from(bcSelectedContacts.keys());
+  } else if (targetMode === "reactivation") {
+    payload.reactivation = {
+      procedureIds: Array.from(document.querySelectorAll("#bc-react-procedures input:checked")).map((c) => c.value),
+      monthsSince: Number(document.getElementById("bc-react-months").value),
+    };
   }
 
   await api("/broadcasts", {
@@ -2490,6 +2510,11 @@ function loadAliceSettings() {
   document.getElementById("as-split-max").value = c.splitMaxMessages ?? 4;
   document.getElementById("as-split-threshold").value = c.splitThresholdChars ?? 450;
   document.getElementById("as-deposit").checked = !!c.requireDepositProof;
+  document.getElementById("as-nps").checked = !!c.npsEnabled;
+  document.getElementById("as-nps-hours").value = c.npsHoursAfter ?? 24;
+  document.getElementById("as-nps-threshold").value = c.npsThreshold ?? 9;
+  document.getElementById("as-google-review").value = c.googleReviewUrl || "";
+  document.getElementById("as-nps-message").value = c.npsMessage || "";
 }
 document.getElementById("alice-settings-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -2506,6 +2531,11 @@ document.getElementById("alice-settings-form").addEventListener("submit", async 
     splitMaxMessages: Number(document.getElementById("as-split-max").value),
     splitThresholdChars: Number(document.getElementById("as-split-threshold").value),
     requireDepositProof: document.getElementById("as-deposit").checked,
+    npsEnabled: document.getElementById("as-nps").checked,
+    npsHoursAfter: Number(document.getElementById("as-nps-hours").value) || 24,
+    npsThreshold: Number(document.getElementById("as-nps-threshold").value),
+    googleReviewUrl: document.getElementById("as-google-review").value.trim(),
+    npsMessage: document.getElementById("as-nps-message").value.trim(),
   };
   await api(`/clinics/${state.clinicId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
   await loadClinics();
@@ -2551,13 +2581,16 @@ function loadPersonalize() {
 
 
 async function refreshAll() {
+  const activeTab = document.querySelector(".nav-item.active")?.dataset.tab;
   // allSettled: uma aba com erro nao pode travar as outras de carregar.
   await Promise.allSettled([
     loadDashboard(),
     loadContacts(),
     loadCrmBoard(),
     loadConversations(),
-    loadAgenda(),
+    // Agenda so recarrega em background quando esta aberta - evita resetar
+    // a navegacao/filtros que o usuario acabou de mexer.
+    activeTab === "agenda" ? loadAgenda() : Promise.resolve(),
     state.activeConversationId ? loadMessages(state.activeConversationId) : Promise.resolve(),
   ]);
 }
@@ -2635,10 +2668,127 @@ function renderMiniCalendar(daily) {
 document.getElementById("period-row").addEventListener("click", (e) => {
   const btn = e.target.closest(".period-btn");
   if (!btn) return;
-  document.querySelectorAll(".period-btn").forEach((b) => b.classList.remove("active"));
+  document.querySelectorAll("#period-row .period-btn").forEach((b) => b.classList.remove("active"));
   btn.classList.add("active");
   state.periodDays = Number(btn.dataset.days) || 30;
   loadDashboard();
+});
+
+// --- Relatórios ---
+state.reportDays = 30;
+const BRL = (n) => (n || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
+const SRC_LABEL = { whatsapp: "WhatsApp", instagram: "Instagram", presencial: "Presencial", telefone: "Telefone", nao_informado: "Não informado" };
+
+function rpBars(containerId, rows) {
+  const box = document.getElementById(containerId);
+  box.innerHTML = "";
+  const max = Math.max(1, ...rows.map((r) => r.value));
+  if (!rows.length) { box.appendChild(el("div", { class: "hint", style: "margin:0" }, ["Sem dados no período."])); return; }
+  for (const r of rows) {
+    box.appendChild(el("div", { class: "rp-bar-row" }, [
+      el("div", { class: "rp-bar-top" }, [el("span", {}, [r.label]), el("span", { class: "v" }, [r.display])]),
+      el("div", { class: "rp-bar-track" }, [el("div", { class: "rp-bar-fill", style: `width:${Math.round((r.value / max) * 100)}%` }, [])]),
+    ]));
+  }
+}
+
+function kpiCard(label, value, hint) {
+  return el("div", { class: "card stat-card" }, [
+    el("div", { class: "stat-card-header" }, [el("span", { class: "stat-label" }, [label])]),
+    el("div", { class: "stat-value" }, [value]),
+    el("div", { class: "stat-hint" }, [hint || " "]),
+  ]);
+}
+
+async function loadReports() {
+  const end = new Date();
+  const start = new Date(end.getTime() - state.reportDays * 24 * 60 * 60_000);
+  document.getElementById("rp-range").textContent = `${start.toLocaleDateString("pt-BR")} — ${end.toLocaleDateString("pt-BR")}`;
+  let d;
+  try {
+    d = await api(`/reports?start=${start.toISOString()}&end=${end.toISOString()}`);
+  } catch { return; }
+
+  const k = document.getElementById("rp-kpis");
+  k.innerHTML = "";
+  k.append(
+    kpiCard("Faturamento realizado", BRL(d.revenue.realizado), `${d.funnel.compareceram} atendimento(s) concluído(s)`),
+    kpiCard("Agendado pra frente", BRL(d.revenue.pipeline), "consultas futuras confirmadas"),
+    kpiCard("Taxa de no-show", `${d.noShowRate}%`, `${d.funnel.nao_compareceram} não compareceram`),
+    kpiCard("Conversão", `${d.funnel.conversao}%`, "dos atendimentos com desfecho"),
+    kpiCard("Recuperados pela Alice", String(d.recuperados), "voltaram pelo recontato e agendaram"),
+    kpiCard("Atendidos pela Alice", String(d.atendidos), "contatos únicos com resposta"),
+  );
+
+  rpBars("rp-funnel", [
+    { label: "Leads", value: d.funnel.leads, display: String(d.funnel.leads) },
+    { label: "Agendaram", value: d.funnel.agendaram, display: String(d.funnel.agendaram) },
+    { label: "Compareceram", value: d.funnel.compareceram, display: String(d.funnel.compareceram) },
+    { label: "Não compareceram", value: d.funnel.nao_compareceram, display: String(d.funnel.nao_compareceram) },
+    { label: "Cancelaram", value: d.funnel.cancelaram, display: String(d.funnel.cancelaram) },
+  ]);
+
+  rpBars("rp-source", d.bySource.map((s) => ({
+    label: SRC_LABEL[s.source] || s.source,
+    value: s.agendamentos,
+    display: `${s.agendamentos}${s.faturamento ? " · " + BRL(s.faturamento) : ""}`,
+  })));
+
+  rpBars("rp-proc", d.revenue.porProcedimento.map((p) => ({
+    label: p.name, value: p.total, display: `${p.count}x · ${BRL(p.total)}`,
+  })));
+
+  const prof = document.getElementById("rp-prof");
+  prof.innerHTML = "";
+  for (const p of d.revenue.porProfissional) {
+    prof.appendChild(el("tr", {}, [
+      el("td", {}, [p.name]),
+      el("td", {}, [String(p.concluidos)]),
+      el("td", {}, [BRL(p.total)]),
+      el("td", {}, [String(p.noShow)]),
+    ]));
+  }
+  if (!d.revenue.porProfissional.length) prof.appendChild(el("tr", {}, [el("td", { colspan: "4", class: "hint", style: "text-align:center;padding:0.8rem" }, ["Sem dados."])]));
+
+  // Grafico diario (faturamento)
+  const chart = document.getElementById("rp-daily");
+  chart.innerHTML = "";
+  const maxF = Math.max(1, ...d.daily.map((x) => x.faturamento));
+  for (const x of d.daily) {
+    const pct = Math.round((x.faturamento / maxF) * 100);
+    chart.appendChild(el("div", { class: "dash-bar-wrap", title: `${x.date}: ${BRL(x.faturamento)} · ${x.agendamentos} agend.` }, [
+      el("div", { class: `dash-bar${x.faturamento ? " has-value" : ""}`, style: `height:${Math.max(pct, 2)}%` }, []),
+    ]));
+  }
+
+  // Satisfação
+  const sat = document.getElementById("rp-sat");
+  sat.innerHTML = "";
+  if (!d.satisfacao.respostas) {
+    document.getElementById("rp-sat-card").style.display = "block";
+    sat.appendChild(el("div", { class: "hint", style: "margin:0" }, ["Nenhuma resposta de satisfação no período. Ative a pesquisa em Personalizar Alice → Ajustes."]));
+  } else {
+    sat.appendChild(el("div", { class: "rp-nps-big" }, [
+      el("div", {}, [el("div", { class: "n" }, [d.satisfacao.nps == null ? "—" : String(d.satisfacao.nps)]), el("div", { class: "l" }, ["NPS"])]),
+      el("div", {}, [el("div", { class: "n" }, [d.satisfacao.media == null ? "—" : String(d.satisfacao.media)]), el("div", { class: "l" }, ["nota média (0-10)"])]),
+      el("div", {}, [el("div", { class: "n" }, [String(d.satisfacao.respostas)]), el("div", { class: "l" }, ["respostas"])]),
+    ]));
+    for (const c of d.satisfacao.comentarios) {
+      sat.appendChild(el("div", { class: "rp-comment" }, [
+        el("div", {}, [c.comentario]),
+        el("div", { class: "who" }, [`${c.nome || "Paciente"} · nota ${c.score}`]),
+      ]));
+    }
+  }
+}
+
+document.getElementById("rp-period-row").addEventListener("click", (e) => {
+  const btn = e.target.closest(".period-btn");
+  if (!btn) return;
+  document.querySelectorAll("#rp-period-row .period-btn").forEach((b) => b.classList.remove("active"));
+  btn.classList.add("active");
+  state.reportDays = Number(btn.dataset.days) || 30;
+  loadReports();
 });
 
 // --- Selecao de clinica (multi-clinica) ---

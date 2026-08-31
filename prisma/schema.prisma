@@ -51,6 +51,13 @@ model Clinic {
   allowEmojis          Boolean @default(true)
   schedulingLink       String? // link externo de auto-agendamento (fallback quando a clinica prefere que o paciente marque sozinho)
 
+  // Pesquisa de satisfacao pos-atendimento (NPS + avaliacao no Google)
+  npsEnabled       Boolean @default(false)
+  npsHoursAfter    Int     @default(24)  // horas depois do atendimento concluido pra perguntar
+  npsThreshold     Int     @default(9)   // nota >= isto -> pede avaliacao no Google
+  npsMessage       String? // texto da pergunta (vazio = padrao)
+  googleReviewUrl  String?
+
   importStatus    String?   // null | "running" | "completed" - importacao de contatos/historico do WhatsApp
   importStats     String?   // JSON: {found,created,merged,ignored,conversations,partialHistory,contactsInBase}
   importUpdatedAt DateTime?
@@ -79,6 +86,7 @@ model Clinic {
   waitlist       WaitlistEntry[]
   tags           Tag[]
   apiKeys        ApiKey[]
+  satisfactionSurveys SatisfactionSurvey[]
   uazapiWebhookEvents UazapiWebhookEvent[]
 }
 
@@ -288,6 +296,7 @@ model Patient {
   birthdaySent  BirthdaySent[]
   waitlist      WaitlistEntry[]
   tags          PatientTag[]
+  satisfactionSurveys SatisfactionSurvey[]
 
   @@unique([clinicId, phone])
 }
@@ -378,7 +387,8 @@ model BroadcastCampaign {
   title        String
   message      String   // suporta {nome}/{primeiro_nome}/{nome_completo}/{telefone}/{endereco}/{unidade}/{data_hora}
   targetStage  String?  // usado so quando targetMode = "stage" - id de src/crm/stages.ts
-  targetMode   String   @default("all") // all | stage | contacts - contacts usa BroadcastRecipient pre-populado na criacao
+  targetMode   String   @default("all") // all | stage | contacts | reactivation
+  targetConfig String?  // JSON extra por targetMode. reactivation: {"procedureIds":[...],"monthsSince":6}
   scheduledFor DateTime
   status       String   @default("scheduled") // scheduled | sending | completed | cancelled
   createdAt    DateTime @default(now())
@@ -462,6 +472,25 @@ model ApiIdempotencyKey {
   createdAt  DateTime @default(now())
 
   @@unique([apiKeyId, key])
+}
+
+// Pesquisa de satisfacao disparada X horas depois de um atendimento concluido.
+// A Alice pergunta a nota na conversa e, se boa, manda o link de avaliacao.
+model SatisfactionSurvey {
+  id             String    @id @default(cuid())
+  clinicId       String
+  clinic         Clinic    @relation(fields: [clinicId], references: [id])
+  patientId      String
+  patient        Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  appointmentId  String?
+  score          Int?      // 0-10
+  comment        String?
+  askedAt        DateTime  @default(now())
+  answeredAt     DateTime?
+  reviewLinkSent Boolean   @default(false)
+
+  @@index([clinicId, askedAt])
+  @@index([patientId, answeredAt])
 }
 
 model Message {

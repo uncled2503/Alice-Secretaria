@@ -18,6 +18,7 @@ import { getFunnelStages, generateStageId } from "../crm/stages.js";
 import { movePatientToKind, movePatientToRecovery, movePatientToStage } from "../crm/stageAutomation.js";
 import { offerFreedSlotToWaitlist } from "../scheduling/waitlist.js";
 import { patientDossier } from "../crm/dossier.js";
+import { buildReport } from "../crm/reports.js";
 import { logActivity, ACTIVITY_AREAS, ACTIVITY_TYPES } from "../crm/activity.js";
 import { createRuleDraft, RULE_CATEGORIES, seedDefaultRules, reseedRulesForProfile } from "../ai/rules.js";
 import { BRIEFING_TEMPLATE, parseBriefing, applyBriefing, BriefingPlanSchema } from "../ai/briefing.js";
@@ -155,6 +156,11 @@ apiRouter.get(
         evaluationFirst: true,
         allowEmojis: true,
         schedulingLink: true,
+        npsEnabled: true,
+        npsHoursAfter: true,
+        npsThreshold: true,
+        npsMessage: true,
+        googleReviewUrl: true,
       },
     });
     const withStatus = await Promise.all(clinics.map(async (clinic) => ({ ...clinic, ...(await getStatus(clinic.id)) })));
@@ -194,6 +200,11 @@ apiRouter.put(
       evaluationFirst?: boolean;
       allowEmojis?: boolean;
       schedulingLink?: string | null;
+      npsEnabled?: boolean;
+      npsHoursAfter?: number;
+      npsThreshold?: number;
+      npsMessage?: string | null;
+      googleReviewUrl?: string | null;
     };
     const { name, whatsappPhone, timezone, workStartHour, workEndHour, workDays, active, notifyPhone, notifyEvents, assistantPersona, assistantPersonaName } = b;
 
@@ -246,6 +257,11 @@ apiRouter.put(
           ...(b.evaluationFirst !== undefined ? { evaluationFirst: b.evaluationFirst } : {}),
           ...(b.allowEmojis !== undefined ? { allowEmojis: b.allowEmojis } : {}),
           ...(b.schedulingLink !== undefined ? { schedulingLink: b.schedulingLink?.trim() || null } : {}),
+          ...(b.npsEnabled !== undefined ? { npsEnabled: b.npsEnabled } : {}),
+          ...(b.npsHoursAfter !== undefined ? { npsHoursAfter: Math.min(Math.max(Math.round(b.npsHoursAfter), 1), 168) } : {}),
+          ...(b.npsThreshold !== undefined ? { npsThreshold: Math.min(Math.max(Math.round(b.npsThreshold), 0), 10) } : {}),
+          ...(b.npsMessage !== undefined ? { npsMessage: b.npsMessage?.trim() || null } : {}),
+          ...(b.googleReviewUrl !== undefined ? { googleReviewUrl: b.googleReviewUrl?.trim() || null } : {}),
         },
       });
 
@@ -557,6 +573,21 @@ apiRouter.post(
     } catch (err: any) {
       res.status(400).json({ error: err?.message ?? "Falha ao iniciar importacao" });
     }
+  })
+);
+
+apiRouter.get(
+  "/reports",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const { start, end } = req.query as { start?: string; end?: string };
+    const endDate = end ? new Date(end) : new Date();
+    const startDate = start ? new Date(start) : new Date(endDate.getTime() - 30 * 24 * 60 * 60_000);
+    if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+      res.status(400).json({ error: "start/end invalidos" });
+      return;
+    }
+    res.json(await buildReport(clinic.id, startDate, endDate));
   })
 );
 
@@ -2209,20 +2240,21 @@ apiRouter.get(
 apiRouter.post(
   "/broadcasts",
   asyncRoute(async (req, res) => {
-    const { title, message, scheduledFor, targetStage, contactIds } = req.body as {
+    const { title, message, scheduledFor, targetStage, contactIds, reactivation } = req.body as {
       title?: string;
       message?: string;
       scheduledFor?: string;
       targetStage?: string | null;
       contactIds?: string[];
+      reactivation?: { procedureIds?: string[]; monthsSince?: number };
     };
 
     if (!title || !message || !scheduledFor) {
       res.status(400).json({ error: "title, message e scheduledFor sao obrigatorios" });
       return;
     }
-    if (!targetStage && !contactIds?.length) {
-      res.status(400).json({ error: "escolha um destino: todos os contatos, uma etapa do funil ou contatos especificos" });
+    if (!targetStage && !contactIds?.length && !reactivation) {
+      res.status(400).json({ error: "escolha um destino: todos os contatos, uma etapa, contatos especificos ou reativacao de base" });
       return;
     }
 
@@ -2244,7 +2276,15 @@ apiRouter.post(
       validContactIds = patients.map((p) => p.id);
     }
 
-    const targetMode = targetStage ? "stage" : validContactIds.length ? "contacts" : "all";
+    let targetConfig: string | null = null;
+    let targetMode = targetStage ? "stage" : validContactIds.length ? "contacts" : "all";
+    if (reactivation) {
+      targetMode = "reactivation";
+      const months = Math.min(Math.max(Number(reactivation.monthsSince) || 6, 1), 36);
+      const procs = Array.isArray(reactivation.procedureIds) ? reactivation.procedureIds.filter(Boolean) : [];
+      targetConfig = JSON.stringify({ procedureIds: procs, monthsSince: months });
+    }
+
     const campaign = await prisma.broadcastCampaign.create({
       data: {
         clinicId: clinic.id,
@@ -2252,6 +2292,7 @@ apiRouter.post(
         message,
         targetStage: targetStage || null,
         targetMode,
+        targetConfig,
         scheduledFor: new Date(scheduledFor),
       },
     });

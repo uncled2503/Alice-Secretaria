@@ -63,6 +63,9 @@
           <button data-tab="agenda" class="nav-item">
             <span class="nav-icon" data-icon="calendar"></span> Agenda
           </button>
+          <button data-tab="reports" class="nav-item">
+            <span class="nav-icon" data-icon="chart"></span> Relatórios
+          </button>
         </div>
 
         <div class="nav-group">
@@ -381,6 +384,60 @@
               <div id="ag-day-list"></div>
             </div>
           </aside>
+        </div>
+      </section>
+
+      <section id="tab-reports" class="tab-panel">
+        <div class="page-header">
+          <div>
+            <h1>Relatórios</h1>
+            <p class="page-subtitle" id="rp-range">Últimos 30 dias</p>
+          </div>
+        </div>
+
+        <div class="period-row" id="rp-period-row">
+          <button class="period-btn" data-days="7">7 dias</button>
+          <button class="period-btn active" data-days="30">30 dias</button>
+          <button class="period-btn" data-days="90">90 dias</button>
+          <button class="period-btn" data-days="180">6 meses</button>
+          <button class="period-btn" data-days="365">12 meses</button>
+        </div>
+
+        <div class="stat-grid" id="rp-kpis"></div>
+
+        <div class="dash-columns" style="grid-template-columns:1fr 1fr">
+          <div class="card">
+            <h3>Funil do período</h3>
+            <div id="rp-funnel" class="rp-bars"></div>
+          </div>
+          <div class="card">
+            <h3>Origem dos agendamentos</h3>
+            <div id="rp-source" class="rp-bars"></div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:1rem">
+          <h3>Faturamento por dia</h3>
+          <div id="rp-daily" class="dash-chart"></div>
+        </div>
+
+        <div class="dash-columns" style="grid-template-columns:1fr 1fr;margin-top:1rem">
+          <div class="card">
+            <h3>Faturamento por procedimento</h3>
+            <div id="rp-proc" class="rp-bars"></div>
+          </div>
+          <div class="card">
+            <h3>Por profissional</h3>
+            <table>
+              <thead><tr><th>Profissional</th><th>Concluídos</th><th>Faturamento</th><th>No-show</th></tr></thead>
+              <tbody id="rp-prof"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:1rem" id="rp-sat-card">
+          <h3>Satisfação (NPS)</h3>
+          <div id="rp-sat"></div>
         </div>
       </section>
 
@@ -988,6 +1045,24 @@
               <label class="checkbox-row"><input type="checkbox" id="as-deposit" /> Exigir comprovante do sinal antes de confirmar o agendamento</label>
               <p class="hint" style="margin-top:0">Quando ativado, a Alice pede o pagamento, aguarda a foto do comprovante e só então marca o horário.</p>
 
+              <div class="section-header" style="margin-top:1rem">Pesquisa de satisfação (NPS + avaliação no Google)</div>
+              <label class="checkbox-row"><input type="checkbox" id="as-nps" /> Perguntar a satisfação depois do atendimento concluído</label>
+              <div class="broadcast-form-row">
+                <label>Quantas horas depois
+                  <input id="as-nps-hours" type="number" min="1" max="168" value="24" />
+                </label>
+                <label>Nota mínima pra pedir avaliação
+                  <input id="as-nps-threshold" type="number" min="0" max="10" value="9" />
+                </label>
+              </div>
+              <label>Link de avaliação no Google
+                <input id="as-google-review" type="url" placeholder="https://g.page/r/..." />
+              </label>
+              <label>Mensagem da pergunta (opcional)
+                <input id="as-nps-message" type="text" placeholder="Ex: De 0 a 10, quanto você recomendaria a {unidade}?" />
+              </label>
+              <p class="hint" style="margin-top:0">Se a nota for &ge; a mínima e houver link, a Alice agradece e pede a avaliação. Nota baixa vira aviso pra equipe.</p>
+
               <div class="broadcast-form-row">
                 <button type="submit" class="btn-brand btn-brand--primary">Salvar ajustes</button>
               </div>
@@ -1255,11 +1330,28 @@
               <option value="all">Todos os contatos</option>
               <option value="stage">Uma etapa do funil</option>
               <option value="contacts">Contatos específicos</option>
+              <option value="reactivation">Reativação de base (quem não volta há um tempo)</option>
             </select>
           </label>
           <label id="bc-stage-wrap" style="display:none">Etapa do funil
             <select id="bc-target-stage"></select>
           </label>
+          <div id="bc-react-wrap" style="display:none">
+            <label>Procedimentos (vazio = qualquer)
+              <div id="bc-react-procedures" class="procedures-checklist" style="max-height:150px"></div>
+            </label>
+            <label>Sem voltar há pelo menos
+              <select id="bc-react-months">
+                <option value="3">3 meses</option>
+                <option value="6" selected>6 meses</option>
+                <option value="9">9 meses</option>
+                <option value="12">12 meses</option>
+                <option value="18">18 meses</option>
+                <option value="24">24 meses</option>
+              </select>
+            </label>
+            <p class="hint" style="margin-top:0">Pega quem fez o procedimento (concluído) há mais tempo que isso e não tem consulta futura marcada. Quando responder, a Alice continua a conversa e agenda.</p>
+          </div>
           <div id="bc-contacts-wrap" style="display:none">
             <input id="bc-contacts-search" type="text" placeholder="Buscar contato por nome ou telefone..." />
             <p class="hint" id="bc-contacts-count" style="margin:0.3rem 0">0 contato(s) selecionado(s).</p>

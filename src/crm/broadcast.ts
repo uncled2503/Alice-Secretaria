@@ -50,6 +50,43 @@ function isWithinBusinessHours(workStartHour: number, workEndHour: number): bool
   return hour >= workStartHour && hour < workEndHour;
 }
 
+// Reativacao de base: quem fez um procedimento (concluido) ha mais de N meses e
+// nao tem consulta futura, exceto quem optou por nao receber.
+async function reactivationRecipients(clinicId: string, config: string | null): Promise<string[]> {
+  let cfg: { procedureIds?: string[]; monthsSince?: number } = {};
+  try { cfg = JSON.parse(config || "{}"); } catch { /* usa default */ }
+  const months = Math.min(Math.max(cfg.monthsSince ?? 6, 1), 36);
+  const cutoff = new Date();
+  cutoff.setMonth(cutoff.getMonth() - months);
+  const now = new Date();
+
+  const completed = await prisma.appointment.findMany({
+    where: {
+      clinicId,
+      status: "completed",
+      ...(cfg.procedureIds?.length ? { procedureId: { in: cfg.procedureIds } } : {}),
+    },
+    select: { patientId: true, scheduledAt: true },
+  });
+  const lastByPatient = new Map<string, Date>();
+  for (const a of completed) {
+    const cur = lastByPatient.get(a.patientId);
+    if (!cur || a.scheduledAt > cur) lastByPatient.set(a.patientId, a.scheduledAt);
+  }
+  const candidateIds = [...lastByPatient].filter(([, last]) => last < cutoff).map(([id]) => id);
+  if (candidateIds.length === 0) return [];
+
+  const [upcoming, optedOut] = await Promise.all([
+    prisma.appointment.findMany({
+      where: { clinicId, status: "confirmed", scheduledAt: { gte: now }, patientId: { in: candidateIds } },
+      select: { patientId: true },
+    }),
+    prisma.patient.findMany({ where: { id: { in: candidateIds }, optedOut: true }, select: { id: true } }),
+  ]);
+  const skip = new Set([...upcoming.map((u) => u.patientId), ...optedOut.map((p) => p.id)]);
+  return candidateIds.filter((id) => !skip.has(id));
+}
+
 async function activateDueCampaigns(): Promise<void> {
   const due = await prisma.broadcastCampaign.findMany({
     where: { status: "scheduled", scheduledFor: { lte: new Date() } },
@@ -58,21 +95,26 @@ async function activateDueCampaigns(): Promise<void> {
   for (const campaign of due) {
     // Campanha criada com "contatos especificos" ja tem os destinatarios
     // gravados na criacao (ver POST /broadcasts) - so recalcula por
-    // clinica/etapa quando nao ha nenhum ainda.
+    // clinica/etapa/reativacao quando nao ha nenhum ainda.
     const alreadyPopulated = await prisma.broadcastRecipient.count({ where: { campaignId: campaign.id } });
     if (alreadyPopulated === 0) {
-      const patients = await prisma.patient.findMany({
-        where: {
-          clinicId: campaign.clinicId,
-          ...(campaign.targetStage ? { funnelStage: campaign.targetStage } : {}),
-        },
-      });
+      let patientIds: string[];
+      if (campaign.targetMode === "reactivation") {
+        patientIds = await reactivationRecipients(campaign.clinicId, campaign.targetConfig);
+      } else {
+        const patients = await prisma.patient.findMany({
+          where: {
+            clinicId: campaign.clinicId,
+            ...(campaign.targetStage ? { funnelStage: campaign.targetStage } : {}),
+          },
+          select: { id: true },
+        });
+        patientIds = patients.map((p) => p.id);
+      }
 
-      if (patients.length > 0) {
-        // skipDuplicates nao existe no SQLite; seguro sem ele pois esta ativacao
-        // roda uma unica vez por campanha (logo depois muda o status pra "sending").
+      if (patientIds.length > 0) {
         await prisma.broadcastRecipient.createMany({
-          data: patients.map((p) => ({ campaignId: campaign.id, patientId: p.id })),
+          data: patientIds.map((id) => ({ campaignId: campaign.id, patientId: id })),
         });
       }
     }
@@ -104,6 +146,19 @@ async function sendNextBatch(): Promise<void> {
           where: { id: recipient.id },
           data: { status: "sent", sentAt: new Date() },
         });
+        // Reativacao: registra a mensagem na conversa do paciente pra Alice ter
+        // contexto quando ele responder (as outras campanhas nao precisam disso).
+        if (campaign.targetMode === "reactivation") {
+          let conv = await prisma.conversation.findFirst({
+            where: { patientId: recipient.patientId, status: { in: ["active", "qualified", "scheduled"] } },
+            orderBy: { createdAt: "desc" },
+          });
+          if (!conv) conv = await prisma.conversation.create({ data: { patientId: recipient.patientId } });
+          await prisma.message.create({
+            data: { conversationId: conv.id, role: "assistant", content: text, authorName: "Reativação de base" },
+          });
+          await prisma.conversation.update({ where: { id: conv.id }, data: { status: "active", lastMessageAt: new Date(), lastFollowUpOrder: 0 } });
+        }
       } catch (err) {
         console.error(`Falha ao enviar broadcast para ${recipient.patient.phone}:`, err);
         await prisma.broadcastRecipient.update({ where: { id: recipient.id }, data: { status: "failed" } });

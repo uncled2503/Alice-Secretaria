@@ -129,6 +129,22 @@ const tools: ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "record_satisfaction",
+      description:
+        "Registra a nota da pesquisa de satisfacao quando o paciente responde com um numero (0 a 10) e ha uma pesquisa pendente no contexto. So chame quando o paciente realmente deu uma nota.",
+      parameters: {
+        type: "object",
+        properties: {
+          score: { type: "integer", description: "Nota de 0 a 10." },
+          comment: { type: "string", description: "Comentario do paciente, se houver." },
+        },
+        required: ["score"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "update_crm_stage",
       description:
         "Atualiza a etapa do paciente no funil de vendas conforme a conversa evolui (ex: demonstrou interesse real -> 'interesse confirmado'; recebeu orcamento -> 'proposta enviada'). NAO use para agendamento, venda fechada, pos-procedimento ou perdido - essas etapas sao automaticas.",
@@ -444,6 +460,46 @@ async function runTool(
     return JSON.stringify({ atualizado: true, etapa: result.label });
   }
 
+  if (name === "record_satisfaction") {
+    const score = Math.round(Number(input.score));
+    if (!Number.isFinite(score) || score < 0 || score > 10) {
+      return JSON.stringify({ ok: false, motivo: "nota deve ser de 0 a 10" });
+    }
+    const survey = await prisma.satisfactionSurvey.findFirst({
+      where: { clinicId, patientId, answeredAt: null, askedAt: { gte: new Date(Date.now() - 7 * 24 * 3_600_000) } },
+      orderBy: { askedAt: "desc" },
+    });
+    if (!survey) return JSON.stringify({ ok: false, motivo: "nao ha pesquisa pendente pra este paciente" });
+
+    await prisma.satisfactionSurvey.update({
+      where: { id: survey.id },
+      data: {
+        score,
+        comment: input.comment ? String(input.comment).slice(0, 500) : null,
+        answeredAt: new Date(),
+        reviewLinkSent: score >= clinic.npsThreshold && !!clinic.googleReviewUrl,
+      },
+    });
+
+    const patient = await prisma.patient.findUnique({ where: { id: patientId } });
+    const who = patientLabelOf(patient);
+    await logActivity({
+      clinicId, type: "satisfaction_recorded", area: "atendimento",
+      title: "Pesquisa de satisfação respondida",
+      description: `${who} deu nota ${score}${input.comment ? `: "${String(input.comment).slice(0, 200)}"` : "."}`,
+      actorName: null,
+    });
+
+    if (score <= 6) {
+      await notifyStaff(clinicId, "human_handoff", `Avaliação baixa (${score}/10): ${who}${input.comment ? ` — "${String(input.comment).slice(0, 200)}"` : ""}. Vale um retorno da equipe.`);
+      return JSON.stringify({ ok: true, acao: "Agradeça pela sinceridade, pergunte o que pode melhorar e diga que vai passar pra equipe. Se ele reclamar, use transfer_to_human." });
+    }
+    if (score >= clinic.npsThreshold && clinic.googleReviewUrl?.trim()) {
+      return JSON.stringify({ ok: true, acao: `Agradeça de coração e peça, se puder, uma avaliação neste link: ${clinic.googleReviewUrl.trim()}` });
+    }
+    return JSON.stringify({ ok: true, acao: "Agradeça pelo retorno." });
+  }
+
   return "Ferramenta desconhecida.";
 }
 
@@ -502,7 +558,7 @@ function personaInstruction(clinic: { name: string; assistantName: string; assis
   return `Voce se apresenta apenas como parte da equipe da ${clinic.name}, sem citar cargo. Ex: "Oi! Aqui e a ${a}, da equipe da ${clinic.name}".`;
 }
 
-export async function buildSystemPrompt(clinicId: string): Promise<string> {
+export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: string } = {}): Promise<string> {
   const clinic = await prisma.clinic.findUniqueOrThrow({
     where: { id: clinicId },
     include: {
@@ -546,6 +602,17 @@ export async function buildSystemPrompt(clinicId: string): Promise<string> {
   const schedulingLinkLine = clinic.schedulingLink?.trim()
     ? `\nLINK DE AUTO-AGENDAMENTO: quando o paciente demonstrar intencao clara de agendar, voce pode enviar direto o link ${clinic.schedulingLink.trim()} (nao pergunte "quer que eu mande o link?", mande). Use este link em vez de book_appointment quando a clinica preferir que o paciente escolha o horario sozinho.`
     : "";
+
+  let surveyLine = "";
+  if (ctx.patientId) {
+    const pending = await prisma.satisfactionSurvey.findFirst({
+      where: { clinicId, patientId: ctx.patientId, answeredAt: null, askedAt: { gte: new Date(Date.now() - 7 * 24 * 3_600_000) } },
+      orderBy: { askedAt: "desc" },
+    });
+    if (pending) {
+      surveyLine = `\nPESQUISA DE SATISFACAO PENDENTE: voce perguntou a nota de 0 a 10. Quando o paciente responder com um numero, chame record_satisfaction (com o comentario, se houver) e siga a "acao" que a ferramenta devolver. Se ele falar de outro assunto, atenda normalmente.`;
+    }
+  }
 
   const templatesBlock = clinic.messageTemplates.length
     ? `\n\nMensagens prontas da clinica (reaproveite quando fizer sentido; ${"{"}modo exato${"}"} = enviar o texto exatamente como esta, so trocando as variaveis):\n${clinic.messageTemplates
@@ -611,7 +678,7 @@ Seu trabalho:
 2. Manter a etapa do paciente no funil atualizada (update_crm_stage) conforme a conversa avanca.
 3. Checar disponibilidade real (check_specific_time / check_availability) antes de falar de qualquer data.
 4. Confirmar o horario escolhido com o paciente e so entao usar book_appointment.
-5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${postureLine}${evalFirstLine}${medicalLine}${emojiLine}${schedulingLinkLine}${handoffLine}
+5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${postureLine}${evalFirstLine}${medicalLine}${emojiLine}${schedulingLinkLine}${surveyLine}${handoffLine}
 
 Procedimentos oferecidos pela clinica:
 ${procedureList || "(nenhum procedimento cadastrado ainda)"}
@@ -662,7 +729,7 @@ export async function handleIncomingMessage(params: {
     take: 30,
   });
 
-  const system = await buildSystemPrompt(clinicId);
+  const system = await buildSystemPrompt(clinicId, { patientId: patient.id });
 
   const messages: ChatCompletionMessageParam[] = [
     { role: "system", content: system },
