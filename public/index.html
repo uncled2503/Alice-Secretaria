@@ -26,6 +26,15 @@
   </div>
 
   <div id="app-root" class="app-shell" style="display:none">
+    <div class="mobile-topbar">
+      <button id="mobile-nav-toggle" class="mobile-nav-toggle" type="button" aria-label="Abrir menu" aria-expanded="false">
+        <span></span><span></span><span></span>
+      </button>
+      <img src="/assets/logo-personagem.webp" alt="" class="mobile-topbar-logo" />
+      <strong id="mobile-topbar-title">Início</strong>
+    </div>
+    <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
+
     <aside class="sidebar">
       <div class="brand">
         <img src="/assets/logo-personagem.webp" alt="" class="brand-logo brand-logo--img" />
@@ -219,6 +228,7 @@
               <ul id="conversations-list"></ul>
             </div>
             <div id="chat-window">
+              <button type="button" id="chat-back" class="chat-back">‹ Conversas</button>
               <div id="chat-empty" class="chat-empty">
                 <span class="nav-icon" data-icon="chat"></span>
                 <p>Selecione uma conversa para ver as mensagens</p>

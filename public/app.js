@@ -278,6 +278,20 @@ document.getElementById("auth-gate-form").addEventListener("submit", async (e) =
   location.reload();
 });
 
+// --- Menu lateral no mobile (gaveta) ---
+const _appRoot = document.getElementById("app-root");
+function setMobileNav(open) {
+  _appRoot.classList.toggle("nav-open", open);
+  document.getElementById("mobile-nav-toggle")?.setAttribute("aria-expanded", String(open));
+}
+document.getElementById("mobile-nav-toggle")?.addEventListener("click", () => {
+  setMobileNav(!_appRoot.classList.contains("nav-open"));
+});
+document.getElementById("sidebar-backdrop")?.addEventListener("click", () => setMobileNav(false));
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && _appRoot.classList.contains("nav-open")) setMobileNav(false);
+});
+
 // --- Navegacao (sidebar) ---
 document.querySelectorAll(".nav-item").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -285,6 +299,9 @@ document.querySelectorAll(".nav-item").forEach((btn) => {
     document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
     btn.classList.add("active");
     document.getElementById(`tab-${btn.dataset.tab}`).classList.add("active");
+    setMobileNav(false);
+    const title = document.getElementById("mobile-topbar-title");
+    if (title) title.textContent = btn.textContent.trim();
     if (btn.dataset.tab === "settings") {
       const activeSub = document.querySelector("#settings-tabs button.active");
       openSettingsSub(activeSub ? activeSub.dataset.sub : "clinic-data");
@@ -661,7 +678,14 @@ function resetChatPane() {
   document.getElementById("chat-controls").style.display = "none";
   document.getElementById("chat-empty").style.display = "flex";
   document.querySelectorAll("#conversations-list li").forEach((li) => li.classList.remove("active"));
+  document.querySelector(".chat-layout")?.classList.remove("chat-layout--conv");
 }
+
+// No mobile o chat mostra um painel de cada vez; "‹ Conversas" volta pra lista.
+document.getElementById("chat-back")?.addEventListener("click", () => {
+  state.activeConversationId = null;
+  resetChatPane();
+});
 
 async function loadMessages(conversationId) {
   let messages;
@@ -717,6 +741,7 @@ async function loadMessages(conversationId) {
 
 async function openConversation(id) {
   state.activeConversationId = id;
+  document.querySelector(".chat-layout")?.classList.add("chat-layout--conv");
   document.querySelectorAll("#conversations-list li").forEach((li) => {
     li.classList.toggle("active", li.dataset.id === id);
   });
@@ -4423,6 +4448,10 @@ function goToTab(tab) {
   document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
   document.getElementById(`tab-${tab}`).classList.add("active");
+  const activeNav = document.querySelector(`.nav-item[data-tab="${tab}"]`);
+  const title = document.getElementById("mobile-topbar-title");
+  if (activeNav && title) title.textContent = activeNav.textContent.trim();
+  setMobileNav(false);
 }
 
 document.getElementById("btn-goto-funnel-config").addEventListener("click", () => {
