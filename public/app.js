@@ -3582,23 +3582,6 @@ document.getElementById("clinic-plan-form").addEventListener("submit", async (e)
   }
 });
 
-document.getElementById("btn-seed-laleblu").addEventListener("click", async (e) => {
-  const btn = e.currentTarget;
-  const out = document.getElementById("seed-laleblu-result");
-  if (!await showConfirm("Criar ou reaplicar o treino da conta Laleblu? Reaplica FAQ, mensagens, roteiros e regras dela; não mexe em contatos nem conversas.")) return;
-  btn.disabled = true;
-  out.hidden = true;
-  try {
-    const r = await api("/clinics/seed-laleblu", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-    out.textContent = `${r.created ? "Conta criada" : "Treino reaplicado"}. Login: ${r.login} · senha: ${r.password}. ${r.faqs} FAQ, ${r.templates} mensagens, ${r.playbooks} roteiros, ${r.rules} regras. Configure a conexão UAZAPI dela na lista acima.`;
-    out.hidden = false;
-    await loadClinicsList();
-    await loadClinics();
-  } finally {
-    btn.disabled = false;
-  }
-});
-
 document.getElementById("clinic-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const name = document.getElementById("cl-name").value.trim();
