@@ -2501,9 +2501,15 @@ function loadAliceSettings() {
   document.getElementById("as-name").value = c.assistantName || "Alice";
   document.getElementById("as-area").value = c.activityArea || "";
   document.getElementById("as-handoff").value = c.handoffPhrase || "";
+  const isAdmin = state.staff?.role === "admin";
+  document.getElementById("as-business-type").value = c.businessType || "clinica";
+  document.getElementById("as-business-type").disabled = !isAdmin;
+  document.getElementById("as-business-label").value = c.businessLabel || "";
+  document.getElementById("as-business-label").disabled = !isAdmin;
   document.getElementById("as-kind").value = c.clinicKind || "estetica";
   document.getElementById("as-posture").value = c.servicePosture || "comercial";
   document.getElementById("as-eval-first").checked = !!c.evaluationFirst;
+  applyBusinessTypeUI();
   document.getElementById("as-emojis").checked = c.allowEmojis !== false;
   document.getElementById("as-scheduling-link").value = c.schedulingLink || "";
   document.getElementById("as-split").checked = c.splitLongMessages !== false;
@@ -2516,12 +2522,28 @@ function loadAliceSettings() {
   document.getElementById("as-google-review").value = c.googleReviewUrl || "";
   document.getElementById("as-nps-message").value = c.npsMessage || "";
 }
+// Mostra/esconde os campos que só valem no modo Clínica.
+function applyBusinessTypeUI() {
+  const geral = document.getElementById("as-business-type").value === "geral";
+  document.getElementById("as-business-label-wrap").hidden = !geral;
+  document.getElementById("as-business-hint").hidden = !geral;
+  document.getElementById("as-clinic-profile-row").hidden = geral;
+  document.getElementById("as-eval-first-row").hidden = geral;
+}
+document.getElementById("as-business-type").addEventListener("change", applyBusinessTypeUI);
+
 document.getElementById("alice-settings-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const payload = {
     assistantName: document.getElementById("as-name").value.trim() || "Alice",
     activityArea: document.getElementById("as-area").value.trim(),
     handoffPhrase: document.getElementById("as-handoff").value.trim(),
+    ...(state.staff?.role === "admin"
+      ? {
+          businessType: document.getElementById("as-business-type").value,
+          businessLabel: document.getElementById("as-business-label").value.trim(),
+        }
+      : {}),
     clinicKind: document.getElementById("as-kind").value,
     servicePosture: document.getElementById("as-posture").value,
     evaluationFirst: document.getElementById("as-eval-first").checked,

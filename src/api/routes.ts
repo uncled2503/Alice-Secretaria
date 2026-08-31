@@ -151,6 +151,8 @@ apiRouter.get(
         splitMaxMessages: true,
         splitThresholdChars: true,
         requireDepositProof: true,
+        businessType: true,
+        businessLabel: true,
         servicePosture: true,
         clinicKind: true,
         evaluationFirst: true,
@@ -198,6 +200,8 @@ apiRouter.put(
       splitMaxMessages?: number;
       splitThresholdChars?: number;
       requireDepositProof?: boolean;
+      businessType?: string;
+      businessLabel?: string | null;
       servicePosture?: string;
       clinicKind?: string;
       evaluationFirst?: boolean;
@@ -218,6 +222,14 @@ apiRouter.put(
     if (assistantPersona !== undefined && !PERSONAS.includes(assistantPersona)) {
       res.status(400).json({ error: "assistantPersona invalido" });
       return;
+    }
+    // Mudar o tipo de negocio troca o conjunto de regras recomendadas - so admin.
+    if (b.businessType !== undefined) {
+      if (!requireAdmin(req, res)) return;
+      if (!["clinica", "geral"].includes(b.businessType)) {
+        res.status(400).json({ error: "businessType invalido" });
+        return;
+      }
     }
     if (b.servicePosture !== undefined && !["comercial", "consultivo"].includes(b.servicePosture)) {
       res.status(400).json({ error: "servicePosture invalido" });
@@ -255,6 +267,8 @@ apiRouter.put(
           ...(b.splitMaxMessages !== undefined ? { splitMaxMessages: Math.min(Math.max(b.splitMaxMessages, 1), 8) } : {}),
           ...(b.splitThresholdChars !== undefined ? { splitThresholdChars: Math.min(Math.max(b.splitThresholdChars, 120), 2000) } : {}),
           ...(b.requireDepositProof !== undefined ? { requireDepositProof: b.requireDepositProof } : {}),
+          ...(b.businessType !== undefined ? { businessType: b.businessType } : {}),
+          ...(b.businessLabel !== undefined ? { businessLabel: b.businessLabel?.trim() || null } : {}),
           ...(b.servicePosture !== undefined ? { servicePosture: b.servicePosture } : {}),
           ...(b.clinicKind !== undefined ? { clinicKind: b.clinicKind } : {}),
           ...(b.evaluationFirst !== undefined ? { evaluationFirst: b.evaluationFirst } : {}),
@@ -269,7 +283,12 @@ apiRouter.put(
       });
 
       // Mudou o perfil de atendimento -> reajusta as regras recomendadas.
-      if (b.servicePosture !== undefined || b.clinicKind !== undefined || b.evaluationFirst !== undefined) {
+      if (
+        b.businessType !== undefined ||
+        b.servicePosture !== undefined ||
+        b.clinicKind !== undefined ||
+        b.evaluationFirst !== undefined
+      ) {
         await reseedRulesForProfile(clinic.id);
       }
       await logActivity({

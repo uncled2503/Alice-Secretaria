@@ -10,6 +10,7 @@
     "test": "npm run build && node --test tests/*.test.mjs",
     "check": "npm run test",
     "backup": "npm run build && node dist/maintenance/backup.js",
+    "seed:laleblu": "npm run build && node dist/maintenance/seedLaleblu.js",
     "start": "prisma migrate deploy && node dist/server.js",
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",

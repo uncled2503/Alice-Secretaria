@@ -45,6 +45,8 @@ model Clinic {
   requireDepositProof  Boolean @default(false) // so confirma agendamento apos o paciente enviar comprovante do sinal
 
   // Perfil de atendimento
+  businessType         String  @default("clinica")   // clinica (paciente, procedimentos, agenda) | geral (cliente, catalogo/FAQ, sem agenda)
+  businessLabel        String?  // rotulo livre do negocio quando businessType = geral (ex: "loja de roupas infantis")
   servicePosture       String  @default("comercial") // comercial (proativo, empurra agenda) | consultivo (avaliacao primeiro, sem pressao)
   clinicKind           String  @default("estetica")  // estetica | medica | ambas - "medica"/"ambas" ativa as travas de seguranca medica
   evaluationFirst      Boolean @default(false) // nunca exige que o paciente saiba o procedimento; sempre oferece avaliacao

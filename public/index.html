@@ -1009,6 +1009,18 @@
 
               <div class="section-header" style="margin-top:1rem">Perfil de atendimento</div>
               <div class="broadcast-form-row">
+                <label style="flex:1">Tipo de negócio
+                  <select id="as-business-type">
+                    <option value="clinica">Clínica — paciente, procedimentos e agenda</option>
+                    <option value="geral">Loja / serviço — cliente e catálogo, sem agenda</option>
+                  </select>
+                </label>
+                <label style="flex:2" id="as-business-label-wrap" hidden>O que o negócio faz
+                  <input id="as-business-label" type="text" placeholder="Ex: loja de roupas para bebês e crianças" />
+                </label>
+              </div>
+              <p class="hint" style="margin-top:0" id="as-business-hint" hidden>No modo Loja / serviço a Alice usa "cliente" no lugar de "paciente", não fala de agenda e responde só pelo catálogo, FAQ e regras cadastradas. As opções abaixo (tipo de clínica, estilo, avaliação) só valem no modo Clínica.</p>
+              <div class="broadcast-form-row" id="as-clinic-profile-row">
                 <label style="flex:1">Tipo de clínica
                   <select id="as-kind">
                     <option value="estetica">Só estética</option>
@@ -1023,7 +1035,7 @@
                   </select>
                 </label>
               </div>
-              <label class="checkbox-row"><input type="checkbox" id="as-eval-first" /> O paciente não precisa saber o procedimento — a Alice sempre oferece avaliação</label>
+              <label class="checkbox-row" id="as-eval-first-row"><input type="checkbox" id="as-eval-first" /> O paciente não precisa saber o procedimento — a Alice sempre oferece avaliação</label>
               <label class="checkbox-row"><input type="checkbox" id="as-emojis" checked /> A Alice pode usar emojis</label>
               <label>Link de auto-agendamento (opcional)
                 <input id="as-scheduling-link" type="url" placeholder="https://agendamento.suaclinica.com.br" />

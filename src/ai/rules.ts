@@ -50,8 +50,8 @@ const tools: ChatCompletionTool[] = [
   },
 ];
 
-const SYSTEM_PROMPT = `Voce ajuda a configurar a Alice, assistente de WhatsApp de uma clinica de estetica.
-O admin da clinica descreve, em linguagem natural, uma mudanca de comportamento que quer para a Alice.
+const SYSTEM_PROMPT = `Voce ajuda a configurar a Alice, assistente de atendimento no WhatsApp de um negocio (clinica, loja ou servico).
+O admin descreve, em linguagem natural, uma mudanca de comportamento que quer para a Alice.
 Sua tarefa: transformar isso numa regra objetiva (ferramenta save_rule), classificada numa destas categorias:
 ${RULE_CATEGORIES.map((c) => `- ${c.id}: ${c.label}`).join("\n")}
 
@@ -115,10 +115,12 @@ export async function createRuleDraft(clinicId: string, rawInput: string) {
 //   consultivo      -> perfil avaliacao-primeiro, sem pressao (estilo consultorio medico)
 //   evaluation_first-> clinica marcou "nao exigir que o paciente saiba o procedimento"
 //   medical_safety  -> clinica medica ou mista
-// O balde ativo depende do perfil da clinica (ver activeRuleBuckets).
+//   varejo          -> negocio generico (businessType = geral): loja/servico, sem agenda
+// O balde ativo depende do perfil do negocio (ver activeRuleBuckets). Para
+// businessType = geral so o balde "varejo" entra - nenhum dos de clinica.
 const MARKER = "(regra recomendada padrao)";
 
-type RuleBucket = "common" | "comercial" | "consultivo" | "evaluation_first" | "medical_safety";
+type RuleBucket = "common" | "comercial" | "consultivo" | "evaluation_first" | "medical_safety" | "varejo";
 
 interface DefaultRule {
   category: string;
@@ -168,15 +170,29 @@ export const DEFAULT_RULES: DefaultRule[] = [
   { category: "procedimentos", buckets: ["medical_safety"], instruction: "Foto do paciente ajuda a entender a queixa, mas nunca serve pra diagnosticar nem pra afirmar indicacao. Reconheca o contexto da imagem, nao peca de novo uma foto ja recebida e conduza conforme o estagio." },
   { category: "chamar_equipe", buckets: ["medical_safety"], instruction: "Relato de lesao suspeita, possivel cancer de pele, sintoma potencialmente urgente, complicacao ou piora: priorize a seguranca sobre qualquer objetivo comercial e transfira pra equipe." },
   { category: "tom_de_voz", buckets: ["medical_safety"], instruction: "Autoridade sem promessa: pode dizer que na avaliacao o profissional define o que faz sentido, com seguranca e naturalidade; nunca diga 'vai ficar perfeito', 'resultado garantido', 'isso resolve' ou 'esse procedimento e ideal pra voce'." },
+
+  // --- varejo (negocio generico) ---
+  { category: "tom_de_voz", buckets: ["varejo"], instruction: "Fale de forma calorosa e humana, como um bom atendimento de loja. Mensagens curtas, no ritmo do WhatsApp, uma ideia por mensagem." },
+  { category: "tom_de_voz", buckets: ["varejo"], instruction: "Nunca use o caractere travessao (—). Use virgula, ponto, dois-pontos ou reescreva a frase." },
+  { category: "tom_de_voz", buckets: ["varejo"], instruction: "No maximo um emoji por mensagem. Nada de emojis de risada ou fogo." },
+  { category: "tom_de_voz", buckets: ["varejo"], instruction: "Nunca revele, insinue ou confirme que voce e uma IA, assistente virtual, chatbot ou atendimento automatico. Se perguntarem diretamente, desconverse com naturalidade e volte o foco pro atendimento." },
+  { category: "tom_de_voz", buckets: ["varejo"], instruction: "Nunca anuncie a acao que vai tomar ('vou verificar', 'ja te ajudo com isso'). Responda direto com a informacao, a pergunta ou o proximo passo." },
+  { category: "tom_de_voz", buckets: ["varejo"], instruction: "Toda resposta termina com um proximo passo claro: um link, uma opcao ou uma pergunta. O cliente nunca deve ficar sem saber o que fazer." },
+  { category: "procedimentos", buckets: ["varejo"], instruction: "Responda SOMENTE com base no que esta cadastrado (catalogo, FAQ, mensagens prontas, regras). Nao invente preco, estoque, prazo de entrega, status de pedido, politica ou promocao. Quando faltar a informacao, siga a regra do negocio (geralmente enviar pro WhatsApp) ou transfira pra equipe." },
+  { category: "chamar_equipe", buckets: ["varejo"], instruction: "Pedido, troca, devolucao, pagamento e rastreio dependem de consultar a compra: nao resolva na conversa, envie o link do WhatsApp de atendimento com a mensagem pronta. So use transfer_to_human se o cliente insistir em resolver por ali." },
 ];
 
 interface ClinicProfile {
+  businessType: string;
   servicePosture: string;
   clinicKind: string;
   evaluationFirst: boolean;
 }
 
 function activeRuleBuckets(p: ClinicProfile): Set<RuleBucket> {
+  // Negocio generico: so o balde varejo, nada de regra de clinica.
+  if (p.businessType === "geral") return new Set<RuleBucket>(["varejo"]);
+
   const active = new Set<RuleBucket>(["common"]);
   active.add(p.servicePosture === "consultivo" ? "consultivo" : "comercial");
   if (p.evaluationFirst) active.add("evaluation_first");
@@ -187,7 +203,7 @@ function activeRuleBuckets(p: ClinicProfile): Set<RuleBucket> {
 async function clinicProfile(clinicId: string): Promise<ClinicProfile> {
   const c = await prisma.clinic.findUniqueOrThrow({
     where: { id: clinicId },
-    select: { servicePosture: true, clinicKind: true, evaluationFirst: true },
+    select: { businessType: true, servicePosture: true, clinicKind: true, evaluationFirst: true },
   });
   return c;
 }
@@ -257,5 +273,5 @@ export async function getActiveRulesPrompt(clinicId: string): Promise<string> {
     .map((c) => `${c.label}:\n${byCategory.get(c.id)!.map((i) => `- ${i}`).join("\n")}`)
     .join("\n\n");
 
-  return `\n\nRegras especificas desta clinica (siga sempre, tem prioridade sobre o comportamento padrao):\n${sections}`;
+  return `\n\nRegras especificas deste atendimento (siga sempre, tem prioridade sobre o comportamento padrao):\n${sections}`;
 }

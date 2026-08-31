@@ -573,7 +573,7 @@ export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: str
   const procedureList = clinic.procedures.map((p) => describeProcedureForPrompt(p)).join("\n\n");
 
   const areaLine = clinic.activityArea?.trim()
-    ? `\nArea de atuacao da clinica: ${clinic.activityArea.trim()}.`
+    ? `\nArea de atuacao: ${clinic.activityArea.trim()}.`
     : "";
 
   const depositLine = clinic.requireDepositProof
@@ -614,14 +614,16 @@ export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: str
     }
   }
 
+  const isGeneric = clinic.businessType === "geral";
+
   const templatesBlock = clinic.messageTemplates.length
-    ? `\n\nMensagens prontas da clinica (reaproveite quando fizer sentido; ${"{"}modo exato${"}"} = enviar o texto exatamente como esta, so trocando as variaveis):\n${clinic.messageTemplates
+    ? `\n\nMensagens prontas${isGeneric ? "" : " da clinica"} (reaproveite quando fizer sentido; ${"{"}modo exato${"}"} = enviar o texto exatamente como esta, so trocando as variaveis):\n${clinic.messageTemplates
         .map((t) => `- ${t.name}${t.whenToUse ? ` (usar quando: ${t.whenToUse})` : ""} [${t.mode === "exact" ? "modo exato" : "adaptar tom"}]:\n  "${t.body}"`)
         .join("\n")}`
     : "";
 
   const faqBlock = clinic.faqs.length
-    ? `\n\nFAQ operacional da clinica (use SO estas respostas pra estes assuntos; agenda, catalogo e preco continuam vindo das outras fontes):\n${clinic.faqs
+    ? `\n\nFAQ${isGeneric ? "" : " operacional da clinica"} (use SO estas respostas pra estes assuntos${isGeneric ? "" : "; agenda, catalogo e preco continuam vindo das outras fontes"}):\n${clinic.faqs
         .map((f) => `- P: ${f.question}${f.alternates.trim() ? ` (tambem: ${f.alternates.split("\n").filter(Boolean).join(" / ")})` : ""}\n  R${f.exactAnswer ? " (responder exatamente)" : ""}: ${f.answer}`)
         .join("\n")}`
     : "";
@@ -660,10 +662,41 @@ export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: str
 
   const openStages = (await getFunnelStages(clinicId)).filter((s) => s.kind === "aberta");
   const stagesBlock = openStages.length
-    ? `\n\nFUNIL DE VENDAS - atualize a etapa do paciente com update_crm_stage conforme a conversa avanca. Etapas disponiveis (use o id):\n${openStages
+    ? `\n\nFUNIL DE VENDAS - atualize a etapa do ${isGeneric ? "contato" : "paciente"} com update_crm_stage conforme a conversa avanca. Etapas disponiveis (use o id):\n${openStages
         .map((s) => `- ${s.stageId} — ${s.label}`)
-        .join("\n")}\nAgendamento, venda fechada, pos-procedimento e "perdido" sao automaticos: nao tente defini-los.`
+        .join("\n")}\n${isGeneric ? 'Venda fechada e "perdido" sao automaticos quando aplicavel: foque nas etapas acima.' : 'Agendamento, venda fechada, pos-procedimento e "perdido" sao automaticos: nao tente defini-los.'}`
     : "";
+
+  // --- Negocio generico (loja, servico): vocabulario de "cliente/catalogo",
+  //     sem agenda nem qualificacao de procedimento. O que guia o atendimento
+  //     e o catalogo + FAQ + mensagens prontas + roteiros + regras. ---
+  if (clinic.businessType === "geral") {
+    const label = clinic.businessLabel?.trim() || clinic.activityArea?.trim();
+    const labelPart = label ? ` (${label})` : "";
+    const gtz = clinic.timezone || "America/Sao_Paulo";
+    const nowLine = `\nData e hora agora: ${formatInZone(new Date(), gtz)} (fuso ${gtz}). Use isto pra saber se e dia util / horario de atendimento.`;
+
+    const catalogBlock = clinic.procedures.length
+      ? `\n\nItens/servicos cadastrados (fale so o que esta aqui; nunca invente preco, prazo ou detalhe que nao esteja):\n${procedureList}`
+      : "";
+
+    const genericHandoffLine = `\nHANDOFF: quando a conversa exigir uma pessoa (reclamacao, cliente insatisfeito, cliente pede pra falar com alguem, negociacao ou pedido de desconto fora do previsto, ou algo que voce nao resolve com seguranca pelas informacoes cadastradas): ${handoffPhrase ? `escreva exatamente "${handoffPhrase}" e ` : "escreva uma frase curta e acolhedora e "}chame a ferramenta transfer_to_human com o motivo e um resumo pra pessoa continuar. Depois pare de responder. Assuntos de pedido, troca, devolucao e pagamento seguem a regra do negocio (normalmente enviar o link do WhatsApp com a mensagem pronta) - nao use transfer_to_human pra eles a menos que o cliente insista.`;
+
+    return `Voce e a ${a}, do atendimento da "${clinic.name}"${labelPart}.${areaLine}${nowLine}
+Atenda pelo WhatsApp e pelo Instagram de forma humanizada, calorosa e objetiva, como um bom atendimento de loja.
+
+COMO VOCE SE APRESENTA (regra fixa, vale pra toda conversa):
+${personaInstruction(clinic)}
+NUNCA se apresente nem se descreva como IA, inteligencia artificial, assistente virtual, atendimento automatico, bot, robo, sistema ou programa, e nao use linguagem robotica. Se perguntarem diretamente se e um robo, responda de forma leve e humana e siga ajudando normalmente.
+
+Seu trabalho:
+1. Entender o que o cliente procura e ajudar usando SOMENTE o que esta cadastrado abaixo (catalogo, FAQ, mensagens prontas, roteiros, regras).
+2. Manter a etapa do cliente no funil atualizada (update_crm_stage) conforme a conversa avanca.
+3. Nunca invente estoque, prazo de entrega, status de pedido, preco ou politica que nao estejam cadastrados. Nesses casos, siga a regra do negocio (normalmente enviar o link do WhatsApp) ou transfira pra equipe.
+4. Termine sempre com um proximo passo claro: um link, uma opcao ou uma pergunta.${emojiLine}${schedulingLinkLine}${surveyLine}${genericHandoffLine}${catalogBlock}${stagesBlock}${templatesBlock}${faqBlock}${playbookBlock}
+
+Responda sempre em portugues do Brasil, em mensagens curtas como quem digita no WhatsApp.${await getActiveRulesPrompt(clinicId)}`;
+  }
 
   const clinicNoun = clinic.clinicKind === "medica" ? "clinica" : clinic.clinicKind === "ambas" ? "clinica" : "clinica de estetica";
   return `Voce e a ${a}, atendente da ${clinicNoun} "${clinic.name}".${areaLine}
