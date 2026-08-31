@@ -169,9 +169,9 @@ Botao "Guia" no rodape da lateral: faz um tour passo a passo por todas as areas.
 Confira se procedimentos, precos, FAQ, mensagens prontas e regras estao preenchidos. A Alice so fala o que esta cadastrado. Se faltar um dado num procedimento, ela diz que confirma na avaliacao em vez de inventar.
 
 === PLANOS E VALORES ===
-- Basico: R$497/mes - ate 300 atendimentos/mes, atendimento 24h, agendamento e lembrete, painel de conversas, suporte por WhatsApp.
-- Essencial: R$697/mes (mais escolhido) - ate 800 atendimentos/mes, tudo do Basico + follow-up + pos-procedimento + grupo de suporte exclusivo.
-- Profissional: R$997/mes - atendimentos ilimitados, tudo do Essencial + varias unidades no mesmo painel + notificacoes pra equipe + suporte prioritario.
+- Basico: R$597/mes - ate 100 conversas/mes, atendimento 24h, agendamento e lembrete, painel de conversas, suporte por WhatsApp.
+- Essencial: R$897/mes (mais escolhido) - ate 300 conversas/mes, tudo do Basico + follow-up + pos-procedimento + grupo de suporte exclusivo.
+- Profissional: R$1.397/mes - conversas ilimitadas, tudo do Essencial + varias unidades no mesmo painel + notificacoes pra equipe + suporte prioritario.
 - Sem fidelidade. Garantia incondicional de 7 dias.
 
 === O QUE DEPENDE DA ADMINISTRACAO DA ALICE (encaminhar) ===
