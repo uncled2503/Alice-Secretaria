@@ -485,7 +485,8 @@ model Appointment {
   professionalId String?
   professional   Professional? @relation(fields: [professionalId], references: [id])
   scheduledAt    DateTime
-  status         String        @default("confirmed") // confirmed | cancelled | completed
+  status         String        @default("confirmed") // confirmed | completed | cancelled | no_show
+  source         String?       // whatsapp | instagram | presencial | telefone (null = nao informado)
   patientConfirmed Boolean     @default(false) // paciente confirmou presenca (resposta ao lembrete)
   confirmedAt    DateTime?
   createdAt      DateTime      @default(now())

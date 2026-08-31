@@ -10,6 +10,14 @@ function el(tag, props = {}, children = []) {
   return node;
 }
 
+// SVG inline (o el() acima usa createElement, que nao serve pra SVG).
+function svgEl(innerMarkup, size = 14) {
+  const wrap = document.createElement("span");
+  wrap.style.display = "inline-flex";
+  wrap.innerHTML = `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${innerMarkup}</svg>`;
+  return wrap;
+}
+
 // Popup de erro no meio da tela, some sozinho depois de um tempo - sem isso,
 // uma chamada que falha so aparece no console (que ninguem olha) e o resto
 // da tela fica silenciosamente vazio.
@@ -961,14 +969,78 @@ document.getElementById("chat-form").addEventListener("submit", async (e) => {
 });
 
 // --- Agenda ---
-state.agendaRangeDays = 1;
-
 const AGENDA_HOUR_START = 7;
 const AGENDA_HOUR_END = 20; // exclusivo - ultima linha e 19:00-20:00
 const AGENDA_DOW = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+const MONTHS_PT = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+
+const APPT_STATUS = {
+  confirmed: { label: "Agendado", color: "#0ea5e9" },
+  completed: { label: "Concluído", color: "#16a34a" },
+  cancelled: { label: "Desmarcado", color: "#dc2626" },
+  no_show: { label: "Não compareceu", color: "#d97706" },
+};
+const APPT_SOURCE = {
+  whatsapp: { label: "WhatsApp", icon: '<path d="M12 2a10 10 0 0 0-8.6 15l-1.3 4.6 4.8-1.3A10 10 0 1 0 12 2z"/>' },
+  instagram: { label: "Instagram", icon: '<rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17" cy="7" r="1"/>' },
+  presencial: { label: "Presencial", icon: '<rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8"/>' },
+  telefone: { label: "Telefone", icon: '<path d="M4 4h4l2 5-3 2a12 12 0 0 0 6 6l2-3 5 2v4a2 2 0 0 1-2 2A18 18 0 0 1 2 6a2 2 0 0 1 2-2z"/>' },
+};
+
+state.ag = { view: "week", anchor: new Date(), mini: new Date(), prof: "", status: "", source: "", q: "", data: [], professionals: [] };
 
 function sameDay(a, b) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+function startOfDay(d) { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; }
+function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+function mondayOf(d) { const x = startOfDay(d); const dow = (x.getDay() + 6) % 7; return addDays(x, -dow); }
+
+function agGridRange() {
+  const a = state.ag.anchor;
+  if (state.ag.view === "day") return { days: [startOfDay(a)] };
+  if (state.ag.view === "month") {
+    const first = new Date(a.getFullYear(), a.getMonth(), 1);
+    const days = [];
+    for (let d = new Date(first); d.getMonth() === first.getMonth(); d = addDays(d, 1)) days.push(new Date(d));
+    return { days };
+  }
+  const mon = mondayOf(a);
+  return { days: Array.from({ length: 7 }, (_, i) => addDays(mon, i)) };
+}
+
+function agFetchWindow() {
+  const gd = agGridRange().days;
+  const gridStart = startOfDay(gd[0]);
+  const gridEnd = addDays(startOfDay(gd[gd.length - 1]), 1);
+  const miniStart = new Date(state.ag.mini.getFullYear(), state.ag.mini.getMonth(), 1);
+  const miniEnd = new Date(state.ag.mini.getFullYear(), state.ag.mini.getMonth() + 1, 1);
+  return {
+    start: gridStart < miniStart ? gridStart : miniStart,
+    end: gridEnd > miniEnd ? gridEnd : miniEnd,
+  };
+}
+
+function agFilter(list) {
+  const q = state.ag.q.trim().toLowerCase();
+  return list.filter((a) => {
+    if (state.ag.status && a.status !== state.ag.status) return false;
+    if (state.ag.source && a.source !== state.ag.source) return false;
+    if (q) {
+      const hay = `${a.patient.name ?? ""} ${a.patient.phone} ${a.procedure.name} ${a.professional?.name ?? ""}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+function agRangeLabel() {
+  const { view, anchor } = state.ag;
+  if (view === "day") return anchor.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" });
+  if (view === "month") return `${MONTHS_PT[anchor.getMonth()]} de ${anchor.getFullYear()}`;
+  const days = agGridRange().days;
+  const a = days[0], b = days[6];
+  return `${a.getDate()}/${String(a.getMonth() + 1).padStart(2, "0")} – ${b.getDate()}/${String(b.getMonth() + 1).padStart(2, "0")} de ${b.getFullYear()}`;
 }
 
 function renderAgendaGrid(appointments, days) {
@@ -985,17 +1057,15 @@ function renderAgendaGrid(appointments, days) {
   const today = new Date();
   days.forEach((day, di) => {
     const header = el("div", { class: `agenda-grid-header${sameDay(day, today) ? " today" : ""}`, style: `grid-column:${di + 2};grid-row:1` }, [
-      el("div", {}, [AGENDA_DOW[day.getDay()]]),
-      el("div", { class: "day-date" }, [String(day.getDate())]),
+      el("div", {}, [AGENDA_DOW[day.getDay()] + (days.length > 1 ? `., ${String(day.getDate()).padStart(2, "0")}/${String(day.getMonth() + 1).padStart(2, "0")}` : "")]),
+      days.length === 1 ? el("div", { class: "day-date" }, [String(day.getDate())]) : "",
     ]);
     grid.appendChild(header);
   });
 
   const cellByKey = new Map();
   hours.forEach((h, hi) => {
-    grid.appendChild(
-      el("div", { class: "agenda-hour-label", style: `grid-column:1;grid-row:${hi + 2}` }, [`${h}:00`])
-    );
+    grid.appendChild(el("div", { class: "agenda-hour-label", style: `grid-column:1;grid-row:${hi + 2}` }, [`${String(h).padStart(2, "0")}:00`]));
     days.forEach((day, di) => {
       const cell = el("div", { class: "agenda-cell", style: `grid-column:${di + 2};grid-row:${hi + 2}` }, []);
       grid.appendChild(cell);
@@ -1011,64 +1081,164 @@ function renderAgendaGrid(appointments, days) {
     const cell = cellByKey.get(`${di}-${hour}`);
     if (!cell) continue;
 
+    const st = APPT_STATUS[a.status] || APPT_STATUS.confirmed;
+    const accent = a.professional?.color || st.color;
     const topPct = (when.getMinutes() / 60) * 100;
-    const heightPx = Math.max((a.procedure.durationMin / 60) * 46, 18);
-    const apptStyle = `top:${topPct}%;height:${heightPx}px${a.professional?.color ? `;border-left:3px solid ${a.professional.color}` : ""}`;
-    const apptEl = el(
-      "div",
-      { class: "agenda-appt", style: apptStyle },
-      [
-        el("div", { class: "t" }, [
-          when.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) + (a.patientConfirmed ? " ✓" : ""),
-        ]),
-        el("div", {}, [a.patient.name ?? a.patient.phone]),
-        el("div", {}, [a.procedure.name]),
-        a.professional ? el("div", { class: "hint", style: "margin:0" }, [a.professional.name]) : "",
-      ]
-    );
+    const heightPx = Math.max((a.procedure.durationMin / 60) * 46, 20);
+    const src = APPT_SOURCE[a.source];
+    const apptEl = el("div", {
+      class: `agenda-appt st-${a.status}`,
+      style: `top:${topPct}%;height:${heightPx}px;border-left:3px solid ${accent}`,
+    }, [
+      el("div", { class: "ap-icons" }, [
+        el("span", { class: "t" }, [when.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) + (a.patientConfirmed ? " ✓" : "")]),
+        src ? Object.assign(svgEl(src.icon, 12), { title: src.label }) : "",
+      ]),
+      el("div", {}, [a.patient.name ?? a.patient.phone]),
+      el("div", {}, [a.procedure.name]),
+      a.professional ? el("div", { class: "hint", style: "margin:0" }, [a.professional.name]) : "",
+    ]);
     apptEl.addEventListener("click", () => openApptEditModal(a));
     cell.appendChild(apptEl);
   }
 
   if (appointments.length === 0) {
-    grid.appendChild(
-      el("div", { class: "agenda-empty-msg", style: `grid-column:1 / span ${days.length + 1};grid-row:2` }, [
-        "Nenhum agendamento neste período.",
-      ])
-    );
+    grid.appendChild(el("div", { class: "agenda-empty-msg", style: `grid-column:1 / span ${days.length + 1};grid-row:2` }, ["Nenhum agendamento neste período."]));
   }
 }
 
-async function loadAgenda() {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start.getTime() + state.agendaRangeDays * 24 * 60 * 60_000);
-  const appointments = await api(`/appointments?start=${start.toISOString()}&end=${end.toISOString()}`);
-
-  const useGrid = state.agendaRangeDays <= 7;
-  document.getElementById("agenda-grid-wrap").style.display = useGrid ? "block" : "none";
-  document.getElementById("agenda-list-wrap").style.display = useGrid ? "none" : "block";
-
-  if (useGrid) {
-    const days = [];
-    for (let i = 0; i < state.agendaRangeDays; i++) days.push(new Date(start.getTime() + i * 24 * 60 * 60_000));
-    renderAgendaGrid(appointments, days);
-    return;
-  }
-
+function renderAgendaList(appointments) {
   const body = document.getElementById("agenda-body");
   body.innerHTML = "";
   for (const a of appointments) {
+    const st = APPT_STATUS[a.status] || APPT_STATUS.confirmed;
     const row = el("tr", { style: "cursor:pointer" }, [
       el("td", {}, [new Date(a.scheduledAt).toLocaleString("pt-BR")]),
       el("td", {}, [a.patient.name ?? a.patient.phone]),
       el("td", {}, [a.procedure.name]),
       el("td", {}, [a.professional?.name || "-"]),
-      el("td", {}, [a.status + (a.patientConfirmed ? " · confirmado" : "")]),
+      el("td", {}, [st.label + (a.patientConfirmed ? " · confirmado" : "")]),
     ]);
     row.addEventListener("click", () => openApptEditModal(a));
     body.appendChild(row);
   }
+  if (!appointments.length) body.appendChild(el("tr", {}, [el("td", { colspan: "5", class: "hint", style: "text-align:center;padding:1rem" }, ["Nenhum agendamento neste período."])]));
+}
+
+function renderMiniCal() {
+  const box = document.getElementById("ag-minical");
+  box.innerHTML = "";
+  const m = state.ag.mini;
+  const first = new Date(m.getFullYear(), m.getMonth(), 1);
+  const gridStart = mondayOf(first);
+  const today = new Date();
+
+  const daysWith = new Set(
+    agFilter(state.ag.data)
+      .filter((a) => !state.ag.prof || a.professional?.id === state.ag.prof)
+      .map((a) => startOfDay(new Date(a.scheduledAt)).getTime())
+  );
+
+  const head = el("div", { class: "ag-minical-head" }, []);
+  const prev = el("button", { type: "button", class: "ag-arrow", "aria-label": "Mês anterior" }, ["‹"]);
+  const next = el("button", { type: "button", class: "ag-arrow", "aria-label": "Próximo mês" }, ["›"]);
+  prev.addEventListener("click", () => { state.ag.mini = new Date(m.getFullYear(), m.getMonth() - 1, 1); loadAgenda(); });
+  next.addEventListener("click", () => { state.ag.mini = new Date(m.getFullYear(), m.getMonth() + 1, 1); loadAgenda(); });
+  head.append(prev, el("strong", {}, [`${MONTHS_PT[m.getMonth()]} de ${m.getFullYear()}`]), next);
+  box.appendChild(head);
+
+  const g = el("div", { class: "ag-minical-grid" }, []);
+  for (const wd of ["S", "T", "Q", "Q", "S", "S", "D"]) g.appendChild(el("div", { class: "wd" }, [wd]));
+  for (let i = 0; i < 42; i++) {
+    const d = addDays(gridStart, i);
+    const cls = [];
+    if (d.getMonth() !== m.getMonth()) cls.push("other");
+    if (sameDay(d, today)) cls.push("today");
+    if (sameDay(d, state.ag.anchor)) cls.push("sel");
+    if (daysWith.has(startOfDay(d).getTime())) cls.push("has");
+    const btn = el("button", { type: "button", class: cls.join(" ") }, [String(d.getDate())]);
+    btn.addEventListener("click", () => {
+      state.ag.anchor = new Date(d);
+      if (state.ag.view === "month") state.ag.mini = new Date(d.getFullYear(), d.getMonth(), 1);
+      loadAgenda();
+    });
+    g.appendChild(btn);
+  }
+  box.appendChild(g);
+}
+
+function renderProfFilter() {
+  const box = document.getElementById("ag-prof-filter");
+  box.innerHTML = "";
+  const mk = (id, name, color) => {
+    const input = el("input", { type: "radio", name: "ag-prof", value: id }, []);
+    input.checked = state.ag.prof === id;
+    input.addEventListener("change", () => { state.ag.prof = id; loadAgenda(); });
+    return el("label", {}, [input, color ? el("span", { class: "dot", style: `background:${color}` }, []) : "", name]);
+  };
+  box.appendChild(mk("", "Todos os profissionais", null));
+  for (const p of state.ag.professionals) box.appendChild(mk(p.id, p.name, p.color || "var(--accent)"));
+}
+
+function renderDaySummary() {
+  const day = startOfDay(state.ag.anchor);
+  const list = agFilter(state.ag.data)
+    .filter((a) => sameDay(new Date(a.scheduledAt), day) && a.status !== "cancelled")
+    .sort((x, y) => new Date(x.scheduledAt) - new Date(y.scheduledAt));
+  document.getElementById("ag-day-count").textContent = String(list.length);
+  document.getElementById("ag-day-label").textContent = day.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" });
+  const box = document.getElementById("ag-day-list");
+  box.innerHTML = "";
+  if (!list.length) { box.appendChild(el("div", { class: "hint", style: "margin:0" }, ["Nenhum atendimento neste dia."])); return; }
+  for (const a of list) {
+    const row = el("div", { class: "ag-day-appt", style: a.professional?.color ? `border-left-color:${a.professional.color}` : "" }, [
+      el("div", { class: "h" }, [new Date(a.scheduledAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) + " · " + (a.patient.name ?? a.patient.phone)]),
+      el("div", { class: "m" }, [`${a.procedure.name}${a.professional ? " · " + a.professional.name : ""}`]),
+    ]);
+    row.addEventListener("click", () => openApptEditModal(a));
+    box.appendChild(row);
+  }
+}
+
+function renderLegend() {
+  const box = document.getElementById("ag-legend");
+  box.innerHTML = "";
+  for (const p of state.ag.professionals) {
+    box.appendChild(el("span", { class: "lg" }, [el("span", { class: "dot", style: `background:${p.color || "var(--accent)"}` }, []), p.name]));
+  }
+  for (const v of Object.values(APPT_STATUS)) {
+    box.appendChild(el("span", { class: "lg" }, [el("span", { class: "dot", style: `background:${v.color}` }, []), v.label]));
+  }
+  for (const v of Object.values(APPT_SOURCE)) {
+    box.appendChild(el("span", { class: "lg" }, [svgEl(v.icon), " " + v.label]));
+  }
+}
+
+async function loadAgenda() {
+  document.querySelectorAll("#agenda-view-toggle button").forEach((b) => b.classList.toggle("active", b.dataset.view === state.ag.view));
+  document.getElementById("ag-range-label").textContent = agRangeLabel();
+
+  if (!state.ag.professionals.length) {
+    try { state.ag.professionals = (await api("/professionals")).filter((p) => p.active); } catch { state.ag.professionals = []; }
+  }
+
+  const w = agFetchWindow();
+  let qs = `start=${w.start.toISOString()}&end=${w.end.toISOString()}`;
+  if (state.ag.prof) qs += `&professionalId=${encodeURIComponent(state.ag.prof)}`;
+  state.ag.data = await api(`/appointments?${qs}`);
+
+  const { days } = agGridRange();
+  const filtered = agFilter(state.ag.data);
+  const useGrid = state.ag.view !== "month";
+  document.getElementById("agenda-grid-wrap").style.display = useGrid ? "block" : "none";
+  document.getElementById("agenda-list-wrap").style.display = useGrid ? "none" : "block";
+  if (useGrid) renderAgendaGrid(filtered.filter((a) => days.some((d) => sameDay(d, new Date(a.scheduledAt)))), days);
+  else renderAgendaList(filtered.filter((a) => days.some((d) => sameDay(d, new Date(a.scheduledAt)))).sort((x, y) => new Date(x.scheduledAt) - new Date(y.scheduledAt)));
+
+  renderMiniCal();
+  renderProfFilter();
+  renderDaySummary();
+  renderLegend();
 }
 
 // --- Editar/excluir/transferir agendamento ---
@@ -1081,6 +1251,7 @@ function openApptEditModal(appt) {
   document.getElementById("appt-edit-when").value =
     `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}T${pad(when.getHours())}:${pad(when.getMinutes())}`;
   document.getElementById("appt-edit-status").value = appt.status;
+  document.getElementById("appt-edit-source").value = appt.source || "";
   document.getElementById("appt-edit-confirmed").checked = !!appt.patientConfirmed;
 
   const select = document.getElementById("appt-edit-procedure");
@@ -1124,11 +1295,12 @@ document.getElementById("appt-edit-form").addEventListener("submit", async (e) =
   const professionalId = document.getElementById("appt-edit-professional").value;
   const when = document.getElementById("appt-edit-when").value;
   const status = document.getElementById("appt-edit-status").value;
+  const source = document.getElementById("appt-edit-source").value || null;
   const patientConfirmed = document.getElementById("appt-edit-confirmed").checked;
   await api(`/appointments/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ procedureId, professionalId, scheduledAt: new Date(when).toISOString(), status, patientConfirmed }),
+    body: JSON.stringify({ procedureId, professionalId, scheduledAt: new Date(when).toISOString(), status, source, patientConfirmed }),
   });
   closeApptEditModal();
   await loadAgenda();
@@ -1144,26 +1316,52 @@ document.getElementById("appt-edit-delete").addEventListener("click", async () =
 });
 
 document.getElementById("agenda-view-toggle").addEventListener("click", (e) => {
-  const btn = e.target.closest("button");
+  const btn = e.target.closest("button[data-view]");
   if (!btn) return;
-  document.querySelectorAll("#agenda-view-toggle button").forEach((b) => b.classList.remove("active"));
-  btn.classList.add("active");
-  state.agendaRangeDays = Number(btn.dataset.range);
+  state.ag.view = btn.dataset.view;
   loadAgenda();
 });
+
+function agShift(dir) {
+  const { view } = state.ag;
+  if (view === "day") state.ag.anchor = addDays(state.ag.anchor, dir);
+  else if (view === "week") state.ag.anchor = addDays(state.ag.anchor, dir * 7);
+  else state.ag.anchor = new Date(state.ag.anchor.getFullYear(), state.ag.anchor.getMonth() + dir, 1);
+  state.ag.mini = new Date(state.ag.anchor.getFullYear(), state.ag.anchor.getMonth(), 1);
+  loadAgenda();
+}
+document.getElementById("ag-prev").addEventListener("click", () => agShift(-1));
+document.getElementById("ag-next").addEventListener("click", () => agShift(1));
+document.getElementById("ag-today").addEventListener("click", () => {
+  state.ag.anchor = new Date();
+  state.ag.mini = new Date();
+  loadAgenda();
+});
+
+document.getElementById("ag-f-status").addEventListener("change", (e) => { state.ag.status = e.target.value; loadAgenda(); });
+document.getElementById("ag-f-source").addEventListener("change", (e) => { state.ag.source = e.target.value; loadAgenda(); });
+let agSearchTimer;
+document.getElementById("agenda-search").addEventListener("input", (e) => {
+  clearTimeout(agSearchTimer);
+  const v = e.target.value;
+  agSearchTimer = setTimeout(() => { state.ag.q = v; loadAgenda(); }, 250);
+});
+
+async function fillApptFormSelects() {
+  const [procedures, professionals] = await Promise.all([api("/procedures"), api("/professionals")]);
+  const ps = document.getElementById("ap-procedure");
+  ps.innerHTML = "";
+  for (const p of procedures) ps.appendChild(el("option", { value: p.id }, [`${p.name} (${p.durationMin}min)`]));
+  const pf = document.getElementById("ap-professional");
+  pf.innerHTML = '<option value="">Não atribuído</option>';
+  for (const p of professionals) if (p.active) pf.appendChild(el("option", { value: p.id }, [p.name]));
+}
 
 document.getElementById("btn-toggle-appt-form").addEventListener("click", async () => {
   const form = document.getElementById("appointment-form");
   const opening = form.style.display === "none";
   form.style.display = opening ? "flex" : "none";
-  if (opening) {
-    const select = document.getElementById("ap-procedure");
-    const procedures = await api("/procedures");
-    select.innerHTML = "";
-    for (const p of procedures) {
-      select.appendChild(el("option", { value: p.id }, [`${p.name} (${p.durationMin}min)`]));
-    }
-  }
+  if (opening) await fillApptFormSelects();
 });
 
 document.getElementById("appointment-form").addEventListener("submit", async (e) => {
@@ -1171,17 +1369,61 @@ document.getElementById("appointment-form").addEventListener("submit", async (e)
   const patientName = document.getElementById("ap-name").value.trim();
   const patientPhone = document.getElementById("ap-phone").value.trim();
   const procedureId = document.getElementById("ap-procedure").value;
+  const professionalId = document.getElementById("ap-professional").value || null;
+  const source = document.getElementById("ap-source").value;
   const when = document.getElementById("ap-when").value;
   if (!patientPhone || !procedureId || !when) return;
 
   await api("/appointments", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ patientName, patientPhone, procedureId, scheduledAt: new Date(when).toISOString() }),
+    body: JSON.stringify({ patientName, patientPhone, procedureId, professionalId, source, scheduledAt: new Date(when).toISOString() }),
   });
 
   e.target.reset();
   document.getElementById("appointment-form").style.display = "none";
+  await loadAgenda();
+});
+
+// --- Bloquear horário direto da agenda ---
+document.getElementById("ag-block").addEventListener("click", async () => {
+  const sel = document.getElementById("bq-professional");
+  sel.innerHTML = '<option value="">Clínica toda</option>';
+  try {
+    for (const p of (await api("/professionals")).filter((x) => x.active)) {
+      sel.appendChild(el("option", { value: p.id }, [p.name]));
+    }
+  } catch {}
+  document.getElementById("bq-start").value = "";
+  document.getElementById("bq-end").value = "";
+  document.getElementById("bq-reason").value = "";
+  document.getElementById("block-quick-overlay").style.display = "flex";
+});
+document.getElementById("block-quick-close").addEventListener("click", () => {
+  document.getElementById("block-quick-overlay").style.display = "none";
+});
+document.getElementById("block-quick-overlay").addEventListener("click", (e) => {
+  if (e.target.id === "block-quick-overlay") document.getElementById("block-quick-overlay").style.display = "none";
+});
+document.getElementById("block-quick-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const start = document.getElementById("bq-start").value;
+  const end = document.getElementById("bq-end").value;
+  if (!start || !end || new Date(end) <= new Date(start)) {
+    showError("O fim precisa ser depois do início.");
+    return;
+  }
+  await api("/schedule-blocks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      professionalId: document.getElementById("bq-professional").value || null,
+      startsAt: new Date(start).toISOString(),
+      endsAt: new Date(end).toISOString(),
+      reason: document.getElementById("bq-reason").value.trim(),
+    }),
+  });
+  document.getElementById("block-quick-overlay").style.display = "none";
   await loadAgenda();
 });
 
@@ -3904,9 +4146,11 @@ const TOUR_STEPS = [
   { section: "Chat", tab: "chat", target: "#chat-window", title: "Assumir e devolver a conversa", desc: "Ao abrir uma conversa aparece o botão de assumir o atendimento: enquanto você está no controle, a Alice para de responder aquele paciente e você digita direto pelo campo de mensagem. Ao devolver, a Alice retoma de onde parou. Em \"Detalhes\", no cabeçalho, você abre a ficha do contato: nome, e-mail, CPF, nascimento, observações e etiquetas, além dos agendamentos e das automações desse paciente." },
 
   // ===== Agenda =====
-  { section: "Agenda", tab: "agenda", target: "#agenda-view-toggle", title: "Visões da agenda", desc: "Alterna entre Hoje, Semana e Mês. \"Hoje\" e \"Semana\" mostram a grade por horário; \"Mês\" mostra a lista de todos os agendamentos do período." },
-  { section: "Agenda", tab: "agenda", target: "#btn-toggle-appt-form", title: "Agendar manualmente", desc: "Marque um horário na mão informando paciente, telefone, procedimento e data/hora — útil para encaixes feitos por telefone. Os agendamentos que a Alice fecha no WhatsApp aparecem aqui automaticamente." },
-  { section: "Agenda", tab: "agenda", target: "#agenda-grid-wrap", title: "Grade de horários", desc: "Cada bloco é um atendimento. Clique num bloco para editar procedimento, profissional responsável, data/hora ou status. É o status \"Concluído\" que alimenta o indicador de atendimentos concluídos no Início e libera as automações de pós-procedimento e renovação; \"Cancelado\" tira o horário da agenda." },
+  { section: "Agenda", tab: "agenda", target: ".ag-toolbar-nav", title: "Navegação da agenda", desc: "\"Hoje\" volta pro dia atual, as setas ‹ › avançam ou voltam, e Dia/Semana/Mês trocam a visão. Ao lado fica o período que está sendo mostrado." },
+  { section: "Agenda", tab: "agenda", target: ".ag-filters", title: "Filtros e busca", desc: "Filtre por status (agendado, concluído, desmarcado, não compareceu) e por origem (WhatsApp, Instagram, presencial, telefone), ou busque por nome do paciente, procedimento ou profissional." },
+  { section: "Agenda", tab: "agenda", target: ".ag-side", title: "Calendário e resumo do dia", desc: "O mini calendário pula pra qualquer data (os dias com atendimento têm um ponto). Abaixo dá pra filtrar por profissional e ver a lista de atendimentos do dia selecionado." },
+  { section: "Agenda", tab: "agenda", target: "#btn-toggle-appt-form", title: "Adicionar e bloquear", desc: "\"Adicionar atendimento\" marca um horário na mão (paciente, procedimento, profissional, origem). \"Bloquear horário\" reserva um período (feriado, almoço) direto daqui. Os agendamentos que a Alice fecha no WhatsApp aparecem sozinhos." },
+  { section: "Agenda", tab: "agenda", target: "#agenda-grid-wrap", title: "Grade de horários", desc: "Cada bloco é um atendimento, colorido pelo profissional, com o ícone da origem. Clique para editar procedimento, profissional, data/hora, origem ou status — \"Concluído\" alimenta o indicador do Início e libera pós-procedimento e renovação." },
 
   // ===== Personalizar Alice =====
   { section: "Personalizar Alice", tab: "settings", sub: "clinic-data", target: "#settings-tabs", title: "Central de configuração", desc: "Tudo o que a Alice sabe e faz é ajustado nessas abas. Vamos passar pelas principais em ordem. Não precisa preencher tudo de uma vez — o mínimo para começar é: Dados da clínica, Procedimentos e Canais. O resto pode vir depois." },

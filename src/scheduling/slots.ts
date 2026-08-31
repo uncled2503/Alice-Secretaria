@@ -450,6 +450,7 @@ export async function createBooking(params: {
         procedureId,
         professionalId: professional?.id ?? null,
         scheduledAt: startUtc,
+        source: "whatsapp",
       },
     });
 

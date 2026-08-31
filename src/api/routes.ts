@@ -1375,12 +1375,17 @@ apiRouter.get(
   "/appointments",
   asyncRoute(async (req, res) => {
     const clinic = await getClinic(req);
-    const { start, end } = req.query as { start?: string; end?: string };
+    const { start, end, professionalId, status, source } = req.query as {
+      start?: string; end?: string; professionalId?: string; status?: string; source?: string;
+    };
 
     const appointments = await prisma.appointment.findMany({
       where: {
         clinicId: clinic.id,
         ...(start && end ? { scheduledAt: { gte: new Date(start), lte: new Date(end) } } : {}),
+        ...(professionalId ? { professionalId } : {}),
+        ...(status ? { status } : {}),
+        ...(source ? { source } : {}),
       },
       orderBy: { scheduledAt: "asc" },
       include: { patient: true, procedure: true, professional: true },
@@ -1391,6 +1396,7 @@ apiRouter.get(
         id: a.id,
         scheduledAt: a.scheduledAt,
         status: a.status,
+        source: a.source,
         patientConfirmed: a.patientConfirmed,
         patient: { name: a.patient.name, phone: a.patient.phone },
         procedure: { id: a.procedureId, name: a.procedure.name, durationMin: a.procedure.durationMin },
@@ -1405,12 +1411,13 @@ apiRouter.get(
 apiRouter.post(
   "/appointments",
   asyncRoute(async (req, res) => {
-    const { patientName, patientPhone, procedureId, professionalId, scheduledAt } = req.body as {
+    const { patientName, patientPhone, procedureId, professionalId, scheduledAt, source } = req.body as {
       patientName?: string;
       patientPhone?: string;
       procedureId?: string;
       professionalId?: string | null;
       scheduledAt?: string;
+      source?: string | null;
     };
 
     if (!patientPhone || !procedureId || !scheduledAt) {
@@ -1426,8 +1433,16 @@ apiRouter.post(
       create: { clinicId: clinic.id, phone, name: patientName || null },
     });
 
+    const VALID_SOURCE = ["whatsapp", "instagram", "presencial", "telefone"];
     const appointment = await prisma.appointment.create({
-      data: { clinicId: clinic.id, patientId: patient.id, procedureId, professionalId: professionalId || null, scheduledAt: new Date(scheduledAt) },
+      data: {
+        clinicId: clinic.id,
+        patientId: patient.id,
+        procedureId,
+        professionalId: professionalId || null,
+        scheduledAt: new Date(scheduledAt),
+        source: source && VALID_SOURCE.includes(source) ? source : "presencial",
+      },
       include: { procedure: true },
     });
     await notifyStaff(
@@ -1458,13 +1473,18 @@ apiRouter.put(
     const existing = await prisma.appointment.findUniqueOrThrow({ where: { id: req.params.id }, include: { patient: true } });
     if (!assertClinicAccess(req, res, existing.clinicId)) return;
 
-    const { procedureId, professionalId, scheduledAt, status, patientConfirmed } = req.body as {
+    const { procedureId, professionalId, scheduledAt, status, patientConfirmed, source } = req.body as {
       procedureId?: string;
       professionalId?: string | null;
       scheduledAt?: string;
       status?: string;
       patientConfirmed?: boolean;
+      source?: string | null;
     };
+    if (status !== undefined && !["confirmed", "completed", "cancelled", "no_show"].includes(status)) {
+      res.status(400).json({ error: "status invalido" });
+      return;
+    }
 
     const appointment = await prisma.appointment.update({
       where: { id: req.params.id },
@@ -1473,6 +1493,7 @@ apiRouter.put(
         ...(professionalId !== undefined ? { professionalId: professionalId || null } : {}),
         ...(scheduledAt !== undefined ? { scheduledAt: new Date(scheduledAt) } : {}),
         ...(status !== undefined ? { status } : {}),
+        ...(source !== undefined ? { source: source || null } : {}),
         ...(patientConfirmed !== undefined
           ? { patientConfirmed, confirmedAt: patientConfirmed ? new Date() : null }
           : {}),
@@ -1524,6 +1545,18 @@ apiRouter.put(
         title: "Atendimento concluído",
         description: `${patientLabel} — ${appointment.procedure.name}.`, actorName,
       });
+    } else if (status === "no_show" && existing.status !== "no_show") {
+      await logActivity({
+        clinicId: existing.clinicId, type: "appointment_no_show", area: "agenda",
+        title: "Paciente não compareceu",
+        description: `${patientLabel} — ${appointment.procedure.name}.`, actorName,
+      });
+      const upcoming = await prisma.appointment.findFirst({
+        where: { patientId: existing.patientId, status: "confirmed", scheduledAt: { gte: new Date() } },
+      });
+      if (!upcoming) {
+        await movePatientToRecovery(existing.clinicId, existing.patientId, { actorName, note: "não compareceu" });
+      }
     } else if (scheduledAt !== undefined && new Date(scheduledAt).getTime() !== existing.scheduledAt.getTime()) {
       await notifyStaff(
         existing.clinicId,

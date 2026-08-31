@@ -19,6 +19,7 @@ export const ACTIVITY_TYPES: Record<string, string> = {
   appointment_rescheduled: "Agendamento remarcado",
   appointment_cancelled: "Agendamento cancelado",
   appointment_completed: "Atendimento concluído",
+  appointment_no_show: "Paciente não compareceu",
   appointment_confirmed: "Presença confirmada pelo paciente",
   waitlist_added: "Paciente entrou na lista de espera",
   waitlist_offer: "Vaga oferecida da lista de espera",

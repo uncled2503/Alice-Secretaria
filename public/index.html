@@ -290,9 +290,22 @@
       </div>
 
       <section id="tab-agenda" class="tab-panel">
-        <div class="page-header">
-          <h1>Agenda</h1>
-          <button id="btn-toggle-appt-form" type="button">+ Adicionar atendimento</button>
+        <div class="ag-toolbar">
+          <div class="ag-toolbar-nav">
+            <button id="ag-today" type="button" class="btn-chat-action">Hoje</button>
+            <button id="ag-prev" type="button" class="ag-arrow" aria-label="Anterior">‹</button>
+            <button id="ag-next" type="button" class="ag-arrow" aria-label="Próximo">›</button>
+            <div class="view-toggle" id="agenda-view-toggle">
+              <button data-view="day">Dia</button>
+              <button data-view="week" class="active">Semana</button>
+              <button data-view="month">Mês</button>
+            </div>
+            <span id="ag-range-label" class="ag-range-label"></span>
+          </div>
+          <div class="ag-toolbar-actions">
+            <button id="btn-toggle-appt-form" type="button" class="btn-brand btn-brand--primary btn-brand--sm"><span class="nav-icon" data-icon="plus"></span> Adicionar atendimento</button>
+            <button id="ag-block" type="button" class="btn-chat-action">Bloquear horário</button>
+          </div>
         </div>
 
         <form id="appointment-form" class="broadcast-form card" style="display:none">
@@ -304,6 +317,19 @@
             <label>Procedimento:
               <select id="ap-procedure" required></select>
             </label>
+            <label>Profissional:
+              <select id="ap-professional"><option value="">Não atribuído</option></select>
+            </label>
+            <label>Origem:
+              <select id="ap-source">
+                <option value="presencial">Presencial</option>
+                <option value="telefone">Telefone</option>
+                <option value="whatsapp">WhatsApp</option>
+                <option value="instagram">Instagram</option>
+              </select>
+            </label>
+          </div>
+          <div class="broadcast-form-row">
             <label>Data/hora:
               <input id="ap-when" type="datetime-local" required />
             </label>
@@ -311,23 +337,50 @@
           </div>
         </form>
 
-        <div class="toolbar">
-          <div class="view-toggle" id="agenda-view-toggle">
-            <button data-range="1" class="active">Hoje</button>
-            <button data-range="7">Semana</button>
-            <button data-range="30">Mês</button>
+        <div class="ag-filters">
+          <select id="ag-f-status">
+            <option value="">Status: todos</option>
+            <option value="confirmed">Agendado</option>
+            <option value="completed">Concluído</option>
+            <option value="cancelled">Desmarcado</option>
+            <option value="no_show">Não compareceu</option>
+          </select>
+          <select id="ag-f-source">
+            <option value="">Origem: todas</option>
+            <option value="whatsapp">WhatsApp</option>
+            <option value="instagram">Instagram</option>
+            <option value="presencial">Presencial</option>
+            <option value="telefone">Telefone</option>
+          </select>
+          <input id="agenda-search" type="search" class="search-input" placeholder="Buscar por paciente, procedimento ou profissional..." />
+        </div>
+
+        <div class="ag-legend" id="ag-legend"></div>
+
+        <div class="ag-main">
+          <div class="ag-main-col">
+            <div class="card agenda-grid-card" id="agenda-grid-wrap">
+              <div class="agenda-grid" id="agenda-grid"></div>
+            </div>
+            <div class="card" id="agenda-list-wrap" style="display:none">
+              <table>
+                <thead><tr><th>Data/Hora</th><th>Paciente</th><th>Procedimento</th><th>Profissional</th><th>Status</th></tr></thead>
+                <tbody id="agenda-body"></tbody>
+              </table>
+            </div>
           </div>
-        </div>
-
-        <div class="card agenda-grid-card" id="agenda-grid-wrap">
-          <div class="agenda-grid" id="agenda-grid"></div>
-        </div>
-
-        <div class="card" id="agenda-list-wrap" style="display:none">
-          <table>
-            <thead><tr><th>Data/Hora</th><th>Paciente</th><th>Procedimento</th><th>Profissional</th><th>Status</th></tr></thead>
-            <tbody id="agenda-body"></tbody>
-          </table>
+          <aside class="ag-side">
+            <div class="ag-minical card" id="ag-minical"></div>
+            <div class="card ag-side-block">
+              <div class="ag-side-title">Profissional</div>
+              <div id="ag-prof-filter"></div>
+            </div>
+            <div class="card ag-side-block">
+              <div class="ag-side-title">Atendimentos do dia <span id="ag-day-count" class="badge badge-neutral">0</span></div>
+              <div id="ag-day-label" class="hint" style="margin:0.2rem 0 0.5rem"></div>
+              <div id="ag-day-list"></div>
+            </div>
+          </aside>
         </div>
       </section>
 
@@ -1032,13 +1085,25 @@
           <label>Data/hora:
             <input id="appt-edit-when" type="datetime-local" required />
           </label>
-          <label>Status:
-            <select id="appt-edit-status">
-              <option value="confirmed">Confirmado</option>
-              <option value="completed">Concluído</option>
-              <option value="cancelled">Cancelado</option>
-            </select>
-          </label>
+          <div class="modal-form-row">
+            <label>Status:
+              <select id="appt-edit-status">
+                <option value="confirmed">Agendado</option>
+                <option value="completed">Concluído</option>
+                <option value="cancelled">Desmarcado</option>
+                <option value="no_show">Não compareceu</option>
+              </select>
+            </label>
+            <label>Origem:
+              <select id="appt-edit-source">
+                <option value="">—</option>
+                <option value="whatsapp">WhatsApp</option>
+                <option value="instagram">Instagram</option>
+                <option value="presencial">Presencial</option>
+                <option value="telefone">Telefone</option>
+              </select>
+            </label>
+          </div>
           <label class="checkbox-row"><input type="checkbox" id="appt-edit-confirmed" /> Presença confirmada pelo paciente</label>
           <div class="modal-actions">
             <button type="button" id="appt-edit-delete" class="btn-cancel">Excluir</button>
@@ -1576,6 +1641,30 @@
             <button type="button" id="ak-secret-done">Pronto</button>
           </div>
         </div>
+      </div>
+    </div>
+
+    <div id="block-quick-overlay" class="modal-overlay" style="display:none">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Bloquear horário</h3>
+          <button type="button" id="block-quick-close" class="modal-close">&times;</button>
+        </div>
+        <form id="block-quick-form">
+          <label>Profissional
+            <select id="bq-professional"><option value="">Clínica toda</option></select>
+          </label>
+          <div class="modal-form-row">
+            <label>Início<input id="bq-start" type="datetime-local" required /></label>
+            <label>Fim<input id="bq-end" type="datetime-local" required /></label>
+          </div>
+          <label>Motivo
+            <input id="bq-reason" type="text" placeholder="Ex.: feriado, almoço, congresso" />
+          </label>
+          <div class="modal-actions">
+            <button type="submit">Bloquear</button>
+          </div>
+        </form>
       </div>
     </div>
 
