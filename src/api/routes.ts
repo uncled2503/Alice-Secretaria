@@ -20,6 +20,7 @@ import { offerFreedSlotToWaitlist } from "../scheduling/waitlist.js";
 import { patientDossier } from "../crm/dossier.js";
 import { buildReport } from "../crm/reports.js";
 import { logActivity, ACTIVITY_AREAS, ACTIVITY_TYPES } from "../crm/activity.js";
+import { leadsByState } from "../crm/geo.js";
 import { createRuleDraft, RULE_CATEGORIES, seedDefaultRules, reseedRulesForProfile } from "../ai/rules.js";
 import { BRIEFING_TEMPLATE, parseBriefing, applyBriefing, BriefingPlanSchema } from "../ai/briefing.js";
 import { API_SCOPES, API_SCOPE_IDS, generateApiKey } from "./external/keys.js";
@@ -733,7 +734,7 @@ apiRouter.get(
     const startDate = start ? new Date(start) : new Date(Date.now() - 30 * 24 * 60 * 60_000);
     const endDate = end ? new Date(end) : new Date();
 
-    const [attended, appointments, newContacts, activeConversations] = await Promise.all([
+    const [attended, appointments, newContacts, activeConversations, attendedPhones] = await Promise.all([
       prisma.message
         .findMany({
           where: {
@@ -754,6 +755,14 @@ apiRouter.get(
       prisma.patient.count({ where: { clinicId: clinic.id, createdAt: { gte: startDate, lte: endDate } } }),
       prisma.conversation.count({
         where: { patient: { clinicId: clinic.id }, lastMessageAt: { gte: startDate, lte: endDate } },
+      }),
+      // Telefones dos contatos atendidos no periodo -> mapa de leads por estado (DDD)
+      prisma.patient.findMany({
+        where: {
+          clinicId: clinic.id,
+          conversations: { some: { messages: { some: { role: "user", createdAt: { gte: startDate, lte: endDate } } } } },
+        },
+        select: { phone: true },
       }),
     ]);
 
@@ -783,6 +792,7 @@ apiRouter.get(
       appointmentsCancelled: cancelled,
       newContacts,
       activeConversations,
+      byState: leadsByState(attendedPhones.map((p) => p.phone)),
       daily,
     });
   })
@@ -2572,7 +2582,17 @@ apiRouter.delete(
 
 apiRouter.get(
   "/rules/categories",
-  asyncRoute(async (_req, res) => {
+  asyncRoute(async (req, res) => {
+    // Negocio "loja" ve rotulos de comercio no lugar dos de clinica.
+    const clinic = await getClinic(req).catch(() => null);
+    if (clinic?.businessType === "geral") {
+      const LOJA_LABELS: Record<string, string> = {
+        agendamento: "Atendimento",
+        procedimentos: "Produtos e serviços",
+      };
+      res.json(RULE_CATEGORIES.map((c) => ({ ...c, label: LOJA_LABELS[c.id] ?? c.label })));
+      return;
+    }
     res.json(RULE_CATEGORIES);
   })
 );

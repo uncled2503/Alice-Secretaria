@@ -189,6 +189,18 @@
             <div class="mini-calendar" id="mini-calendar"></div>
           </div>
         </div>
+
+        <div class="card dash-map-card">
+          <div class="card-title-row">
+            <h3>De onde chegam os leads</h3>
+            <span class="chart-total" id="map-total"></span>
+          </div>
+          <p class="hint" style="margin:0 0 0.6rem">Estados dos contatos atendidos no período, pelo DDD do WhatsApp.</p>
+          <div class="dash-map-wrap">
+            <div id="dash-br-map" class="dash-br-map"></div>
+            <ol id="dash-map-rank" class="dash-map-rank"></ol>
+          </div>
+        </div>
       </section>
 
       <section id="tab-contacts" class="tab-panel">
@@ -437,17 +449,17 @@
             <div id="rp-funnel" class="rp-bars"></div>
           </div>
           <div class="card">
-            <h3>Origem dos agendamentos</h3>
+            <h3 data-biz-label="Origem dos agendamentos|Origem dos contatos">Origem dos agendamentos</h3>
             <div id="rp-source" class="rp-bars"></div>
           </div>
         </div>
 
-        <div class="card" style="margin-top:1rem">
+        <div class="card biz-clinica-only" style="margin-top:1rem">
           <h3>Faturamento por dia</h3>
           <div id="rp-daily" class="dash-chart"></div>
         </div>
 
-        <div class="dash-columns" style="grid-template-columns:1fr 1fr;margin-top:1rem">
+        <div class="dash-columns biz-clinica-only" style="grid-template-columns:1fr 1fr;margin-top:1rem">
           <div class="card">
             <h3>Faturamento por procedimento</h3>
             <div id="rp-proc" class="rp-bars"></div>
@@ -550,13 +562,13 @@
             </div>
 
             <div class="section-header" style="margin-top:1rem"><span class="nav-icon" data-icon="building"></span> Como a Alice se apresenta no atendimento</div>
-            <p class="hint" style="margin-top:0">A Alice nunca se identifica como assistente virtual, IA ou atendimento automático. Escolha como ela se apresenta pro paciente:</p>
+            <p class="hint" style="margin-top:0" data-biz-label="A Alice nunca se identifica como assistente virtual, IA ou atendimento automático. Escolha como ela se apresenta pro paciente:|A Alice nunca se identifica como assistente virtual, IA ou atendimento automático. Escolha como ela se apresenta pro cliente:">A Alice nunca se identifica como assistente virtual, IA ou atendimento automático. Escolha como ela se apresenta pro paciente:</p>
             <div class="broadcast-form-row">
               <label style="flex:1">Identidade da Alice
                 <select id="cd-persona">
-                  <option value="team">Parte da equipe da clínica — "Aqui é a Alice, da equipe da [clínica]"</option>
-                  <option value="clinic_secretary">Secretária da clínica — "Aqui é a Alice, secretária da [clínica]"</option>
-                  <option value="professional_secretary">Secretária de um profissional — "Aqui é a Alice, secretária da Dra. Fulana"</option>
+                  <option value="team" data-biz-label='Parte da equipe da clínica — "Aqui é a Alice, da equipe da [clínica]"|Parte da equipe da loja — "Aqui é a Alice, da equipe da [loja]"'>Parte da equipe da clínica — "Aqui é a Alice, da equipe da [clínica]"</option>
+                  <option value="clinic_secretary" data-biz-label='Secretária da clínica — "Aqui é a Alice, secretária da [clínica]"|Atendente da loja — "Aqui é a Alice, atendente da [loja]"'>Secretária da clínica — "Aqui é a Alice, secretária da [clínica]"</option>
+                  <option value="professional_secretary" class="biz-clinica-only">Secretária de um profissional — "Aqui é a Alice, secretária da Dra. Fulana"</option>
                 </select>
               </label>
               <label id="cd-persona-name-wrap">Nome do profissional
@@ -565,7 +577,8 @@
             </div>
 
             <div class="section-header" style="margin-top:1rem"><span class="nav-icon" data-icon="building"></span> Notificações no WhatsApp</div>
-            <p class="hint" style="margin-top:0">Receba um aviso no seu WhatsApp sempre que houver agendamento novo, remarcação, cancelamento ou transferência para atendimento humano. As mensagens são enviadas pelo WhatsApp conectado em "Canais".</p>
+            <p class="hint biz-clinica-only" style="margin-top:0">Receba um aviso no seu WhatsApp sempre que houver agendamento novo, remarcação, cancelamento ou transferência para atendimento humano. As mensagens são enviadas pelo WhatsApp conectado em "Canais".</p>
+            <p class="hint biz-loja-only" style="margin-top:0">Receba um aviso no seu WhatsApp quando a Alice transferir um atendimento para uma pessoa. As mensagens saem pelo WhatsApp conectado em "Canais".</p>
             <div class="broadcast-form-row">
               <label style="flex:1">Número para receber avisos (com DDI/DDD, ex: 5511999999999)
                 <input id="cd-notify-phone" type="text" placeholder="Deixe em branco para desativar" />
@@ -574,10 +587,10 @@
             <div class="broadcast-form-row">
               <label>Quais avisos mandar
                 <div id="cd-notify-events" class="weekday-picker">
-                  <label><input type="checkbox" value="new_appointment" />Novo agendamento</label>
-                  <label><input type="checkbox" value="reschedule" />Remarcação</label>
-                  <label><input type="checkbox" value="cancel" />Cancelamento</label>
-                  <label><input type="checkbox" value="confirmed" />Presença confirmada pelo paciente</label>
+                  <label class="biz-clinica-only"><input type="checkbox" value="new_appointment" />Novo agendamento</label>
+                  <label class="biz-clinica-only"><input type="checkbox" value="reschedule" />Remarcação</label>
+                  <label class="biz-clinica-only"><input type="checkbox" value="cancel" />Cancelamento</label>
+                  <label class="biz-clinica-only"><input type="checkbox" value="confirmed" />Presença confirmada pelo paciente</label>
                   <label><input type="checkbox" value="human_handoff" />Transferência para humano</label>
                 </div>
               </label>
@@ -942,7 +955,7 @@
             <button data-rt="home" class="active">Início</button>
             <button data-rt="global">Regras globais</button>
             <button data-rt="templates">Mensagens prontas</button>
-            <button data-rt="faq">FAQ da clínica</button>
+            <button data-rt="faq" data-biz-label="FAQ da clínica|FAQ da loja">FAQ da clínica</button>
             <button data-rt="settings">Ajustes da Alice</button>
             <button data-rt="playbooks">Roteiros</button>
           </div>
@@ -1003,8 +1016,9 @@
           <div id="rt-faq" class="rules-panel">
             <div class="list-toolbar">
               <div>
-                <div class="list-count">FAQ da clínica (<span id="faq-count">0</span>)</div>
-                <p class="hint" style="margin:0.2rem 0 0">Perguntas operacionais: estacionamento, acesso, documentos, políticas. Agenda, catálogo e preço continuam nas fontes oficiais.</p>
+                <div class="list-count"><span data-biz-label="FAQ da clínica|FAQ da loja">FAQ da clínica</span> (<span id="faq-count">0</span>)</div>
+                <p class="hint biz-clinica-only" style="margin:0.2rem 0 0">Perguntas operacionais: estacionamento, acesso, documentos, políticas. Agenda, catálogo e preço continuam nas fontes oficiais.</p>
+                <p class="hint biz-loja-only" style="margin:0.2rem 0 0">Perguntas frequentes com resposta pronta: frete, trocas, formas de pagamento, tamanhos, políticas. Use palavras-chave para a Alice reconhecer a pergunta.</p>
               </div>
               <div class="list-toolbar-actions">
                 <input id="faq-search" type="text" placeholder="Buscar FAQ" />

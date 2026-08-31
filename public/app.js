@@ -2661,7 +2661,16 @@ function currentBusinessType() {
 
 function applyBizMode() {
   const mode = currentBusinessType();
+  const changed = state._bizMode !== undefined && state._bizMode !== mode;
+  state._bizMode = mode;
   document.body.dataset.biz = mode;
+
+  // Os rótulos das categorias de regra mudam por tipo de negócio - limpa o
+  // cache pra rebuscar da API no próximo acesso à aba de regras.
+  if (changed) {
+    RULE_CATEGORY_LIST = [];
+    RULE_CATEGORY_LABELS = {};
+  }
 
   // Troca os rótulos marcados com data-biz-label="rótulo clínica|rótulo loja".
   // Só o primeiro nó de texto é trocado (preserva <input>/<svg> filhos).
@@ -2702,6 +2711,8 @@ async function loadDashboard() {
   // Cartões exclusivos de loja (só aparecem no modo loja)
   document.getElementById("stat-new-contacts").textContent = stats.newContacts ?? "—";
   document.getElementById("stat-conversations").textContent = stats.activeConversations ?? "—";
+
+  renderStateMap(stats.byState || []);
 
   // No modo loja o gráfico de agendamentos e o calendário operacional ficam
   // escondidos - não vale renderizar.
@@ -2762,6 +2773,73 @@ document.getElementById("period-row").addEventListener("click", (e) => {
   loadDashboard();
 });
 
+// --- Mapa de leads por estado (tile grid do Brasil) ---
+// Posição de cada UF numa grade 7 colunas x 9 linhas (mapa estilizado).
+const BR_TILES = {
+  RR: [3, 0], AP: [4, 0],
+  AM: [2, 1], PA: [3, 1], MA: [4, 1], CE: [5, 1], RN: [6, 1],
+  AC: [1, 2], RO: [2, 2], TO: [3, 2], PI: [4, 2], PB: [5, 2], PE: [6, 2],
+  MT: [2, 3], GO: [3, 3], BA: [4, 3], SE: [5, 3], AL: [6, 3],
+  MS: [2, 4], DF: [3, 4], MG: [4, 4], ES: [5, 4],
+  SP: [3, 5], RJ: [4, 5],
+  PR: [3, 6],
+  SC: [3, 7],
+  RS: [3, 8],
+};
+const UF_NAMES = {
+  AC: "Acre", AL: "Alagoas", AP: "Amapá", AM: "Amazonas", BA: "Bahia", CE: "Ceará",
+  DF: "Distrito Federal", ES: "Espírito Santo", GO: "Goiás", MA: "Maranhão", MT: "Mato Grosso",
+  MS: "Mato Grosso do Sul", MG: "Minas Gerais", PA: "Pará", PB: "Paraíba", PR: "Paraná",
+  PE: "Pernambuco", PI: "Piauí", RJ: "Rio de Janeiro", RN: "Rio Grande do Norte",
+  RS: "Rio Grande do Sul", RO: "Rondônia", RR: "Roraima", SC: "Santa Catarina",
+  SP: "São Paulo", SE: "Sergipe", TO: "Tocantins",
+};
+
+function renderStateMap(byState) {
+  const mapBox = document.getElementById("dash-br-map");
+  const rankBox = document.getElementById("dash-map-rank");
+  const totalEl = document.getElementById("map-total");
+  if (!mapBox) return;
+
+  const counts = Object.fromEntries(byState.map((s) => [s.uf, s.count]));
+  const total = byState.reduce((sum, s) => sum + s.count, 0);
+  const max = byState.length ? byState[0].count : 0;
+  totalEl.textContent = total ? `${total} lead${total > 1 ? "s" : ""}` : "";
+
+  if (!total) {
+    mapBox.innerHTML = '<div class="dash-map-empty">Sem leads com DDD reconhecido no período.</div>';
+    rankBox.innerHTML = "";
+    return;
+  }
+
+  const CELL = 38, SIZE = 34;
+  let tiles = "";
+  for (const [uf, [col, row]] of Object.entries(BR_TILES)) {
+    const n = counts[uf] || 0;
+    const opacity = n === 0 ? 0.08 : (0.25 + 0.75 * (n / max)).toFixed(2);
+    const textFill = n > 0 && opacity >= 0.55 ? "#fff" : "var(--text-faint)";
+    const x = col * CELL, y = row * CELL;
+    tiles +=
+      `<g><title>${UF_NAMES[uf]}: ${n} lead${n === 1 ? "" : "s"}</title>` +
+      `<rect class="br-tile" x="${x}" y="${y}" width="${SIZE}" height="${SIZE}" rx="5" fill="var(--accent)" fill-opacity="${opacity}"/>` +
+      `<text class="br-tile-label" x="${x + SIZE / 2}" y="${y + SIZE / 2 + 3}" text-anchor="middle" fill="${textFill}">${uf}</text></g>`;
+  }
+  mapBox.innerHTML = `<svg viewBox="0 0 ${7 * CELL - 4} ${9 * CELL - 4}" role="img" aria-label="Mapa de leads por estado">${tiles}</svg>`;
+
+  rankBox.innerHTML = "";
+  for (const s of byState.slice(0, 6)) {
+    rankBox.appendChild(
+      el("li", {}, [
+        el("span", { class: "mr-uf", title: UF_NAMES[s.uf] }, [s.uf]),
+        el("span", { class: "mr-bar" }, [
+          el("span", { class: "mr-fill", style: `width:${Math.round((s.count / max) * 100)}%` }, []),
+        ]),
+        el("span", { class: "mr-n" }, [String(s.count)]),
+      ])
+    );
+  }
+}
+
 // --- Relatórios ---
 state.reportDays = 30;
 const BRL = (n) => (n || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
@@ -2797,29 +2875,46 @@ async function loadReports() {
     d = await api(`/reports?start=${start.toISOString()}&end=${end.toISOString()}`);
   } catch { return; }
 
+  const isLoja = document.body.dataset.biz === "loja";
   const k = document.getElementById("rp-kpis");
   k.innerHTML = "";
-  k.append(
-    kpiCard("Faturamento realizado", BRL(d.revenue.realizado), `${d.funnel.compareceram} atendimento(s) concluído(s)`),
-    kpiCard("Agendado pra frente", BRL(d.revenue.pipeline), "consultas futuras confirmadas"),
-    kpiCard("Taxa de no-show", `${d.noShowRate}%`, `${d.funnel.nao_compareceram} não compareceram`),
-    kpiCard("Conversão", `${d.funnel.conversao}%`, "dos atendimentos com desfecho"),
-    kpiCard("Recuperados pela Alice", String(d.recuperados), "voltaram pelo recontato e agendaram"),
-    kpiCard("Atendidos pela Alice", String(d.atendidos), "contatos únicos com resposta"),
-  );
+  if (isLoja) {
+    k.append(
+      kpiCard("Clientes atendidos", String(d.atendidos), "contatos únicos com resposta"),
+      kpiCard("Contatos recuperados", String(d.recuperados), "voltaram pelo recontato"),
+      kpiCard("Leads no período", String(d.funnel.leads), "contatos que demonstraram interesse"),
+      kpiCard("Conversão", `${d.funnel.conversao}%`, "dos contatos com desfecho"),
+    );
+  } else {
+    k.append(
+      kpiCard("Faturamento realizado", BRL(d.revenue.realizado), `${d.funnel.compareceram} atendimento(s) concluído(s)`),
+      kpiCard("Agendado pra frente", BRL(d.revenue.pipeline), "consultas futuras confirmadas"),
+      kpiCard("Taxa de no-show", `${d.noShowRate}%`, `${d.funnel.nao_compareceram} não compareceram`),
+      kpiCard("Conversão", `${d.funnel.conversao}%`, "dos atendimentos com desfecho"),
+      kpiCard("Recuperados pela Alice", String(d.recuperados), "voltaram pelo recontato e agendaram"),
+      kpiCard("Atendidos pela Alice", String(d.atendidos), "contatos únicos com resposta"),
+    );
+  }
 
-  rpBars("rp-funnel", [
-    { label: "Leads", value: d.funnel.leads, display: String(d.funnel.leads) },
-    { label: "Agendaram", value: d.funnel.agendaram, display: String(d.funnel.agendaram) },
-    { label: "Compareceram", value: d.funnel.compareceram, display: String(d.funnel.compareceram) },
-    { label: "Não compareceram", value: d.funnel.nao_compareceram, display: String(d.funnel.nao_compareceram) },
-    { label: "Cancelaram", value: d.funnel.cancelaram, display: String(d.funnel.cancelaram) },
-  ]);
+  rpBars("rp-funnel", (isLoja
+    ? [
+        { label: "Leads", value: d.funnel.leads, display: String(d.funnel.leads) },
+        { label: "Avançaram", value: d.funnel.agendaram, display: String(d.funnel.agendaram) },
+        { label: "Compraram", value: d.funnel.compareceram, display: String(d.funnel.compareceram) },
+        { label: "Perderam", value: d.funnel.cancelaram, display: String(d.funnel.cancelaram) },
+      ]
+    : [
+        { label: "Leads", value: d.funnel.leads, display: String(d.funnel.leads) },
+        { label: "Agendaram", value: d.funnel.agendaram, display: String(d.funnel.agendaram) },
+        { label: "Compareceram", value: d.funnel.compareceram, display: String(d.funnel.compareceram) },
+        { label: "Não compareceram", value: d.funnel.nao_compareceram, display: String(d.funnel.nao_compareceram) },
+        { label: "Cancelaram", value: d.funnel.cancelaram, display: String(d.funnel.cancelaram) },
+      ]));
 
   rpBars("rp-source", d.bySource.map((s) => ({
     label: SRC_LABEL[s.source] || s.source,
     value: s.agendamentos,
-    display: `${s.agendamentos}${s.faturamento ? " · " + BRL(s.faturamento) : ""}`,
+    display: `${s.agendamentos}${!isLoja && s.faturamento ? " · " + BRL(s.faturamento) : ""}`,
   })));
 
   rpBars("rp-proc", d.revenue.porProcedimento.map((p) => ({
