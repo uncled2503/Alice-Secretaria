@@ -355,39 +355,79 @@ apiRouter.post(
   })
 );
 
-// So admin exclui, e so se a clinica estiver vazia (sem paciente/conta de
-// equipe) - evita apagar por engano uma clinica de cliente de verdade com
-// historico. Clinica de teste/duplicada criada errada cai nesse caso.
+// So admin exclui. Por padrao so apaga clinica vazia (sem paciente nem conta
+// de equipe) - evita apagar por engano uma clinica de cliente de verdade com
+// historico. Com ?force=true, apaga TUDO da clinica em cascata (contatos,
+// conversas, agendamentos, automacoes, contas de acesso) - usado pra limpar
+// clinica de teste/duplicada que ja tem dado dentro.
 apiRouter.delete(
   "/clinics/:id",
   asyncRoute(async (req, res) => {
     if (!requireAdmin(req, res)) return;
 
-    const [patientCount, staffCount] = await Promise.all([
-      prisma.patient.count({ where: { clinicId: req.params.id } }),
-      prisma.staffUser.count({ where: { clinicId: req.params.id } }),
-    ]);
-    if (patientCount > 0 || staffCount > 0) {
-      res.status(400).json({ error: "So da pra excluir clinicas vazias (sem contato nem conta de equipe vinculada)" });
+    const clinicId = req.params.id;
+    const force = req.query.force === "true" || req.query.force === "1";
+
+    const clinic = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { id: true } });
+    if (!clinic) {
+      res.status(404).json({ error: "Clinica nao encontrada (pode ja ter sido excluida)" });
       return;
     }
 
+    if (!force) {
+      const [patientCount, staffCount] = await Promise.all([
+        prisma.patient.count({ where: { clinicId } }),
+        prisma.staffUser.count({ where: { clinicId } }),
+      ]);
+      if (patientCount > 0 || staffCount > 0) {
+        res.status(400).json({
+          error: `Clinica com ${patientCount} contato(s) e ${staffCount} conta(s) de equipe - use a exclusao forcada pra apagar tudo`,
+          patientCount,
+          staffCount,
+        });
+        return;
+      }
+    }
+
+    // Ordem: filhos antes dos pais (SQLite valida as foreign keys). Contas
+    // admin tem clinicId null, entao o deleteMany de StaffUser nunca as toca.
     await prisma.$transaction([
-      prisma.clinicLocation.deleteMany({ where: { clinicId: req.params.id } }),
-      prisma.funnelStage.deleteMany({ where: { clinicId: req.params.id } }),
-      prisma.followUpRule.deleteMany({ where: { clinicId: req.params.id } }),
-      prisma.reminderRule.deleteMany({ where: { clinicId: req.params.id } }),
-      prisma.postProcedureRule.deleteMany({ where: { clinicId: req.params.id } }),
-      prisma.renewalRule.deleteMany({ where: { clinicId: req.params.id } }),
-      prisma.birthdayRule.deleteMany({ where: { clinicId: req.params.id } }),
-      prisma.activityLog.deleteMany({ where: { clinicId: req.params.id } }),
-      prisma.messageTemplate.deleteMany({ where: { clinicId: req.params.id } }),
-      prisma.clinicFaq.deleteMany({ where: { clinicId: req.params.id } }),
-      prisma.playbook.deleteMany({ where: { clinicId: req.params.id } }),
-      prisma.customRule.deleteMany({ where: { clinicId: req.params.id } }),
-      prisma.procedure.deleteMany({ where: { clinicId: req.params.id } }),
-      prisma.broadcastCampaign.deleteMany({ where: { clinicId: req.params.id } }),
-      prisma.clinic.delete({ where: { id: req.params.id } }),
+      prisma.message.deleteMany({ where: { conversation: { patient: { clinicId } } } }),
+      prisma.followUpSent.deleteMany({ where: { conversation: { patient: { clinicId } } } }),
+      prisma.reminderSent.deleteMany({ where: { appointment: { clinicId } } }),
+      prisma.postProcedureSent.deleteMany({ where: { appointment: { clinicId } } }),
+      prisma.renewalSent.deleteMany({ where: { appointment: { clinicId } } }),
+      prisma.birthdaySent.deleteMany({ where: { patient: { clinicId } } }),
+      prisma.broadcastRecipient.deleteMany({ where: { campaign: { clinicId } } }),
+      prisma.patientTag.deleteMany({ where: { patient: { clinicId } } }),
+      prisma.conversation.deleteMany({ where: { patient: { clinicId } } }),
+      prisma.appointment.deleteMany({ where: { clinicId } }),
+      prisma.waitlistEntry.deleteMany({ where: { clinicId } }),
+      prisma.scheduleBlock.deleteMany({ where: { clinicId } }),
+      prisma.satisfactionSurvey.deleteMany({ where: { clinicId } }),
+      prisma.apiIdempotencyKey.deleteMany({ where: { apiKey: { clinicId } } }),
+      prisma.apiKey.deleteMany({ where: { clinicId } }),
+      prisma.broadcastCampaign.deleteMany({ where: { clinicId } }),
+      prisma.reminderRule.deleteMany({ where: { clinicId } }),
+      prisma.postProcedureRule.deleteMany({ where: { clinicId } }),
+      prisma.renewalRule.deleteMany({ where: { clinicId } }),
+      prisma.birthdayRule.deleteMany({ where: { clinicId } }),
+      prisma.followUpRule.deleteMany({ where: { clinicId } }),
+      prisma.tag.deleteMany({ where: { clinicId } }),
+      prisma.professional.deleteMany({ where: { clinicId } }),
+      prisma.procedure.deleteMany({ where: { clinicId } }),
+      prisma.product.deleteMany({ where: { clinicId } }),
+      prisma.patient.deleteMany({ where: { clinicId } }),
+      prisma.messageTemplate.deleteMany({ where: { clinicId } }),
+      prisma.clinicFaq.deleteMany({ where: { clinicId } }),
+      prisma.playbook.deleteMany({ where: { clinicId } }),
+      prisma.customRule.deleteMany({ where: { clinicId } }),
+      prisma.funnelStage.deleteMany({ where: { clinicId } }),
+      prisma.activityLog.deleteMany({ where: { clinicId } }),
+      prisma.clinicLocation.deleteMany({ where: { clinicId } }),
+      prisma.staffUser.deleteMany({ where: { clinicId } }),
+      prisma.uazapiWebhookEvent.deleteMany({ where: { clinicId } }),
+      prisma.clinic.delete({ where: { id: clinicId } }),
     ]);
     res.json({ ok: true });
   })

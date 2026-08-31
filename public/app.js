@@ -3292,13 +3292,30 @@ async function loadClinicsList() {
       await loadClinicsList();
     });
 
-    const deleteBtn = el("button", { type: "button", class: "btn-icon-danger", title: "Excluir clínica (só se estiver vazia)" }, [
+    const deleteBtn = el("button", { type: "button", class: "btn-icon-danger", title: "Excluir clínica" }, [
       el("span", { class: "nav-icon", "data-icon": "trash" }, []),
     ]);
     deleteBtn.addEventListener("click", async () => {
-      if (!await showConfirm(`Excluir a clínica "${c.name}"? Só funciona se ela estiver vazia (sem contato nem conta de equipe).`)) return;
-      await api(`/clinics/${c.id}`, { method: "DELETE" });
+      if (!await showConfirm(`Excluir a clínica "${c.name}"?`)) return;
+      try {
+        await api(`/clinics/${c.id}`, { method: "DELETE", silentStatuses: [400] });
+      } catch (err) {
+        if (err.status !== 400) return; // api() já mostrou o erro
+        const ok = await showConfirm(
+          `"${c.name}" não está vazia${err.detail ? ` (${err.detail})` : ""}. ` +
+          `Excluir mesmo assim apaga TUDO dessa clínica: contatos, conversas, ` +
+          `agendamentos, automações e contas de acesso. Não dá pra desfazer.`,
+        );
+        if (!ok) return;
+        await api(`/clinics/${c.id}?force=true`, { method: "DELETE" });
+      }
+      // Se o admin apagou a clínica que estava selecionada no topo, volta pra outra.
+      if (state.clinicId === c.id) {
+        state.clinicId = null;
+        try { localStorage.removeItem("alice_clinic_id"); } catch {}
+      }
       await loadClinicsList();
+      if (typeof loadClinics === "function") await loadClinics();
     });
 
     const uazapiBtn = el("button", { type: "button", class: "btn-brand btn-brand--secondary btn-brand--sm" }, [
