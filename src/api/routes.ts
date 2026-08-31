@@ -733,7 +733,7 @@ apiRouter.get(
     const startDate = start ? new Date(start) : new Date(Date.now() - 30 * 24 * 60 * 60_000);
     const endDate = end ? new Date(end) : new Date();
 
-    const [attended, appointments] = await Promise.all([
+    const [attended, appointments, newContacts, activeConversations] = await Promise.all([
       prisma.message
         .findMany({
           where: {
@@ -748,6 +748,12 @@ apiRouter.get(
       prisma.appointment.findMany({
         where: { clinicId: clinic.id, scheduledAt: { gte: startDate, lte: endDate } },
         select: { scheduledAt: true, status: true },
+      }),
+      // Metricas uteis pra negocio sem agenda (loja/servico): contatos novos e
+      // conversas com atividade no periodo.
+      prisma.patient.count({ where: { clinicId: clinic.id, createdAt: { gte: startDate, lte: endDate } } }),
+      prisma.conversation.count({
+        where: { patient: { clinicId: clinic.id }, lastMessageAt: { gte: startDate, lte: endDate } },
       }),
     ]);
 
@@ -775,6 +781,8 @@ apiRouter.get(
       appointmentsTotal: total,
       appointmentsCompleted: completed,
       appointmentsCancelled: cancelled,
+      newContacts,
+      activeConversations,
       daily,
     });
   })

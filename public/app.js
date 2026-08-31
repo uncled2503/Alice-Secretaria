@@ -224,10 +224,11 @@ function applyRoleUI() {
 async function bootApp() {
   applyRoleUI();
   try {
-    await loadClinics();
+    await loadClinics(); // resolve o tipo de painel (clínica/loja) antes de revelar a tela
   } catch (err) {
     console.error("Falha ao carregar clinicas:", err);
   }
+  hideAuthGate();
   await refreshAll();
   if (!state.pollHandle) state.pollHandle = setInterval(refreshAll, 5000);
 }
@@ -239,7 +240,6 @@ async function checkAuthAndBoot() {
     return;
   }
   state.staff = me;
-  hideAuthGate();
   await bootApp();
 }
 
@@ -2650,6 +2650,39 @@ function updateBrandName() {
   const name = clinic?.name ?? "—";
   document.getElementById("brand-clinic-name").textContent = name;
   document.getElementById("dash-greeting").textContent = `Olá, ${name}!`;
+  applyBizMode();
+}
+
+// --- Modo do painel: clínica x loja (dirigido por Clinic.businessType) ---
+function currentBusinessType() {
+  const c = (state.clinics || []).find((x) => x.id === state.clinicId);
+  return c?.businessType === "geral" ? "loja" : "clinica";
+}
+
+function applyBizMode() {
+  const mode = currentBusinessType();
+  document.body.dataset.biz = mode;
+
+  // Troca os rótulos marcados com data-biz-label="rótulo clínica|rótulo loja".
+  // Só o primeiro nó de texto é trocado (preserva <input>/<svg> filhos).
+  document.querySelectorAll("[data-biz-label]").forEach((elm) => {
+    const parts = elm.dataset.bizLabel.split("|");
+    const text = mode === "loja" ? (parts[1] ?? parts[0]) : parts[0];
+    if (elm.firstChild && elm.firstChild.nodeType === 3) elm.firstChild.nodeValue = text;
+    else elm.textContent = text;
+  });
+
+  // Barra superior (mobile) reflete o rótulo atual
+  const activeNav = document.querySelector(".nav-item.active");
+  const title = document.getElementById("mobile-topbar-title");
+  if (activeNav && title) title.textContent = activeNav.textContent.trim();
+
+  // Se caiu numa área que não existe no modo loja, volta pro seguro
+  if (mode === "loja") {
+    if (activeNav?.dataset.tab === "agenda") goToTab("dashboard");
+    const activeSub = document.querySelector("#settings-tabs button.active");
+    if (activeSub && activeSub.classList.contains("biz-clinica-only")) openSettingsSub("clinic-data");
+  }
 }
 
 async function loadDashboard() {
@@ -2665,6 +2698,14 @@ async function loadDashboard() {
   const pctDone = stats.appointmentsTotal > 0 ? Math.round((stats.appointmentsCompleted / stats.appointmentsTotal) * 100) : 0;
   const pctCancel = stats.appointmentsTotal > 0 ? Math.round((stats.appointmentsCancelled / stats.appointmentsTotal) * 100) : 0;
   document.getElementById("stat-completed-hint").textContent = `${pctDone}% de conclusão · ${pctCancel}% cancelados`;
+
+  // Cartões exclusivos de loja (só aparecem no modo loja)
+  document.getElementById("stat-new-contacts").textContent = stats.newContacts ?? "—";
+  document.getElementById("stat-conversations").textContent = stats.activeConversations ?? "—";
+
+  // No modo loja o gráfico de agendamentos e o calendário operacional ficam
+  // escondidos - não vale renderizar.
+  if (document.body.dataset.biz === "loja") return;
 
   const totalAppts = stats.daily.reduce((sum, d) => sum + d.count, 0);
   document.getElementById("chart-total").textContent = `${totalAppts} no período`;
@@ -3428,6 +3469,29 @@ async function loadClinicsList() {
     const planMeta = PLAN_META[c.plan] || { label: c.plan || "—" };
     const st = planStatusBadge(c);
 
+    // Tipo de painel: clínica (completo) ou loja (enxuto). Muda na hora.
+    const bizSelect = el("select", { style: "font-size:0.8rem;padding:0.3rem 1.6rem 0.3rem 0.5rem" }, [
+      el("option", { value: "clinica" }, ["Clínica"]),
+      el("option", { value: "geral" }, ["Loja / serviço"]),
+    ]);
+    bizSelect.value = c.businessType === "geral" ? "geral" : "clinica";
+    bizSelect.addEventListener("change", async () => {
+      const prev = bizSelect.value === "geral" ? "clinica" : "geral";
+      try {
+        await api(`/clinics/${c.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ businessType: bizSelect.value }),
+        });
+        const sc = (state.clinics || []).find((x) => x.id === c.id);
+        if (sc) sc.businessType = bizSelect.value;
+        applyBizMode(); // atualiza o painel na hora se for a clínica selecionada
+        await loadClinicsList();
+      } catch {
+        bizSelect.value = prev;
+      }
+    });
+
     body.appendChild(
       el("tr", {}, [
         el("td", {}, [c.name]),
@@ -3442,6 +3506,7 @@ async function loadClinicsList() {
             c.connected ? "Conectado" : c.connecting ? "Conectando…" : "Desconectado",
           ]),
         ]),
+        el("td", {}, [bizSelect]),
         el("td", {}, [
           el("div", { style: "display:flex;flex-direction:column;gap:.25rem;align-items:flex-start" }, [
             el("span", { class: "badge badge-plan" }, [planMeta.label]),

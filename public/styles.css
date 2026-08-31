@@ -85,6 +85,14 @@ body {
 .error-toast.error-toast-hide { opacity: 0; }
 [data-theme="dark"] .error-toast { background: #1c1c1c; color: var(--accent-dark); border: 1px solid var(--accent); }
 
+/* --- Modo do painel por tipo de negócio (clínica x loja) ---
+   body[data-biz="loja"] esconde o que é só de clínica (agenda, procedimentos,
+   profissionais…) e mostra os blocos exclusivos de loja. Os textos que mudam
+   usam data-biz-label="rótulo clínica|rótulo loja" e são trocados no app.js. */
+.biz-loja-only { display: none; }
+body[data-biz="loja"] .biz-clinica-only { display: none !important; }
+body[data-biz="loja"] .biz-loja-only { display: flex; }
+
 /* --- Shell / Sidebar --- */
 .app-shell { display: flex; min-height: 100vh; }
 
