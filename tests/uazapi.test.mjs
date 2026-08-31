@@ -43,5 +43,6 @@ test("ignora eco da API e mensagens de grupo", () => {
 test("rejeita URL sem HTTPS e remove barra final", () => {
   assert.equal(normalizeUazapiBaseUrl("https://api.uazapi.com/"), "https://api.uazapi.com");
   assert.throws(() => normalizeUazapiBaseUrl("http://api.uazapi.com"), /HTTPS/);
-  assert.throws(() => normalizeUazapiBaseUrl("https://example.com"), /uazapi\.com/);
+  // dominio fora da lista permitida e rejeitado (mensagem nao cita o provedor)
+  assert.throws(() => normalizeUazapiBaseUrl("https://example.com"), /servidor invalid/i);
 });

@@ -343,7 +343,7 @@ apiRouter.put(
       });
       res.json(result);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Falha ao validar a UAZAPI";
+      const message = error instanceof Error ? error.message : "Falha ao validar as credenciais de conexao";
       res.status(400).json({ error: message });
     }
   })
@@ -641,7 +641,7 @@ apiRouter.put(
     try {
       res.json(await saveUazapiConfig(clinic.id, { baseUrl, token }));
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Falha ao validar a UAZAPI";
+      const message = error instanceof Error ? error.message : "Falha ao validar as credenciais de conexao";
       res.status(400).json({ error: message });
     }
   })

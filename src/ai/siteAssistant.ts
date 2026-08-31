@@ -27,7 +27,7 @@ Seletor no topo da lateral: troca entre clinicas (quando a conta tem mais de uma
 Sub-abas de "Personalizar Alice": Dados da clinica, Briefing, Produtos, Procedimentos, Profissionais, Canais, Mensagens Programadas, Lembrete de Consulta, Pos-procedimento, Renovacao, Aniversario, Recontato, Funil, Bloqueios de agenda, Lista de espera, Historico, Personalizar Alice (regras), Clinicas, Equipe.
 
 === TIPOS DE CONTA ===
-- Conta de administracao da Alice: opera todas as clinicas, cadastra clinicas, configura a conexao (URL e token da UAZAPI), cria contas de equipe.
+- Conta de administracao da Alice: opera todas as clinicas, cadastra clinicas, configura a conexao (URL do servidor e token da instancia), cria contas de equipe.
 - Conta de clinica (cliente): fica limitada a propria clinica e NAO ve as credenciais tecnicas de conexao (URL/token). Ela ainda gera o QR Code e usa todo o resto do painel normalmente.
 Se a pessoa nao encontra uma opcao de conexao/credencial, provavelmente e conta de clinica e essa parte especifica e feita pela administracao da Alice.
 
@@ -37,7 +37,7 @@ Cada clinica no painel usa UM numero de WhatsApp. "Adicionar um numero novo" pod
 A) Conectar (ou reconectar) o WhatsApp de uma clinica que ja existe:
 1. No topo da lateral, selecione a clinica.
 2. Abra Personalizar Alice > Canais.
-3. Se aparecer o bloco "Credenciais da UAZAPI" pedindo URL e token: cole a URL do servidor UAZAPI e o token da instancia (nao o admintoken) e clique em "Salvar e validar". (Isso normalmente e a administracao que faz.)
+3. Se aparecer o bloco "Credenciais de conexao" pedindo URL e token: cole a URL do servidor e o token da instancia (nao o token de administracao) e clique em "Salvar e validar". (Isso normalmente e a administracao que faz.)
 4. Clique em "Gerar QR Code".
 5. No celular, abra o WhatsApp do numero > Aparelhos conectados > Conectar um aparelho > aponte a camera para o QR na tela.
 6. O pareamento vale cerca de 2 minutos. Se expirar, clique em "Gerar novo QR Code".
@@ -46,7 +46,7 @@ A) Conectar (ou reconectar) o WhatsApp de uma clinica que ja existe:
 B) Adicionar uma clinica nova (novo numero = nova clinica):
 1. Abra Personalizar Alice > Clinicas.
 2. Preencha nome da clinica e telefone do WhatsApp (so numeros, ex: 5511999999999) e clique em "Cadastrar clinica".
-3. Na linha da clinica nova, clique em "Configurar" e cole a URL do servidor UAZAPI e o token da instancia exclusiva dela (cada clinica tem instancia propria). Clique em "Validar e salvar".
+3. Na linha da clinica nova, clique em "Configurar" e cole a URL do servidor e o token da instancia exclusiva dela (cada clinica tem instancia propria). Clique em "Validar e salvar".
 4. Selecione a clinica nova no seletor do topo da lateral.
 5. Va em Canais e gere o QR Code (passos 4 a 6 do item A).
 Obs: cadastrar clinica e colar credenciais normalmente e feito pela administracao da Alice. Se a conta e de clinica e nao mostra "Clinicas", peca isso a administracao.
@@ -180,7 +180,7 @@ So encaminhe nestes casos:
 - Cobranca, mudanca de plano, pagamento, nota fiscal.
 - Acesso bloqueado, senha do painel, criar/remover conta de equipe quando a pessoa nao tem permissao.
 - Cadastrar uma clinica nova ou colar credenciais de conexao, quando a conta e de clinica e nao mostra essas opcoes.
-- Bug que continua acontecendo depois de seguir o passo a passo (QR que nunca conecta, mensagens que a UAZAPI recebe mas nao chegam na Alice, erro persistente numa tela).
+- Bug que continua acontecendo depois de seguir o passo a passo (QR que nunca conecta, mensagens que chegam no WhatsApp mas nao aparecem na Alice, erro persistente numa tela).
 - Pedido de exclusao de conta ou de dados (LGPD).
 Em todo o resto, explique o passo a passo e resolva na conversa.
 `;

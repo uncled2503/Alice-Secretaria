@@ -3467,7 +3467,7 @@ async function openClinicUazapiModal(clinic) {
   const saveBtn = document.getElementById("clinic-uazapi-save");
 
   document.getElementById("clinic-uazapi-id").value = clinic.id;
-  document.getElementById("clinic-uazapi-title").textContent = `UAZAPI — ${clinic.name}`;
+  document.getElementById("clinic-uazapi-title").textContent = `Conexão — ${clinic.name}`;
   document.getElementById("clinic-uazapi-url").value = "";
   tokenInput.value = "";
   tokenInput.required = !clinic.configured;
@@ -3521,15 +3521,15 @@ document.getElementById("clinic-uazapi-form").addEventListener("submit", async (
     document.getElementById("clinic-uazapi-token-hint").textContent =
       `Token atual: ${config.tokenHint}. Deixe o campo vazio para manter esse token.`;
     feedback.textContent = result.webhookConfigured
-      ? "Credenciais validadas e webhook configurado com sucesso."
-      : "Credenciais salvas. Configure PUBLIC_BASE_URL e UAZAPI_WEBHOOK_SECRET no servidor para ativar o webhook.";
+      ? "Credenciais validadas e recebimento de mensagens configurado com sucesso."
+      : "Credenciais salvas. Configure as variáveis de webhook no servidor para ativar o recebimento de mensagens.";
     feedback.style.color = result.webhookConfigured ? "var(--green-text)" : "var(--text-muted)";
     feedback.style.display = "block";
     await loadClinicsList();
     await loadClinics();
   } catch (error) {
     if (error.status !== 400) throw error;
-    feedback.textContent = error.detail || "Não foi possível validar as credenciais da UAZAPI.";
+    feedback.textContent = error.detail || "Não foi possível validar as credenciais de conexão.";
     feedback.style.color = "#b91c1c";
     feedback.style.display = "block";
   } finally {
@@ -3886,7 +3886,7 @@ document.getElementById("btn-add-location").addEventListener("click", async () =
   await loadClinicLocations();
 });
 
-// --- Canais (UAZAPI) ---
+// --- Canais (conexão do WhatsApp) ---
 async function loadUazapiConfig() {
   const wrap = document.getElementById("channel-uazapi-config");
   const statusEl = document.getElementById("channel-uazapi-config-status");
@@ -3960,7 +3960,7 @@ async function loadChannelStatus() {
     const isAdmin = state.staff?.role === "admin";
     if (!status.configured) {
       errorEl.textContent = isAdmin
-        ? "Configure as credenciais da UAZAPI acima."
+        ? "Configure as credenciais de conexão acima."
         : "Peça a um administrador para configurar.";
     } else if (!status.connecting && !status.connected && status.lastError) {
       errorEl.textContent = isAdmin
@@ -4098,7 +4098,7 @@ document.getElementById("btn-channel-uazapi-save").addEventListener("click", asy
   const statusEl = document.getElementById("channel-uazapi-config-status");
   const baseUrl = document.getElementById("channel-uazapi-url").value.trim();
   const token = document.getElementById("channel-uazapi-token").value.trim();
-  if (!baseUrl) return showError("Informe a URL da UAZAPI.");
+  if (!baseUrl) return showError("Informe a URL do servidor.");
 
   button.disabled = true;
   button.textContent = "Validando…";
@@ -4111,13 +4111,13 @@ document.getElementById("btn-channel-uazapi-save").addEventListener("click", asy
       silentStatuses: [400],
     });
     statusEl.textContent = result.webhookConfigured
-      ? "Credenciais e webhook configurados."
-      : "Credenciais salvas; falta configurar PUBLIC_BASE_URL/UAZAPI_WEBHOOK_SECRET no servidor.";
+      ? "Credenciais e recebimento de mensagens configurados."
+      : "Credenciais salvas; falta configurar as variáveis de webhook no servidor.";
     await loadUazapiConfig();
     await loadChannelStatus();
   } catch (error) {
     if (error.status !== 400) throw error;
-    statusEl.textContent = error.detail || "Não foi possível validar as credenciais da UAZAPI.";
+    statusEl.textContent = error.detail || "Não foi possível validar as credenciais de conexão.";
   } finally {
     button.disabled = false;
     button.textContent = "Salvar e validar";

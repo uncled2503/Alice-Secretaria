@@ -61,7 +61,7 @@ export function normalizeUazapiBaseUrl(value: string): string {
   const normalized = normalizeHttpsBaseUrl(value);
   const hostname = new URL(normalized).hostname.toLowerCase();
   if (hostname !== "uazapi.com" && !hostname.endsWith(".uazapi.com")) {
-    throw new Error("Use a URL oficial do seu servidor em *.uazapi.com");
+    throw new Error("Endereco de servidor invalido. Use a URL exata da instancia, comecando com https://.");
   }
   return normalized;
 }
@@ -72,27 +72,26 @@ async function clinicCredentials(clinicId: string): Promise<UazapiCredentials> {
     select: { uazapiBaseUrl: true, uazapiToken: true },
   });
   if (!clinic.uazapiBaseUrl || !clinic.uazapiToken) {
-    throw new Error("Configure a URL e o token da instancia UAZAPI desta clinica");
+    throw new Error("Configure a URL do servidor e o token da instancia desta clinica");
   }
   return { baseUrl: normalizeUazapiBaseUrl(clinic.uazapiBaseUrl), token: clinic.uazapiToken };
 }
 
 // Traduz as falhas mais comuns de configuracao (URL do servidor errada ou
-// token que nao pertence aquela instancia) numa mensagem acionavel. A UAZAPI
-// hospeda cada conta num subdominio proprio: um token valido em um servidor
-// responde 401 "Invalid token." em outro, e um host inexistente responde 404.
+// token que nao pertence aquela instancia) numa mensagem acionavel. Cada conta
+// fica num subdominio proprio: um token valido num servidor responde 401
+// "Invalid token." em outro, e um host inexistente responde 404.
 function explainCredentialError(error: unknown, baseUrl: string): Error {
   const message = error instanceof Error ? error.message : String(error);
   if (/HTTP 401/.test(message)) {
     return new Error(
-      `A UAZAPI recusou o token (401). Confirme no painel da UAZAPI que ${baseUrl} e a URL exata do ` +
-        "servidor dessa instancia e que voce colou o token da instancia (nao o token de administrador), sem espacos."
+      `O servidor recusou o token (401). Confirme que ${baseUrl} e a URL exata da instancia e que voce ` +
+        "colou o token da instancia (nao o token de administracao), sem espacos."
     );
   }
   if (/HTTP 404/.test(message)) {
     return new Error(
-      `${baseUrl} nao respondeu como um servidor UAZAPI (404). Use a URL do seu servidor no painel, ` +
-        "no formato https://seusubdominio.uazapi.com."
+      `${baseUrl} nao respondeu como esperado (404). Confirme a URL do servidor da instancia, comecando com https://.`
     );
   }
   return error instanceof Error ? error : new Error(message);
@@ -107,7 +106,7 @@ function uazapiError(status: number, body: unknown): Error {
     data?.message,
     data?.provider_message
   );
-  return new Error(`UAZAPI HTTP ${status}${message ? `: ${message}` : ""}`);
+  return new Error(`Servidor de conexao HTTP ${status}${message ? `: ${message}` : ""}`);
 }
 
 async function request<T>(credentials: UazapiCredentials, path: string, init: RequestInit = {}): Promise<T> {
@@ -170,7 +169,7 @@ export async function getStatus(clinicId: string): Promise<UazapiConnectionStatu
       connected: false,
       connecting: false,
       qr: null,
-      lastError: error instanceof Error ? error.message : "UAZAPI nao configurada",
+      lastError: error instanceof Error ? error.message : "conexao nao configurada",
     };
     statusCache.set(clinicId, { status, fetchedAt: Date.now() });
     return status;
@@ -189,7 +188,7 @@ export async function getStatus(clinicId: string): Promise<UazapiConnectionStatu
       connected: false,
       connecting: false,
       qr: null,
-      lastError: error instanceof Error ? error.message : "Falha ao consultar a UAZAPI",
+      lastError: error instanceof Error ? error.message : "Falha ao consultar o servidor de conexao",
     };
     statusCache.set(clinicId, { status, fetchedAt: Date.now() });
     return status;
@@ -247,7 +246,7 @@ export async function saveUazapiConfig(
   });
   const baseUrl = normalizeUazapiBaseUrl(input.baseUrl);
   const token = input.token?.trim() || existing.uazapiToken;
-  if (!token) throw new Error("Informe o token da instancia UAZAPI");
+  if (!token) throw new Error("Informe o token da instancia");
 
   const credentials = { baseUrl, token };
   let status: UazapiConnectionStatus;
@@ -260,7 +259,7 @@ export async function saveUazapiConfig(
     await prisma.clinic.update({ where: { id: clinicId }, data: { uazapiBaseUrl: baseUrl, uazapiToken: token } });
   } catch (error) {
     if (record(error)?.code === "P2002") {
-      throw new Error("Este token UAZAPI ja esta vinculado a outra clinica");
+      throw new Error("Este token ja esta vinculado a outra clinica");
     }
     throw error;
   }
@@ -466,7 +465,7 @@ function webhookExternalId(body: unknown): string {
 
 export async function enqueueWebhook(clinicId: string, body: unknown): Promise<"queued" | "duplicate"> {
   const clinic = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { id: true, uazapiToken: true } });
-  if (!clinic?.uazapiToken) throw new Error("Clinica sem instancia UAZAPI configurada");
+  if (!clinic?.uazapiToken) throw new Error("Clinica sem conexao de WhatsApp configurada");
 
   const payloadToken = textValue(record(body)?.token);
   if (payloadToken) {
