@@ -1,6 +1,6 @@
 import { Router, type Request, type Response, type RequestHandler } from "express";
 import { rateLimit } from "express-rate-limit";
-import { timingSafeEqual } from "crypto";
+import { timingSafeEqual, randomBytes } from "crypto";
 import { prisma } from "../db/client.js";
 import {
   sendText,
@@ -490,7 +490,10 @@ apiRouter.get(
   "/whatsapp/config",
   asyncRoute(async (req, res) => {
     const clinic = await getClinic(req);
-    res.json(await getUazapiConfig(clinic.id));
+    const cfg = await getUazapiConfig(clinic.id);
+    // Conta de clinica nao ve o provedor (URL do servidor UAZAPI).
+    if (req.staff?.role !== "admin") res.json({ configured: cfg.configured, baseUrl: "", tokenHint: null });
+    else res.json(cfg);
   })
 );
 
@@ -2663,6 +2666,10 @@ apiRouter.delete("/playbooks/:id", asyncRoute(async (req, res) => {
 // na propria clinica em toda a API via getClinic() acima - esse e o
 // isolamento real entre clientes da Alice. ---
 
+// Hash valido de uma senha aleatoria - usado so pra igualar o tempo de resposta
+// do login quando o usuario nao existe (evita enumeracao por timing).
+const DUMMY_HASH = hashPassword(randomBytes(24).toString("hex"));
+
 // So login/bootstrap aceitam requisicao sem sessao - sem limite de tentativas,
 // dariam pra forcar senha por tentativa e erro sem nenhum obstaculo.
 const loginRateLimit = rateLimit({
@@ -2738,7 +2745,12 @@ apiRouter.post(
     }
 
     const staff = await prisma.staffUser.findUnique({ where: { username } });
-    if (!staff || !verifyPassword(password, staff.passwordHash)) {
+    // Verifica a senha mesmo quando o usuario nao existe (contra um dummy hash),
+    // pra nao vazar por tempo de resposta quais usuarios existem.
+    const passwordOk = staff
+      ? verifyPassword(password, staff.passwordHash)
+      : (verifyPassword(password, DUMMY_HASH), false);
+    if (!staff || !passwordOk) {
       res.status(401).json({ error: "Usuario ou senha invalidos" });
       return;
     }
@@ -2847,6 +2859,14 @@ apiRouter.delete(
     if (req.staff?.role !== "admin" && target.clinicId !== req.staff?.clinicId) {
       res.status(403).json({ error: "Sem acesso a essa conta" });
       return;
+    }
+    // Nunca deixa a plataforma sem nenhum admin (senao so o bootstrap resolve).
+    if (target.role === "admin") {
+      const admins = await prisma.staffUser.count({ where: { role: "admin" } });
+      if (admins <= 1) {
+        res.status(400).json({ error: "Não dá pra remover a última conta de administrador." });
+        return;
+      }
     }
     await prisma.staffUser.delete({ where: { id: req.params.id } });
     res.json({ ok: true });

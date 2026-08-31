@@ -4,6 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import express from "express";
 import helmet from "helmet";
+import { rateLimit } from "express-rate-limit";
 import { startReminderJob } from "./reminders/cron.js";
 import { startPostProcedureJob } from "./reminders/postProcedure.js";
 import { startRenewalJob } from "./reminders/renewal.js";
@@ -46,7 +47,9 @@ app.use(helmet({
     },
   },
 }));
-app.use(express.json({ limit: "8mb" })); // fotos de produto vem como data URI (base64) no body
+// 4mb cobre uma foto de ate ~2.5MB em data URI (base64 infla ~33%). Endpoints
+// que aceitam foto (produtos/profissionais) sao os unicos que chegam perto.
+app.use(express.json({ limit: "4mb" }));
 
 app.get("/health", async (_req, res) => {
   res.set("Cache-Control", "no-store");
@@ -151,8 +154,36 @@ const PUBLIC_API_PATHS = new Set([
   "/staff/bootstrap-admin",
 ]);
 
+// Teto por IP em toda a API do painel: generoso o bastante pro painel (que
+// faz ~1 requisicao/segundo de background) e varios atendentes na mesma
+// clinica, mas fecha a porta pra um bot ou uma sessao comprometida martelando.
+const apiRateLimit = rateLimit({
+  windowMs: 60_000,
+  limit: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Muitas requisicoes em pouco tempo. Aguarde um instante." },
+  // Webhook da UAZAPI tem alta cadencia legitima e ja e protegido por HMAC.
+  skip: (req) => req.method === "POST" && req.path.startsWith("/uazapi/webhook/"),
+});
+
+// Limite dedicado pro webhook publico. A UAZAPI manda tudo do mesmo IP, entao
+// contamos por clinica (o id vem no path /:clinicId/:signature) - 300/min por
+// clinica e MUITA conversa; acima disso e flood.
+const webhookRateLimit = rateLimit({
+  windowMs: 60_000,
+  limit: 300,
+  standardHeaders: false,
+  legacyHeaders: false,
+  message: { error: "rate limited" },
+  keyGenerator: (req) => req.path.split("/")[1] || req.ip || "anon",
+  validate: { keyGeneratorIpFallback: false },
+});
+app.use("/api/uazapi/webhook", webhookRateLimit);
+
 app.use(
   "/api",
+  apiRateLimit,
   async (req, res, next) => {
     req.staff = readStaffSession(req.headers.cookie);
     const isUazapiWebhook = req.method === "POST" && req.path.startsWith("/uazapi/webhook/");
