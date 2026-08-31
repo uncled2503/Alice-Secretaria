@@ -86,9 +86,9 @@
         "description": "Secretária virtual humanizada com IA: atendimento automático no WhatsApp, qualificação de contatos, agendamento, confirmação, lembrete de consulta, follow-up e pós-atendimento.",
         "publisher": { "@id": "%%BASE_URL%%/#organization" },
         "offers": [
-          { "@type": "Offer", "name": "Plano Básico", "price": "597.00", "priceCurrency": "BRL", "url": "%%BASE_URL%%/#planos", "category": "Assinatura mensal" },
-          { "@type": "Offer", "name": "Plano Essencial", "price": "897.00", "priceCurrency": "BRL", "url": "%%BASE_URL%%/#planos", "category": "Assinatura mensal" },
-          { "@type": "Offer", "name": "Plano Profissional", "price": "1397.00", "priceCurrency": "BRL", "url": "%%BASE_URL%%/#planos", "category": "Assinatura mensal" }
+          { "@type": "Offer", "name": "Plano Realce", "price": "597.00", "priceCurrency": "BRL", "url": "%%BASE_URL%%/#planos", "category": "Assinatura mensal" },
+          { "@type": "Offer", "name": "Plano Prime", "price": "897.00", "priceCurrency": "BRL", "url": "%%BASE_URL%%/#planos", "category": "Assinatura mensal" },
+          { "@type": "Offer", "name": "Plano Prestige", "price": "1397.00", "priceCurrency": "BRL", "url": "%%BASE_URL%%/#planos", "category": "Assinatura mensal" }
         ]
       },
       {
@@ -117,7 +117,7 @@
           },
           {
             "@type": "Question",
-            "name": "E se eu passar do limite de atendimentos do plano?",
+            "name": "E se eu passar do limite de conversas do plano?",
             "acceptedAnswer": { "@type": "Answer", "text": "A gente te avisa antes de chegar no limite e você decide se quer subir de plano. A Alice não para de atender de repente." }
           },
           {
@@ -491,44 +491,60 @@
       </div>
       <div class="plans">
         <div class="plan">
-          <h3>Básico</h3>
+          <h3>Plano Realce</h3>
           <div class="price"><sup>R$</sup>597<small>/mês</small></div>
           <div class="per">Para clínicas começando a organizar o WhatsApp</div>
           <ul>
             <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Até 100 conversas/mês</li>
-            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Atendimento automático 24h</li>
-            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Agendamento e lembrete de consulta</li>
-            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Painel de conversas</li>
-            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Suporte por WhatsApp</li>
+            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Atendimento automático 24h no WhatsApp</li>
+            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Agendamento automático com checagem de conflito</li>
+            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Confirmação e lembrete de consulta</li>
+            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Qualificação automática de contatos</li>
+            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Painel de conversas com atendimento manual quando quiser</li>
+            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Funil (CRM) com movimentação automática de etapa</li>
+            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Ficha do contato com etiquetas e histórico</li>
+            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> 1 unidade · 1 profissional</li>
+            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Configuração inicial feita pela nossa equipe</li>
+            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Suporte por WhatsApp · garantia de 7 dias</li>
           </ul>
           <a href="/admin" class="btn btn-ghost btn-block">Começar agora</a>
         </div>
 
         <div class="plan featured">
           <span class="plan-badge">Mais escolhido</span>
-          <h3>Essencial</h3>
+          <h3>Plano Prime</h3>
           <div class="price"><sup>R$</sup>897<small>/mês</small></div>
-          <div class="per">Para a maioria das clínicas</div>
+          <div class="per">Para a maioria das clínicas — tudo do Realce, mais:</div>
           <ul>
             <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Até 300 conversas/mês</li>
-            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Tudo do Básico</li>
-            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Follow-up automático</li>
+            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Follow-up automático de quem parou de responder</li>
             <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Mensagem de pós-procedimento</li>
+            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Lembrete de renovação (botox, preenchimento…)</li>
+            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Mensagem de aniversário</li>
+            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Lista de espera automática (avisa quando abre vaga)</li>
+            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Até 3 profissionais com agenda própria</li>
+            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Bloqueio de agenda (folga, feriado, almoço)</li>
+            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Notificações para a equipe</li>
+            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Relatórios de desempenho (funil, no-show, faturamento)</li>
             <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Grupo de suporte exclusivo</li>
           </ul>
           <a href="/admin" class="btn btn-primary btn-block">Começar agora</a>
         </div>
 
         <div class="plan">
-          <h3>Profissional</h3>
+          <h3>Plano Prestige</h3>
           <div class="price"><sup>R$</sup>1.397<small>/mês</small></div>
-          <div class="per">Para redes e clínicas de alto volume</div>
+          <div class="per">Para redes e clínicas de alto volume — tudo do Prime, mais:</div>
           <ul>
             <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Conversas ilimitadas</li>
-            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Tudo do Essencial</li>
-            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Várias unidades no mesmo painel</li>
-            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Notificações para a equipe</li>
-            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Suporte prioritário</li>
+            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Profissionais e unidades ilimitados no mesmo painel</li>
+            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Campanhas de reativação de base</li>
+            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Disparo em massa por etapa do funil</li>
+            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Pesquisa de satisfação (NPS) + avaliação no Google no automático</li>
+            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Modo consultivo / clínica médica com travas de segurança</li>
+            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Roteiros de conversa personalizados + FAQ ilimitada</li>
+            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> API para integrar com o sistema da clínica</li>
+            <li><svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M8 13.2 4.8 10l-1.4 1.4L8 16l9-9-1.4-1.4z"/></svg> Suporte prioritário + revisão trimestral de performance</li>
           </ul>
           <a href="/admin" class="btn btn-ghost btn-block">Começar agora</a>
         </div>
@@ -603,7 +619,7 @@
           <p>Na configuração a gente cadastra seus procedimentos, valores, formas de pagamento, horários de atendimento e o tom de voz da clínica. A Alice só fala o que você cadastrou.</p>
         </details>
         <details>
-          <summary>E se eu passar do limite de atendimentos do plano?</summary>
+          <summary>E se eu passar do limite de conversas do plano?</summary>
           <p>A gente te avisa antes de chegar no limite e você decide se quer subir de plano. A Alice não para de atender de repente.</p>
         </details>
         <details>

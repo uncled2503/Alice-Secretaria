@@ -61,6 +61,15 @@ model Clinic {
   importStatus    String?   // null | "running" | "completed" - importacao de contatos/historico do WhatsApp
   importStats     String?   // JSON: {found,created,merged,ignored,conversations,partialHistory,contactsInBase}
   importUpdatedAt DateTime?
+
+  // Plano contratado e vigencia (controle comercial - so a administracao da
+  // Alice edita, pelo painel adm). Nada e bloqueado automaticamente quando
+  // vence: o painel adm so mostra um aviso (ver src/reminders/planExpiry.ts).
+  plan               String    @default("prime") // realce | prime | prestige
+  planActivatedAt    DateTime?
+  planExpiresAt      DateTime? // null = sem prazo definido
+  planExpiryNotified Boolean   @default(false) // trava o aviso de "venceu" pra registrar so uma vez
+
   createdAt     DateTime  @default(now())
 
   procedures    Procedure[]

@@ -27,6 +27,8 @@ export const ACTIVITY_TYPES: Record<string, string> = {
   schedule_block_added: "Bloqueio de agenda criado",
   stage_changed: "Paciente movido de etapa no funil",
   clinic_updated: "Dados da clínica alterados",
+  plan_updated: "Plano do cliente definido",
+  plan_expired: "Plano do cliente venceu",
   briefing_applied: "Configuração aplicada via briefing",
   catalog_added: "Item de catálogo adicionado",
   catalog_removed: "Item de catálogo removido",

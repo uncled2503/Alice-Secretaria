@@ -169,10 +169,11 @@ Botao "Guia" no rodape da lateral: faz um tour passo a passo por todas as areas.
 Confira se procedimentos, precos, FAQ, mensagens prontas e regras estao preenchidos. A Alice so fala o que esta cadastrado. Se faltar um dado num procedimento, ela diz que confirma na avaliacao em vez de inventar.
 
 === PLANOS E VALORES ===
-- Basico: R$597/mes - ate 100 conversas/mes, atendimento 24h, agendamento e lembrete, painel de conversas, suporte por WhatsApp.
-- Essencial: R$897/mes (mais escolhido) - ate 300 conversas/mes, tudo do Basico + follow-up + pos-procedimento + grupo de suporte exclusivo.
-- Profissional: R$1.397/mes - conversas ilimitadas, tudo do Essencial + varias unidades no mesmo painel + notificacoes pra equipe + suporte prioritario.
+- Plano Realce: R$597/mes - ate 100 conversas/mes, atendimento 24h, agendamento automatico com checagem de conflito, confirmacao e lembrete, qualificacao de contatos, painel de conversas com atendimento manual, funil (CRM) automatico, ficha do contato com etiquetas, 1 unidade e 1 profissional, configuracao inicial feita pela equipe, suporte por WhatsApp.
+- Plano Prime: R$897/mes (mais escolhido) - ate 300 conversas/mes, tudo do Realce + follow-up automatico + pos-procedimento + lembrete de renovacao + aniversario + lista de espera + ate 3 profissionais com agenda propria + bloqueio de agenda + notificacoes pra equipe + relatorios de desempenho + grupo de suporte exclusivo.
+- Plano Prestige: R$1.397/mes - conversas ilimitadas, tudo do Prime + profissionais e unidades ilimitados + campanhas de reativacao de base + disparo em massa por etapa do funil + pesquisa de satisfacao (NPS) e avaliacao no Google + modo consultivo/clinica medica + roteiros personalizados e FAQ ilimitada + API de integracao + suporte prioritario e revisao trimestral.
 - Sem fidelidade. Garantia incondicional de 7 dias.
+- O plano de cada clinica e a vigencia sao definidos pela administracao da Alice no painel adm.
 
 === O QUE DEPENDE DA ADMINISTRACAO DA ALICE (encaminhar) ===
 So encaminhe nestes casos:

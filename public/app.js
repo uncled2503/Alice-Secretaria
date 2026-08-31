@@ -3273,10 +3273,62 @@ document.getElementById("professional-form").addEventListener("submit", async (e
   await loadProfessionals();
 });
 
+const PLAN_META = {
+  realce: { label: "Realce", price: "R$ 597" },
+  prime: { label: "Prime", price: "R$ 897" },
+  prestige: { label: "Prestige", price: "R$ 1.397" },
+};
+
+// Dias inteiros de agora até uma data ISO (negativo = já passou).
+function daysUntil(iso) {
+  if (!iso) return null;
+  return Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000);
+}
+
+// Selo de vigência do plano: { text, cls }.
+function planStatusBadge(c) {
+  if (!c.active) return { text: "Bloqueada", cls: "badge-red" };
+  const d = daysUntil(c.planExpiresAt);
+  if (d === null) return { text: "Sem prazo", cls: "badge-neutral" };
+  if (d < 0) return { text: `Vencido há ${-d}d`, cls: "badge-red" };
+  if (d === 0) return { text: "Vence hoje", cls: "badge-red" };
+  if (d <= 7) return { text: `Vence em ${d}d`, cls: "badge-amber" };
+  return { text: `Vence em ${d}d`, cls: "badge-green" };
+}
+
+// Banner no topo da aba Clínicas: lista quem está vencido ou vencendo em 7 dias.
+function renderClinicsPlanAlert(clinics) {
+  const box = document.getElementById("clinics-plan-alert");
+  if (!box) return;
+  const vencidos = [];
+  const vencendo = [];
+  for (const c of clinics) {
+    if (!c.active || !c.planExpiresAt) continue;
+    const d = daysUntil(c.planExpiresAt);
+    if (d < 0) vencidos.push(`${c.name} (há ${-d}d)`);
+    else if (d <= 7) vencendo.push(`${c.name} (${d === 0 ? "hoje" : `em ${d}d`})`);
+  }
+  box.innerHTML = "";
+  if (!vencidos.length && !vencendo.length) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  box.classList.toggle("plan-alert--danger", vencidos.length > 0);
+  if (vencidos.length) {
+    box.appendChild(el("strong", {}, [`⚠️ Plano vencido: ${vencidos.length}`]));
+    box.appendChild(el("div", {}, [vencidos.join(" · ")]));
+  }
+  if (vencendo.length) {
+    box.appendChild(el("div", { style: "margin-top:.3rem" }, [`Vence em breve: ${vencendo.join(" · ")}`]));
+  }
+}
+
 async function loadClinicsList() {
   const clinics = await api("/clinics");
   const body = document.getElementById("clinics-body");
   body.innerHTML = "";
+  renderClinicsPlanAlert(clinics);
   for (const c of clinics) {
     const toggleBtn = el("button", { type: "button", class: c.active ? "btn-cancel" : "btn-approve" }, [
       c.active ? "Bloquear" : "Desbloquear",
@@ -3323,6 +3375,12 @@ async function loadClinicsList() {
     ]);
     uazapiBtn.addEventListener("click", () => openClinicUazapiModal(c));
 
+    const planBtn = el("button", { type: "button", class: "btn-brand btn-brand--secondary btn-brand--sm" }, ["Plano"]);
+    planBtn.addEventListener("click", () => openClinicPlanModal(c));
+
+    const planMeta = PLAN_META[c.plan] || { label: c.plan || "—" };
+    const st = planStatusBadge(c);
+
     body.appendChild(
       el("tr", {}, [
         el("td", {}, [c.name]),
@@ -3338,11 +3396,12 @@ async function loadClinicsList() {
           ]),
         ]),
         el("td", {}, [
-          el("span", { class: `badge ${c.active ? "badge-green" : "badge-neutral"}` }, [
-            c.active ? "Em dia" : "Bloqueada",
+          el("div", { style: "display:flex;flex-direction:column;gap:.25rem;align-items:flex-start" }, [
+            el("span", { class: "badge badge-plan" }, [planMeta.label]),
+            el("span", { class: `badge ${st.cls}` }, [st.text]),
           ]),
         ]),
-        el("td", { class: "actions" }, [uazapiBtn, toggleBtn, deleteBtn]),
+        el("td", { class: "actions" }, [planBtn, uazapiBtn, toggleBtn, deleteBtn]),
       ])
     );
   }
@@ -3426,6 +3485,76 @@ document.getElementById("clinic-uazapi-form").addEventListener("submit", async (
     feedback.textContent = error.detail || "Não foi possível validar as credenciais da UAZAPI.";
     feedback.style.color = "#b91c1c";
     feedback.style.display = "block";
+  } finally {
+    saveBtn.disabled = false;
+  }
+});
+
+// --- Plano da clínica (só admin) ---
+function closeClinicPlanModal() {
+  document.getElementById("clinic-plan-overlay").style.display = "none";
+}
+
+function openClinicPlanModal(clinic) {
+  document.getElementById("clinic-plan-id").value = clinic.id;
+  document.getElementById("clinic-plan-title").textContent = `Plano — ${clinic.name}`;
+  document.getElementById("clinic-plan-select").value = PLAN_META[clinic.plan] ? clinic.plan : "prime";
+  document.getElementById("clinic-plan-days").value = "30";
+  document.getElementById("clinic-plan-custom").value = "";
+  document.getElementById("clinic-plan-custom-wrap").style.display = "none";
+
+  const current = document.getElementById("clinic-plan-current");
+  const d = daysUntil(clinic.planExpiresAt);
+  if (!clinic.planExpiresAt) {
+    current.textContent = clinic.planActivatedAt
+      ? `Atualmente: ${PLAN_META[clinic.plan]?.label ?? clinic.plan}, sem prazo definido.`
+      : "Nenhum plano definido ainda.";
+  } else {
+    const venc = new Date(clinic.planExpiresAt).toLocaleDateString("pt-BR");
+    current.textContent =
+      d < 0
+        ? `Atualmente: ${PLAN_META[clinic.plan]?.label ?? clinic.plan} — venceu em ${venc} (há ${-d} dias).`
+        : `Atualmente: ${PLAN_META[clinic.plan]?.label ?? clinic.plan} — vence em ${venc} (${d} dias).`;
+  }
+
+  document.getElementById("clinic-plan-overlay").style.display = "flex";
+}
+
+document.getElementById("clinic-plan-days").addEventListener("change", (e) => {
+  document.getElementById("clinic-plan-custom-wrap").style.display = e.target.value === "custom" ? "" : "none";
+});
+document.getElementById("clinic-plan-close").addEventListener("click", closeClinicPlanModal);
+document.getElementById("clinic-plan-cancel").addEventListener("click", closeClinicPlanModal);
+document.getElementById("clinic-plan-overlay").addEventListener("click", (e) => {
+  if (e.target.id === "clinic-plan-overlay") closeClinicPlanModal();
+});
+
+document.getElementById("clinic-plan-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const id = document.getElementById("clinic-plan-id").value;
+  const plan = document.getElementById("clinic-plan-select").value;
+  const daysSel = document.getElementById("clinic-plan-days").value;
+  let days;
+  if (daysSel === "custom") {
+    days = Number(document.getElementById("clinic-plan-custom").value);
+    if (!Number.isFinite(days) || days < 1 || days > 3650) {
+      showError("Informe um número de dias entre 1 e 3650.");
+      return;
+    }
+  } else {
+    days = Number(daysSel); // 0 = sem prazo
+  }
+  const saveBtn = document.getElementById("clinic-plan-save");
+  saveBtn.disabled = true;
+  try {
+    await api(`/clinics/${id}/plan`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ plan, days }),
+    });
+    closeClinicPlanModal();
+    await loadClinicsList();
+    await loadClinics();
   } finally {
     saveBtn.disabled = false;
   }
@@ -4353,7 +4482,7 @@ const TOUR_STEPS = [
   { section: "Inteligência da Alice", tab: "settings", sub: "rules", rt: "playbooks", target: "#rt-playbooks", title: "Roteiros", desc: "Sequências passo a passo que a Alice segue em situações específicas (primeiro atendimento, objeções, remarcação...). Você define o gatilho, o objetivo e os passos, e ela conduz a conversa nessa ordem." },
 
   { section: "Conta", tab: "settings", sub: "history", target: "#sub-history", title: "Histórico de atividades", desc: "Registro do que mudou na clínica: o que aconteceu, quem fez e quando. Filtre por tipo de evento ou por área. Útil para auditar mudanças e entender um comportamento novo da Alice." },
-  { section: "Conta", tab: "settings", sub: "clinics", target: "#sub-clinics", title: "Clínicas", desc: "Cadastre outras clínicas, cada uma com sua própria conexão de WhatsApp e configuração independente. O seletor no topo da barra lateral troca entre elas." },
+  { section: "Conta", tab: "settings", sub: "clinics", target: "#sub-clinics", title: "Clínicas", desc: "Cadastre outras clínicas, cada uma com sua própria conexão de WhatsApp e configuração independente. O seletor no topo da barra lateral troca entre elas. No botão \"Plano\" você define o plano de cada cliente (Realce, Prime ou Prestige) e por quantos dias ele vale — o painel avisa aqui quando a vigência acaba." },
   { section: "Conta", tab: "settings", sub: "team", target: "#sub-team", title: "Equipe", desc: "Contas individuais para os atendentes. Quando alguém está logado com a própria conta, as transferências no Chat mostram o nome certo. Não substitui a senha principal do painel." },
 
   // ===== Fim =====

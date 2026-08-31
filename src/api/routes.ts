@@ -161,6 +161,9 @@ apiRouter.get(
         npsThreshold: true,
         npsMessage: true,
         googleReviewUrl: true,
+        plan: true,
+        planActivatedAt: true,
+        planExpiresAt: true,
       },
     });
     const withStatus = await Promise.all(clinics.map(async (clinic) => ({ ...clinic, ...(await getStatus(clinic.id)) })));
@@ -430,6 +433,54 @@ apiRouter.delete(
       prisma.clinic.delete({ where: { id: clinicId } }),
     ]);
     res.json({ ok: true });
+  })
+);
+
+// Plano contratado da clinica. So a administracao da Alice define. Ao escolher
+// o plano, informa por quantos dias vale (days) - o painel adm avisa quando a
+// vigencia acaba (ver src/reminders/planExpiry.ts). days = 0 / null = sem prazo.
+const PLAN_IDS = ["realce", "prime", "prestige"] as const;
+const PLAN_LABEL: Record<string, string> = { realce: "Realce", prime: "Prime", prestige: "Prestige" };
+
+apiRouter.put(
+  "/clinics/:id/plan",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+
+    const { plan, days } = req.body as { plan?: string; days?: number | null };
+    if (!plan || !(PLAN_IDS as readonly string[]).includes(plan)) {
+      res.status(400).json({ error: "plano invalido (use realce, prime ou prestige)" });
+      return;
+    }
+
+    const now = new Date();
+    let planExpiresAt: Date | null = null;
+    if (days !== null && days !== undefined && Number(days) !== 0) {
+      const n = Math.round(Number(days));
+      if (!Number.isFinite(n) || n < 1 || n > 3650) {
+        res.status(400).json({ error: "days invalido (1 a 3650, ou 0 para sem prazo)" });
+        return;
+      }
+      planExpiresAt = new Date(now.getTime() + n * 86_400_000);
+    }
+
+    const clinic = await prisma.clinic.update({
+      where: { id: req.params.id },
+      data: { plan, planActivatedAt: now, planExpiresAt, planExpiryNotified: false },
+    });
+
+    await logActivity({
+      clinicId: clinic.id,
+      type: "plan_updated",
+      area: "clinica",
+      title: `Plano definido: ${PLAN_LABEL[plan]}`,
+      description: planExpiresAt
+        ? `Vigência até ${planExpiresAt.toLocaleDateString("pt-BR")}.`
+        : "Sem prazo definido.",
+      actorName: req.staff?.name ?? null,
+    });
+
+    res.json(clinic);
   })
 );
 
