@@ -2659,6 +2659,71 @@ function currentBusinessType() {
   return c?.businessType === "geral" ? "loja" : "clinica";
 }
 
+// Troca de vocabulário clínica -> loja aplicada em todo o texto do painel no
+// modo loja (nomes de campo, dicas, títulos). Ordem importa: específico antes
+// do geral. Só noun-swap; frases que não fazem sentido pra loja são tratadas
+// com pares .biz-clinica-only / .biz-loja-only no HTML.
+const LOJA_RE = [
+  [/d[úu]vida cl[íi]nica/gi, "dúvida técnica"],
+  [/P[óo]s-procedimentos?/g, "Pós-venda"],
+  [/p[óo]s-procedimentos?/g, "pós-venda"],
+  [/p[óo]s-atendimento/g, "pós-venda"],
+  [/Cl[íi]nica toda/g, "Loja toda"],
+  [/consultas? futuras?/gi, "compra futura"],
+  [/\bcl[íi]nicas\b/g, "lojas"],
+  [/\bCl[íi]nicas\b/g, "Lojas"],
+  [/\bcl[íi]nica\b/g, "loja"],
+  [/\bCl[íi]nica\b/g, "Loja"],
+  [/\bprocedimentos\b/g, "produtos"],
+  [/\bProcedimentos\b/g, "Produtos"],
+  [/\bprocedimento\b/g, "produto"],
+  [/\bProcedimento\b/g, "Produto"],
+  [/\bpacientes\b/g, "clientes"],
+  [/\bPacientes\b/g, "Clientes"],
+  [/\bpaciente\b/g, "cliente"],
+  [/\bPaciente\b/g, "Cliente"],
+  [/\bprofissionais\b/g, "atendentes"],
+  [/\bProfissionais\b/g, "Atendentes"],
+  [/\bprofissional\b/g, "atendente"],
+  [/\bProfissional\b/g, "Atendente"],
+  [/\bno-show\b/gi, "falta"],
+  [/\bagendamentos\b/g, "atendimentos"],
+  [/\bAgendamentos\b/g, "Atendimentos"],
+  [/\bagendamento\b/g, "atendimento"],
+  [/\bAgendamento\b/g, "Atendimento"],
+];
+function lojaify(s) {
+  let out = s;
+  for (const [re, rep] of LOJA_RE) out = out.replace(re, rep);
+  return out;
+}
+
+// Sub-árvores que NÃO devem ser varridas (nomes reais, seletor de clínica,
+// explicação dos próprios modos, rótulos já tratados por data-biz-label).
+const BIZ_SWEEP_SKIP = "#sub-clinics, #clinic-select, #settings-tabs, .sidebar, #as-business-hint, #as-business-type, [data-biz-label], #dash-br-map, #dash-map-rank, .mobile-topbar";
+
+function sweepBizText(mode) {
+  const root = document.getElementById("app-root");
+  if (!root) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(n) {
+      if (!n.nodeValue || !n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+      const p = n.parentElement;
+      if (!p || p.closest("script, style, " + BIZ_SWEEP_SKIP)) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (n.__bizOrig === undefined) n.__bizOrig = n.nodeValue;
+    n.nodeValue = mode === "loja" ? lojaify(n.__bizOrig) : n.__bizOrig;
+  }
+  root.querySelectorAll("input[placeholder], textarea[placeholder]").forEach((el) => {
+    if (el.closest(BIZ_SWEEP_SKIP)) return;
+    if (el.__bizOrigPh === undefined) el.__bizOrigPh = el.getAttribute("placeholder") || "";
+    el.setAttribute("placeholder", mode === "loja" ? lojaify(el.__bizOrigPh) : el.__bizOrigPh);
+  });
+}
+
 function applyBizMode() {
   const mode = currentBusinessType();
   const changed = state._bizMode !== undefined && state._bizMode !== mode;
@@ -2672,6 +2737,8 @@ function applyBizMode() {
     RULE_CATEGORY_LABELS = {};
   }
 
+  sweepBizText(mode);
+
   // Troca os rótulos marcados com data-biz-label="rótulo clínica|rótulo loja".
   // Só o primeiro nó de texto é trocado (preserva <input>/<svg> filhos).
   document.querySelectorAll("[data-biz-label]").forEach((elm) => {
@@ -2681,17 +2748,17 @@ function applyBizMode() {
     else elm.textContent = text;
   });
 
-  // Barra superior (mobile) reflete o rótulo atual
-  const activeNav = document.querySelector(".nav-item.active");
-  const title = document.getElementById("mobile-topbar-title");
-  if (activeNav && title) title.textContent = activeNav.textContent.trim();
-
   // Se caiu numa área que não existe no modo loja, volta pro seguro
   if (mode === "loja") {
-    if (activeNav?.dataset.tab === "agenda") goToTab("dashboard");
+    if (document.querySelector(".nav-item.active")?.dataset.tab === "agenda") goToTab("dashboard");
     const activeSub = document.querySelector("#settings-tabs button.active");
     if (activeSub && activeSub.classList.contains("biz-clinica-only")) openSettingsSub("clinic-data");
   }
+
+  // Barra superior (mobile) reflete o rótulo atual (depois de todas as trocas)
+  const activeNav = document.querySelector(".nav-item.active");
+  const title = document.getElementById("mobile-topbar-title");
+  if (activeNav && title) title.textContent = activeNav.textContent.trim();
 }
 
 async function loadDashboard() {
@@ -4591,6 +4658,9 @@ const SETTINGS_SUB_LOADERS = {
 function openSettingsSub(sub) {
   // Abas so da administracao da Alice - cliente cai em "Dados da clinica".
   if ((sub === "briefing" || sub === "clinics") && state.staff?.role !== "admin") sub = "clinic-data";
+  // No modo loja, abas de clinica nao existem - cai em "Dados da loja".
+  const tabBtn = document.querySelector(`#settings-tabs button[data-sub="${sub}"]`);
+  if (document.body.dataset.biz === "loja" && tabBtn?.classList.contains("biz-clinica-only")) sub = "clinic-data";
   document.querySelectorAll("#settings-tabs button").forEach((b) => b.classList.toggle("active", b.dataset.sub === sub));
   document.querySelectorAll(".settings-subpanel").forEach((p) => p.classList.remove("active"));
   document.getElementById(`sub-${sub}`).classList.add("active");
@@ -4756,7 +4826,8 @@ function showTourStep(i, dir = 1) {
 
   const render = () => {
     const target = document.querySelector(step.target);
-    if (!target) {
+    // Alvo ausente OU escondido (ex: passo de clínica no modo loja) -> pula.
+    if (!target || !target.getClientRects().length) {
       const next = i + (dir < 0 ? -1 : 1);
       if (next >= 0 && next < TOUR_STEPS.length) showTourStep(next, dir);
       else endTour();
@@ -4764,9 +4835,10 @@ function showTourStep(i, dir = 1) {
     }
     target.scrollIntoView({ block: "center" });
 
+    const isLoja = document.body.dataset.biz === "loja";
     document.getElementById("tour-step-label").textContent = `${step.section} · Passo ${i + 1}/${TOUR_STEPS.length}`;
-    document.getElementById("tour-title").textContent = step.title;
-    document.getElementById("tour-desc").textContent = step.desc;
+    document.getElementById("tour-title").textContent = isLoja ? lojaify(step.title) : step.title;
+    document.getElementById("tour-desc").textContent = isLoja ? lojaify(step.desc) : step.desc;
     document.getElementById("tour-prev").style.visibility = i === 0 ? "hidden" : "visible";
     document.getElementById("tour-next").textContent = i === TOUR_STEPS.length - 1 ? "Concluir" : "Próximo";
     const bar = document.getElementById("tour-progress-bar");

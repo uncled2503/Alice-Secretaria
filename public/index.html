@@ -491,8 +491,8 @@
           <button data-sub="channels">Canais</button>
           <button data-sub="broadcasts">Mensagens Programadas</button>
           <button data-sub="appt-reminder" class="biz-clinica-only">Lembrete de Consulta</button>
-          <button data-sub="post-procedure" data-biz-label="Pós-procedimento|Pós-venda">Pós-procedimento</button>
-          <button data-sub="renewal" data-biz-label="Renovação|Recompra">Renovação</button>
+          <button data-sub="post-procedure" class="biz-clinica-only">Pós-procedimento</button>
+          <button data-sub="renewal" class="biz-clinica-only">Renovação</button>
           <button data-sub="birthday">Aniversário</button>
           <button data-sub="followup">Recontato</button>
           <button data-sub="funnel">Funil</button>
@@ -653,7 +653,7 @@
           </div>
         </div>
 
-        <div id="sub-procedures" class="settings-subpanel">
+        <div id="sub-procedures" class="settings-subpanel biz-clinica-only">
           <div class="list-toolbar">
             <div class="list-count">Serviços (<span id="procedures-count">0</span>)</div>
             <div class="list-toolbar-actions">
@@ -670,7 +670,7 @@
           </div>
         </div>
 
-        <div id="sub-staff" class="settings-subpanel">
+        <div id="sub-staff" class="settings-subpanel biz-clinica-only">
           <div class="list-toolbar">
             <div class="list-count">Profissionais (<span id="professionals-count">0</span>)</div>
             <div class="list-toolbar-actions">
@@ -758,7 +758,7 @@
           </div>
         </div>
 
-        <div id="sub-appt-reminder" class="settings-subpanel">
+        <div id="sub-appt-reminder" class="settings-subpanel biz-clinica-only">
           <div class="list-toolbar">
             <div>
               <div class="list-count">Lembrete de Consulta (<span id="reminder-rules-count">0</span>)</div>
@@ -778,7 +778,7 @@
           </div>
         </div>
 
-        <div id="sub-post-procedure" class="settings-subpanel">
+        <div id="sub-post-procedure" class="settings-subpanel biz-clinica-only">
           <div class="list-toolbar">
             <div>
               <div class="list-count">Pós-procedimento (<span id="pp-rules-count">0</span>)</div>
@@ -798,11 +798,12 @@
           </div>
         </div>
 
-        <div id="sub-renewal" class="settings-subpanel">
+        <div id="sub-renewal" class="settings-subpanel biz-clinica-only">
           <div class="list-toolbar">
             <div>
-              <div class="list-count">Renovação (<span id="renewal-rules-count">0</span>)</div>
-              <p class="hint" style="margin:0.2rem 0 0">Retome o contato meses ou anos depois para renovar procedimentos e tratamentos.</p>
+              <div class="list-count"><span data-biz-label="Renovação|Recompra">Renovação</span> (<span id="renewal-rules-count">0</span>)</div>
+              <p class="hint biz-clinica-only" style="margin:0.2rem 0 0">Retome o contato meses ou anos depois para renovar procedimentos e tratamentos.</p>
+              <p class="hint biz-loja-only" style="margin:0.2rem 0 0">Retome o contato semanas ou meses depois da compra para trazer o cliente de volta (reposição, nova coleção, tamanho seguinte).</p>
             </div>
             <div class="list-toolbar-actions">
               <input id="renewal-rules-search" type="text" placeholder="Buscar renovação" />
@@ -886,7 +887,7 @@
           </div>
         </div>
 
-        <div id="sub-blocks" class="settings-subpanel">
+        <div id="sub-blocks" class="settings-subpanel biz-clinica-only">
           <p class="hint" style="margin-top:0">Bloqueie feriados, folgas, almoço ou manutenção de equipamento. A Alice não oferece nem aceita agendamento nesses períodos.</p>
           <form id="block-form" class="broadcast-form card">
             <div class="broadcast-form-row">
@@ -914,7 +915,7 @@
           </div>
         </div>
 
-        <div id="sub-waitlist" class="settings-subpanel">
+        <div id="sub-waitlist" class="settings-subpanel biz-clinica-only">
           <p class="hint" style="margin-top:0">Pacientes que quiseram um horário lotado. Quando abre uma vaga por cancelamento, a Alice avisa automaticamente o primeiro da fila compatível.</p>
           <div class="card">
             <table>
@@ -1059,7 +1060,7 @@
                   <input id="as-business-label" type="text" placeholder="Ex: loja de roupas para bebês e crianças" />
                 </label>
               </div>
-              <p class="hint" style="margin-top:0" id="as-business-hint" hidden>No modo Loja / serviço a Alice usa "cliente" no lugar de "paciente", não fala de agenda e responde só pelo catálogo, FAQ e regras cadastradas. As opções abaixo (tipo de clínica, estilo, avaliação) só valem no modo Clínica.</p>
+              <p class="hint" style="margin-top:0" id="as-business-hint" hidden>No modo Loja o painel inteiro usa o vocabulário de comércio (cliente, produto, pós-venda), esconde a agenda e as opções abaixo. A Alice responde só pelo catálogo, FAQ e regras cadastradas.</p>
               <div class="broadcast-form-row" id="as-clinic-profile-row">
                 <label style="flex:1">Tipo de clínica
                   <select id="as-kind">
@@ -1077,10 +1078,10 @@
               </div>
               <label class="checkbox-row" id="as-eval-first-row"><input type="checkbox" id="as-eval-first" /> O paciente não precisa saber o procedimento — a Alice sempre oferece avaliação</label>
               <label class="checkbox-row"><input type="checkbox" id="as-emojis" checked /> A Alice pode usar emojis</label>
-              <label>Link de auto-agendamento (opcional)
+              <label class="biz-clinica-only">Link de auto-agendamento (opcional)
                 <input id="as-scheduling-link" type="url" placeholder="https://agendamento.suaclinica.com.br" />
               </label>
-              <p class="hint" style="margin-top:0">Se preenchido, quando o paciente quiser marcar a Alice envia esse link em vez de marcar direto. Mudar o tipo ou o estilo reajusta as regras recomendadas.</p>
+              <p class="hint biz-clinica-only" style="margin-top:0">Se preenchido, quando o paciente quiser marcar a Alice envia esse link em vez de marcar direto. Mudar o tipo ou o estilo reajusta as regras recomendadas.</p>
 
               <div class="section-header" style="margin-top:1rem">Como a Alice envia mensagens</div>
               <label class="checkbox-row"><input type="checkbox" id="as-split" checked /> Dividir respostas longas em várias bolhas</label>
@@ -1383,17 +1384,17 @@
               <option value="all">Todos os contatos</option>
               <option value="stage">Uma etapa do funil</option>
               <option value="contacts">Contatos específicos</option>
-              <option value="reactivation">Reativação de base (quem não volta há um tempo)</option>
+              <option value="reactivation" class="biz-clinica-only">Reativação de base (quem não volta há um tempo)</option>
             </select>
           </label>
           <label id="bc-stage-wrap" style="display:none">Etapa do funil
             <select id="bc-target-stage"></select>
           </label>
           <div id="bc-react-wrap" style="display:none">
-            <label>Procedimentos (vazio = qualquer)
+            <label><span data-biz-label="Procedimentos|Produtos ou serviços">Procedimentos</span> (vazio = qualquer)
               <div id="bc-react-procedures" class="procedures-checklist" style="max-height:150px"></div>
             </label>
-            <label>Sem voltar há pelo menos
+            <label><span data-biz-label="Sem voltar há pelo menos|Sem comprar há pelo menos">Sem voltar há pelo menos</span>
               <select id="bc-react-months">
                 <option value="3">3 meses</option>
                 <option value="6" selected>6 meses</option>
@@ -1403,7 +1404,8 @@
                 <option value="24">24 meses</option>
               </select>
             </label>
-            <p class="hint" style="margin-top:0">Pega quem fez o procedimento (concluído) há mais tempo que isso e não tem consulta futura marcada. Quando responder, a Alice continua a conversa e agenda.</p>
+            <p class="hint biz-clinica-only" style="margin-top:0">Pega quem fez o procedimento (concluído) há mais tempo que isso e não tem consulta futura marcada. Quando responder, a Alice continua a conversa e agenda.</p>
+            <p class="hint biz-loja-only" style="margin-top:0">Pega quem comprou há mais tempo que isso e não voltou. Quando responder, a Alice continua a conversa normalmente.</p>
           </div>
           <div id="bc-contacts-wrap" style="display:none">
             <input id="bc-contacts-search" type="text" placeholder="Buscar contato por nome ou telefone..." />
@@ -1641,7 +1643,7 @@
           <label class="checkbox-row"><input type="radio" name="fu-repeat" value="every_silence" checked /> Repetir a cada novo silêncio</label>
           <label class="checkbox-row"><input type="radio" name="fu-repeat" value="once" /> Enviar só uma vez por conversa</label>
 
-          <label class="checkbox-row"><input type="checkbox" id="fu-skip-appt" checked /> Não enviar se já houver agendamento futuro</label>
+          <label class="checkbox-row biz-clinica-only"><input type="checkbox" id="fu-skip-appt" checked /> Não enviar se já houver agendamento futuro</label>
 
           <div class="modal-form-row">
             <label>Início da janela de envio
