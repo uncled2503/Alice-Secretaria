@@ -502,7 +502,7 @@ function personaInstruction(clinic: { name: string; assistantName: string; assis
   return `Voce se apresenta apenas como parte da equipe da ${clinic.name}, sem citar cargo. Ex: "Oi! Aqui e a ${a}, da equipe da ${clinic.name}".`;
 }
 
-async function buildSystemPrompt(clinicId: string): Promise<string> {
+export async function buildSystemPrompt(clinicId: string): Promise<string> {
   const clinic = await prisma.clinic.findUniqueOrThrow({
     where: { id: clinicId },
     include: {
