@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { fileURLToPath } from "url";
 import { prisma } from "../db/client.js";
 import { hashPassword } from "../api/passwords.js";
 import { seedDefaultRules } from "../ai/rules.js";
@@ -313,7 +314,20 @@ const RULES: { category: string; instruction: string }[] = [
   { category: "agendamento", instruction: "A Laleblu não trabalha com agendamento nem hora marcada. Se perguntarem, informe os horários das lojas físicas e que é só chegar." },
 ];
 
-async function main(): Promise<void> {
+export interface SeedLalebluResult {
+  clinicId: string;
+  login: string;
+  password: string;
+  created: boolean;
+  faqs: number;
+  templates: number;
+  playbooks: number;
+  rules: number;
+}
+
+// Idempotente. Chamado pelo CLI (npm run seed:laleblu) e pela rota admin
+// POST /clinics/seed-laleblu. NAO fecha a conexao do Prisma (quem chama decide).
+export async function seedLaleblu(): Promise<SeedLalebluResult> {
   // 1. Conta/tenant Laleblu (chaveada pelo WhatsApp de atendimento)
   const clinic = await prisma.clinic.upsert({
     where: { whatsappPhone: WA },
@@ -357,6 +371,7 @@ async function main(): Promise<void> {
   // 2. Conta de acesso ao painel
   const passwordHash = hashPassword(PASSWORD);
   const existingUser = await prisma.staffUser.findUnique({ where: { username: LOGIN } });
+  const created = !existingUser;
   if (existingUser) {
     await prisma.staffUser.update({
       where: { username: LOGIN },
@@ -410,13 +425,26 @@ async function main(): Promise<void> {
     data: RULES.map((r) => ({ clinicId: clinic.id, category: r.category, rawInput: "seed:laleblu", instruction: r.instruction, clarifyingQuestion: null, status: "active" })),
   });
   console.log(`Regras: ${seeded} padrão (varejo) + ${RULES.length} da Laleblu`);
-
   console.log("\nPronto. Login: " + LOGIN + " · Senha: " + PASSWORD);
+
+  return {
+    clinicId: clinic.id,
+    login: LOGIN,
+    password: PASSWORD,
+    created,
+    faqs: FAQS.length,
+    templates: TEMPLATES.length,
+    playbooks: PLAYBOOKS.length,
+    rules: seeded + RULES.length,
+  };
 }
 
-main()
-  .catch((err) => {
-    console.error(err);
-    process.exitCode = 1;
-  })
-  .finally(() => prisma.$disconnect());
+// Entrypoint de linha de comando (npm run seed:laleblu).
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  seedLaleblu()
+    .catch((err) => {
+      console.error(err);
+      process.exitCode = 1;
+    })
+    .finally(() => prisma.$disconnect());
+}

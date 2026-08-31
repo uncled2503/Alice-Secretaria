@@ -24,6 +24,7 @@ import { createRuleDraft, RULE_CATEGORIES, seedDefaultRules, reseedRulesForProfi
 import { BRIEFING_TEMPLATE, parseBriefing, applyBriefing, BriefingPlanSchema } from "../ai/briefing.js";
 import { API_SCOPES, API_SCOPE_IDS, generateApiKey } from "./external/keys.js";
 import { answerSiteQuestion, type SiteMessage } from "../ai/siteAssistant.js";
+import { seedLaleblu } from "../maintenance/seedLaleblu.js";
 import { notifyStaff } from "../crm/notify.js";
 import { hashPassword, verifyPassword } from "./passwords.js";
 import { createSessionCookie, clearSessionCookie } from "./staffSession.js";
@@ -500,6 +501,26 @@ apiRouter.put(
     });
 
     res.json(clinic);
+  })
+);
+
+// Cria/atualiza a conta da Laleblu (loja infantil, negocio generico) e treina
+// a Alice a partir do documento de respostas automaticas dela. Idempotente -
+// pode chamar de novo pra reaplicar o treino. So admin.
+apiRouter.post(
+  "/clinics/seed-laleblu",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const result = await seedLaleblu();
+    await logActivity({
+      clinicId: result.clinicId,
+      type: "briefing_applied",
+      area: "clinica",
+      title: result.created ? "Conta Laleblu criada" : "Treino da Laleblu reaplicado",
+      description: `${result.faqs} FAQ, ${result.templates} mensagens prontas, ${result.playbooks} roteiros, ${result.rules} regras.`,
+      actorName: req.staff?.name ?? null,
+    });
+    res.json(result);
   })
 );
 
