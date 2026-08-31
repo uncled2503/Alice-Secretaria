@@ -89,6 +89,15 @@ Personalizar Alice > Profissionais > "Adicionar Profissional": nome, bio, Instag
 - "Agenda do profissional": inicio/fim do expediente e dias de atendimento proprios. Em branco = herda o da clinica.
 - A checagem de conflito de horario e por profissional: com profissionais cadastrados e vinculados aos procedimentos, dois atendem em paralelo. A Alice pergunta a preferencia do paciente quando ha mais de um.
 
+=== RELATORIOS ===
+Aba Relatorios (menu Operacao): funil do periodo (leads > agendaram > compareceram), taxa de no-show, conversao, faturamento realizado e o que esta agendado pra frente, ranking por procedimento e por profissional, origem dos agendamentos, quantos pacientes a Alice recuperou pelo recontato, e o NPS. Escolha o periodo no topo (7 dias a 12 meses).
+
+=== REATIVACAO DE BASE ===
+Personalizar Alice > Mensagens Programadas > Nova mensagem > destino "Reativacao de base". Escolha os procedimentos e "sem voltar ha pelo menos X meses". Pega quem fez aquilo e nao tem consulta futura, manda a mensagem e a Alice continua a conversa quando o paciente responde. Otimo pra trazer paciente antigo de volta.
+
+=== PESQUISA DE SATISFACAO / AVALIACAO NO GOOGLE ===
+Personalizar Alice > Ajustes da Alice > "Pesquisa de satisfacao". Ligue, defina quantas horas depois do atendimento concluido a Alice pergunta a nota (0 a 10), a nota minima pra pedir avaliacao e o link de avaliacao no Google. Nota alta: a Alice agradece e manda o link. Nota baixa: vira aviso pra equipe. Os resultados aparecem em Relatorios.
+
 === AGENDA ===
 Aba Agenda:
 - Hoje / Semana / Mes muda a visao. "Hoje" e "Semana" mostram a grade por horario; "Mes" mostra a lista.
