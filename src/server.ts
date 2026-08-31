@@ -226,6 +226,17 @@ app.use((err: unknown, _req: express.Request, res: express.Response, _next: expr
   res.status(500).json({ error: "Erro interno" });
 });
 
+// Avisa cedo se algo essencial de producao esta faltando - sem isso o admin
+// so descobre quando tenta conectar um WhatsApp e leva um erro sem contexto.
+for (const [name, hint] of [
+  ["PUBLIC_BASE_URL", "endereco HTTPS publico da Alice (usado no webhook e na doc da API)"],
+  ["UAZAPI_WEBHOOK_SECRET", "segredo do webhook da UAZAPI (min. 32 caracteres)"],
+  ["OPENAI_API_KEY", "chave da OpenAI - a Alice nao responde pacientes sem ela"],
+] as const) {
+  if (!process.env[name]?.trim()) console.warn(`[config] ${name} nao configurada: ${hint}`);
+}
+if (process.env.NODE_ENV !== "production") console.warn("[config] NODE_ENV != production - cookies sem Secure, cache do site desligado");
+
 const port = Number(process.env.PORT ?? 3000);
 app.listen(port, () => {
   console.log(`Alice rodando na porta ${port}`);
