@@ -14,6 +14,8 @@ import { getFunnelStages } from "../crm/stages.js";
 import { movePatientToKind, movePatientToStage, movePatientToRecovery } from "../crm/stageAutomation.js";
 import { notifyStaff } from "../crm/notify.js";
 import { logActivity } from "../crm/activity.js";
+import { enqueueLead, enqueueSchedule } from "../meta/events.js";
+import { ctwaClidToFbc } from "../meta/userData.js";
 import type { Procedure } from "@prisma/client";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -328,6 +330,7 @@ async function runTool(
 
     await prisma.conversation.updateMany({ where: { patientId }, data: { status: "scheduled" } });
     await movePatientToKind(clinicId, patientId, "avaliacao_agendada", { note: "agendou pela Alice" });
+    void enqueueSchedule(clinicId, booking.appointmentId).catch((err) => console.error("[meta] enqueueSchedule:", err));
 
     const patient = await prisma.patient.findUnique({ where: { id: patientId } });
     const whenLabel = formatDateTimeInZone(booking.scheduledAt, tz);
@@ -723,23 +726,56 @@ Use so os dados de valor, beneficio, indicacao e prazo que estao cadastrados aci
 Responda sempre em portugues do Brasil, em mensagens curtas como quem digita no WhatsApp.${await getActiveRulesPrompt(clinicId)}`;
 }
 
+export interface IncomingReferral {
+  ctwaClid?: string;
+  sourceUrl?: string;
+  adCampaignName?: string;
+  adsetName?: string;
+  adName?: string;
+}
+
 export async function handleIncomingMessage(params: {
   clinicId: string;
   patientPhone: string;
   patientName?: string;
   text: string;
   imageDataUrl?: string; // foto enviada pelo cliente (o modelo "ve" a imagem nesta rodada)
+  referral?: IncomingReferral; // atribuicao de Click-to-WhatsApp (so no 1o contato)
 }): Promise<string> {
-  const { clinicId, patientPhone, patientName, text, imageDataUrl } = params;
+  const { clinicId, patientPhone, patientName, text, imageDataUrl, referral } = params;
   const trimmed = text.trim();
   const storedContent = trimmed || (imageDataUrl ? "[imagem]" : "");
   if (!storedContent) return "";
 
-  const patient = await prisma.patient.upsert({
+  // Detecta lead novo (pra disparar o evento Lead uma vez so) e guarda a
+  // atribuicao de campanha no primeiro contato.
+  const existing = await prisma.patient.findUnique({
     where: { clinicId_phone: { clinicId, phone: patientPhone } },
-    update: { name: patientName },
-    create: { clinicId, phone: patientPhone, name: patientName },
+    select: { id: true, metaFbc: true },
   });
+  const attribution =
+    referral && (!existing || !existing.metaFbc)
+      ? {
+          ...(referral.ctwaClid ? { metaFbc: ctwaClidToFbc(referral.ctwaClid), metaFbclid: referral.ctwaClid } : {}),
+          ...(referral.sourceUrl ? { sourceUrl: referral.sourceUrl } : {}),
+          ...(referral.adCampaignName ? { adCampaignName: referral.adCampaignName } : {}),
+          ...(referral.adsetName ? { adsetName: referral.adsetName } : {}),
+          ...(referral.adName ? { adName: referral.adName } : {}),
+        }
+      : {};
+
+  const patient = existing
+    ? await prisma.patient.update({
+        where: { id: existing.id },
+        data: { name: patientName, ...attribution },
+      })
+    : await prisma.patient.create({
+        data: { clinicId, phone: patientPhone, name: patientName, ...attribution },
+      });
+
+  if (!existing) {
+    void enqueueLead(clinicId, patient.id).catch((err) => console.error("[meta] enqueueLead:", err));
+  }
 
   let conversation = await prisma.conversation.findFirst({
     where: { patientId: patient.id, status: { in: ["active", "qualified"] } },

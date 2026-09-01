@@ -21,6 +21,10 @@ import { patientDossier } from "../crm/dossier.js";
 import { buildReport } from "../crm/reports.js";
 import { logActivity, ACTIVITY_AREAS, ACTIVITY_TYPES } from "../crm/activity.js";
 import { leadsByState } from "../crm/geo.js";
+import { encryptSecret, decryptSecret, maskToken, encryptionAvailable } from "../meta/secretBox.js";
+import { testCapiConnection } from "../meta/capi.js";
+import { enqueueTestLead, enqueueSchedule, META_MAX_ATTEMPTS } from "../meta/events.js";
+import { retryMetaEvent } from "../meta/worker.js";
 import { createRuleDraft, RULE_CATEGORIES, seedDefaultRules, reseedRulesForProfile } from "../ai/rules.js";
 import { BRIEFING_TEMPLATE, parseBriefing, applyBriefing, BriefingPlanSchema } from "../ai/briefing.js";
 import { API_SCOPES, API_SCOPE_IDS, generateApiKey } from "./external/keys.js";
@@ -1645,6 +1649,7 @@ apiRouter.post(
       description: `${patient.name ?? patient.phone} — ${appointment.procedure.name} em ${appointment.scheduledAt.toLocaleString("pt-BR", { timeZone: clinic.timezone || "America/Sao_Paulo" })}.`,
       actorName: req.staff?.name ?? null,
     });
+    void enqueueSchedule(clinic.id, appointment.id).catch((err: unknown) => console.error("[meta] enqueueSchedule:", err));
     res.json(appointment);
   })
 );
@@ -2511,6 +2516,255 @@ apiRouter.post(
     }
     const summary = await applyBriefing(clinic.id, parsed.data, req.staff?.name ?? null);
     res.json(summary);
+  })
+);
+
+// ======================= INTEGRACAO COM A META (Pixel + API de Conversoes) ===
+// Config por clinica. So administracao da Alice. O token nunca volta pro
+// navegador - so o tokenHint mascarado.
+const metaTestRateLimit = rateLimit({
+  windowMs: 60_000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Muitos testes em pouco tempo. Aguarde um minuto." },
+});
+const META_GRAPH_VERSIONS = ["v21.0", "v20.0", "v19.0", "v18.0"];
+
+async function metaConfigForClinic(clinicId: string) {
+  return prisma.metaConfig.findUnique({ where: { clinicId } });
+}
+
+// GET: config atual, com token mascarado e nunca o valor real.
+apiRouter.get(
+  "/meta/config",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await getClinic(req);
+    const cfg = await metaConfigForClinic(clinic.id);
+    const stages = await getFunnelStages(clinic.id);
+    res.json({
+      config: cfg
+        ? {
+            name: cfg.name,
+            pixelId: cfg.pixelId,
+            tokenHint: cfg.tokenHint,
+            hasToken: !!cfg.accessTokenEnc,
+            graphVersion: cfg.graphVersion,
+            siteUrl: cfg.siteUrl,
+            testEventCode: cfg.testEventCode,
+            pixelEnabled: cfg.pixelEnabled,
+            capiEnabled: cfg.capiEnabled,
+            stageQualified: cfg.stageQualified,
+            stageDisqualified: cfg.stageDisqualified,
+            stageWon: cfg.stageWon,
+            stageLost: cfg.stageLost,
+            stagesIgnored: cfg.stagesIgnored ? cfg.stagesIgnored.split(",").filter(Boolean) : [],
+            lastTestAt: cfg.lastTestAt,
+            lastTestResult: cfg.lastTestResult,
+          }
+        : null,
+      stages: stages.map((s) => ({ stageId: s.stageId, label: s.label, kind: s.kind })),
+      graphVersions: META_GRAPH_VERSIONS,
+      encryptionReady: encryptionAvailable(),
+    });
+  })
+);
+
+apiRouter.put(
+  "/meta/config",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await getClinic(req);
+    const b = req.body as {
+      name?: string;
+      pixelId?: string | null;
+      accessToken?: string | null; // texto puro; vazio = manter
+      graphVersion?: string;
+      siteUrl?: string | null;
+      testEventCode?: string | null;
+      pixelEnabled?: boolean;
+      capiEnabled?: boolean;
+      stageQualified?: string | null;
+      stageDisqualified?: string | null;
+      stageWon?: string | null;
+      stageLost?: string | null;
+      stagesIgnored?: string[];
+    };
+
+    if (b.graphVersion !== undefined && !META_GRAPH_VERSIONS.includes(b.graphVersion)) {
+      res.status(400).json({ error: "Versao da Graph API invalida" });
+      return;
+    }
+
+    const data: Record<string, unknown> = {};
+    if (b.name !== undefined) data.name = String(b.name).slice(0, 120);
+    if (b.pixelId !== undefined) data.pixelId = b.pixelId?.trim().replace(/\D/g, "") || null;
+    if (b.graphVersion !== undefined) data.graphVersion = b.graphVersion;
+    if (b.siteUrl !== undefined) data.siteUrl = b.siteUrl?.trim() || null;
+    if (b.testEventCode !== undefined) data.testEventCode = b.testEventCode?.trim() || null;
+    if (b.pixelEnabled !== undefined) data.pixelEnabled = !!b.pixelEnabled;
+    if (b.capiEnabled !== undefined) data.capiEnabled = !!b.capiEnabled;
+    if (b.stageQualified !== undefined) data.stageQualified = b.stageQualified || null;
+    if (b.stageDisqualified !== undefined) data.stageDisqualified = b.stageDisqualified || null;
+    if (b.stageWon !== undefined) data.stageWon = b.stageWon || null;
+    if (b.stageLost !== undefined) data.stageLost = b.stageLost || null;
+    if (b.stagesIgnored !== undefined) data.stagesIgnored = (b.stagesIgnored || []).filter(Boolean).join(",");
+
+    if (b.accessToken && b.accessToken.trim()) {
+      if (!encryptionAvailable()) {
+        res.status(400).json({ error: "META_ENCRYPTION_KEY nao configurada no servidor - nao da pra guardar o token com seguranca." });
+        return;
+      }
+      const token = b.accessToken.trim();
+      data.accessTokenEnc = encryptSecret(token);
+      data.tokenHint = maskToken(token);
+    }
+
+    // capiEnabled so pode ficar ligado com pixel + token
+    const existing = await metaConfigForClinic(clinic.id);
+    const willHaveToken = data.accessTokenEnc ?? existing?.accessTokenEnc;
+    const willHavePixel = data.pixelId ?? existing?.pixelId;
+    if (data.capiEnabled === true && (!willHaveToken || !willHavePixel)) {
+      res.status(400).json({ error: "Preencha o ID do Pixel e o token antes de ligar a API de Conversoes." });
+      return;
+    }
+
+    const cfg = await prisma.metaConfig.upsert({
+      where: { clinicId: clinic.id },
+      update: data,
+      create: { clinicId: clinic.id, ...data },
+    });
+    await logActivity({
+      clinicId: clinic.id,
+      type: "clinic_updated",
+      area: "clinica",
+      title: "Integracao com a Meta atualizada",
+      description: `CAPI ${cfg.capiEnabled ? "ligada" : "desligada"}${cfg.pixelId ? ` · pixel ${cfg.pixelId}` : ""}.`,
+      actorName: req.staff?.name ?? null,
+    });
+    res.json({ ok: true, tokenHint: cfg.tokenHint, capiEnabled: cfg.capiEnabled });
+  })
+);
+
+apiRouter.post(
+  "/meta/test-connection",
+  metaTestRateLimit,
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await getClinic(req);
+    const cfg = await metaConfigForClinic(clinic.id);
+    if (!cfg) {
+      res.status(400).json({ error: "Configure a Meta primeiro." });
+      return;
+    }
+    const result = await testCapiConnection(cfg);
+    await prisma.metaConfig.update({
+      where: { clinicId: clinic.id },
+      data: { lastTestAt: new Date(), lastTestResult: result.ok ? "ok" : result.detail.slice(0, 300) },
+    });
+    res.json(result);
+  })
+);
+
+apiRouter.post(
+  "/meta/test-event",
+  metaTestRateLimit,
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await getClinic(req);
+    const result = await enqueueTestLead(clinic.id);
+    res.json(result);
+  })
+);
+
+apiRouter.get(
+  "/meta/diagnostics",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await getClinic(req);
+    const cfg = await metaConfigForClinic(clinic.id);
+    const since = new Date(Date.now() - 24 * 60 * 60_000);
+    const rows = await prisma.metaEvent.groupBy({
+      by: ["status"],
+      where: { clinicId: clinic.id, createdAt: { gte: since } },
+      _count: { _all: true },
+    });
+    const counts: Record<string, number> = {};
+    for (const r of rows) counts[r.status] = r._count._all;
+    res.json({
+      pixelId: cfg?.pixelId ?? null,
+      capiEnabled: !!cfg?.capiEnabled,
+      lastTestAt: cfg?.lastTestAt ?? null,
+      lastTestResult: cfg?.lastTestResult ?? null,
+      last24h: {
+        total: Object.values(counts).reduce((a, b) => a + b, 0),
+        processed: counts.processed ?? 0,
+        error: (counts.error ?? 0) + (counts.dead ?? 0),
+        pending: (counts.pending ?? 0) + (counts.processing ?? 0),
+      },
+      maxAttempts: META_MAX_ATTEMPTS,
+    });
+  })
+);
+
+apiRouter.get(
+  "/meta/events",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await getClinic(req);
+    const take = Math.min(Number(req.query.limit) || 30, 100);
+    const events = await prisma.metaEvent.findMany({
+      where: { clinicId: clinic.id },
+      orderBy: { createdAt: "desc" },
+      take,
+      select: {
+        id: true, eventId: true, eventName: true, source: true, leadId: true,
+        status: true, attempts: true, lastError: true, metaResponse: true,
+        testEventCode: true, createdAt: true, processedAt: true,
+      },
+    });
+    const leadIds = [...new Set(events.map((e) => e.leadId).filter((x): x is string => !!x))];
+    const leads = leadIds.length
+      ? await prisma.patient.findMany({ where: { id: { in: leadIds } }, select: { id: true, name: true, phone: true } })
+      : [];
+    const leadById = new Map(leads.map((l) => [l.id, l.name || l.phone]));
+    res.json(
+      events.map((e) => ({
+        ...e,
+        leadLabel: e.leadId ? leadById.get(e.leadId) ?? null : null,
+      })),
+    );
+  })
+);
+
+apiRouter.post(
+  "/meta/events/:id/retry",
+  metaTestRateLimit,
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await getClinic(req);
+    const ev = await prisma.metaEvent.findUnique({ where: { id: req.params.id }, select: { clinicId: true } });
+    if (!ev || ev.clinicId !== clinic.id) {
+      res.status(404).json({ error: "Evento nao encontrado" });
+      return;
+    }
+    const ok = await retryMetaEvent(req.params.id);
+    res.json({ ok });
+  })
+);
+
+apiRouter.post(
+  "/meta/events/retry-failed",
+  metaTestRateLimit,
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await getClinic(req);
+    const { count } = await prisma.metaEvent.updateMany({
+      where: { clinicId: clinic.id, status: { in: ["error", "dead"] } },
+      data: { status: "pending", nextAttemptAt: new Date(), attempts: 0, lastError: null },
+    });
+    res.json({ ok: true, requeued: count });
   })
 );
 

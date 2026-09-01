@@ -99,6 +99,63 @@ model Clinic {
   apiKeys        ApiKey[]
   satisfactionSurveys SatisfactionSurvey[]
   uazapiWebhookEvents UazapiWebhookEvent[]
+  metaConfig    MetaConfig?
+  metaEvents    MetaEvent[]
+}
+
+// Integracao com a Meta por clinica (Pixel + API de Conversoes). O token da
+// CAPI fica criptografado (AES-256-GCM) em accessTokenEnc e nunca volta pro
+// navegador; a UI so ve tokenHint mascarado.
+model MetaConfig {
+  id                String   @id @default(cuid())
+  clinicId          String   @unique
+  clinic            Clinic   @relation(fields: [clinicId], references: [id])
+  name              String   @default("")
+  pixelId           String?  // ID do Pixel / Dataset
+  accessTokenEnc    String?  // token da API de Conversoes, criptografado
+  tokenHint         String?  // ex "••••••••1234" pra mostrar na tela
+  graphVersion      String   @default("v21.0")
+  siteUrl           String?  // URL oficial do site (event_source_url de fallback)
+  testEventCode     String?  // codigo de "Eventos de teste" da Meta (temporario)
+  pixelEnabled      Boolean  @default(false)
+  capiEnabled       Boolean  @default(false) // chave mestra dos eventos do servidor
+
+  // Mapeamento das etapas do CRM -> pelo stageId (estavel se renomear a coluna)
+  stageQualified    String?
+  stageDisqualified String?
+  stageWon          String?
+  stageLost         String?
+  stagesIgnored     String   @default("") // stageIds separados por virgula que nao enviam evento
+
+  lastTestAt        DateTime?
+  lastTestResult    String?  // "ok" ou resumo do erro (sanitizado)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+// Fila de saida + auditoria dos eventos enviados pra Meta. (clinicId, eventId)
+// unico = garantia de deduplicacao/idempotencia.
+model MetaEvent {
+  id            String    @id @default(cuid())
+  clinicId      String
+  clinic        Clinic    @relation(fields: [clinicId], references: [id])
+  eventId       String    // id estavel de deduplicacao (ex "lead:<patientId>")
+  eventName     String    // Lead | Schedule | CRMStageChanged | DisqualifiedLead | QualifiedLead
+  source        String    @default("server") // server (nao ha pixel de navegador nesta versao)
+  leadId        String?   // Patient.id
+  payload       String    // JSON sanitizado do evento (user_data ja com hash, sem token, sem PII crua)
+  status        String    @default("pending") // pending | processing | processed | error | dead
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime?
+  lastError     String?
+  metaResponse  String?   // resposta da Meta, sanitizada (events_received, fbtrace_id, messages)
+  testEventCode String?
+  createdAt     DateTime  @default(now())
+  processedAt   DateTime?
+
+  @@unique([clinicId, eventId])
+  @@index([status, nextAttemptAt])
+  @@index([clinicId, createdAt])
 }
 
 // Fila duravel dos webhooks da UAZAPI. A rota confirma o recebimento rapido
@@ -299,6 +356,22 @@ model Patient {
   funnelStage   String    @default("novo_lead") // ver src/crm/stages.ts para a lista de etapas
   optedOut      Boolean   @default(false) // paciente pediu pra nao receber mensagens (LGPD) - trava automacoes
   optedOutAt    DateTime?
+
+  // Atribuicao de campanha Meta, capturada na criacao do lead (Click-to-WhatsApp).
+  // Fica vinculada ao lead pra eventos posteriores do CRM baterem com o anuncio.
+  metaFbc        String?
+  metaFbp        String?
+  metaFbclid     String?
+  utmSource      String?
+  utmMedium      String?
+  utmCampaign    String?
+  utmContent     String?
+  utmTerm        String?
+  adCampaignName String?
+  adsetName      String?
+  adName         String?
+  sourceUrl      String?
+
   createdAt     DateTime  @default(now())
 
   conversations Conversation[]

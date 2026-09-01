@@ -28,6 +28,15 @@ export interface IncomingUazapiMessage {
   mediaMessageId?: string; // audio/ptt a transcrever
   imageMessageId?: string; // foto a interpretar (visao)
   pushName?: string;
+  referral?: IncomingReferralData; // Click-to-WhatsApp (so no 1o contato)
+}
+
+export interface IncomingReferralData {
+  ctwaClid?: string;
+  sourceUrl?: string;
+  adCampaignName?: string;
+  adsetName?: string;
+  adName?: string;
 }
 
 const REQUEST_TIMEOUT_MS = 25_000;
@@ -381,6 +390,39 @@ function messageCandidates(body: JsonRecord): JsonRecord[] {
   return candidates.map(record).filter((value): value is JsonRecord => !!value);
 }
 
+// Dados do anuncio Click-to-WhatsApp que a Meta anexa na 1a mensagem. A forma
+// exata varia por gateway; tentamos os formatos conhecidos (WhatsApp Cloud API
+// `referral`, Baileys `contextInfo.externalAdReply`, campos achatados). Tudo
+// opcional - se nao vier nada, o lead so nao ganha atribuicao de campanha.
+function extractReferral(message: JsonRecord): IncomingReferralData | undefined {
+  const content = record(message.content) ?? {};
+  const ref =
+    record(message.referral) ??
+    record(content.referral) ??
+    record(record(message.contextInfo)?.externalAdReply) ??
+    record(record(content.contextInfo)?.externalAdReply) ??
+    record(message.externalAdReply);
+
+  const ctwaClid = textValue(
+    message.ctwa_clid,
+    message.ctwaClid,
+    ref?.ctwa_clid,
+    ref?.ctwaClid,
+    ref?.click_id,
+  );
+  const sourceUrl = textValue(message.source_url, ref?.source_url, ref?.sourceUrl, ref?.url);
+  const adName = textValue(ref?.headline, ref?.title, ref?.source_id, ref?.sourceId);
+  const adCampaignName = textValue(ref?.campaign_name, ref?.campaignName, ref?.body);
+
+  if (!ctwaClid && !sourceUrl && !adName && !adCampaignName) return undefined;
+  return {
+    ...(ctwaClid ? { ctwaClid } : {}),
+    ...(sourceUrl ? { sourceUrl } : {}),
+    ...(adName ? { adName } : {}),
+    ...(adCampaignName ? { adCampaignName } : {}),
+  };
+}
+
 function phoneFromJid(value: unknown, allowLid = false): string | null {
   if (typeof value !== "string" || !value) return null;
   if (value.endsWith("@g.us") || value === "status@broadcast" || (!allowLid && value.endsWith("@lid"))) return null;
@@ -421,6 +463,7 @@ export function parseWebhookPayload(bodyValue: unknown): IncomingUazapiMessage[]
       mediaMessageId: !text && isAudio ? externalId : undefined,
       imageMessageId: isImage ? externalId : undefined,
       pushName: textValue(message.senderName, message.sender_name, message.pushName, message.push_name),
+      referral: extractReferral(message),
     });
   }
   return output;
@@ -486,6 +529,7 @@ async function handleQueuedPayload(clinicId: string, body: unknown): Promise<voi
       patientName: incoming.pushName,
       text: text ?? "",
       imageDataUrl,
+      referral: incoming.referral,
     });
     if (reply) await sendText(clinicId, incoming.phone, reply);
   }

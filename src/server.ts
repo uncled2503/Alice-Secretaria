@@ -11,6 +11,7 @@ import { startRenewalJob } from "./reminders/renewal.js";
 import { startBirthdayJob } from "./reminders/birthday.js";
 import { startNpsJob } from "./reminders/nps.js";
 import { startPlanExpiryJob } from "./reminders/planExpiry.js";
+import { startMetaEventWorker } from "./meta/worker.js";
 import { startFollowUpJob } from "./crm/followup.js";
 import { startBroadcastJob } from "./crm/broadcast.js";
 import { startUazapiWebhookWorker } from "./uazapi/client.js";
@@ -249,5 +250,6 @@ app.listen(port, () => {
   startBroadcastJob();
   startNpsJob();
   startPlanExpiryJob();
+  startMetaEventWorker();
   startUazapiWebhookWorker().catch((err) => console.error("Falha ao iniciar fila de webhooks UAZAPI:", err));
 });

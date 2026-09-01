@@ -503,6 +503,7 @@
           <button data-sub="clinics">Clínicas</button>
           <button data-sub="team">Equipe</button>
           <button data-sub="external-api">API Externa</button>
+          <button data-sub="meta">Meta / Pixel</button>
         </div>
 
         <div id="sub-clinic-data" class="settings-subpanel active">
@@ -1190,6 +1191,78 @@
               <tbody id="api-keys-body"></tbody>
             </table>
             <div id="api-keys-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Nenhuma chave criada.</div>
+          </div>
+        </div>
+
+        <div id="sub-meta" class="settings-subpanel">
+          <p class="hint" style="margin-top:0">Envia os eventos dos leads pra Meta pela <strong>API de Conversões</strong> (servidor): Lead ao gravar o contato, Schedule ao confirmar o agendamento, e as movimentações do CRM. Deduplicado, com fila e novas tentativas. Não há Pixel no navegador nesta versão.</p>
+          <p id="meta-enc-warning" class="plan-alert plan-alert--danger" hidden>⚠️ <code>META_ENCRYPTION_KEY</code> não está configurada no servidor. Sem ela não dá pra guardar o token com segurança — configure a variável de ambiente (32 bytes em base64 ou hex).</p>
+
+          <form id="meta-form" class="broadcast-form card">
+            <div class="section-header"><span class="nav-icon" data-icon="building"></span> Credenciais</div>
+            <div class="broadcast-form-row">
+              <label style="flex:1">Nome da integração
+                <input id="meta-name" type="text" placeholder="Ex.: Meta da Clínica Bella Pele" />
+              </label>
+              <label style="flex:1">ID do Pixel / Dataset
+                <input id="meta-pixel" type="text" inputmode="numeric" placeholder="Só números" />
+              </label>
+            </div>
+            <label>Token da API de Conversões
+              <input id="meta-token" type="password" autocomplete="new-password" placeholder="Cole para configurar ou trocar" />
+            </label>
+            <p id="meta-token-hint" class="hint" style="margin:0">Nenhum token configurado.</p>
+            <div class="broadcast-form-row">
+              <label>Versão da Graph API
+                <select id="meta-graph-version"></select>
+              </label>
+              <label style="flex:1">URL oficial do site
+                <input id="meta-site-url" type="url" placeholder="https://suaclinica.com.br" />
+              </label>
+              <label>Código de evento de teste
+                <input id="meta-test-code" type="text" placeholder="TEST12345 (temporário)" />
+              </label>
+            </div>
+            <p id="meta-testcode-warning" class="plan-alert plan-alert--danger" style="margin:0" hidden>⚠️ Código de teste ativo — <strong>todos</strong> os eventos vão para "Eventos de teste" e não contam como conversão. Apague o código quando terminar de testar.</p>
+            <label class="checkbox-row"><input type="checkbox" id="meta-pixel-enabled" /> Ativar Pixel (navegador) — sem efeito nesta versão, guardado para o futuro</label>
+            <label class="checkbox-row"><input type="checkbox" id="meta-capi-enabled" /> <strong>Ativar API de Conversões</strong> (liga o envio dos eventos do servidor)</label>
+
+            <div class="section-header" style="margin-top:1rem"><span class="nav-icon" data-icon="grid"></span> Mapeamento das etapas do CRM</div>
+            <p class="hint" style="margin-top:0">As colunas são identificadas pelo ID interno da etapa — não quebra se você renomear a coluna.</p>
+            <div class="broadcast-form-row">
+              <label>Lead qualificado <select id="meta-stage-qualified"></select></label>
+              <label>Lead desqualificado <select id="meta-stage-disqualified"></select></label>
+              <label>Venda ganha <select id="meta-stage-won"></select></label>
+              <label>Perdido <select id="meta-stage-lost"></select></label>
+            </div>
+            <label>Colunas que NÃO devem enviar evento
+              <div id="meta-stages-ignored" class="procedures-checklist" style="max-height:130px"></div>
+            </label>
+            <p class="hint" style="margin:0">DisqualifiedLead sai só quando o lead entra na coluna de desqualificado — <strong>nunca</strong> na de Perdido. QualifiedLead só sai se você mapear a coluna de qualificado.</p>
+
+            <div class="broadcast-form-row" style="align-items:center;margin-top:0.6rem">
+              <button type="submit">Salvar</button>
+              <button type="button" id="meta-btn-test-conn" class="btn-brand btn-brand--secondary btn-brand--sm">Testar conexão</button>
+              <button type="button" id="meta-btn-test-event" class="btn-brand btn-brand--secondary btn-brand--sm">Enviar evento de teste</button>
+              <span id="meta-status" class="hint" style="margin:0"></span>
+            </div>
+          </form>
+
+          <div class="section-header" style="margin-top:1.4rem"><span class="nav-icon" data-icon="chart"></span> Diagnóstico</div>
+          <div class="stat-grid" id="meta-diag-grid" style="margin-bottom:1rem"></div>
+          <div class="list-toolbar">
+            <div class="list-count">Últimos eventos</div>
+            <div class="list-toolbar-actions">
+              <button type="button" id="meta-btn-retry-failed" class="btn-brand btn-brand--secondary btn-brand--sm">Reenviar os com erro</button>
+              <button type="button" id="meta-btn-refresh" class="btn-brand btn-brand--secondary btn-brand--sm">Atualizar</button>
+            </div>
+          </div>
+          <div class="card">
+            <table>
+              <thead><tr><th>Evento</th><th>Origem</th><th>Lead</th><th>Status</th><th>Tent.</th><th>Resposta da Meta</th><th></th></tr></thead>
+              <tbody id="meta-events-body"></tbody>
+            </table>
+            <div id="meta-events-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Nenhum evento ainda.</div>
           </div>
         </div>
       </section>

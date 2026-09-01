@@ -1,6 +1,6 @@
 import { prisma } from "../db/client.js";
 import { getFunnelStages, type FunnelStageKind } from "./stages.js";
-import { logActivity } from "./activity.js";
+import { enqueueStageChange } from "../meta/events.js";
 
 // Ordem de fallback quando a clinica nao tem uma etapa exatamente do "kind"
 // pedido (ex: removeu a coluna "Pos-procedimento" -> cai em "Ganho").
@@ -20,20 +20,45 @@ interface MoveOpts {
 async function applyMove(
   clinicId: string,
   patientId: string,
+  fromStageId: string | undefined,
   targetStageId: string,
   targetLabel: string,
   fromLabel: string | undefined,
   opts: MoveOpts,
 ): Promise<void> {
   await prisma.patient.update({ where: { id: patientId }, data: { funnelStage: targetStageId } });
-  await logActivity({
-    clinicId,
-    type: "stage_changed",
-    area: "crm",
-    title: "Paciente movido no funil",
-    description: `${fromLabel ?? "—"} → ${targetLabel}${opts.note ? ` · ${opts.note}` : ""}`,
-    actorName: opts.actorName ?? null,
-  });
+
+  // Registra a transicao (o id deste log serve de transitionId estavel pra
+  // deduplicar os eventos de CRM na Meta). Nunca deixa o log derrubar o move.
+  let transitionId: string | null = null;
+  try {
+    const log = await prisma.activityLog.create({
+      data: {
+        clinicId,
+        type: "stage_changed",
+        area: "crm",
+        title: "Paciente movido no funil",
+        description: `${fromLabel ?? "—"} → ${targetLabel}${opts.note ? ` · ${opts.note}` : ""}`,
+        actorName: opts.actorName ?? null,
+      },
+    });
+    transitionId = log.id;
+  } catch (err) {
+    console.error("Falha ao registrar transicao de etapa:", err);
+  }
+
+  if (transitionId) {
+    void enqueueStageChange({
+      clinicId,
+      patientId,
+      transitionId,
+      prevStageId: fromStageId ?? null,
+      prevStageName: fromLabel ?? null,
+      newStageId: targetStageId,
+      newStageName: targetLabel,
+      actorName: opts.actorName ?? null,
+    }).catch((err) => console.error("[meta] enqueueStageChange:", err));
+  }
 }
 
 // Move o paciente para a etapa cujo "kind" foi pedido (ou o fallback). Nao
@@ -70,7 +95,7 @@ export async function movePatientToKind(
     }
     if (!target || target.stageId === patient.funnelStage) return;
 
-    await applyMove(clinicId, patientId, target.stageId, target.label, current?.label, opts);
+    await applyMove(clinicId, patientId, current?.stageId, target.stageId, target.label, current?.label, opts);
   } catch (err) {
     console.error("Falha ao mover paciente de etapa (kind):", err);
   }
@@ -97,7 +122,7 @@ export async function movePatientToRecovery(
       stages.find((s) => s.kind === "aberta");
     if (!target || target.stageId === patient.funnelStage) return;
 
-    await applyMove(clinicId, patientId, target.stageId, target.label, current?.label, opts);
+    await applyMove(clinicId, patientId, current?.stageId, target.stageId, target.label, current?.label, opts);
   } catch (err) {
     console.error("Falha ao mover paciente para recuperacao:", err);
   }
@@ -134,6 +159,6 @@ export async function movePatientToStage(
   if (patient.funnelStage === stageId) return { ok: true, label: target.label, changed: false };
 
   const current = stages.find((s) => s.stageId === patient.funnelStage);
-  await applyMove(clinicId, patientId, target.stageId, target.label, current?.label, opts);
+  await applyMove(clinicId, patientId, current?.stageId, target.stageId, target.label, current?.label, opts);
   return { ok: true, label: target.label, changed: true };
 }

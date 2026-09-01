@@ -212,7 +212,7 @@ function hideAuthGate() {
 function applyRoleUI() {
   const isAdmin = state.staff?.role === "admin";
   // Abas visiveis so para a administracao da Alice.
-  for (const sub of ["clinics", "briefing"]) {
+  for (const sub of ["clinics", "briefing", "meta"]) {
     const tab = document.querySelector(`#settings-tabs button[data-sub="${sub}"]`);
     if (tab) tab.style.display = isAdmin ? "" : "none";
   }
@@ -4626,6 +4626,197 @@ document.getElementById("api-key-form").addEventListener("submit", async (e) => 
 });
 
 // --- Navegacao das sub-abas de "Personalizar Alice" ---
+// ======================= META / PIXEL =======================
+const META_EVENT_STATUS = {
+  pending: { label: "Pendente", cls: "badge-neutral" },
+  processing: { label: "Enviando…", cls: "badge-neutral" },
+  processed: { label: "Processado", cls: "badge-green" },
+  error: { label: "Erro (vai retentar)", cls: "badge-amber" },
+  dead: { label: "Falhou", cls: "badge-red" },
+};
+
+async function loadMetaConfig() {
+  let data;
+  try {
+    data = await api("/meta/config");
+  } catch {
+    return;
+  }
+  document.getElementById("meta-enc-warning").hidden = data.encryptionReady !== false;
+
+  const gv = document.getElementById("meta-graph-version");
+  gv.innerHTML = "";
+  for (const v of data.graphVersions) gv.appendChild(el("option", { value: v }, [v]));
+
+  const stageOptions = (sel, includeEmpty = true) => {
+    sel.innerHTML = "";
+    if (includeEmpty) sel.appendChild(el("option", { value: "" }, ["— não mapeado —"]));
+    for (const s of data.stages) sel.appendChild(el("option", { value: s.stageId }, [`${s.label}`]));
+  };
+  stageOptions(document.getElementById("meta-stage-qualified"));
+  stageOptions(document.getElementById("meta-stage-disqualified"));
+  stageOptions(document.getElementById("meta-stage-won"));
+  stageOptions(document.getElementById("meta-stage-lost"));
+
+  const ignoredBox = document.getElementById("meta-stages-ignored");
+  ignoredBox.innerHTML = "";
+  const ignoredSet = new Set((data.config && data.config.stagesIgnored) || []);
+  for (const s of data.stages) {
+    const lbl = el("label", {}, []);
+    const cb = el("input", { type: "checkbox", value: s.stageId }, []);
+    if (ignoredSet.has(s.stageId)) cb.checked = true;
+    lbl.appendChild(cb);
+    lbl.appendChild(document.createTextNode(" " + s.label));
+    ignoredBox.appendChild(lbl);
+  }
+
+  const c = data.config || {};
+  document.getElementById("meta-name").value = c.name || "";
+  document.getElementById("meta-pixel").value = c.pixelId || "";
+  document.getElementById("meta-token").value = "";
+  document.getElementById("meta-token-hint").textContent = c.hasToken
+    ? `Token atual: ${c.tokenHint}. Deixe vazio para manter.`
+    : "Nenhum token configurado.";
+  gv.value = c.graphVersion || data.graphVersions[0];
+  document.getElementById("meta-site-url").value = c.siteUrl || "";
+  document.getElementById("meta-test-code").value = c.testEventCode || "";
+  document.getElementById("meta-testcode-warning").hidden = !c.testEventCode;
+  document.getElementById("meta-pixel-enabled").checked = !!c.pixelEnabled;
+  document.getElementById("meta-capi-enabled").checked = !!c.capiEnabled;
+  document.getElementById("meta-stage-qualified").value = c.stageQualified || "";
+  document.getElementById("meta-stage-disqualified").value = c.stageDisqualified || "";
+  document.getElementById("meta-stage-won").value = c.stageWon || "";
+  document.getElementById("meta-stage-lost").value = c.stageLost || "";
+
+  const st = document.getElementById("meta-status");
+  st.textContent = c.lastTestAt
+    ? `Última conexão: ${new Date(c.lastTestAt).toLocaleString("pt-BR")} — ${c.lastTestResult === "ok" ? "ok" : c.lastTestResult}`
+    : "";
+
+  loadMetaDiagnostics();
+  loadMetaEvents();
+}
+
+document.getElementById("meta-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const payload = {
+    name: document.getElementById("meta-name").value.trim(),
+    pixelId: document.getElementById("meta-pixel").value.trim(),
+    graphVersion: document.getElementById("meta-graph-version").value,
+    siteUrl: document.getElementById("meta-site-url").value.trim(),
+    testEventCode: document.getElementById("meta-test-code").value.trim(),
+    pixelEnabled: document.getElementById("meta-pixel-enabled").checked,
+    capiEnabled: document.getElementById("meta-capi-enabled").checked,
+    stageQualified: document.getElementById("meta-stage-qualified").value,
+    stageDisqualified: document.getElementById("meta-stage-disqualified").value,
+    stageWon: document.getElementById("meta-stage-won").value,
+    stageLost: document.getElementById("meta-stage-lost").value,
+    stagesIgnored: Array.from(document.querySelectorAll("#meta-stages-ignored input:checked")).map((c) => c.value),
+  };
+  const token = document.getElementById("meta-token").value.trim();
+  if (token) payload.accessToken = token;
+  const st = document.getElementById("meta-status");
+  try {
+    await api("/meta/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), silentStatuses: [400] });
+    st.textContent = "Salvo.";
+    await loadMetaConfig();
+  } catch (err) {
+    if (err.status === 400) st.textContent = err.detail || "Não foi possível salvar.";
+    else throw err;
+  }
+});
+
+document.getElementById("meta-btn-test-conn").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const st = document.getElementById("meta-status");
+  btn.disabled = true;
+  st.textContent = "Testando…";
+  try {
+    const r = await api("/meta/test-connection", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}", silentStatuses: [400] });
+    st.textContent = (r.ok ? "✅ " : "❌ ") + r.detail;
+  } catch (err) {
+    st.textContent = err.detail || "Falha no teste.";
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("meta-btn-test-event").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const st = document.getElementById("meta-status");
+  btn.disabled = true;
+  try {
+    const r = await api("/meta/test-event", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}", silentStatuses: [400] });
+    st.textContent = (r.ok ? "✅ " : "❌ ") + r.detail;
+    setTimeout(() => { loadMetaEvents(); loadMetaDiagnostics(); }, 3000);
+  } catch (err) {
+    st.textContent = err.detail || "Falha.";
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("meta-btn-refresh").addEventListener("click", () => { loadMetaEvents(); loadMetaDiagnostics(); });
+document.getElementById("meta-btn-retry-failed").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  try {
+    const r = await api("/meta/events/retry-failed", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    document.getElementById("meta-status").textContent = `${r.requeued} evento(s) reenfileirado(s).`;
+    setTimeout(() => { loadMetaEvents(); loadMetaDiagnostics(); }, 2500);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+async function loadMetaDiagnostics() {
+  let d;
+  try { d = await api("/meta/diagnostics"); } catch { return; }
+  const box = document.getElementById("meta-diag-grid");
+  box.innerHTML = "";
+  const card = (label, value, hint) => box.appendChild(el("div", { class: "card stat-card" }, [
+    el("div", { class: "stat-card-header" }, [el("span", { class: "stat-label" }, [label])]),
+    el("div", { class: "stat-value" }, [String(value)]),
+    el("div", { class: "stat-hint" }, [hint || " "]),
+  ]));
+  card("Pixel", d.pixelId || "—", d.capiEnabled ? "API de Conversões ligada" : "API de Conversões desligada");
+  card("Eventos 24h", d.last24h.total, "enviados nas últimas 24 horas");
+  card("Processados 24h", d.last24h.processed, `${d.last24h.pending} pendente(s)`);
+  card("Com erro 24h", d.last24h.error, `limite de ${d.maxAttempts} tentativas`);
+}
+
+async function loadMetaEvents() {
+  let events;
+  try { events = await api("/meta/events?limit=40"); } catch { return; }
+  const body = document.getElementById("meta-events-body");
+  body.innerHTML = "";
+  document.getElementById("meta-events-empty").style.display = events.length ? "none" : "block";
+  for (const ev of events) {
+    const s = META_EVENT_STATUS[ev.status] || { label: ev.status, cls: "badge-neutral" };
+    let resp = "";
+    try {
+      const r = JSON.parse(ev.metaResponse || "{}");
+      resp = r.error || (r.eventsReceived != null ? `recebidos: ${r.eventsReceived}` : "") || (r.fbtraceId ? `trace ${r.fbtraceId}` : "");
+    } catch { resp = ev.lastError || ""; }
+    const retryBtn = el("button", { type: "button", class: "btn-brand btn-brand--secondary btn-brand--sm" }, ["Reenviar"]);
+    retryBtn.addEventListener("click", async () => {
+      retryBtn.disabled = true;
+      await api(`/meta/events/${ev.id}/retry`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      setTimeout(() => { loadMetaEvents(); loadMetaDiagnostics(); }, 2000);
+    });
+    body.appendChild(el("tr", {}, [
+      el("td", {}, [el("div", {}, [ev.eventName]), el("div", { class: "hint", style: "margin:0;font-size:0.72rem" }, [ev.eventId]), ev.testEventCode ? el("span", { class: "badge badge-amber" }, ["teste"]) : el("span", {}, [])]),
+      el("td", {}, [ev.source === "server" ? "Servidor" : "Navegador"]),
+      el("td", {}, [ev.leadLabel || "—"]),
+      el("td", {}, [el("span", { class: `badge ${s.cls}` }, [s.label])]),
+      el("td", {}, [String(ev.attempts)]),
+      el("td", { class: "cell-truncate", title: resp }, [resp || "—"]),
+      el("td", {}, [ev.status === "error" || ev.status === "dead" ? retryBtn : el("span", {}, [])]),
+    ]));
+  }
+  paintIcons(body);
+}
+
 const SETTINGS_SUB_LOADERS = {
   "clinic-data": () => {
     loadClinicDataForm();
@@ -4653,11 +4844,12 @@ const SETTINGS_SUB_LOADERS = {
   channels: startChannelPolling,
   team: loadTeam,
   "external-api": loadApiKeys,
+  meta: loadMetaConfig,
 };
 
 function openSettingsSub(sub) {
   // Abas so da administracao da Alice - cliente cai em "Dados da clinica".
-  if ((sub === "briefing" || sub === "clinics") && state.staff?.role !== "admin") sub = "clinic-data";
+  if ((sub === "briefing" || sub === "clinics" || sub === "meta") && state.staff?.role !== "admin") sub = "clinic-data";
   // No modo loja, abas de clinica nao existem - cai em "Dados da loja".
   const tabBtn = document.querySelector(`#settings-tabs button[data-sub="${sub}"]`);
   if (document.body.dataset.biz === "loja" && tabBtn?.classList.contains("biz-clinica-only")) sub = "clinic-data";

@@ -32,7 +32,21 @@ test("aceita payload oficial de mensagem e resolve sender_pn", () => {
       text: "Quero agendar",
     },
   });
-  assert.deepEqual(messages, [{ externalId: "ABC123", phone: "5532999999999", text: "Quero agendar", mediaMessageId: undefined, imageMessageId: undefined, pushName: "Maria" }]);
+  assert.deepEqual(messages, [{ externalId: "ABC123", phone: "5532999999999", text: "Quero agendar", mediaMessageId: undefined, imageMessageId: undefined, pushName: "Maria", referral: undefined }]);
+});
+
+test("captura o referral de Click-to-WhatsApp quando presente", () => {
+  const m = parseWebhookPayload({
+    message: {
+      messageid: "R1",
+      sender_pn: "5511988887777@s.whatsapp.net",
+      messageType: "text",
+      text: "vi seu anuncio",
+      referral: { source_url: "https://fb.com/ad", ctwa_clid: "CLID123", headline: "Promo de verao" },
+    },
+  });
+  assert.equal(m[0].referral.ctwaClid, "CLID123");
+  assert.equal(m[0].referral.sourceUrl, "https://fb.com/ad");
 });
 
 test("ignora eco da API e mensagens de grupo", () => {

@@ -2,7 +2,7 @@ import cron from "node-cron";
 import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 import { getFunnelStages } from "./stages.js";
-import { movePatientToKind } from "./stageAutomation.js";
+import { movePatientToKind, movePatientToStage } from "./stageAutomation.js";
 import { renderMessageTemplate, getClinicTemplateInfo, type ClinicTemplateInfo } from "./template.js";
 
 // Cache simples por execucao do job.
@@ -168,9 +168,9 @@ export async function runFollowUpCheck(): Promise<void> {
     // removeu esse stageId, so pulamos esse bonus (sem quebrar o envio).
     const recoveryStage = stages.find((s) => s.stageId === "recuperacao");
     if (nextOrder === 1 && recoveryStage && recoveryEligible.has(conversation.patient.funnelStage)) {
-      await prisma.patient.update({
-        where: { id: conversation.patientId },
-        data: { funnelStage: recoveryStage.stageId },
+      // via movePatientToStage: registra a transicao e dispara os eventos de CRM
+      await movePatientToStage(clinicId, conversation.patientId, recoveryStage.stageId, {
+        note: "sem resposta no recontato",
       });
     }
   }
