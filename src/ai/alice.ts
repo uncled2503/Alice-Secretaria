@@ -599,6 +599,8 @@ export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: str
 
   const emojiLine = clinic.allowEmojis === false ? `\nNao use emojis em nenhuma mensagem.` : "";
 
+  const visionLine = `\nFOTOS E AUDIOS: voce VE as fotos que o cliente envia e ESCUTA os audios (eles ja chegam transcritos). Responda com base no que esta na imagem/audio, com naturalidade. Nunca diga que "nao consegue ver imagens", "nao abre fotos" ou "so entende texto". Se a foto estiver ruim ou nao der pra identificar algo com seguranca, diga o que da pra ver e peca um detalhe (angulo melhor, nome do item). Print de golpe/corrente/spam: nao responda.`;
+
   const schedulingLinkLine = clinic.schedulingLink?.trim()
     ? `\nLINK DE AUTO-AGENDAMENTO: quando o paciente demonstrar intencao clara de agendar, voce pode enviar direto o link ${clinic.schedulingLink.trim()} (nao pergunte "quer que eu mande o link?", mande). Use este link em vez de book_appointment quando a clinica preferir que o paciente escolha o horario sozinho.`
     : "";
@@ -693,7 +695,7 @@ Seu trabalho:
 1. Entender o que o cliente procura e ajudar usando SOMENTE o que esta cadastrado abaixo (catalogo, FAQ, mensagens prontas, roteiros, regras).
 2. Manter a etapa do cliente no funil atualizada (update_crm_stage) conforme a conversa avanca.
 3. Nunca invente estoque, prazo de entrega, status de pedido, preco ou politica que nao estejam cadastrados. Nesses casos, siga a regra do negocio (normalmente enviar o link do WhatsApp) ou transfira pra equipe.
-4. Termine sempre com um proximo passo claro: um link, uma opcao ou uma pergunta.${emojiLine}${schedulingLinkLine}${surveyLine}${genericHandoffLine}${catalogBlock}${stagesBlock}${templatesBlock}${faqBlock}${playbookBlock}
+4. Termine sempre com um proximo passo claro: um link, uma opcao ou uma pergunta.${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${genericHandoffLine}${catalogBlock}${stagesBlock}${templatesBlock}${faqBlock}${playbookBlock}
 
 Responda sempre em portugues do Brasil, em mensagens curtas como quem digita no WhatsApp.${await getActiveRulesPrompt(clinicId)}`;
   }
@@ -711,7 +713,7 @@ Seu trabalho:
 2. Manter a etapa do paciente no funil atualizada (update_crm_stage) conforme a conversa avanca.
 3. Checar disponibilidade real (check_specific_time / check_availability) antes de falar de qualquer data.
 4. Confirmar o horario escolhido com o paciente e so entao usar book_appointment.
-5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${postureLine}${evalFirstLine}${medicalLine}${emojiLine}${schedulingLinkLine}${surveyLine}${handoffLine}
+5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${postureLine}${evalFirstLine}${medicalLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}
 
 Procedimentos oferecidos pela clinica:
 ${procedureList || "(nenhum procedimento cadastrado ainda)"}
@@ -726,8 +728,12 @@ export async function handleIncomingMessage(params: {
   patientPhone: string;
   patientName?: string;
   text: string;
+  imageDataUrl?: string; // foto enviada pelo cliente (o modelo "ve" a imagem nesta rodada)
 }): Promise<string> {
-  const { clinicId, patientPhone, patientName, text } = params;
+  const { clinicId, patientPhone, patientName, text, imageDataUrl } = params;
+  const trimmed = text.trim();
+  const storedContent = trimmed || (imageDataUrl ? "[imagem]" : "");
+  if (!storedContent) return "";
 
   const patient = await prisma.patient.upsert({
     where: { clinicId_phone: { clinicId, phone: patientPhone } },
@@ -744,7 +750,7 @@ export async function handleIncomingMessage(params: {
   }
 
   await prisma.message.create({
-    data: { conversationId: conversation.id, role: "user", content: text },
+    data: { conversationId: conversation.id, role: "user", content: storedContent },
   });
   await prisma.conversation.update({
     where: { id: conversation.id },
@@ -771,6 +777,18 @@ export async function handleIncomingMessage(params: {
       content: m.content,
     })),
   ];
+
+  // Foto recebida agora: substitui a ultima mensagem do usuario (a "[imagem]"
+  // que acabou de entrar no historico) por uma mensagem multimodal com a imagem.
+  if (imageDataUrl) {
+    const lastUser = [...messages].reverse().find((m) => m.role === "user");
+    if (lastUser) {
+      lastUser.content = [
+        { type: "text", text: trimmed || "(o cliente enviou esta foto, sem texto)" },
+        { type: "image_url", image_url: { url: imageDataUrl } },
+      ];
+    }
+  }
 
   let finalText = "";
   for (let turn = 0; turn < 6; turn++) {

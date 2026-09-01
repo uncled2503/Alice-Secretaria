@@ -168,6 +168,9 @@ Botao "Guia" no rodape da lateral: faz um tour passo a passo por todas as areas.
 === QUANDO A ALICE RESPONDE INCOMPLETO NO ATENDIMENTO ===
 Confira se procedimentos, precos, FAQ, mensagens prontas e regras estao preenchidos. A Alice so fala o que esta cadastrado. Se faltar um dado num procedimento, ela diz que confirma na avaliacao em vez de inventar.
 
+=== AUDIO E FOTO ===
+A Alice transcreve os audios que o cliente envia e enxerga as fotos (visao), respondendo com base no conteudo, igual a uma mensagem de texto. Nao precisa configurar nada. Prints de golpe/corrente/spam ela ignora.
+
 === PLANOS E VALORES ===
 - Plano Realce: R$597/mes - ate 100 conversas/mes, atendimento 24h, agendamento automatico com checagem de conflito, confirmacao e lembrete, qualificacao de contatos, painel de conversas com atendimento manual, funil (CRM) automatico, ficha do contato com etiquetas, 1 unidade e 1 profissional, configuracao inicial feita pela equipe, suporte por WhatsApp.
 - Plano Prime: R$897/mes (mais escolhido) - ate 300 conversas/mes, tudo do Realce + follow-up automatico + pos-procedimento + lembrete de renovacao + aniversario + lista de espera + ate 3 profissionais com agenda propria + bloqueio de agenda + notificacoes pra equipe + relatorios de desempenho + grupo de suporte exclusivo.

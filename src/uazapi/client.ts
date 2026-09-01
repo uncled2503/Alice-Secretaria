@@ -25,7 +25,8 @@ export interface IncomingUazapiMessage {
   externalId: string;
   phone: string;
   text?: string;
-  mediaMessageId?: string;
+  mediaMessageId?: string; // audio/ptt a transcrever
+  imageMessageId?: string; // foto a interpretar (visao)
   pushName?: string;
 }
 
@@ -411,12 +412,14 @@ export function parseWebhookPayload(bodyValue: unknown): IncomingUazapiMessage[]
     const content = record(message.content);
     const text = textValue(message.text, message.caption, message.body, content?.text, content?.conversation);
     const isAudio = type.includes("audio") || type.includes("ptt");
+    const isImage = type.includes("image");
 
     output.push({
       externalId,
       phone,
       text,
       mediaMessageId: !text && isAudio ? externalId : undefined,
+      imageMessageId: isImage ? externalId : undefined,
       pushName: textValue(message.senderName, message.sender_name, message.pushName, message.push_name),
     });
   }
@@ -442,15 +445,47 @@ async function transcribeAudio(clinicId: string, messageId: string): Promise<str
   }
 }
 
+// Baixa a foto que o cliente enviou e devolve como data URL, pra Alice
+// "ver" a imagem (visao do modelo). Limita a ~4MB pra nao estourar o request.
+async function downloadImageDataUrl(clinicId: string, messageId: string): Promise<string | null> {
+  try {
+    const credentials = await clinicCredentials(clinicId);
+    const response = record(await request(credentials, "/message/download", {
+      method: "POST",
+      body: JSON.stringify({ id: messageId, return_base64: true, return_link: false, transcribe: false }),
+    }));
+    const encoded = textValue(response?.base64Data, response?.base64, response?.data);
+    if (!encoded) return null;
+    if (encoded.startsWith("data:")) return encoded.length > 6_000_000 ? null : encoded;
+    const base64 = encoded.includes(",") ? encoded.slice(encoded.indexOf(",") + 1) : encoded;
+    if (base64.length > 6_000_000) return null; // ~4.5MB de imagem
+    const mime = textValue(response?.mimetype, response?.mimeType, record(response?.info)?.mimetype) ?? "image/jpeg";
+    return `data:${mime};base64,${base64}`;
+  } catch (error) {
+    console.error("[UAZAPI] Falha ao baixar imagem:", error);
+    return null;
+  }
+}
+
 async function handleQueuedPayload(clinicId: string, body: unknown): Promise<void> {
   for (const incoming of parseWebhookPayload(body)) {
-    const text = incoming.text ?? (incoming.mediaMessageId ? await transcribeAudio(clinicId, incoming.mediaMessageId) : null);
-    if (!text) continue;
+    let text = incoming.text ?? null;
+    let imageDataUrl: string | undefined;
+
+    if (incoming.imageMessageId) {
+      imageDataUrl = (await downloadImageDataUrl(clinicId, incoming.imageMessageId)) ?? undefined;
+    } else if (!text && incoming.mediaMessageId) {
+      text = await transcribeAudio(clinicId, incoming.mediaMessageId);
+    }
+
+    if (!text && !imageDataUrl) continue;
+
     const reply = await handleIncomingMessage({
       clinicId,
       patientPhone: incoming.phone,
       patientName: incoming.pushName,
-      text,
+      text: text ?? "",
+      imageDataUrl,
     });
     if (reply) await sendText(clinicId, incoming.phone, reply);
   }
