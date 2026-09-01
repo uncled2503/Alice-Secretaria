@@ -278,6 +278,11 @@ document.getElementById("auth-gate-form").addEventListener("submit", async (e) =
   location.reload();
 });
 
+// Rótulo de um item do menu, sem o ícone nem o selo de contagem.
+function navItemLabel(btn) {
+  return (btn?.querySelector(".nav-label")?.textContent || btn?.textContent || "").trim();
+}
+
 // --- Menu lateral no mobile (gaveta) ---
 const _appRoot = document.getElementById("app-root");
 function setMobileNav(open) {
@@ -301,7 +306,7 @@ document.querySelectorAll(".nav-item").forEach((btn) => {
     document.getElementById(`tab-${btn.dataset.tab}`).classList.add("active");
     setMobileNav(false);
     const title = document.getElementById("mobile-topbar-title");
-    if (title) title.textContent = btn.textContent.trim();
+    if (title) title.textContent = navItemLabel(btn);
     if (btn.dataset.tab === "settings") {
       const activeSub = document.querySelector("#settings-tabs button.active");
       openSettingsSub(activeSub ? activeSub.dataset.sub : "clinic-data");
@@ -613,7 +618,37 @@ state.chatFilter = "all";
 async function loadConversations() {
   const conversations = await api("/conversations");
   state.conversations = conversations;
+  notifyNewHandoffs(conversations);
   renderConversationsList();
+}
+
+// Avisa (toast + selo no menu) quando aparece uma conversa nova que a Alice
+// transferiu pra equipe - senão o handoff passa despercebido no painel.
+function notifyNewHandoffs(conversations) {
+  const humanIds = new Set(conversations.filter((c) => c.humanTakeover).map((c) => c.id));
+  if (state._knownHumanIds) {
+    for (const c of conversations) {
+      if (c.humanTakeover && !state._knownHumanIds.has(c.id) && c.id !== state.activeConversationId) {
+        const who = c.patient?.name || c.patient?.phone || "um contato";
+        showError(`🔔 Conversa transferida para atendimento humano: ${who}${c.handoffReason ? ` — ${c.handoffReason}` : ""}`);
+      }
+    }
+  }
+  state._knownHumanIds = humanIds;
+
+  const navChat = document.querySelector('.nav-item[data-tab="chat"]');
+  if (navChat) {
+    let badge = navChat.querySelector(".nav-count-badge");
+    if (humanIds.size > 0) {
+      if (!badge) {
+        badge = el("span", { class: "nav-count-badge" }, []);
+        navChat.appendChild(badge);
+      }
+      badge.textContent = String(humanIds.size);
+    } else if (badge) {
+      badge.remove();
+    }
+  }
 }
 
 function renderConversationsList() {
@@ -2758,7 +2793,7 @@ function applyBizMode() {
   // Barra superior (mobile) reflete o rótulo atual (depois de todas as trocas)
   const activeNav = document.querySelector(".nav-item.active");
   const title = document.getElementById("mobile-topbar-title");
-  if (activeNav && title) title.textContent = activeNav.textContent.trim();
+  if (activeNav && title) title.textContent = navItemLabel(activeNav);
 }
 
 async function loadDashboard() {
@@ -4872,7 +4907,7 @@ function goToTab(tab) {
   document.getElementById(`tab-${tab}`).classList.add("active");
   const activeNav = document.querySelector(`.nav-item[data-tab="${tab}"]`);
   const title = document.getElementById("mobile-topbar-title");
-  if (activeNav && title) title.textContent = activeNav.textContent.trim();
+  if (activeNav && title) title.textContent = navItemLabel(activeNav);
   setMobileNav(false);
 }
 

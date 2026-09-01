@@ -159,6 +159,11 @@ body[data-biz="loja"] li.biz-loja-only { display: block; }
 }
 .nav-item:hover { background: var(--accent-50); }
 .nav-item.active { background: var(--accent-100); color: var(--accent-dark); font-weight: 600; }
+.nav-count-badge {
+  margin-left: auto; flex-shrink: 0; min-width: 18px; height: 18px; padding: 0 5px;
+  border-radius: 999px; background: #b91c1c; color: #fff;
+  font-size: 0.7rem; font-weight: 700; display: inline-flex; align-items: center; justify-content: center;
+}
 .nav-icon { width: 18px; height: 18px; flex-shrink: 0; display: inline-flex; color: inherit; }
 .nav-icon svg { width: 100%; height: 100%; }
 
