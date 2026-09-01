@@ -7,8 +7,9 @@ import { DEFAULT_FUNNEL_STAGES } from "../crm/stages.js";
 
 // ---------------------------------------------------------------------------
 // Configura a conta da Laleblu (loja de roupas e enxoval para bebes e criancas)
-// como negocio generico (businessType = geral) e treina a Alice a partir do
-// documento "LALEBLU - Configuracao de respostas automaticas" (ManyChat).
+// como negocio generico (businessType = geral) e treina a Alice a partir dos
+// documentos "LALEBLU - Configuracao de respostas automaticas" (ManyChat) e
+// "LALEBLU - Guia de Links para o Atendimento" (catalogo de links do site).
 //
 // Rodar: npm run seed:laleblu   (ou: node dist/maintenance/seedLaleblu.js)
 //
@@ -44,25 +45,26 @@ const FAQS: { question: string; alternates: string; answer: string }[] = [
     question: "Qual tamanho comprar?",
     alternates: "tamanho\nmedida\ntabela\nRN\nprematuro\nveste\nnumeração\nque tamanho\nqual tamanho",
     answer:
-      "Nossos tamanhos vão do Prematuro ao 2:\n• Prematuro (até 47 cm) • PP/RN 0 a 1 mês (até 55 cm) • P 1 a 3 meses (até 61 cm) • M 3 a 6 meses (até 67 cm) • G 6 a 9 meses (até 72 cm) • GG/1 9 meses a 1 ano (até 76 cm) • 2 1 a 2 anos (até 88 cm)\nNa dúvida entre dois tamanhos, vale escolher o maior. Cada peça tem as medidas em cm na página. Me diga a idade ou a altura do bebê que eu ajudo a escolher.",
+      "Nossos tamanhos vão do Prematuro ao 2:\n• Prematuro (até 47 cm) • PP/RN 0 a 1 mês (até 55 cm) • P 1 a 3 meses (até 61 cm) • M 3 a 6 meses (até 67 cm) • G 6 a 9 meses (até 72 cm) • GG/1 9 meses a 1 ano (até 76 cm) • 2 1 a 2 anos (até 88 cm)\nNa dúvida entre dois tamanhos, vale escolher o maior. Toque em \"Guia de Tamanhos\" na página do produto pra ver a tabela de medidas e o \"Como Medir\". Me diga a idade ou a altura do bebê que eu ajudo a escolher.",
   },
   {
     question: "Como funciona o frete? Qual o prazo de entrega?",
     alternates: "frete\nentrega\nprazo\nmotoboy\ncorreios\nchega quando\nquanto tempo\nfrete grátis",
     answer:
-      "Frete grátis para compras com preço regular:\n• Cidade de SP: acima de R$ 399 • Estado de SP: acima de R$ 599 • Sul, Sudeste e Centro-Oeste: acima de R$ 699 • Norte e Nordeste: acima de R$ 799\nO prazo aparece no carrinho quando você coloca o CEP. Em SP capital, Grande SP e ABC também tem motoboy, com entrega no mesmo dia para pedidos pagos até as 14h. Regras completas: https://laleblu.com.br/policies/shipping-policy",
+      "Frete grátis para compras com preço regular:\n• Cidade de SP: a partir de R$ 399 • Estado de SP: a partir de R$ 599 • Sul, Sudeste e Centro-Oeste: a partir de R$ 699 • Norte e Nordeste: a partir de R$ 799\nO prazo e o valor aparecem no carrinho quando você coloca o CEP. Entrega expressa em São Paulo e região (próximo dia útil): R$ 29,90. Em SP capital, Grande SP e ABC também tem motoboy no mesmo dia, para pedidos pagos até as 14h. Regras completas: https://laleblu.com.br/policies/shipping-policy",
   },
   {
     question: "Onde ficam as lojas? Qual o horário?",
     alternates: "loja\nlojas\nendereço\nhorário\nshopping\nmoema\nbertioga\nriviera\njardins\ncidade jardim\nonde fica\nvocês têm loja física",
     answer:
-      "Você pode nos visitar em 4 lojas:\n📍 Moema — Av. Bem-te-vi, 177 (estacionamento grátis) · seg a sáb, 10h às 19h\n📍 Shops Jardins — Rua Haddock Lobo, 1626 · seg a sáb, 10h às 22h · dom e feriados, 14h às 20h\n📍 Shopping Cidade Jardim — Av. Magalhães de Castro, 12.000 · seg a sáb, 10h às 22h · dom e feriados, 14h às 20h\n📍 Shopping Riviera de São Lourenço, Bertioga · todos os dias, 10h às 22h\nWhatsApp das lojas: Moema (11) 95965-5533 · Jardins (11) 91497-8851 · Cidade Jardim (11) 94535-7349. Ver no mapa: https://laleblu.com.br/pages/nossas-lojas",
+      "Você pode nos visitar em 4 lojas:\n📍 Moema — Av. Bem-te-vi, 177 (estacionamento grátis) · seg a sáb, 10h às 19h · fechada dom e feriados\n📍 Shops Jardins — Rua Haddock Lobo, 1626 · seg a sáb, 10h às 22h · dom e feriados, 14h às 20h\n📍 Shopping Cidade Jardim — Av. Magalhães de Castro, 12.000 · seg a sáb, 10h às 22h · dom e feriados, 14h às 20h\n📍 Shopping Riviera de São Lourenço — Av. da Riviera, 1256, Bertioga · todos os dias, 10h às 22h\nWhatsApp das lojas: Moema (11) 95965-5533 · Jardins (11) 91497-8851 · Cidade Jardim (11) 94535-7349. Ver no mapa: https://laleblu.com.br/pages/nossas-lojas",
   },
   {
     question: "Quero criar meu chá de bebê / encontrar uma lista",
-    alternates: "chá\ncha de bebe\nchá de bebê\nlista\npresentear\nlista de presentes\nquero criar\nencontrar lista",
+    alternates:
+      "chá\ncha de bebe\nchá de bebê\nlista\npresentear\nlista de presentes\nquero criar\nencontrar lista\ngerenciar lista\nquem presenteou\nlista de desejos\nwishlist",
     answer:
-      "Que fase linda 🍼 Na Laleblu você cria sua lista de chá de bebê em poucos minutos e compartilha o link com quem vai presentear. Os convidados escolhem os itens pelo site e você acompanha tudo pela sua conta.\nCriar minha lista: https://laleblu.com.br/pages/cha-de-bebe\nEncontrar uma lista: https://laleblu.com.br/pages/encontre-seu-cha-de-bebe",
+      "Que fase linda 🍼 Você cria sua lista de chá de bebê em poucos minutos e compartilha o link com quem vai presentear.\n• Página do chá de bebê: https://laleblu.com.br/pages/cha-de-bebe\n• Criar a lista: https://laleblu.com.br/pages/cadastro-cha-de-bebe\n• Encontrar uma lista: https://laleblu.com.br/pages/encontre-seu-cha-de-bebe\n• Gerenciar a minha lista: https://laleblu.com.br/pages/cha-de-bebe-gerenciar-lista\n• Ver quem presenteou: https://laleblu.com.br/pages/cha-de-bebe-quem-presenteou\n• Lista de desejos: https://laleblu.com.br/pages/wish-list",
   },
   {
     question: "Como monto o enxoval? Tem checklist?",
@@ -93,16 +95,17 @@ const FAQS: { question: string; alternates: string; answer: string }[] = [
       waText("Olá! Vim pelo Instagram e quero saber sobre o meu pedido nº "),
   },
   {
-    question: "Tem cupom de desconto?",
-    alternates: "cupom\ncoupom\ndesconto\npromoção\nprimeira compra\ncódigo de desconto\ntem desconto",
+    question: "Tem cupom de desconto? Como faço pra parcelar?",
+    alternates:
+      "cupom\ncoupom\ndesconto\npromoção\nprimeira compra\ncódigo de desconto\ntem desconto\nvip10\nparcelar\nparcelamento\nquantas vezes\nsem juros\n6x",
     answer:
-      "Temos sim 💙 Na sua primeira compra, use o cupom PRIMEIRACOMPRA e ganhe 5% de desconto (sem valor mínimo, uma vez por cliente).\nE no Clube VIP você recebe novidades antes de todo mundo e cupons exclusivos ao longo do ano: https://laleblu.com.br/pages/clube-vip",
+      "Cupons que você pode usar:\n• PRIMEIRACOMPRA — 5% na primeira compra (cupom da newsletter, sem valor mínimo)\n• VIP10 — 10% em compras acima de R$ 299, válido até 30/11/2026 (Clube VIP: https://laleblu.com.br/pages/clube-vip)\nÉ um cupom por pedido e eles não acumulam entre si. O parcelamento é em até 6x sem juros no cartão. Formas de pagamento: https://laleblu.com.br/pages/formas-de-pagamento",
   },
   {
     question: "Vocês têm moda praia para bebê?",
     alternates: "praia\nmaiô\nbiquíni\nsunga\npiscina\nUV\nmoda praia\nproteção solar\nfps",
     answer:
-      "Nossa linha Moda Praia para Bebê tem maiôs, biquínis, sungas, camisetas e chapéus com proteção UV FPS 50+ ☀️ Feita em parceria com a Banho Maria, do Prematuro ao GG/1: https://laleblu.com.br/collections/moda-praia-para-bebe",
+      "Nossa linha Moda Praia para Bebê tem maiôs, biquínis, sungas, camisetas e chapéus com proteção UV FPS 50+ ☀️ Do Prematuro ao GG/1: https://laleblu.com.br/collections/moda-praia",
   },
   {
     question: "Quero fazer uma parceria / publi",
@@ -137,7 +140,7 @@ const FAQS: { question: string; alternates: string; answer: string }[] = [
     alternates:
       "reposição\nrepor\nvai chegar\nesgotado\nsem estoque\nprevisão\noutra cor\nsó tem\nquando volta\navise-me\nesgotou",
     answer:
-      "Quando uma cor ou tamanho está esgotado, o jeito mais fácil é tocar em \"Avise-me\" na página do produto: assim que chegar, você recebe um aviso na hora 🤍 Se quiser uma previsão, me diga qual peça e qual cor que eu verifico com a equipe.",
+      "Quando uma cor ou tamanho está esgotado, o jeito mais fácil é tocar em \"Notifique-me\" no tamanho desejado, na página do produto: assim que voltar ao estoque, você recebe o aviso 🤍 Se quiser uma previsão, me diga qual peça e qual cor que eu verifico com a equipe.",
   },
   {
     question: "Qual o contato / WhatsApp de vocês?",
@@ -165,6 +168,120 @@ const FAQS: { question: string; alternates: string; answer: string }[] = [
       "amei\nadorei\napaixonada\nperfeita\nexperiência\nparabéns\nvim agradecer\nmaravilhoso\nlindo demais\nrecebi e amei",
     answer:
       "Que alegria ler isso 🥹💙 Tudo é preparado com muito carinho e saber que chegou assim até você faz o nosso dia. Se puder, deixe sua avaliação na página do produto, ajuda muito outras famílias na escolha. E se postar o bebê com a peça, marca a gente que a gente reposta 🤍",
+  },
+
+  // --- Guia de links do site (doc "LALEBLU - Guia de Links para o Atendimento", 01/09/2026) ---
+  {
+    question: "Quero ver as novidades, os mais vendidos ou a loja toda",
+    alternates:
+      "novidade\nnovidades\nlançamento\nlançamentos\nnovo\ntem de novo\no que chegou\nmais vendidos\nmais vendido\nmais procurado\nver tudo\ntoda a loja\nloja inteira\ncatálogo\nvitrine",
+    answer:
+      "Direto pra você 🤍\n• Novidades: https://laleblu.com.br/collections/novidades\n• Mais vendidos: https://laleblu.com.br/collections/toda-a-loja?sort_by=best-selling\n• Ver a loja toda: https://laleblu.com.br/collections/toda-a-loja\n• Sale (com desconto): https://laleblu.com.br/collections/sale",
+  },
+  {
+    question: "Quero ver roupas de menina, de menino ou neutras",
+    alternates:
+      "menina\nmenino\nneutro\nneutra\nunissex\nnão sei o sexo\nnão sei o sexo ainda\npra menina\npra menino\nsem saber o sexo\npeças neutras",
+    answer:
+      "• Menina: https://laleblu.com.br/collections/meninas\n• Menino: https://laleblu.com.br/collections/meninos\n• Neutro / unissex: https://laleblu.com.br/collections/unissex\nSe quiser já filtrado por tamanho, me diz o tamanho (Prematuro, PP/RN, P, M, G, GG/1 ou 2) que eu monto o link.",
+  },
+  {
+    question: "Quais tipos de roupa vocês têm? (macacão, body, casaco, conjunto...)",
+    alternates:
+      "macacão\nmacacao\nbody\nbodies\nbody com gola\nmacacão curto\ncalça\nculote\nmijão\ncasaco\nconjunto\nconjuntos\nsaco de dormir\nbásico\nbasicos\ntipo de peça\ncategoria\nque roupas tem",
+    answer:
+      "Nossas categorias de roupa:\n• Todas as roupas: https://laleblu.com.br/collections/roupas\n• Macacões e vestidos: https://laleblu.com.br/collections/macacoes-e-vestidos\n• Macacão curto (verão): https://laleblu.com.br/collections/macacao-curto\n• Bodies, calças e culotes: https://laleblu.com.br/collections/bodies\n• Body com gola: https://laleblu.com.br/collections/body-com-gola\n• Calça, culote ou mijão: https://laleblu.com.br/collections/calca-culote-ou-mijao\n• Casacos: https://laleblu.com.br/collections/casaco\n• Conjuntos: https://laleblu.com.br/collections/conjuntos\n• Básicos (dia a dia): https://laleblu.com.br/collections/basicos\n• Saco de dormir: https://laleblu.com.br/collections/saco-de-dormir\n• Moda praia (UV FPS 50+): https://laleblu.com.br/collections/moda-praia",
+  },
+  {
+    question: "Quero ver por tipo de tecido (pima, suedine, tricô, plush, soft, linho)",
+    alternates:
+      "tecido\nmaterial\npima\nalgodão pima\nsuedine\negípcio\negipcio\ntricô\ntricot\ntricotil\nplush\nsoft\nmalha\nmalha uv\nlinho\nquentinho\nfresquinho\ninverno\nverão\nquente\nleve",
+    answer:
+      "Dá pra ver por tecido:\n• Coleção PIMA: https://laleblu.com.br/collections/pima\n• Macacões Algodão Pima: https://laleblu.com.br/collections/macacoes-algodao-pima\n• Macacões Egípcio, Suedine e Tricotil: https://laleblu.com.br/collections/macacoes-egipcio-suedine-e-tricotil\n• Macacões Soft e Plush (inverno): https://laleblu.com.br/collections/macacoes-soft-e-plush\nEm qualquer coleção dá pra filtrar pelo tecido acrescentando ?filter.p.m.custom.material=Tricot no fim do link (troque o tecido; \"Algodão Pima\" vira Algod%C3%A3o+Pima, \"Malha UV\" vira Malha+UV).",
+  },
+  {
+    question: "Tem em rosa, azul, branco ou outra cor?",
+    alternates:
+      "cor\ncores\nrosa\nazul\nbranco\nbege\namarelo\nverde\nvermelho\ncinza\nroxo\nlavanda\nem qual cor\nque cores tem\ntem em outra cor",
+    answer:
+      "Pra ver por cor, é só acrescentar ?filter.p.m.custom.cor_para_filtro=Rosa no fim de qualquer link (troque a cor: Rosa, Azul, Branco, Bege, Amarelo, Verde, Vermelho, Cinza, Roxo).\nExemplo — tudo em azul: https://laleblu.com.br/collections/toda-a-loja?filter.p.m.custom.cor_para_filtro=Azul",
+  },
+  {
+    question: "Quero uma saída de maternidade",
+    alternates:
+      "saída de maternidade\nsaida de maternidade\nsair da maternidade\nprimeira roupinha\nprimeira roupa\nroupa do parto\nlook da maternidade\nmacacão de sair da maternidade",
+    answer:
+      "Nossas saídas de maternidade (macacões e vestidos): https://laleblu.com.br/collections/macacoes-e-vestidos-saidas-maternidade\n• Menina: https://laleblu.com.br/collections/macacoes-e-vestidos-saidas-maternidade?filter.p.m.custom.genero=Menina\n• Menino: https://laleblu.com.br/collections/macacoes-e-vestidos-saidas-maternidade?filter.p.m.custom.genero=Menino\n• Unissex: https://laleblu.com.br/collections/macacoes-e-vestidos-saidas-maternidade?filter.p.m.custom.genero=Unissex\nSugestões de looks: https://laleblu.com.br/pages/saida-maternidade-looks\nO tricô em linha é o queridinho: mantém a temperatura do bebê sem esquentar demais.",
+  },
+  {
+    question: "Tem roupa para bebê prematuro?",
+    alternates:
+      "prematuro\nprematura\nbebê prematuro\nnasceu antes\nbaixo peso\nrn pequeno\n34 semanas\n35 semanas\nmenor que rn",
+    answer:
+      "Temos uma seleção pro tamanho Prematuro: https://laleblu.com.br/collections/prematuro 🤍 Me diz se é menina, menino ou neutro que eu ajudo a escolher.",
+  },
+  {
+    question: "Vocês têm mantas, cueiros e cobertores?",
+    alternates:
+      "manta\nmantas\ncueiro\ncueiros\ncobertor\ncobertores\nedredom\nxale\nvira manta\nmanta de berço\nmanta de tricot\nmanta de malha",
+    answer:
+      "Temos sim:\n• Todas as mantas: https://laleblu.com.br/collections/mantas\n• Mantas de tricot: https://laleblu.com.br/collections/mantas-tricot\n• Mantas de malha: https://laleblu.com.br/collections/mantas-malha\n• Manta de berço: https://laleblu.com.br/collections/manta-de-berco\n• Cueiros: https://laleblu.com.br/collections/cueiros\n• Mantas e cueiros básicos: https://laleblu.com.br/collections/mantas-e-cueiros\n• Vira manta: https://laleblu.com.br/collections/vira-manta\n• Cobertores: https://laleblu.com.br/collections/cobertores-mantas\n• Edredom: https://laleblu.com.br/collections/edredom\n• Xale: https://laleblu.com.br/collections/xale\nMantas e cueiros são tamanho único, então não aparecem em links filtrados por tamanho.",
+  },
+  {
+    question: "Quais itens de enxoval vocês têm? (lençol, toalha, fralda, bolsa...)",
+    alternates:
+      "enxoval\nberço\nbanho\nlençol\njogo de lençol\ntoalha\ntoalha de banho\nprotetor de colchão\nalmofada redutora\nfralda de boca\nfralda de ombro\nnécessaire\norganizador\nbolsa\nmochila\nbolsa térmica\nmala maternidade\nporta documentos",
+    answer:
+      "Nosso enxoval por categoria:\n• Enxoval completo: https://laleblu.com.br/collections/enxoval\n• Berço e banho: https://laleblu.com.br/collections/berco-e-banho\n• Jogos de lençol: https://laleblu.com.br/collections/jogos-de-lencol\n• Toalha de banho: https://laleblu.com.br/collections/toalha-de-banho\n• Protetor para colchão: https://laleblu.com.br/collections/protetor-para-colchao\n• Almofada redutora: https://laleblu.com.br/collections/almofada-redutora\n• Fralda de boca: https://laleblu.com.br/collections/fralda-de-boca-enxoval\n• Fralda de ombro: https://laleblu.com.br/collections/fralda-de-ombro-enxoval\n• Para organizar: https://laleblu.com.br/collections/para-organizar\n• Bolsas e mochilas: https://laleblu.com.br/collections/bolsas-e-mochilas\n• Bolsa térmica: https://laleblu.com.br/collections/bolsa-termica\nChecklist interativo do enxoval: https://laleblu.com.br/pages/checklist-enxoval",
+  },
+  {
+    question: "Vocês têm acessórios? (naninha, sapatinho, touca, meia, laço, babador)",
+    alternates:
+      "acessório\nacessórios\nnaninha\nsapatinho\nsapatinhos\ntouca\nluva\ntoucas e luvas\nmeia\nmeias\nfaixa\nlaço\nfaixas e laços\nprendedor de chupeta\nbabador\nbabadores\ncuidados\nhigiene\nescova\npente\nhome spray",
+    answer:
+      "Temos:\n• Todos os acessórios: https://laleblu.com.br/collections/acessorios\n• Naninhas: https://laleblu.com.br/collections/naninhas\n• Sapatinhos: https://laleblu.com.br/collections/sapatinhos\n• Toucas e luvas: https://laleblu.com.br/collections/toucas-e-luvas\n• Meias: https://laleblu.com.br/collections/meias\n• Faixas e laços: https://laleblu.com.br/collections/faixas-e-lacos\n• Prendedor de chupeta: https://laleblu.com.br/collections/prendedor-de-chupetas\n• Babadores: https://laleblu.com.br/collections/babadores\n• Cuidados (higiene): https://laleblu.com.br/collections/cuidados\n• Escova e pente: https://laleblu.com.br/collections/escova-e-pente\n• Home spray: https://laleblu.com.br/collections/home-spray\nAcessórios são tamanho único, não aparecem em links filtrados por tamanho.",
+  },
+  {
+    question: "Vocês fazem peças com o nome bordado?",
+    alternates:
+      "personalizado\npersonalizados\nnome bordado\nbordar o nome\ncom o nome\nmonograma\nbordado\niniciais\ncom o nome do bebê",
+    answer:
+      "Fazemos sim 💙\n• Todos os personalizados: https://laleblu.com.br/collections/personalizados\n• Fralda de boca e ombro personalizada: https://laleblu.com.br/collections/fralda-de-boca-e-ombro-personalizada\n• Touca personalizada: https://laleblu.com.br/collections/touca-para-bebe-personalizada\n• Faixa de cabelo personalizada: https://laleblu.com.br/collections/faixa-de-cabelo-para-bebe-personalizada\nO prazo de produção da peça personalizada aparece na página do produto.",
+  },
+  {
+    question: "Tem roupa para batizado, Natal, Páscoa ou de coleção temática?",
+    alternates:
+      "batizado\ntoalha de batizado\nnatal\npáscoa\npascoa\nfutebol\nbrasil\nchá revelação\ncha revelacao\ndata especial\ncoleção\nbonequinha\ncachorrinho\nleãozinho\nsuper heróis\nurso petit\nsafari\ncolors\nsoninho\nmimos\ntemática",
+    answer:
+      "Datas especiais:\n• Geral: https://laleblu.com.br/collections/datas-especiais\n• Batizado: https://laleblu.com.br/collections/batizado · Toalha de batizado: https://laleblu.com.br/collections/toalha-de-batizado\n• Natal: https://laleblu.com.br/collections/natal · Páscoa: https://laleblu.com.br/collections/pascoa\n• Futebol: https://laleblu.com.br/collections/futebol · Brasil: https://laleblu.com.br/collections/brasil\n• Chá revelação: https://laleblu.com.br/collections/cha-revelacao\nColeções temáticas: Bonequinha https://laleblu.com.br/collections/colecao-bonequinha · Cachorrinho https://laleblu.com.br/collections/colecao-cachorrinho · Leãozinho https://laleblu.com.br/collections/colecao-leaozinho · Super Heróis https://laleblu.com.br/collections/colecao-super-herois · Urso Petit https://laleblu.com.br/collections/urso-petit · Safari https://laleblu.com.br/collections/safari · Soninho https://laleblu.com.br/collections/colecao-soninho · Colors https://laleblu.com.br/collections/colecao-colors · Mimos https://laleblu.com.br/collections/colecao-mimos · Zíper estampado https://laleblu.com.br/collections/colecao-ziper-estampado · Histórias Laleblu https://laleblu.com.br/collections/historias-laleblu\nTodas as coleções: https://laleblu.com.br/collections",
+  },
+  {
+    question: "Quero um presente dentro de um valor",
+    alternates:
+      "presente até\npresente de\nquanto gastar\nfaixa de preço\npresente barato\npresente até 150\npresente 200\npresente 300\nvalor do presente\nembalagem de presente\ncaixa de presente",
+    answer:
+      "A vitrine de presentes filtra por valor:\n• Até R$ 150: https://laleblu.com.br/collections/presentes?filter.v.price.lte=150\n• De R$ 150 a R$ 300: https://laleblu.com.br/collections/presentes?filter.v.price.gte=150&filter.v.price.lte=300\n• Acima de R$ 300: https://laleblu.com.br/collections/presentes?filter.v.price.gte=300\n• Para menina: https://laleblu.com.br/collections/presentes?filter.p.m.custom.genero=Menina\n• Para menino: https://laleblu.com.br/collections/presentes?filter.p.m.custom.genero=Menino\nEmbalagem (caixa, sacola e cartão) por R$ 15,90: https://laleblu.com.br/products/caixa-sacola-e-cartao-para-presente",
+  },
+  {
+    question: "Como funcionam os kits de presente? Tem desconto no kit?",
+    alternates:
+      "kit\nkits\nkit presente\nkit de presente\ndesconto no kit\ncomo compro o kit\ncombo\ndesconto de kit",
+    answer:
+      "O kit é uma sugestão de combinação 🤍 A compra é feita pelas peças individuais: você abre o kit, toca em cada peça e adiciona ao carrinho. O preço que aparece no kit é a soma das peças — não há desconto de kit. Ver os kits: https://laleblu.com.br/collections/presentes",
+  },
+  {
+    question: "Onde vejo a central de ajuda, quem somos, minha conta?",
+    alternates:
+      "central de ajuda\najuda\nquem somos\nsobre a loja\nsobre vocês\nminha conta\nmeus pedidos\ncriar conta\nlogin\nfale conosco\ncontato\nlink da bio\ntodos os links\npolítica\nformas de pagamento",
+    answer:
+      "• Central de ajuda: https://laleblu.com.br/pages/central-de-ajuda\n• Perguntas frequentes: https://laleblu.com.br/pages/perguntas-frequentes\n• Trocas e devoluções: https://laleblu.com.br/policies/refund-policy\n• Entrega e frete: https://laleblu.com.br/policies/shipping-policy\n• Formas de pagamento: https://laleblu.com.br/pages/formas-de-pagamento\n• Quem somos: https://laleblu.com.br/pages/quem-somos\n• Clube VIP: https://laleblu.com.br/pages/clube-vip\n• Minha conta / meus pedidos: https://laleblu.com.br/account/login\n• Criar conta: https://laleblu.com.br/account/register\n• Fale conosco: https://laleblu.com.br/pages/contact\n• Todos os links (bio): https://laleblu.com.br/pages/links",
+  },
+  {
+    question: "Como monto um link do site já filtrado pelo que a cliente pediu?",
+    alternates:
+      "montar link\nlink filtrado\nfiltro\nfiltrar\nurl com filtro\nlink por tamanho\nlink por cor\nlink por preço\ncomo filtro o site",
+    answer:
+      "Comece pela URL da categoria e junte os filtros depois de \"?\", separando com \"&\":\n• tamanho: filter.v.option.tamanho=P (Prematuro, PP%2FRN, P, M, G, GG%2F1, 2)\n• gênero: filter.p.m.custom.genero=Menina (Menina · Menino · Unissex)\n• tecido: filter.p.m.custom.material=Tricot\n• cor: filter.p.m.custom.cor_para_filtro=Rosa\n• preço: filter.v.price.gte=150&filter.v.price.lte=300\n• ordenar: sort_by=best-selling · price-ascending · created-descending\nExemplo — bodies de menina tamanho M por menor preço: https://laleblu.com.br/collections/bodies?filter.p.m.custom.genero=Menina&filter.v.option.tamanho=M&sort_by=price-ascending\nBarra \"/\" vira %2F, espaço vira \"+\", acento vira código (Algod%C3%A3o+Pima). Na dúvida, mande o link da categoria sem filtro.",
   },
 ];
 
@@ -274,6 +391,21 @@ const PLAYBOOKS: {
     ],
   },
   {
+    name: "Montar link do site com filtro",
+    scriptType: "livre",
+    triggerText: "a cliente pede algo específico: gênero + tamanho, uma cor, um tecido ou uma faixa de preço",
+    goal: "enviar um link da vitrine já filtrado com o que a cliente pediu, sem ela precisar mexer em nada",
+    steps: [
+      "Identifique o que ela pediu: categoria (macacão, body, saída de maternidade...), gênero, tamanho, cor, tecido, faixa de preço.",
+      "Comece pela URL da categoria (ex: https://laleblu.com.br/collections/bodies). Sem categoria específica, use toda-a-loja, meninas, meninos ou unissex.",
+      "Junte os filtros depois de '?', separando com '&': tamanho = filter.v.option.tamanho=P · gênero = filter.p.m.custom.genero=Menina (Menina/Menino/Unissex) · tecido = filter.p.m.custom.material=Tricot · cor = filter.p.m.custom.cor_para_filtro=Rosa · preço = filter.v.price.gte=150&filter.v.price.lte=300 · ordenar = sort_by=best-selling (ou price-ascending, created-descending).",
+      "Codifique os caracteres especiais: '/' vira %2F (PP%2FRN, GG%2F1), espaço vira '+' (Malha+UV), acento vira código (Algod%C3%A3o+Pima).",
+      "Exemplo: bodies de menina tamanho M por menor preço = https://laleblu.com.br/collections/bodies?filter.p.m.custom.genero=Menina&filter.v.option.tamanho=M&sort_by=price-ascending",
+      "Na dúvida sobre a URL da categoria, mande o link da categoria sem filtro e diga que dá pra filtrar na própria página. Nunca invente um endereço.",
+      "Mantas, naninhas e acessórios são tamanho único: mande o link da categoria, sem o filtro de tamanho.",
+    ],
+  },
+  {
     name: "Elogio ou agradecimento",
     scriptType: "livre",
     triggerText: "mensagem de agradecimento ou elogio após a entrega",
@@ -303,7 +435,11 @@ const RULES: { category: string; instruction: string }[] = [
   { category: "procedimentos", instruction: "Frete grátis vale só para compras com preço regular, não vale em Sale nem Black Friday." },
   { category: "procedimentos", instruction: "Em Sale e Black Friday não há troca, apenas devolução e peça com defeito." },
   // pagamento / cupom
-  { category: "pagamento", instruction: "O único cupom que pode ser divulgado é o PRIMEIRACOMPRA (5% na primeira compra, sem valor mínimo, uma vez por cliente). Nenhum outro cupom ou código de promoção deve ser informado: convide para o Clube VIP. Se a pessoa perguntar por um código específico de promoção, transfira para a equipe." },
+  { category: "pagamento", instruction: "Cupons que podem ser informados: PRIMEIRACOMPRA (5% na primeira compra, cupom da newsletter, sem valor mínimo) e VIP10 (10% em compras acima de R$ 299, válido até 30/11/2026, do Clube VIP). Um cupom por pedido, não acumulam entre si. Nenhum outro código de promoção deve ser informado: convide para o Clube VIP. Se pedirem outro código específico, transfira para a equipe." },
+  { category: "pagamento", instruction: "O parcelamento é em até 6x sem juros no cartão. O Pix tem aprovação imediata. Formas de pagamento: https://laleblu.com.br/pages/formas-de-pagamento" },
+  { category: "procedimentos", instruction: "Entrega expressa (São Paulo e região, próximo dia útil) custa R$ 29,90. Motoboy no mesmo dia para capital, Grande SP e ABC, pedidos até as 14h. O valor e o prazo do frete aparecem no carrinho quando a cliente coloca o CEP." },
+  { category: "procedimentos", instruction: "Quando a cliente pedir algo específico (gênero, tamanho, cor, tecido ou faixa de preço), monte o link da coleção já filtrado seguindo o roteiro 'Montar link do site com filtro' e mande pronto. Se não tiver certeza da URL exata da categoria, mande o link da categoria sem filtro (ou toda-a-loja com o filtro). Nunca invente um endereço de coleção: use só os que estão nas FAQ e nos roteiros." },
+  { category: "procedimentos", instruction: "Mantas, cueiros, naninhas e acessórios são tamanho único e não aparecem em links filtrados por tamanho: nesses casos mande o link da categoria, sem o filtro de tamanho." },
   // chamar a equipe
   { category: "chamar_equipe", instruction: "Pedido, troca, devolução, rastreio e problema de pagamento não se resolvem na conversa: envie o link do WhatsApp (11) 94254-0549 com a mensagem pronta. Só use transfer_to_human se a pessoa insistir em resolver por ali." },
   { category: "chamar_equipe", instruction: "O atendimento humano funciona de segunda a sexta, das 9h às 17h. Ao transferir dentro desse horário, diga que a equipe já responde por aqui. Fora do horário, avise que a mensagem ficou registrada e será respondida no próximo horário útil, e ofereça o WhatsApp para urgências." },
