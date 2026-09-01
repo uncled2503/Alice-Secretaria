@@ -46,10 +46,50 @@ test("plano de briefing aceita perfil de atendimento", () => {
   assert.equal(p.clinic.clinicKind, "medica");
   assert.equal(p.clinic.evaluationFirst, true);
   assert.equal(p.clinic.allowEmojis, false);
-  assert.equal(BriefingPlanSchema.safeParse({ clinic: { servicePosture: "outra" } }).success, false);
+  // enum fora da lista some (vira undefined) em vez de derrubar o plano todo
+  const j = BriefingPlanSchema.parse({ clinic: { servicePosture: "outra" } });
+  assert.equal(j.clinic.servicePosture, undefined);
 });
 
-test("plano de briefing rejeita categoria de regra invalida e hora fora do intervalo", () => {
-  assert.equal(BriefingPlanSchema.safeParse({ rules: [{ category: "xpto", instruction: "teste" }] }).success, false);
-  assert.equal(BriefingPlanSchema.safeParse({ clinic: { workStartHour: 30 } }).success, false);
+test("plano de briefing descarta ruido em vez de falhar", () => {
+  // categoria de regra invalida: a regra ruim some, a boa fica
+  const r = BriefingPlanSchema.parse({
+    rules: [
+      { category: "xpto", instruction: "categoria inexistente" },
+      { category: "tom_de_voz", instruction: "Falar sempre com gentileza." },
+    ],
+  });
+  assert.equal(r.rules.length, 1);
+  assert.equal(r.rules[0].category, "tom_de_voz");
+  // hora fora do intervalo: campo some, resto do plano segue
+  const h = BriefingPlanSchema.parse({ clinic: { name: "X", workStartHour: 30 } });
+  assert.equal(h.clinic.workStartHour, undefined);
+  assert.equal(h.clinic.name, "X");
+});
+
+test("plano de briefing tolera null, string no lugar de array e numero como texto", () => {
+  const p = BriefingPlanSchema.parse({
+    clinic: { name: "Clinica X", timezone: null, workStartHour: "9", workEndHour: "19", assistantPersonaName: null, allowEmojis: null, schedulingLink: "" },
+    procedures: [
+      { name: "Toxina", durationMin: "30", price: "1200", goals: "rosto cansado", aliases: null },
+      { name: "", price: null },
+      { name: "Cirurgia", price: "depende de avaliacao", priceVariable: true },
+    ],
+    professionals: [{ name: "Dra. Ana", procedureNames: "Toxina" }],
+    playbooks: [{ name: "Primeiro contato", scriptType: "saudacao", steps: "Cumprimente" }],
+    warnings: null,
+  });
+  assert.equal(p.clinic.workStartHour, 9);
+  assert.equal(p.clinic.workEndHour, 19);
+  assert.equal(p.clinic.timezone, undefined);
+  assert.equal(p.procedures.length, 2); // o sem nome foi descartado
+  assert.equal(p.procedures[0].durationMin, 30);
+  assert.equal(p.procedures[0].price, 1200);
+  assert.deepEqual(p.procedures[0].goals, ["rosto cansado"]);
+  assert.equal(p.procedures[1].price, undefined); // "depende" nao vira numero
+  assert.equal(p.procedures[1].priceVariable, true);
+  assert.deepEqual(p.professionals[0].procedureNames, ["Toxina"]);
+  assert.equal(p.playbooks[0].scriptType, undefined); // enum invalido -> some
+  assert.deepEqual(p.playbooks[0].steps, ["Cumprimente"]);
+  assert.deepEqual(p.warnings, []);
 });

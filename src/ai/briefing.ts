@@ -6,8 +6,9 @@ import { reseedRulesForProfile } from "./rules.js";
 import { logActivity } from "../crm/activity.js";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-// Briefing e uma chamada rara (uma por cliente novo) e vale um modelo melhor.
-const MODEL = process.env.OPENAI_BRIEFING_MODEL ?? process.env.OPENAI_MODEL ?? "gpt-4o";
+// Briefing e uma chamada rara (uma por cliente novo) e vale um modelo melhor:
+// nao cai no OPENAI_MODEL (que costuma ser o mini) - usa gpt-4o por padrao.
+const MODEL = process.env.OPENAI_BRIEFING_MODEL ?? "gpt-4o";
 
 // ---------------------------------------------------------------------------
 // Questionario que o cliente responde. Fonte unica: o painel serve este texto
@@ -118,148 +119,218 @@ const SCRIPT_TYPES = [
   "remarcacao", "pos_procedimento", "transferir", "livre",
 ] as const;
 
-const num = z.number().finite();
-const str = z.string().trim();
+// --- Tolerancia ao ruido do modelo ---------------------------------------
+// A IA (via tool call) as vezes manda "campo": null nos opcionais, string no
+// lugar de array, enum fora da lista ou numero como texto. Nada disso pode
+// derrubar o briefing inteiro: o que nao der pra mapear e ignorado e o
+// applyBriefing preenche defaults. pruneEmpty roda ANTES do parse.
+export function pruneEmpty(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(pruneEmpty).filter((v) => v !== undefined && v !== null && v !== "");
+  }
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      const cleaned = pruneEmpty(v);
+      if (cleaned !== undefined && cleaned !== null && cleaned !== "") out[k] = cleaned;
+    }
+    return out;
+  }
+  return value;
+}
 
-export const BriefingPlanSchema = z.object({
+// string que tambem aceita numero/boolean (a IA manda "numero": 177 as vezes).
+const str = z.preprocess(
+  (v) => (typeof v === "number" || typeof v === "boolean" ? String(v) : v),
+  z.string().trim(),
+);
+// numero que aceita "30" (texto). Lixo ("depende") -> erro, tratado com .catch.
+const num = z.coerce.number().finite();
+const bool = z.preprocess(
+  (v) => (typeof v === "string" ? ["true", "sim", "yes", "1"].includes(v.trim().toLowerCase()) : v),
+  z.boolean(),
+);
+const optBool = bool.optional().catch(undefined);
+const optHour = num.int().min(0).max(23).optional().catch(undefined);
+const optPosInt = num.int().positive().optional().catch(undefined);
+// array de strings que aceita uma string solta no lugar do array.
+const strArray = z
+  .preprocess((v) => (typeof v === "string" ? [v] : v), z.array(str))
+  .optional()
+  .catch(undefined);
+const canBeNum = (v: unknown) => v != null && v !== "" && Number.isFinite(Number(v));
+
+// enum opcional: valor fora da lista vira undefined em vez de falhar o plano.
+function softEnum<T extends readonly [string, ...string[]]>(values: T) {
+  const set = new Set<string>(values);
+  return z.preprocess((v) => (typeof v === "string" && set.has(v) ? v : undefined), z.enum(values).optional());
+}
+// enum com fallback: valor fora da lista vira o padrao.
+function softEnumDefault<T extends readonly [string, ...string[]]>(values: T, fallback: T[number]) {
+  const set = new Set<string>(values);
+  return z.preprocess((v) => (typeof v === "string" && set.has(v) ? v : fallback), z.enum(values));
+}
+// array que descarta itens invalidos em vez de invalidar o array inteiro.
+function lenientArray<T extends z.ZodTypeAny>(item: T, keep: (v: Record<string, unknown>) => boolean) {
+  return z.preprocess(
+    (v) => (Array.isArray(v) ? v.filter((x) => !!x && typeof x === "object" && !Array.isArray(x) && keep(x as Record<string, unknown>)) : v),
+    z.array(item).default([]).catch(() => []),
+  );
+}
+const hasName = (v: Record<string, unknown>) => typeof v.name === "string" && v.name.trim().length > 0;
+
+const BriefingPlanObject = z.object({
   clinic: z
     .object({
       name: str.optional(),
       whatsappPhone: str.optional(),
       timezone: str.optional(),
-      workStartHour: num.int().min(0).max(23).optional(),
-      workEndHour: num.int().min(0).max(23).optional(),
+      workStartHour: optHour,
+      workEndHour: optHour,
       workDays: str.optional(), // "1,2,3,4,5" (0=dom..6=sab)
       assistantName: str.optional(),
-      assistantPersona: z.enum(PERSONA).optional(),
+      assistantPersona: softEnum(PERSONA),
       assistantPersonaName: str.optional(),
       activityArea: str.optional(),
       handoffPhrase: str.optional(),
-      requireDepositProof: z.boolean().optional(),
+      requireDepositProof: optBool,
       notifyPhone: str.optional(),
       notifyEvents: str.optional(), // csv de new_appointment,reschedule,cancel,confirmed,human_handoff
-      servicePosture: z.enum(["comercial", "consultivo"]).optional(),
-      clinicKind: z.enum(["estetica", "medica", "ambas"]).optional(),
-      evaluationFirst: z.boolean().optional(),
-      allowEmojis: z.boolean().optional(),
+      servicePosture: softEnum(["comercial", "consultivo"] as const),
+      clinicKind: softEnum(["estetica", "medica", "ambas"] as const),
+      evaluationFirst: optBool,
+      allowEmojis: optBool,
       schedulingLink: str.optional(),
     })
     .default({}),
-  locations: z
-    .array(
-      z.object({
-        name: str.default("Unidade principal"),
-        street: str.optional(),
-        number: str.optional(),
-        complement: str.optional(),
-        neighborhood: str.optional(),
-        city: str.optional(),
-        state: str.optional(),
-        zipCode: str.optional(),
-        arrivalInstructions: str.optional(),
-      }),
-    )
-    .default([]),
-  procedures: z
-    .array(
-      z.object({
-        name: str,
-        durationMin: num.int().positive().optional(),
-        price: num.nonnegative().nullable().optional(),
-        priceVariable: z.boolean().optional(),
-        paymentMethods: str.optional(), // csv de dinheiro,pix,credito,debito
-        offerInstallments: z.boolean().optional(),
-        maxInstallments: num.int().min(2).max(24).optional(),
-        paymentLink: str.optional(),
-        description: str.optional(),
-        goals: z.array(str).optional(),
-        benefits: z.array(str).optional(),
-        aliases: str.optional(), // csv
-        resultTimeline: str.optional(),
-      }),
-    )
-    .default([]),
-  products: z
-    .array(z.object({ name: str, price: num.nonnegative().nullable().optional(), description: str.optional() }))
-    .default([]),
-  professionals: z
-    .array(
-      z.object({
-        name: str,
-        bio: str.optional(),
-        instagram: str.optional(),
-        procedureNames: z.array(str).optional(),
-        workDays: str.optional(),
-        workStartHour: num.int().min(0).max(23).optional(),
-        workEndHour: num.int().min(0).max(23).optional(),
-      }),
-    )
-    .default([]),
-  faqs: z
-    .array(
-      z.object({
-        question: str,
-        answer: str,
-        alternates: z.array(str).optional(),
-        exactAnswer: z.boolean().optional(),
-      }),
-    )
-    .default([]),
-  templates: z
-    .array(
-      z.object({
-        name: str,
-        body: str,
-        mode: z.enum(["adapt", "exact"]).optional(),
-        whenToUse: str.optional(),
-      }),
-    )
-    .default([]),
-  rules: z.array(z.object({ category: z.enum(RULE_CATS), instruction: str })).default([]),
-  playbooks: z
-    .array(
-      z.object({
-        name: str,
-        scriptType: z.enum(SCRIPT_TYPES).optional(),
-        triggerText: str.optional(),
-        goal: str.optional(),
-        steps: z.array(str).optional(),
-      }),
-    )
-    .default([]),
+  locations: lenientArray(
+    z.object({
+      name: str.default("Unidade principal"),
+      street: str.optional(),
+      number: str.optional(),
+      complement: str.optional(),
+      neighborhood: str.optional(),
+      city: str.optional(),
+      state: str.optional(),
+      zipCode: str.optional(),
+      arrivalInstructions: str.optional(),
+    }),
+    () => true,
+  ),
+  procedures: lenientArray(
+    z.object({
+      name: str,
+      durationMin: optPosInt,
+      price: num.nonnegative().nullable().optional().catch(undefined),
+      priceVariable: optBool,
+      paymentMethods: str.optional(), // csv de dinheiro,pix,credito,debito
+      offerInstallments: optBool,
+      maxInstallments: num.int().min(2).max(24).optional().catch(undefined),
+      paymentLink: str.optional(),
+      description: str.optional(),
+      goals: strArray,
+      benefits: strArray,
+      aliases: str.optional(), // csv
+      resultTimeline: str.optional(),
+    }),
+    hasName,
+  ),
+  products: lenientArray(
+    z.object({ name: str, price: num.nonnegative().nullable().optional().catch(undefined), description: str.optional() }),
+    hasName,
+  ),
+  professionals: lenientArray(
+    z.object({
+      name: str,
+      bio: str.optional(),
+      instagram: str.optional(),
+      procedureNames: strArray,
+      workDays: str.optional(),
+      workStartHour: optHour,
+      workEndHour: optHour,
+    }),
+    hasName,
+  ),
+  faqs: lenientArray(
+    z.object({
+      question: str,
+      answer: str,
+      alternates: strArray,
+      exactAnswer: optBool,
+    }),
+    (v) => typeof v.question === "string" && !!v.question.trim() && typeof v.answer === "string" && !!v.answer.trim(),
+  ),
+  templates: lenientArray(
+    z.object({
+      name: str,
+      body: str,
+      mode: softEnum(["adapt", "exact"] as const),
+      whenToUse: str.optional(),
+    }),
+    (v) => typeof v.name === "string" && !!v.name.trim() && typeof v.body === "string" && !!v.body.trim(),
+  ),
+  rules: lenientArray(
+    z.object({ category: z.enum(RULE_CATS), instruction: str }),
+    (v) => (RULE_CATS as readonly string[]).includes(v.category as string) && typeof v.instruction === "string" && !!v.instruction.trim(),
+  ),
+  playbooks: lenientArray(
+    z.object({
+      name: str,
+      scriptType: softEnum(SCRIPT_TYPES),
+      triggerText: str.optional(),
+      goal: str.optional(),
+      steps: strArray,
+    }),
+    hasName,
+  ),
   automations: z
     .object({
-      reminders: z.array(z.object({ hoursBefore: num.int().positive(), message: str.optional() })).default([]),
-      followups: z
-        .array(z.object({ afterDays: num.int().positive(), message: str.optional(), repeatMode: z.enum(["every_silence", "once"]).optional() }))
-        .default([]),
-      postProcedure: z
-        .array(
-          z.object({
-            name: str.default("Pos-procedimento"),
-            intervalValue: num.int().positive().default(2),
-            intervalUnit: z.enum(["hours", "days"]).default("days"),
-            procedureNames: z.array(str).optional(),
-            message: str.optional(),
-          }),
-        )
-        .default([]),
-      renewals: z
-        .array(
-          z.object({
-            name: str.default("Renovacao"),
-            intervalValue: num.int().positive().default(6),
-            intervalUnit: z.enum(["months", "years"]).default("months"),
-            procedureNames: z.array(str).optional(),
-            message: str.optional(),
-          }),
-        )
-        .default([]),
-      birthday: z.object({ enabled: z.boolean().default(false), sendHour: num.int().min(0).max(23).optional(), message: str.optional() }).default({ enabled: false }),
+      reminders: lenientArray(
+        z.object({ hoursBefore: num.int().positive(), message: str.optional() }),
+        (v) => canBeNum(v.hoursBefore) && Number(v.hoursBefore) > 0,
+      ),
+      followups: lenientArray(
+        z.object({
+          afterDays: num.int().positive(),
+          message: str.optional(),
+          repeatMode: softEnum(["every_silence", "once"] as const),
+        }),
+        (v) => canBeNum(v.afterDays) && Number(v.afterDays) > 0,
+      ),
+      postProcedure: lenientArray(
+        z.object({
+          name: str.default("Pos-procedimento"),
+          intervalValue: num.int().positive().catch(2).default(2),
+          intervalUnit: softEnumDefault(["hours", "days"] as const, "days"),
+          procedureNames: strArray,
+          message: str.optional(),
+        }),
+        () => true,
+      ),
+      renewals: lenientArray(
+        z.object({
+          name: str.default("Renovacao"),
+          intervalValue: num.int().positive().catch(6).default(6),
+          intervalUnit: softEnumDefault(["months", "years"] as const, "months"),
+          procedureNames: strArray,
+          message: str.optional(),
+        }),
+        () => true,
+      ),
+      birthday: z
+        .object({ enabled: bool.catch(false).default(false), sendHour: optHour, message: str.optional() })
+        .default({ enabled: false }),
     })
     .default({}),
-  warnings: z.array(str).default([]),
+  warnings: z
+    .preprocess((v) => (Array.isArray(v) ? v : v == null ? [] : [v]), z.array(str))
+    .default([])
+    .catch(() => []),
 });
+
+// Tira null / "" / undefined recursivamente ANTES de validar, pra "campo": null
+// (que a IA adora mandar nos opcionais) nao derrubar o plano.
+export const BriefingPlanSchema = z.preprocess((v) => pruneEmpty(v == null ? {} : v), BriefingPlanObject);
 
 export type BriefingPlan = z.infer<typeof BriefingPlanSchema>;
 
@@ -290,7 +361,9 @@ Regras:
 - schedulingLink: so preencha se houver um link real de auto-agendamento.
 - procedures.price: numero em reais, ou null se "depende de avaliacao" (nesse caso priceVariable=true).
 - paymentMethods: csv com os valores exatos dinheiro,pix,credito,debito.
-- rules: transforme cada instrucao de tom de voz / politica de preco / "nunca fazer" / "quando chamar a equipe" em uma regra objetiva na categoria certa. Instrucoes claras e acionaveis, na 3a pessoa.
+- rules: transforme cada instrucao de tom de voz / politica de preco / "nunca fazer" / "quando chamar a equipe" em uma regra objetiva. Instrucoes claras e acionaveis, na 3a pessoa.
+- rules.category: use EXATAMENTE uma destas cinco: agendamento, pagamento, tom_de_voz, chamar_equipe, procedimentos. Se a instrucao nao se encaixa perfeitamente, escolha a mais proxima (ex: "nao prometer resultado" -> procedimentos; "ser sempre educada, sem girias" -> tom_de_voz; "nao dar desconto, chamar o responsavel" -> chamar_equipe; "confirmar horario manualmente" -> agendamento; "nao passar valor de cirurgia" -> pagamento). Nunca invente outra categoria.
+- Use apenas os valores exatos de enum pedidos em cada campo. Quando nao souber um campo, omita-o (nao mande null nem texto livre).
 - automations: so inclua o que o cliente pediu. Se ele nao especificou a mensagem, deixe message vazio (o sistema usa um padrao). Para pos-procedimento/renovacao, mapeie procedureNames pelos nomes exatos dos procedimentos do briefing (vazio = todos).
 - warnings: liste o que ficou ambiguo, incompleto ou que voce nao conseguiu mapear, pra pessoa revisar depois.
 - Nao invente valor, prazo, beneficio ou politica que nao esteja no briefing.`;
@@ -511,14 +584,18 @@ export async function parseBriefing(text: string): Promise<ParseResult> {
       model: MODEL,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: clean.slice(0, 24_000) },
+        { role: "user", content: clean.slice(0, 60_000) },
       ],
       tools,
       tool_choice: { type: "function", function: { name: "save_briefing" } },
     });
-    const call = response.choices[0].message.tool_calls?.[0];
+    const call = response.choices[0]?.message?.tool_calls?.[0];
     if (!call || call.type !== "function") return { ok: false, error: "A IA não conseguiu interpretar o briefing. Tente reescrever de forma mais estruturada." };
-    raw = JSON.parse(call.function.arguments || "{}");
+    try {
+      raw = JSON.parse(call.function.arguments || "{}");
+    } catch {
+      return { ok: false, error: "A IA devolveu um JSON inválido. Tente de novo em instantes." };
+    }
   } catch (err) {
     console.error("Falha ao interpretar briefing:", err);
     return { ok: false, error: "Erro ao chamar a IA para interpretar o briefing. Tente de novo em instantes." };
@@ -526,10 +603,34 @@ export async function parseBriefing(text: string): Promise<ParseResult> {
 
   const parsed = BriefingPlanSchema.safeParse(raw);
   if (!parsed.success) {
-    console.error("Plano de briefing invalido:", parsed.error.issues);
-    return { ok: false, error: "A IA devolveu dados em formato inesperado. Revise o briefing e tente de novo." };
+    const spots = [...new Set(parsed.error.issues.map((i) => i.path.slice(0, 2).join(".")).filter(Boolean))].slice(0, 6);
+    console.error("Plano de briefing invalido:", JSON.stringify(parsed.error.issues.slice(0, 15)));
+    return {
+      ok: false,
+      error:
+        "A IA devolveu dados fora do formato esperado" +
+        (spots.length ? ` (em: ${spots.join(", ")})` : "") +
+        ". Tente de novo; se continuar, ajuste essas partes do briefing.",
+    };
   }
-  return { ok: true, plan: parsed.data };
+
+  // Avisa sobre itens que a IA mandou mas nao deram pra interpretar (categoria
+  // de regra invalida, item sem nome, etc): entram nos warnings pra revisao.
+  const plan = parsed.data;
+  const pruned = pruneEmpty(raw ?? {}) as Record<string, unknown>;
+  const dropped: string[] = [];
+  const LABELS: Record<string, string> = {
+    procedures: "procedimento(s)", professionals: "profissional(is)", faqs: "FAQ",
+    templates: "mensagem(ns) pronta(s)", rules: "regra(s)", playbooks: "roteiro(s)",
+    locations: "endereço(s)", products: "produto(s)",
+  };
+  for (const k of Object.keys(LABELS)) {
+    const sent = Array.isArray(pruned[k]) ? (pruned[k] as unknown[]).length : 0;
+    const kept = Array.isArray((plan as Record<string, unknown>)[k]) ? ((plan as Record<string, unknown>)[k] as unknown[]).length : 0;
+    if (sent - kept > 0) dropped.push(`${sent - kept} ${LABELS[k]} não puderam ser interpretados e foram ignorados — confira no briefing.`);
+  }
+  if (dropped.length) plan.warnings = [...plan.warnings, ...dropped];
+  return { ok: true, plan };
 }
 
 export interface ApplyResult {
