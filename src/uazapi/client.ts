@@ -2,7 +2,7 @@ import crypto, { timingSafeEqual } from "crypto";
 import OpenAI from "openai";
 import { toFile } from "openai";
 import { prisma } from "../db/client.js";
-import { handleIncomingMessage } from "../ai/alice.js";
+import { recordIncomingMessage, generateReply } from "../ai/alice.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -238,7 +238,7 @@ async function configureWebhook(clinicId: string, credentials: UazapiCredentials
     body: JSON.stringify({
       enabled: true,
       url,
-      events: ["messages", "connection"],
+      events: ["messages", "connection", "presence"],
       excludeMessages: ["wasSentByApi", "fromMeYes", "isGroupYes"],
       addUrlEvents: false,
       addUrlTypesMessages: false,
@@ -295,6 +295,13 @@ export async function getUazapiConfig(clinicId: string): Promise<{ configured: b
     baseUrl: clinic.uazapiBaseUrl ?? "",
     tokenHint: clinic.uazapiToken ? `••••${clinic.uazapiToken.slice(-4)}` : null,
   };
+}
+
+// Reaplica a config do webhook na instancia (ex: pra passar a receber os
+// eventos de "digitando" numa conta que ja estava conectada).
+export async function reapplyWebhook(clinicId: string): Promise<void> {
+  const credentials = await clinicCredentials(clinicId);
+  await configureWebhook(clinicId, credentials);
 }
 
 export async function connectClinic(clinicId: string): Promise<void> {
@@ -510,6 +517,55 @@ async function downloadImageDataUrl(clinicId: string, messageId: string): Promis
   }
 }
 
+// --- Agrupamento de mensagens quebradas ------------------------------------
+// O cliente costuma mandar varias mensagens curtas seguidas. Quando a clinica
+// configura replyDelaySeconds > 0, a Alice espera esse tempo sem mensagem nova
+// antes de responder - e responde a todas de uma vez. Estado em memoria (um
+// restart perde os timers pendentes; as mensagens ja estao gravadas).
+const MAX_TOTAL_WAIT_MS = 45_000;
+
+interface PendingReply {
+  timer: NodeJS.Timeout;
+  conversationId: string;
+  phone: string;
+  imageDataUrl?: string;
+  firstAt: number;
+}
+const pendingReplies = new Map<string, PendingReply>(); // key = `${clinicId}:${phone}`
+
+function scheduleGroupedReply(clinicId: string, phone: string, conversationId: string, delayMs: number, imageDataUrl?: string): void {
+  const key = `${clinicId}:${phone}`;
+  const existing = pendingReplies.get(key);
+  if (existing) clearTimeout(existing.timer);
+
+  const firstAt = existing?.firstAt ?? Date.now();
+  const img = imageDataUrl ?? existing?.imageDataUrl;
+  const remaining = MAX_TOTAL_WAIT_MS - (Date.now() - firstAt);
+  const wait = Math.max(0, Math.min(delayMs, remaining));
+
+  const timer = setTimeout(() => {
+    pendingReplies.delete(key);
+    const startedAt = new Date();
+    generateReply(conversationId, { imageDataUrl: img, guardAgainstNewerThan: startedAt })
+      .then((reply) => {
+        // Um novo agrupamento comecou enquanto gerava -> nao envia esta.
+        if (pendingReplies.has(key)) return;
+        if (reply) return sendText(clinicId, phone, reply);
+      })
+      .catch((err) => console.error("[reply-group] falha ao gerar/enviar:", err));
+  }, wait);
+
+  pendingReplies.set(key, { timer, conversationId, phone, imageDataUrl: img, firstAt });
+}
+
+// Sinal de "digitando": so ESTENDE um agrupamento ja em curso (nunca inicia).
+export function bumpTypingWait(clinicId: string, phone: string, extraMs: number): void {
+  const key = `${clinicId}:${phone}`;
+  const e = pendingReplies.get(key);
+  if (!e) return;
+  scheduleGroupedReply(clinicId, phone, e.conversationId, extraMs, e.imageDataUrl);
+}
+
 async function handleQueuedPayload(clinicId: string, body: unknown): Promise<void> {
   for (const incoming of parseWebhookPayload(body)) {
     let text = incoming.text ?? null;
@@ -523,7 +579,7 @@ async function handleQueuedPayload(clinicId: string, body: unknown): Promise<voi
 
     if (!text && !imageDataUrl) continue;
 
-    const reply = await handleIncomingMessage({
+    const recorded = await recordIncomingMessage({
       clinicId,
       patientPhone: incoming.phone,
       patientName: incoming.pushName,
@@ -531,6 +587,14 @@ async function handleQueuedPayload(clinicId: string, body: unknown): Promise<voi
       imageDataUrl,
       referral: incoming.referral,
     });
+    if (!recorded || recorded.humanTakeover) continue;
+
+    if (recorded.replyDelayMs > 0) {
+      scheduleGroupedReply(clinicId, incoming.phone, recorded.conversationId, recorded.replyDelayMs, imageDataUrl);
+      continue;
+    }
+
+    const reply = await generateReply(recorded.conversationId, { imageDataUrl });
     if (reply) await sendText(clinicId, incoming.phone, reply);
   }
 }
@@ -542,7 +606,22 @@ function webhookExternalId(body: unknown): string {
   return crypto.createHash("sha256").update(stable).digest("hex");
 }
 
-export async function enqueueWebhook(clinicId: string, body: unknown): Promise<"queued" | "duplicate"> {
+// Detecta um evento de presenca ("digitando"). A forma exata varia; tentamos
+// os campos conhecidos. Devolve o telefone se for "composing"/"recording".
+function typingPhoneFromPresence(body: unknown): string | null {
+  const root = record(body);
+  if (!root) return null;
+  const p =
+    record(root.presence) ??
+    record(record(root.data)?.presence) ??
+    (textValue(root.type, root.event, root.EventType)?.toLowerCase().includes("presence") ? record(root.data) ?? root : null);
+  if (!p) return null;
+  const state = textValue(p.presence, p.lastKnownPresence, p.status, p.state)?.toLowerCase() ?? "";
+  if (!state.includes("composing") && !state.includes("recording") && !state.includes("typing")) return null;
+  return phoneFromJid(p.id, true) ?? phoneFromJid(p.chatid) ?? phoneFromJid(p.from) ?? phoneFromJid(p.participant);
+}
+
+export async function enqueueWebhook(clinicId: string, body: unknown): Promise<"queued" | "duplicate" | "presence"> {
   const clinic = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { id: true, uazapiToken: true } });
   if (!clinic?.uazapiToken) throw new Error("Clinica sem conexao de WhatsApp configurada");
 
@@ -551,6 +630,14 @@ export async function enqueueWebhook(clinicId: string, body: unknown): Promise<"
     const expected = Buffer.from(clinic.uazapiToken);
     const received = Buffer.from(payloadToken);
     if (expected.length !== received.length || !timingSafeEqual(expected, received)) throw new Error("Token do webhook nao corresponde a clinica");
+  }
+
+  // Presenca ("digitando") nao entra na fila durante - so estende um
+  // agrupamento ja em curso pra Alice esperar a pessoa terminar de escrever.
+  const typingPhone = typingPhoneFromPresence(body);
+  if (typingPhone) {
+    bumpTypingWait(clinicId, typingPhone, 12_000);
+    return "presence";
   }
 
   try {

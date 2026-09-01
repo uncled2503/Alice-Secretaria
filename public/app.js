@@ -2575,6 +2575,7 @@ function loadAliceSettings() {
   document.getElementById("as-split").checked = c.splitLongMessages !== false;
   document.getElementById("as-split-max").value = c.splitMaxMessages ?? 4;
   document.getElementById("as-split-threshold").value = c.splitThresholdChars ?? 450;
+  document.getElementById("as-reply-delay").value = c.replyDelaySeconds ?? 0;
   document.getElementById("as-deposit").checked = !!c.requireDepositProof;
   document.getElementById("as-nps").checked = !!c.npsEnabled;
   document.getElementById("as-nps-hours").value = c.npsHoursAfter ?? 24;
@@ -2612,6 +2613,7 @@ document.getElementById("alice-settings-form").addEventListener("submit", async 
     splitLongMessages: document.getElementById("as-split").checked,
     splitMaxMessages: Number(document.getElementById("as-split-max").value),
     splitThresholdChars: Number(document.getElementById("as-split-threshold").value),
+    replyDelaySeconds: Number(document.getElementById("as-reply-delay").value) || 0,
     requireDepositProof: document.getElementById("as-deposit").checked,
     npsEnabled: document.getElementById("as-nps").checked,
     npsHoursAfter: Number(document.getElementById("as-nps-hours").value) || 24,
@@ -4180,6 +4182,10 @@ async function loadChannelStatus() {
   const disconnectBtn = document.getElementById("btn-channel-disconnect");
   const qrLoading = document.getElementById("channel-qr-loading");
 
+  // "Reaplicar webhook": só admin, e só faz sentido com a instância configurada.
+  document.getElementById("btn-channel-reapply-webhook").style.display =
+    state.staff?.role === "admin" && status.configured ? "inline-flex" : "none";
+
   state.channelConnected = !!status.connected;
 
   if (!status.configured) {
@@ -4352,6 +4358,21 @@ document.getElementById("btn-channel-disconnect").addEventListener("click", asyn
   } catch (error) {
     if (error.status !== 400) throw error;
     errorEl.textContent = channelErrorText(error, "Não foi possível desconectar.");
+  }
+});
+
+document.getElementById("btn-channel-reapply-webhook").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const st = document.getElementById("channel-reapply-status");
+  btn.disabled = true;
+  st.textContent = "Reaplicando…";
+  try {
+    await api("/whatsapp/reconfigure-webhook", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}", silentStatuses: [400] });
+    st.textContent = "✅ Webhook reaplicado.";
+  } catch (err) {
+    st.textContent = err.detail || "Não foi possível reaplicar.";
+  } finally {
+    btn.disabled = false;
   }
 });
 

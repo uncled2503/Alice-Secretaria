@@ -11,6 +11,7 @@ import {
   triggerHistoryImport,
   getUazapiConfig,
   saveUazapiConfig,
+  reapplyWebhook,
   verifyWebhookSignature,
   enqueueWebhook,
 } from "../uazapi/client.js";
@@ -156,6 +157,7 @@ apiRouter.get(
         splitLongMessages: true,
         splitMaxMessages: true,
         splitThresholdChars: true,
+        replyDelaySeconds: true,
         requireDepositProof: true,
         businessType: true,
         businessLabel: true,
@@ -205,6 +207,7 @@ apiRouter.put(
       splitLongMessages?: boolean;
       splitMaxMessages?: number;
       splitThresholdChars?: number;
+      replyDelaySeconds?: number;
       requireDepositProof?: boolean;
       businessType?: string;
       businessLabel?: string | null;
@@ -272,6 +275,7 @@ apiRouter.put(
           ...(b.splitLongMessages !== undefined ? { splitLongMessages: b.splitLongMessages } : {}),
           ...(b.splitMaxMessages !== undefined ? { splitMaxMessages: Math.min(Math.max(b.splitMaxMessages, 1), 8) } : {}),
           ...(b.splitThresholdChars !== undefined ? { splitThresholdChars: Math.min(Math.max(b.splitThresholdChars, 120), 2000) } : {}),
+          ...(b.replyDelaySeconds !== undefined ? { replyDelaySeconds: Math.min(Math.max(Math.round(b.replyDelaySeconds), 0), 60) } : {}),
           ...(b.requireDepositProof !== undefined ? { requireDepositProof: b.requireDepositProof } : {}),
           ...(b.businessType !== undefined ? { businessType: b.businessType } : {}),
           ...(b.businessLabel !== undefined ? { businessLabel: b.businessLabel?.trim() || null } : {}),
@@ -711,6 +715,22 @@ apiRouter.post(
       res.json({ ok: true });
     } catch (err: any) {
       res.status(400).json({ error: err?.message ?? "Falha ao iniciar importacao" });
+    }
+  })
+);
+
+// Reaplica a config do webhook (ex: passar a receber o sinal de "digitando"
+// numa conta ja conectada). So admin.
+apiRouter.post(
+  "/whatsapp/reconfigure-webhook",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await getClinic(req);
+    try {
+      await reapplyWebhook(clinic.id);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : "Falha ao reaplicar o webhook" });
     }
   })
 );

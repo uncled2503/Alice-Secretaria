@@ -42,6 +42,7 @@ model Clinic {
   splitLongMessages    Boolean @default(true) // quebra respostas longas em varias bolhas
   splitMaxMessages     Int     @default(4)
   splitThresholdChars  Int     @default(450) // a partir de quantos caracteres ja e "resposta longa"
+  replyDelaySeconds    Int     @default(0) // espera N seg pra agrupar mensagens quebradas do cliente (0 = responde na hora)
   requireDepositProof  Boolean @default(false) // so confirma agendamento apos o paciente enviar comprovante do sinal
 
   // Perfil de atendimento

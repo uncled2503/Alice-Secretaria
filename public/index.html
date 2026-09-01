@@ -715,7 +715,10 @@
             <div class="broadcast-form-row" style="margin-top:0.8rem">
               <button id="btn-channel-connect" type="button">Gerar QR Code</button>
               <button id="btn-channel-disconnect" type="button" class="tour-btn-ghost" style="display:none">Desconectar</button>
+              <button id="btn-channel-reapply-webhook" type="button" class="btn-brand btn-brand--secondary btn-brand--sm" style="display:none">Reaplicar webhook</button>
+              <span id="channel-reapply-status" class="hint" style="margin:0"></span>
             </div>
+            <p class="hint" style="margin:0.4rem 0 0">Use "Reaplicar webhook" se a Alice parou de receber mensagens ou pra ligar o sinal de "digitando" numa conexão antiga.</p>
           </div>
 
           <div class="section-header" style="margin-top:1.2rem"><span class="nav-icon" data-icon="repeat"></span> Importar dados do WhatsApp</div>
@@ -1094,6 +1097,12 @@
                   <input id="as-split-threshold" type="number" min="120" max="2000" value="450" />
                 </label>
               </div>
+              <div class="broadcast-form-row">
+                <label>Esperar antes de responder (segundos)
+                  <input id="as-reply-delay" type="number" min="0" max="60" value="0" />
+                </label>
+              </div>
+              <p class="hint" style="margin-top:0">O cliente costuma mandar várias mensagens seguidas. Com um valor aqui (ex: 8), a Alice espera esse tempo sem mensagem nova e responde a todas de uma vez, como uma pessoa faria. <strong>0 = responde na hora.</strong> Se o número enviar o sinal de "digitando", ela também espera a pessoa terminar.</p>
 
               <div class="section-header" style="margin-top:1rem">Sinal para garantir o horário</div>
               <label class="checkbox-row"><input type="checkbox" id="as-deposit" /> Exigir comprovante do sinal antes de confirmar o agendamento</label>

@@ -734,21 +734,29 @@ export interface IncomingReferral {
   adName?: string;
 }
 
-export async function handleIncomingMessage(params: {
+export interface RecordedMessage {
+  conversationId: string;
+  patientId: string;
+  humanTakeover: boolean;
+  replyDelayMs: number; // 0 = responder na hora; >0 = agrupar mensagens quebradas
+}
+
+// PASSO 1 (imediato, por mensagem): grava a mensagem do cliente, cuida do
+// lead/atribuicao e devolve o que o chamador precisa pra decidir quando (e se)
+// gerar a resposta. NAO chama a OpenAI.
+export async function recordIncomingMessage(params: {
   clinicId: string;
   patientPhone: string;
   patientName?: string;
   text: string;
-  imageDataUrl?: string; // foto enviada pelo cliente (o modelo "ve" a imagem nesta rodada)
-  referral?: IncomingReferral; // atribuicao de Click-to-WhatsApp (so no 1o contato)
-}): Promise<string> {
+  imageDataUrl?: string;
+  referral?: IncomingReferral;
+}): Promise<RecordedMessage | null> {
   const { clinicId, patientPhone, patientName, text, imageDataUrl, referral } = params;
   const trimmed = text.trim();
   const storedContent = trimmed || (imageDataUrl ? "[imagem]" : "");
-  if (!storedContent) return "";
+  if (!storedContent) return null;
 
-  // Detecta lead novo (pra disparar o evento Lead uma vez so) e guarda a
-  // atribuicao de campanha no primeiro contato.
   const existing = await prisma.patient.findUnique({
     where: { clinicId_phone: { clinicId, phone: patientPhone } },
     select: { id: true, metaFbc: true },
@@ -765,13 +773,8 @@ export async function handleIncomingMessage(params: {
       : {};
 
   const patient = existing
-    ? await prisma.patient.update({
-        where: { id: existing.id },
-        data: { name: patientName, ...attribution },
-      })
-    : await prisma.patient.create({
-        data: { clinicId, phone: patientPhone, name: patientName, ...attribution },
-      });
+    ? await prisma.patient.update({ where: { id: existing.id }, data: { name: patientName, ...attribution } })
+    : await prisma.patient.create({ data: { clinicId, phone: patientPhone, name: patientName, ...attribution } });
 
   if (!existing) {
     void enqueueLead(clinicId, patient.id).catch((err) => console.error("[meta] enqueueLead:", err));
@@ -790,16 +793,40 @@ export async function handleIncomingMessage(params: {
   });
   await prisma.conversation.update({
     where: { id: conversation.id },
-    data: { lastMessageAt: new Date(), lastFollowUpOrder: 0 }, // paciente respondeu, reinicia a cascata de recontato
+    data: { lastMessageAt: new Date(), lastFollowUpOrder: 0 },
   });
 
-  if (conversation.humanTakeover) {
-    // Atendente assumiu esta conversa pelo painel; Alice so registra, nao responde.
-    return "";
-  }
+  const clinic = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { replyDelaySeconds: true } });
+  const delaySec = Math.min(Math.max(clinic?.replyDelaySeconds ?? 0, 0), 60);
+
+  return {
+    conversationId: conversation.id,
+    patientId: patient.id,
+    humanTakeover: conversation.humanTakeover,
+    replyDelayMs: delaySec * 1000,
+  };
+}
+
+// PASSO 2 (pode ser adiado): olha TODAS as mensagens acumuladas da conversa,
+// gera a resposta da Alice, grava e devolve o texto pra enviar. Devolve "" se
+// nao deve responder (humano assumiu, ou chegou mensagem nova durante a geracao).
+export async function generateReply(
+  conversationId: string,
+  opts: { imageDataUrl?: string; guardAgainstNewerThan?: Date } = {},
+): Promise<string> {
+  const conversation = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    include: { patient: { select: { id: true, clinicId: true, name: true, phone: true } } },
+  });
+  if (!conversation) return "";
+  if (conversation.humanTakeover) return "";
+
+  const clinicId = conversation.patient.clinicId;
+  const patient = conversation.patient;
+  const { imageDataUrl } = opts;
 
   const history = await prisma.message.findMany({
-    where: { conversationId: conversation.id },
+    where: { conversationId },
     orderBy: { createdAt: "asc" },
     take: 30,
   });
@@ -814,13 +841,13 @@ export async function handleIncomingMessage(params: {
     })),
   ];
 
-  // Foto recebida agora: substitui a ultima mensagem do usuario (a "[imagem]"
-  // que acabou de entrar no historico) por uma mensagem multimodal com a imagem.
+  // Foto recebida no meio do "burst": anexa a imagem na ultima fala do cliente.
   if (imageDataUrl) {
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
     if (lastUser) {
+      const caption = typeof lastUser.content === "string" && lastUser.content !== "[imagem]" ? lastUser.content : "(o cliente enviou esta foto)";
       lastUser.content = [
-        { type: "text", text: trimmed || "(o cliente enviou esta foto, sem texto)" },
+        { type: "text", text: caption },
         { type: "image_url", image_url: { url: imageDataUrl } },
       ];
     }
@@ -858,15 +885,24 @@ export async function handleIncomingMessage(params: {
   }
 
   // Re-checa o estado da conversa DEPOIS de gerar a resposta.
-  const after = await prisma.conversation.findUnique({ where: { id: conversation.id }, select: { humanTakeover: true } });
+  const after = await prisma.conversation.findUnique({
+    where: { id: conversation.id },
+    select: { humanTakeover: true, messages: { where: { role: "user", createdAt: { gt: opts.guardAgainstNewerThan ?? new Date(0) } }, take: 1, select: { id: true } } },
+  });
+
   if (after?.humanTakeover && !didTransfer) {
-    // Um atendente assumiu a conversa enquanto a Alice ainda estava
-    // respondendo. Nao envia nada - quem manda agora e a pessoa.
+    // Um atendente assumiu a conversa enquanto a Alice ainda estava respondendo.
     if (finalText.trim()) {
       await prisma.message.create({
         data: { conversationId: conversation.id, role: "system", content: "(a Alice ia responder, mas o atendimento acabou de ser assumido por uma pessoa)", authorName: null },
       });
     }
+    return "";
+  }
+
+  // Chegou mensagem nova do cliente enquanto a Alice gerava a resposta: descarta
+  // esta (ja e velha) - o novo agrupamento vai gerar uma resposta atualizada.
+  if (opts.guardAgainstNewerThan && after && after.messages.length > 0) {
     return "";
   }
 
@@ -888,4 +924,18 @@ export async function handleIncomingMessage(params: {
   });
 
   return finalText;
+}
+
+// Compat: grava a mensagem e responde na hora (usado onde nao ha debounce).
+export async function handleIncomingMessage(params: {
+  clinicId: string;
+  patientPhone: string;
+  patientName?: string;
+  text: string;
+  imageDataUrl?: string;
+  referral?: IncomingReferral;
+}): Promise<string> {
+  const rec = await recordIncomingMessage(params);
+  if (!rec || rec.humanTakeover) return "";
+  return generateReply(rec.conversationId, { imageDataUrl: params.imageDataUrl });
 }
