@@ -416,6 +416,7 @@ model Conversation {
   status            String    @default("active") // active | qualified | scheduled | closed
   humanTakeover     Boolean   @default(false) // true = Alice para de responder, atendente assumiu
   handoffReason     String?   // motivo curto do ultimo handoff para humano (ex: "pedido de desconto")
+  handoffPending    Boolean   @default(false) // Alice transferiu pra uma pessoa e ninguem abriu a conversa ainda
   lastFollowUpOrder Int       @default(0) // ultima etapa de recontato ja enviada (0 = nenhuma)
   lastMessageAt     DateTime  @default(now())
   createdAt         DateTime  @default(now())

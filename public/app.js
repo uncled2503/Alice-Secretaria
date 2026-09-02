@@ -622,29 +622,30 @@ async function loadConversations() {
   renderConversationsList();
 }
 
-// Avisa (toast + selo no menu) quando aparece uma conversa nova que a Alice
-// transferiu pra equipe - senão o handoff passa despercebido no painel.
+// Avisa (toast + selo no menu) quando aparece uma conversa que a Alice
+// transferiu pra uma pessoa e que ninguém abriu ainda - senão o handoff passa
+// despercebido no painel. O selo/contador mostra só os pendentes (não vistos).
 function notifyNewHandoffs(conversations) {
-  const humanIds = new Set(conversations.filter((c) => c.humanTakeover).map((c) => c.id));
-  if (state._knownHumanIds) {
+  const pendingIds = new Set(conversations.filter((c) => c.handoffPending).map((c) => c.id));
+  if (state._knownHandoffIds) {
     for (const c of conversations) {
-      if (c.humanTakeover && !state._knownHumanIds.has(c.id) && c.id !== state.activeConversationId) {
+      if (c.handoffPending && !state._knownHandoffIds.has(c.id) && c.id !== state.activeConversationId) {
         const who = c.patient?.name || c.patient?.phone || "um contato";
-        showError(`🔔 Conversa transferida para atendimento humano: ${who}${c.handoffReason ? ` — ${c.handoffReason}` : ""}`);
+        showError(`🔔 Precisa de atendimento humano: ${who}${c.handoffReason ? ` — ${c.handoffReason}` : ""}`);
       }
     }
   }
-  state._knownHumanIds = humanIds;
+  state._knownHandoffIds = pendingIds;
 
   const navChat = document.querySelector('.nav-item[data-tab="chat"]');
   if (navChat) {
     let badge = navChat.querySelector(".nav-count-badge");
-    if (humanIds.size > 0) {
+    if (pendingIds.size > 0) {
       if (!badge) {
         badge = el("span", { class: "nav-count-badge" }, []);
         navChat.appendChild(badge);
       }
-      badge.textContent = String(humanIds.size);
+      badge.textContent = String(pendingIds.size);
     } else if (badge) {
       badge.remove();
     }
@@ -678,16 +679,24 @@ function renderConversationsList() {
       avatarNode(c.patient.name, c.patient.avatarUrl, "avatar"),
       el("div", { class: "conv-text" }, [
         el("div", { class: "conv-top-row" }, [
-          el("div", { class: "name" }, [c.patient.name ?? c.patient.phone]),
+          el("div", { class: "name" }, [
+            c.handoffPending ? el("span", { class: "conv-dot", title: "Precisa de atendimento humano" }, []) : "",
+            c.patient.name ?? c.patient.phone,
+          ]),
           el("div", { class: "conv-time" }, [formatConvTime(c.lastMessageAt)]),
         ]),
         el("div", { class: "preview" }, [
-          c.humanTakeover && c.handoffReason ? `⚑ ${c.handoffReason} — ` : "",
+          c.handoffPending
+            ? `⚑ Precisa de atendimento${c.handoffReason ? ` (${c.handoffReason})` : ""} — `
+            : c.humanTakeover && c.handoffReason
+              ? `⚑ ${c.handoffReason} — `
+              : "",
           c.lastMessage ?? "",
         ]),
       ]),
       contactBtn,
     ]);
+    if (c.handoffPending) li.classList.add("needs-human");
     if (c.id === state.activeConversationId) li.classList.add("active");
     li.addEventListener("click", () => openConversation(c.id));
     list.appendChild(li);
@@ -722,7 +731,7 @@ document.getElementById("chat-back")?.addEventListener("click", () => {
   resetChatPane();
 });
 
-async function loadMessages(conversationId) {
+async function loadMessages(conversationId, { forceScroll = false } = {}) {
   let messages;
   try {
     messages = await api(`/conversations/${conversationId}/messages`, { silentStatuses: [404] });
@@ -740,6 +749,11 @@ async function loadMessages(conversationId) {
     throw err;
   }
   const box = document.getElementById("chat-messages");
+  // Só rola pro fim se o usuário já estava no fim (ou é uma conversa recém-aberta).
+  // Senão, quem rolou pra cima pra ler fica onde estava, sem ser puxado a cada poll.
+  const convChanged = state._renderedConvId !== conversationId;
+  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  const keepScroll = box.scrollTop;
   box.innerHTML = "";
   let lastDay = null;
   for (const m of messages) {
@@ -771,7 +785,12 @@ async function loadMessages(conversationId) {
     box.appendChild(bubble);
   }
   paintIcons(box);
-  box.scrollTop = box.scrollHeight;
+  if (forceScroll || convChanged || nearBottom) {
+    box.scrollTop = box.scrollHeight;
+  } else {
+    box.scrollTop = keepScroll;
+  }
+  state._renderedConvId = conversationId;
 }
 
 async function openConversation(id) {
@@ -809,7 +828,16 @@ async function openConversation(id) {
 
   document.getElementById("chat-controls").style.display = "flex";
   updateToggleButton(conv?.humanTakeover ?? false);
-  await loadMessages(id);
+
+  // Abrir a conversa já a marca como vista: tira o aviso na hora, sem esperar
+  // o próximo poll (o servidor faz o mesmo ao carregar as mensagens).
+  if (conv?.handoffPending) {
+    conv.handoffPending = false;
+    renderConversationsList();
+    notifyNewHandoffs(state.conversations || []);
+  }
+
+  await loadMessages(id, { forceScroll: true });
 }
 
 function updateToggleButton(humanTakeover) {
@@ -1027,7 +1055,7 @@ document.getElementById("chat-form").addEventListener("submit", async (e) => {
     await openConversation(id);
   } else {
     updateToggleButton(true);
-    await loadMessages(id);
+    await loadMessages(id, { forceScroll: true });
   }
 });
 

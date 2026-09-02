@@ -8,19 +8,24 @@ import { DEFAULT_FUNNEL_STAGES } from "../crm/stages.js";
 // ---------------------------------------------------------------------------
 // Configura a conta da Laleblu (loja de roupas e enxoval para bebes e criancas)
 // como negocio generico (businessType = geral) e treina a Alice a partir dos
-// documentos "LALEBLU - Configuracao de respostas automaticas" (ManyChat) e
-// "LALEBLU - Guia de Links para o Atendimento" (catalogo de links do site).
+// documentos da loja (respostas automaticas + guia de links do site).
+//
+// A Alice atende PELO proprio WhatsApp oficial da Laleblu. Ela NUNCA manda link
+// de WhatsApp nem numero pra "chamar o atendimento" - quando precisa de uma
+// pessoa, usa transfer_to_human e alguem da equipe assume ESTA conversa.
 //
 // Rodar: npm run seed:laleblu   (ou: node dist/maintenance/seedLaleblu.js)
 //
 // Idempotente: pode rodar de novo. Reaplica FAQ, mensagens prontas, roteiros e
 // as regras marcadas como "seed:laleblu" (regras escritas a mao no painel e o
-// catalogo/contatos/conversas NAO sao tocados).
+// catalogo/contatos/conversas NAO sao tocados). NAO sobrescreve o numero de
+// avisos (notifyPhone) - esse fica configurado no painel.
 // ---------------------------------------------------------------------------
 
-const WA = "5511942540549"; // WhatsApp de atendimento: (11) 94254-0549
-const WA_LINK = `https://wa.me/${WA}`;
-const waText = (msg: string) => `${WA_LINK}?text=${encodeURIComponent(msg)}`;
+const WA = "5511942540549"; // numero conectado da Laleblu (chave do tenant)
+
+// Frase que a Alice manda logo antes de transferir pra uma pessoa da equipe.
+const HANDOFF_PHRASE = "Já vou pedir pra uma pessoa da equipe continuar com você por aqui 💙";
 
 const LOGIN = "laleblu@aliceconversa.com";
 const PASSWORD = "laleblu1234";
@@ -76,23 +81,20 @@ const FAQS: { question: string; alternates: string; answer: string }[] = [
     question: "Quero dar um presente para um bebê",
     alternates: "presente\nkit\npresentear\nnascimento\nrecém-nascido\nrecem nascido\nsugestão de presente\nvou ser madrinha",
     answer:
-      "Presentear um bebê é sempre especial 💙 Temos kits prontos com as peças que mais combinam. Ver kits: https://laleblu.com.br/collections/presentes\nSe for para um chá de bebê, você também pode buscar a lista da família: https://laleblu.com.br/pages/encontre-seu-cha-de-bebe\nSe quiser embalagem para presente, me avisa que eu confirmo com a equipe.",
+      "Presentear um bebê é sempre especial 💙 Temos kits prontos com as peças que mais combinam. Ver kits: https://laleblu.com.br/collections/presentes\nSe for para um chá de bebê, você também pode buscar a lista da família: https://laleblu.com.br/pages/encontre-seu-cha-de-bebe\nEmbalagem para presente (caixa, sacola e cartão): R$ 15,90, é só adicionar https://laleblu.com.br/products/caixa-sacola-e-cartao-para-presente",
   },
   {
     question: "Como funciona troca e devolução?",
     alternates: "troca\ntrocar\ndevolver\ndevolução\ndefeito\nestorno\narrependimento\nquero trocar",
     answer:
-      "Nossa política é simples:\n• Troca: até 30 dias, peça sem uso e com etiqueta\n• Devolução (arrependimento): até 7 dias corridos após o recebimento\n• Peça com defeito: resolvemos com frete por nossa conta\nEm Sale e Black Friday há apenas devolução e defeito, não há troca. Trocas e devoluções são feitas pela nossa equipe no WhatsApp, que acessa o seu pedido: " +
-      waText("Olá! Vim pelo Instagram e quero falar sobre uma troca ou devolução.") +
-      "\nPolítica completa: https://laleblu.com.br/policies/refund-policy",
+      "Nossa política é simples:\n• Troca: até 30 dias, peça sem uso e com etiqueta\n• Devolução (arrependimento): até 7 dias corridos após o recebimento\n• Peça com defeito: resolvemos com frete por nossa conta\nEm Sale e Black Friday há apenas devolução e defeito, não há troca. Me diz o número do pedido (começa com #) ou o e-mail da compra que eu já passo pra uma pessoa da equipe cuidar da sua troca por aqui 🤍\nPolítica completa: https://laleblu.com.br/policies/refund-policy",
   },
   {
     question: "Cadê meu pedido? Quero rastrear",
     alternates:
       "pedido\nrastreio\nrastrear\ncódigo\nstatus\nnão chegou\natrasou\ncadê meu pedido\nnota fiscal\nmeu pedido",
     answer:
-      "Vamos verificar pra você 🤍 Dúvidas sobre um pedido já feito são atendidas pelo nosso WhatsApp, onde a equipe consulta a compra na hora. Toque aqui e, se puder, já manda o número do pedido (começa com #) ou o e-mail da compra: " +
-      waText("Olá! Vim pelo Instagram e quero saber sobre o meu pedido nº "),
+      "Vamos verificar pra você 🤍 Me manda o número do pedido (começa com #) ou o e-mail da compra que eu já peço pra uma pessoa da equipe consultar e te responder aqui mesmo.",
   },
   {
     question: "Tem cupom de desconto? Como faço pra parcelar?",
@@ -124,9 +126,7 @@ const FAQS: { question: string; alternates: string; answer: string }[] = [
     alternates:
       "não deu certo\nfinalização\nfinalizar\npagamento\nerro\ncartão\npix\nnão consegui comprar\nrecusado\nnão passou\nnão consigo pagar",
     answer:
-      "Poxa, vamos resolver isso 💙 Duas coisas que costumam funcionar na hora:\n• Se foi cartão, tente o Pix, a aprovação é imediata\n• Confira se o CEP e o endereço estão completos\nSe não der certo, chame a equipe no WhatsApp com um print da tela que ela finaliza a compra com você: " +
-      waText("Olá! Vim pelo Instagram. Tentei finalizar uma compra no site e não deu certo.") +
-      "\nOu tente de novo: https://laleblu.com.br/cart",
+      "Poxa, vamos resolver isso 💙 Duas coisas que costumam funcionar na hora:\n• Se foi cartão, tente o Pix, a aprovação é imediata\n• Confira se o CEP e o endereço estão completos\nTentar de novo: https://laleblu.com.br/cart\nSe ainda assim não der, me conta o que apareceu na tela que eu chamo uma pessoa da equipe pra finalizar a compra com você por aqui.",
   },
   {
     question: "As peças são 100% algodão? Qual tecido é mais fresquinho?",
@@ -140,15 +140,13 @@ const FAQS: { question: string; alternates: string; answer: string }[] = [
     alternates:
       "reposição\nrepor\nvai chegar\nesgotado\nsem estoque\nprevisão\noutra cor\nsó tem\nquando volta\navise-me\nesgotou",
     answer:
-      "Quando uma cor ou tamanho está esgotado, o jeito mais fácil é tocar em \"Notifique-me\" no tamanho desejado, na página do produto: assim que voltar ao estoque, você recebe o aviso 🤍 Se quiser uma previsão, me diga qual peça e qual cor que eu verifico com a equipe.",
+      "Quando uma cor ou tamanho está esgotado, o jeito mais fácil é tocar em \"Notifique-me\" no tamanho desejado, na página do produto: assim que voltar ao estoque, você recebe o aviso 🤍 Se quiser uma previsão de quando volta, me diga qual peça e qual cor que eu peço pra uma pessoa da equipe confirmar por aqui.",
   },
   {
     question: "Qual o contato / WhatsApp de vocês?",
-    alternates: "contato\ntelefone\nwhatsapp\nnúmero\nzap\nfalar com vocês",
+    alternates: "contato\ntelefone\nwhatsapp\nnúmero\nzap\nfalar com vocês\nfalar com atendente\nfalar com uma pessoa",
     answer:
-      "Nosso WhatsApp de atendimento é (11) 94254-0549 💙 " +
-      WA_LINK +
-      "\nSe preferir falar direto com uma loja (Moema, Jardins, Cidade Jardim ou Bertioga), é só me dizer qual.",
+      "Você já está no nosso WhatsApp oficial, é aqui mesmo que a gente te atende 💙 Se quiser, eu chamo uma pessoa da equipe pra continuar com você.\nPra falar direto com uma loja: Moema (11) 95965-5533 · Jardins (11) 91497-8851 · Cidade Jardim (11) 94535-7349. Ver as lojas: https://laleblu.com.br/pages/nossas-lojas",
   },
   {
     question: "O que é o Clube VIP?",
@@ -290,7 +288,7 @@ const TEMPLATES: { name: string; body: string; mode: string; whenToUse: string }
     name: "Boas-vindas",
     mode: "adapt",
     whenToUse: "primeira mensagem de alguém novo, ou quando a pessoa só manda um oi",
-    body: "Oi! Que bom ter você por aqui 💙 Posso te ajudar com enxoval, presentes, chá de bebê, tamanhos e frete, e te levo ao WhatsApp se for sobre um pedido. Por onde quer começar?",
+    body: "Oi! Que bom ter você por aqui 💙 Posso te ajudar com enxoval, presentes, chá de bebê, tamanhos e frete, e chamo uma pessoa da equipe se for sobre um pedido já feito. Por onde quer começar?",
   },
   {
     name: "Não entendi o pedido",
@@ -301,14 +299,14 @@ const TEMPLATES: { name: string; body: string; mode: string; whenToUse: string }
   {
     name: "Transferir no horário de atendimento",
     mode: "exact",
-    whenToUse: "ao passar para a equipe de segunda a sexta, entre 9h e 17h",
-    body: "Perfeito, vou te passar para a nossa equipe 🤍 Em instantes alguém responde por aqui. Se preferir, também estamos no WhatsApp: (11) 94254-0549",
+    whenToUse: "logo antes de chamar transfer_to_human, de segunda a sexta entre 9h e 17h",
+    body: "Perfeito, já vou pedir pra uma pessoa da equipe continuar com você por aqui 🤍 É rapidinho.",
   },
   {
     name: "Transferir fora do horário",
     mode: "exact",
-    whenToUse: "ao passar para a equipe fora de seg a sex, 9h às 17h",
-    body: "Nossa equipe atende de segunda a sexta, das 9h às 17h. Sua mensagem já ficou registrada e será respondida logo no próximo horário de atendimento 💙 Se for urgente, chame no WhatsApp: (11) 94254-0549",
+    whenToUse: "logo antes de chamar transfer_to_human fora de seg a sex, 9h às 17h",
+    body: "Nossa equipe atende de segunda a sexta, das 9h às 17h. Já deixei sua mensagem registrada aqui e uma pessoa te responde no próximo horário de atendimento 💙",
   },
   {
     name: "Assinatura da equipe",
@@ -358,36 +356,36 @@ const PLAYBOOKS: {
   {
     name: "Pedido, rastreio ou status",
     scriptType: "transferir",
-    triggerText: "pergunta sobre um pedido já feito: rastreio, atraso, status, nota fiscal",
-    goal: "encaminhar para o WhatsApp com a mensagem pronta, sem tentar consultar aqui",
+    triggerText: "pergunta sobre um pedido já feito: rastreio, atraso, status, nota fiscal, cadê meu pedido",
+    goal: "levar o caso pra uma pessoa da equipe resolver nesta mesma conversa",
     steps: [
-      "Diga que dúvidas de pedido são atendidas no WhatsApp, onde a equipe consulta a compra na hora.",
-      `Envie o link ${WA_LINK} com a mensagem pronta sobre o pedido.`,
-      "Peça que já mande o número do pedido (começa com #) ou o e-mail da compra.",
-      "Não tente rastrear nem dar status por aqui. Não use transfer_to_human, a menos que a pessoa insista.",
+      "Diga com acolhimento que vai pedir pra uma pessoa da equipe verificar o pedido.",
+      "Peça o número do pedido (começa com #) ou o e-mail da compra.",
+      "Assim que tiver esse dado (ou se a pessoa não tiver em mãos), chame transfer_to_human com o resumo: nome, o que ela quer e o número/e-mail do pedido.",
+      "Nunca tente rastrear ou dar status por conta própria. Nunca mande link de WhatsApp nem número: esta conversa já é o WhatsApp da loja.",
     ],
   },
   {
     name: "Troca ou devolução",
     scriptType: "transferir",
     triggerText: "quer trocar, devolver, falar de defeito ou estorno",
-    goal: "dar a política resumida e encaminhar para o WhatsApp",
+    goal: "dar a política resumida e passar pra uma pessoa da equipe nesta conversa",
     steps: [
-      "Resuma a política: troca em até 30 dias (sem uso, com etiqueta), devolução em até 7 dias corridos, defeito com frete por nossa conta.",
-      `Envie o link do WhatsApp com a mensagem pronta de troca e o link da política (https://laleblu.com.br/policies/refund-policy).`,
-      "Não transfira no Direct. Se a pessoa insistir em resolver por aqui, aplique a etiqueta de troca e a equipe responde.",
+      "Resuma a política: troca em até 30 dias (sem uso, com etiqueta), devolução em até 7 dias corridos, defeito com frete por nossa conta. Em Sale/Black Friday só devolução e defeito.",
+      "Mande o link da política: https://laleblu.com.br/policies/refund-policy",
+      "Peça o número do pedido (#) ou o e-mail da compra e chame transfer_to_human com esse resumo pra uma pessoa da equipe cuidar da troca aqui.",
     ],
   },
   {
     name: "Não conseguiu finalizar a compra",
     scriptType: "transferir",
     triggerText: "tentou comprar e não conseguiu, erro no pagamento, cartão recusado",
-    goal: "dar as duas soluções rápidas e, se não resolver, mandar para o WhatsApp",
+    goal: "dar as duas soluções rápidas e, se não resolver, passar pra uma pessoa da equipe",
     steps: [
       "Reconheça com leveza e um toque de urgência (a pessoa está com o cartão na mão).",
       "Dê as duas soluções: tentar pagar com Pix (aprovação imediata) e conferir se CEP e endereço estão completos.",
-      `Se não resolver, envie o link do WhatsApp com a mensagem pronta pedindo um print da tela.`,
-      "Ofereça o link do carrinho para tentar de novo: https://laleblu.com.br/cart",
+      "Ofereça o link do carrinho pra tentar de novo: https://laleblu.com.br/cart",
+      "Se não resolver, peça o que apareceu na tela e chame transfer_to_human pra uma pessoa da equipe finalizar a compra com a cliente aqui. Nunca mande link de WhatsApp.",
     ],
   },
   {
@@ -426,27 +424,28 @@ const RULES: { category: string; instruction: string }[] = [
   { category: "tom_de_voz", instruction: "Emojis com moderação, no máximo um por mensagem, preferindo 💙 🤍 🍼 ✨. Nada de emojis de risada ou fogo. Nenhum emoji em mensagem sobre preço, pagamento ou política de troca." },
   { category: "tom_de_voz", instruction: "Sempre termine com um próximo passo: um link, uma opção ou uma pergunta. A pessoa nunca deve ficar sem saber o que fazer." },
   { category: "tom_de_voz", instruction: "Use com naturalidade, quando couber, as palavras da marca: enxoval, chá de bebê, macacão, body, naninha, kit presente, algodão pima, Clube VIP." },
-  { category: "tom_de_voz", instruction: "Quando o atendimento for transferido para a equipe, encerre com: 'Qualquer dúvida, é só chamar. Equipe Laleblu 💙'." },
+  { category: "tom_de_voz", instruction: "Logo antes de chamar transfer_to_human, mande uma frase curta e acolhedora dizendo que uma pessoa da equipe vai continuar por ali. Não diga 'vou te transferir para um atendente' de forma robótica." },
   // catalogo / informacao
-  { category: "procedimentos", instruction: "Nunca prometa nem afirme estoque, disponibilidade de cor ou tamanho, prazo exato de entrega ou status de um pedido. Esses dados mudam e não estão com você: direcione para o site ('Avise-me' na página do produto) ou para o WhatsApp da equipe." },
-  { category: "procedimentos", instruction: "Preço é sempre pelo site, que tem valor e estoque em tempo real. Se a pessoa mandar print ou nome de peça pedindo valor, oriente ver no site ou passe para a equipe." },
-  { category: "procedimentos", instruction: "Tecidos: Suedine, Tricotil, Algodão Pima e Algodão Egípcio são 100% algodão. Peças em Soft, Napa Soft e Plush NÃO são 100% algodão: se a pergunta citar esses materiais, não afirme composição, confirme com a equipe." },
+  { category: "procedimentos", instruction: "Nunca prometa nem afirme estoque, disponibilidade de cor ou tamanho, prazo exato de entrega ou status de um pedido. Esses dados mudam e não estão com você: mande o link da peça ou da coleção no site e o botão 'Notifique-me' na página. Se a pessoa insistir numa confirmação agora, use transfer_to_human — nunca mande link de WhatsApp." },
+  { category: "procedimentos", instruction: "Preço é sempre pelo site, que tem valor e estoque em tempo real. Se a pessoa mandar print ou nome de peça pedindo valor, mande o link da peça ou da coleção. Se ela insistir, use transfer_to_human." },
+  { category: "procedimentos", instruction: "Tecidos: Suedine, Tricotil, Algodão Pima e Algodão Egípcio são 100% algodão. Peças em Soft, Napa Soft e Plush NÃO são 100% algodão: se a pergunta citar esses materiais, não afirme a composição; diga que confirma e, se a pessoa quiser essa confirmação na hora, use transfer_to_human." },
   { category: "procedimentos", instruction: "A tabela de tamanhos vai do Prematuro ao 2. Na dúvida entre dois tamanhos, oriente escolher o maior. As medidas em centímetros de cada peça estão na página do produto." },
   { category: "procedimentos", instruction: "Frete grátis vale só para compras com preço regular, não vale em Sale nem Black Friday." },
   { category: "procedimentos", instruction: "Em Sale e Black Friday não há troca, apenas devolução e peça com defeito." },
   // pagamento / cupom
-  { category: "pagamento", instruction: "Cupons que podem ser informados: PRIMEIRACOMPRA (5% na primeira compra, cupom da newsletter, sem valor mínimo) e VIP10 (10% em compras acima de R$ 299, válido até 30/11/2026, do Clube VIP). Um cupom por pedido, não acumulam entre si. Nenhum outro código de promoção deve ser informado: convide para o Clube VIP. Se pedirem outro código específico, transfira para a equipe." },
+  { category: "pagamento", instruction: "Cupons que podem ser informados: PRIMEIRACOMPRA (5% na primeira compra, cupom da newsletter, sem valor mínimo) e VIP10 (10% em compras acima de R$ 299, válido até 30/11/2026, do Clube VIP). Um cupom por pedido, não acumulam entre si. Nenhum outro código de promoção deve ser informado: convide para o Clube VIP. Se pedirem outro código específico, use transfer_to_human." },
   { category: "pagamento", instruction: "O parcelamento é em até 6x sem juros no cartão. O Pix tem aprovação imediata. Formas de pagamento: https://laleblu.com.br/pages/formas-de-pagamento" },
   { category: "procedimentos", instruction: "Entrega expressa (São Paulo e região, próximo dia útil) custa R$ 29,90. Motoboy no mesmo dia para capital, Grande SP e ABC, pedidos até as 14h. O valor e o prazo do frete aparecem no carrinho quando a cliente coloca o CEP." },
   { category: "procedimentos", instruction: "Quando a cliente pedir algo específico (gênero, tamanho, cor, tecido ou faixa de preço), monte o link da coleção já filtrado seguindo o roteiro 'Montar link do site com filtro' e mande pronto. Se não tiver certeza da URL exata da categoria, mande o link da categoria sem filtro (ou toda-a-loja com o filtro). Nunca invente um endereço de coleção: use só os que estão nas FAQ e nos roteiros." },
   { category: "procedimentos", instruction: "Mantas, cueiros, naninhas e acessórios são tamanho único e não aparecem em links filtrados por tamanho: nesses casos mande o link da categoria, sem o filtro de tamanho." },
   // chamar a equipe
-  { category: "chamar_equipe", instruction: "Pedido, troca, devolução, rastreio e problema de pagamento não se resolvem na conversa: envie o link do WhatsApp (11) 94254-0549 com a mensagem pronta. Só use transfer_to_human se a pessoa insistir em resolver por ali." },
-  { category: "chamar_equipe", instruction: "O atendimento humano funciona de segunda a sexta, das 9h às 17h. Ao transferir dentro desse horário, diga que a equipe já responde por aqui. Fora do horário, avise que a mensagem ficou registrada e será respondida no próximo horário útil, e ofereça o WhatsApp para urgências." },
-  { category: "chamar_equipe", instruction: "Se a pessoa marcar a loja num story (foto do bebê com a peça), agradeça e pergunte se pode repostar. Se ela autorizar, transfira para a equipe com a etiqueta de repost." },
+  { category: "chamar_equipe", instruction: "A Alice atende PELO próprio WhatsApp oficial da Laleblu. É proibido, em qualquer resposta: mandar link de WhatsApp (wa.me), escrever um número de telefone pra 'falar com a equipe', ou mandar a pessoa procurar o atendimento em outro canal. Esta conversa já é o atendimento. Quando precisa de uma pessoa, é sempre a ferramenta transfer_to_human — alguém da equipe assume esta mesma conversa. (Os números das lojas físicas só entram se a pessoa pedir explicitamente para ligar numa loja específica.)" },
+  { category: "chamar_equipe", instruction: "Pedido, troca, devolução, rastreio e problema de pagamento: peça o número do pedido (começa com #) ou o e-mail da compra e chame transfer_to_human com esse resumo. Não tente consultar nem resolver o pedido sozinha." },
+  { category: "chamar_equipe", instruction: "O atendimento humano é de segunda a sexta, das 9h às 17h. Ao usar transfer_to_human nesse horário, diga que uma pessoa da equipe já continua por aqui. Fora do horário, diga que a mensagem ficou registrada e uma pessoa responde no próximo horário de atendimento." },
+  { category: "chamar_equipe", instruction: "Se a pessoa marcar a loja num story (foto do bebê com a peça), agradeça e pergunte se pode repostar. Se ela autorizar, use transfer_to_human com o motivo 'autorização de repost'." },
   { category: "chamar_equipe", instruction: "Você enxerga as fotos que o cliente envia. Se for foto de um produto, do bebê com uma peça, ou print de tela do site, ajude normalmente. Se for spam (print de investimento, corrente, propaganda de terceiro), não responda." },
-  { category: "procedimentos", instruction: "Quando o cliente mandar foto de uma peça ou print, diga o que dá pra ver (tipo de peça, cor, estampa) e mande o link da busca no site ou de uma coleção parecida. Se não der pra identificar com segurança, peça o nome da peça ou um print da página do produto." },
-  { category: "chamar_equipe", instruction: "Pedido de previsão de chegada de uma cor ou tamanho esgotado: peça qual peça e qual cor e transfira para a equipe, que dá a previsão real." },
+  { category: "procedimentos", instruction: "Quando o cliente mandar foto de uma peça ou print pedindo cor, modelo ou 'o que tem disponível': diga o que dá pra ver (tipo de peça, cor, estampa) e MANDE O LINK do site — a busca pelo nome da peça, ou a coleção com o filtro de cor. NUNCA diga pra ela 'falar com a equipe' pra ver cores ou modelos: isso você resolve com o link do site. Só se ela não conseguir achar e insistir muito é que você usa transfer_to_human." },
+  { category: "chamar_equipe", instruction: "Pedido de previsão de chegada de uma cor ou tamanho esgotado: peça qual peça e qual cor e use transfer_to_human, que a equipe dá a previsão real." },
   // agendamento (loja nao agenda)
   { category: "agendamento", instruction: "A Laleblu não trabalha com agendamento nem hora marcada. Se perguntarem, informe os horários das lojas físicas e que é só chegar." },
 ];
@@ -481,9 +480,10 @@ export async function seedLaleblu(): Promise<SeedLalebluResult> {
       workStartHour: 9,
       workEndHour: 17,
       replyDelaySeconds: 10,
-      notifyPhone: WA,
+      // notifyPhone NAO entra aqui de proposito: e configurado no painel e nao
+      // pode ser o proprio numero conectado (WhatsApp nao manda mensagem pra si).
       notifyEvents: "human_handoff",
-      handoffPhrase: "",
+      handoffPhrase: HANDOFF_PHRASE,
       npsEnabled: false,
     },
     create: {
@@ -500,12 +500,21 @@ export async function seedLaleblu(): Promise<SeedLalebluResult> {
       workStartHour: 9,
       workEndHour: 17,
       replyDelaySeconds: 10,
-      notifyPhone: WA,
+      notifyPhone: "",
       notifyEvents: "human_handoff",
+      handoffPhrase: HANDOFF_PHRASE,
       plan: "prime",
     },
   });
   console.log(`Clinica: ${clinic.name} (${clinic.id}) — businessType=${clinic.businessType}`);
+
+  // O numero de avisos nao pode ser o proprio numero conectado (WhatsApp nao
+  // envia pra si mesmo). Se ficou assim de um seed antigo, limpa - sem mexer
+  // num numero de verdade que a Laleblu tenha configurado no painel.
+  if (clinic.notifyPhone && clinic.notifyPhone.replace(/\D/g, "") === WA) {
+    await prisma.clinic.update({ where: { id: clinic.id }, data: { notifyPhone: "" } });
+    console.log("notifyPhone: limpo (era o proprio numero conectado) — configure um numero da equipe no painel");
+  }
 
   // 2. Conta de acesso ao painel
   const passwordHash = hashPassword(PASSWORD);

@@ -1168,6 +1168,7 @@ apiRouter.get(
         status: c.status,
         humanTakeover: c.humanTakeover,
         handoffReason: c.handoffReason,
+        handoffPending: c.handoffPending,
         lastMessageAt: c.lastMessageAt,
         patient: {
           id: c.patient.id,
@@ -1192,6 +1193,12 @@ apiRouter.get(
       include: { patient: true },
     });
     if (!assertClinicAccess(req, res, conversation.patient.clinicId)) return;
+
+    // Abrir a conversa no painel ja conta como "vista": tira o aviso de
+    // handoff pendente da lista de conversas.
+    if (conversation.handoffPending) {
+      await prisma.conversation.update({ where: { id: conversation.id }, data: { handoffPending: false } });
+    }
 
     const messages = await prisma.message.findMany({
       where: { conversationId: req.params.id },
@@ -1247,7 +1254,7 @@ apiRouter.post(
     });
     await prisma.conversation.update({
       where: { id: conversation.id },
-      data: { humanTakeover: true, lastMessageAt: new Date() },
+      data: { humanTakeover: true, handoffPending: false, lastMessageAt: new Date() },
     });
 
     try {
@@ -1278,7 +1285,7 @@ apiRouter.post(
       await prisma.message.create({
         data: { conversationId: conversation.id, role: "system", content: "Atendimento transferido para o atendente", authorName },
       });
-      await prisma.conversation.update({ where: { id: conversation.id }, data: { humanTakeover: true } });
+      await prisma.conversation.update({ where: { id: conversation.id }, data: { humanTakeover: true, handoffPending: false } });
       await notifyStaff(
         conversation.patient.clinicId,
         "human_handoff",
@@ -1316,7 +1323,7 @@ apiRouter.post(
     });
     await prisma.conversation.update({
       where: { id: req.params.id },
-      data: { humanTakeover: false },
+      data: { humanTakeover: false, handoffPending: false },
     });
     await logActivity({
       clinicId: conversation.patient.clinicId,

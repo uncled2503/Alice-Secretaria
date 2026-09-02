@@ -9,12 +9,20 @@ export type NotifyEvent = "new_appointment" | "reschedule" | "cancel" | "human_h
 export async function notifyStaff(clinicId: string, event: NotifyEvent, message: string): Promise<void> {
   const clinic = await prisma.clinic.findUnique({
     where: { id: clinicId },
-    select: { notifyPhone: true, notifyEvents: true },
+    select: { notifyPhone: true, notifyEvents: true, whatsappPhone: true },
   });
   if (!clinic?.notifyPhone) return;
 
   const events = clinic.notifyEvents.split(",").map((e) => e.trim());
   if (!events.includes(event)) return;
+
+  // O numero de avisos nao pode ser o proprio numero conectado: o WhatsApp nao
+  // envia mensagem pra si mesmo. Nesse caso o aviso fica so no painel.
+  const digits = (s: string) => s.replace(/\D/g, "");
+  if (digits(clinic.notifyPhone) === digits(clinic.whatsappPhone || "")) {
+    console.warn(`notifyStaff: numero de avisos da clinica ${clinicId} e o proprio numero conectado - avisando so no painel`);
+    return;
+  }
 
   try {
     await sendText(clinicId, clinic.notifyPhone, message);

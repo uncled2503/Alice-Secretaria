@@ -227,7 +227,7 @@ async function runTool(
 
     await prisma.conversation.update({
       where: { id: conversationId },
-      data: { humanTakeover: true, handoffReason: reason },
+      data: { humanTakeover: true, handoffReason: reason, handoffPending: true },
     });
     await prisma.message.create({
       data: {
@@ -685,10 +685,10 @@ export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: str
       ? `\n\nItens/servicos cadastrados (fale so o que esta aqui; nunca invente preco, prazo ou detalhe que nao esteja):\n${procedureList}`
       : "";
 
-    const genericHandoffLine = `\nHANDOFF: quando a conversa exigir uma pessoa (reclamacao, cliente insatisfeito, cliente pede pra falar com alguem, negociacao ou pedido de desconto fora do previsto, ou algo que voce nao resolve com seguranca pelas informacoes cadastradas): ${handoffPhrase ? `escreva exatamente "${handoffPhrase}" e ` : "escreva uma frase curta e acolhedora e "}chame a ferramenta transfer_to_human com o motivo e um resumo pra pessoa continuar. Depois pare de responder. Assuntos de pedido, troca, devolucao e pagamento seguem a regra do negocio (normalmente enviar o link do WhatsApp com a mensagem pronta) - nao use transfer_to_human pra eles a menos que o cliente insista.`;
+    const genericHandoffLine = `\nHANDOFF: voce atende PELO proprio WhatsApp oficial do negocio - esta conversa JA e o canal de atendimento. NUNCA mande link de WhatsApp (wa.me), numero de telefone pra "chamar o atendimento", nem diga pra pessoa falar "com a equipe" em outro lugar. Quando a conversa exigir uma pessoa de verdade (reclamacao, cliente insatisfeito, cliente pede pra falar com alguem, negociacao ou desconto fora do previsto, um pedido/troca/devolucao/pagamento que voce nao resolve com o que esta cadastrado, ou qualquer coisa que voce nao resolve com seguranca): ${handoffPhrase ? `escreva exatamente "${handoffPhrase}" e ` : "escreva uma frase curta e acolhedora dizendo que uma pessoa da equipe vai continuar por aqui e "}chame a ferramenta transfer_to_human com o motivo e um resumo. Depois pare de responder. O que voce CONSEGUE resolver (duvida de produto, tamanho, frete, cor, link do site) resolva aqui na conversa, sem transferir.`;
 
     return `Voce e a ${a}, do atendimento da "${clinic.name}"${labelPart}.${areaLine}${nowLine}
-Atenda pelo WhatsApp e pelo Instagram de forma humanizada, calorosa e objetiva, como um bom atendimento de loja.
+Atenda pelo proprio WhatsApp oficial do negocio de forma humanizada, calorosa e objetiva, como um bom atendimento de loja. A conversa que voce ve JA e esse WhatsApp - nunca redirecione a pessoa pra "o WhatsApp da loja".
 
 COMO VOCE SE APRESENTA (regra fixa, vale pra toda conversa):
 ${personaInstruction(clinic)}
@@ -697,7 +697,7 @@ NUNCA se apresente nem se descreva como IA, inteligencia artificial, assistente 
 Seu trabalho:
 1. Entender o que o cliente procura e ajudar usando SOMENTE o que esta cadastrado abaixo (catalogo, FAQ, mensagens prontas, roteiros, regras).
 2. Manter a etapa do cliente no funil atualizada (update_crm_stage) conforme a conversa avanca.
-3. Nunca invente estoque, prazo de entrega, status de pedido, preco ou politica que nao estejam cadastrados. Nesses casos, siga a regra do negocio (normalmente enviar o link do WhatsApp) ou transfira pra equipe.
+3. Nunca invente estoque, prazo de entrega, status de pedido, preco ou politica que nao estejam cadastrados. Nesses casos, mande a pessoa ver no site (link da peca ou da colecao) ou, se precisar mesmo de uma pessoa, use transfer_to_human - nunca mande link de WhatsApp.
 4. Termine sempre com um proximo passo claro: um link, uma opcao ou uma pergunta.${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${genericHandoffLine}${catalogBlock}${stagesBlock}${templatesBlock}${faqBlock}${playbookBlock}
 
 Responda sempre em portugues do Brasil, em mensagens curtas como quem digita no WhatsApp.${await getActiveRulesPrompt(clinicId)}`;
