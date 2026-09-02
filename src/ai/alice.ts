@@ -23,6 +23,32 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 // modelo mais caro. Troque via OPENAI_MODEL se a qualidade exigir.
 const MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
+// --- Trava anti-loop ------------------------------------------------------
+// O modelo as vezes trava reenviando a mesma resposta (ou variacoes dela) a
+// cada mensagem do cliente. Detectamos isso comparando o texto normalizado.
+export function normalizeReply(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "") // tira acentos (ate == ate)
+    .replace(/https?:\/\/\S+/g, " ") // ignora links (mudam de conversa pra conversa)
+    .replace(/[^\p{L}\p{N}\s]/gu, " ") // tira pontuacao e emoji
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Similaridade de Jaccard entre os conjuntos de palavras (0 a 1).
+export function replySimilarity(a: string, b: string): number {
+  const wa = new Set(normalizeReply(a).split(" ").filter(Boolean));
+  const wb = new Set(normalizeReply(b).split(" ").filter(Boolean));
+  if (wa.size === 0 || wb.size === 0) return 0;
+  let inter = 0;
+  for (const w of wa) if (wb.has(w)) inter++;
+  return inter / (wa.size + wb.size - inter);
+}
+
+const REPEAT_SIMILARITY = 0.82; // acima disso conta como "mesma resposta"
+
 const tools: ChatCompletionTool[] = [
   {
     type: "function",
@@ -584,7 +610,11 @@ export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: str
     : "";
 
   const handoffPhrase = clinic.handoffPhrase?.trim();
-  const handoffLine = `\nHANDOFF: quando a situacao exigir uma pessoa (pedido de desconto ou negociacao, reclamacao, paciente insatisfeito, paciente pede pra falar com alguem, duvida clinica que so o profissional responde, risco medico ou urgencia, problema de pagamento, exames prontos com interesse cirurgico, ou algo que voce nao resolve com seguranca): ${handoffPhrase ? `escreva exatamente "${handoffPhrase}" e ` : "escreva uma frase curta e acolhedora e "}chame a ferramenta transfer_to_human com o motivo e um resumo pra pessoa continuar. Depois disso pare de responder. Nao anuncie que vai "transferir pra um atendente".`;
+  const handoffLine = `\nHANDOFF: quando a situacao exigir uma pessoa (pedido de desconto ou negociacao, reclamacao, paciente insatisfeito, paciente pede pra falar com alguem OU pra ligar, paciente diz que as respostas estao "no automatico" / repetitivas / confusas, duvida clinica que so o profissional responde, risco medico ou urgencia, problema de pagamento, exames prontos com interesse cirurgico, ou algo que voce nao resolve com seguranca): ${handoffPhrase ? `escreva exatamente "${handoffPhrase}" e ` : "escreva uma frase curta e acolhedora e "}chame a ferramenta transfer_to_human com o motivo e um resumo pra pessoa continuar. Depois disso pare de responder. Nao anuncie que vai "transferir pra um atendente".`;
+
+  // Trava anti-loop: o modelo (gpt-4o-mini) as vezes trava repetindo a mesma
+  // resposta. Isso e reforcado no prompt e checado de novo no codigo.
+  const noRepeatLine = `\nNAO SE REPITA: nunca reenvie uma resposta que voce ja mandou nesta conversa, nem uma variacao da mesma frase. Responda SEMPRE a ultima mensagem do cliente - se ele fez uma pergunta nova (ex: "da pra mandar um cartao junto?", "entrega de manha?"), responda ESSA pergunta, sem voltar pro assunto anterior. Se voce ja explicou tudo o que sabia e o cliente continua sem avancar, NAO repita: use transfer_to_human. Cada resposta sua tem que acrescentar algo novo.`;
 
   const postureLine =
     clinic.servicePosture === "consultivo"
@@ -685,7 +715,7 @@ export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: str
       ? `\n\nItens/servicos cadastrados (fale so o que esta aqui; nunca invente preco, prazo ou detalhe que nao esteja):\n${procedureList}`
       : "";
 
-    const genericHandoffLine = `\nHANDOFF: voce atende PELO proprio WhatsApp oficial do negocio - esta conversa JA e o canal de atendimento. NUNCA mande link de WhatsApp (wa.me), numero de telefone pra "chamar o atendimento", nem diga pra pessoa falar "com a equipe" em outro lugar. Quando a conversa exigir uma pessoa de verdade (reclamacao, cliente insatisfeito, cliente pede pra falar com alguem, negociacao ou desconto fora do previsto, um pedido/troca/devolucao/pagamento que voce nao resolve com o que esta cadastrado, ou qualquer coisa que voce nao resolve com seguranca): ${handoffPhrase ? `escreva exatamente "${handoffPhrase}" e ` : "escreva uma frase curta e acolhedora dizendo que uma pessoa da equipe vai continuar por aqui e "}chame a ferramenta transfer_to_human com o motivo e um resumo. Depois pare de responder. O que voce CONSEGUE resolver (duvida de produto, tamanho, frete, cor, link do site) resolva aqui na conversa, sem transferir.`;
+    const genericHandoffLine = `\nHANDOFF: voce atende PELO proprio WhatsApp oficial do negocio - esta conversa JA e o canal de atendimento. NUNCA mande link de WhatsApp (wa.me), numero de telefone pra "chamar o atendimento", nem diga pra pessoa falar "com a equipe" em outro lugar. Quando a conversa exigir uma pessoa de verdade (reclamacao, cliente insatisfeito, cliente pede pra falar com alguem OU pra ligar, cliente diz que as respostas estao "no automatico" / repetitivas / confusas, negociacao ou desconto fora do previsto, um pedido/troca/devolucao/pagamento que voce nao resolve com o que esta cadastrado, quer finalizar uma compra e precisa de confirmacao, ou qualquer coisa que voce nao resolve com seguranca): ${handoffPhrase ? `escreva exatamente "${handoffPhrase}" e ` : "escreva uma frase curta e acolhedora dizendo que uma pessoa da equipe vai continuar por aqui e "}chame a ferramenta transfer_to_human com o motivo e um resumo. Depois pare de responder. O que voce CONSEGUE resolver (duvida de produto, tamanho, frete, cor, link do site) resolva aqui na conversa, sem transferir.`;
 
     return `Voce e a ${a}, do atendimento da "${clinic.name}"${labelPart}.${areaLine}${nowLine}
 Atenda pelo proprio WhatsApp oficial do negocio de forma humanizada, calorosa e objetiva, como um bom atendimento de loja. A conversa que voce ve JA e esse WhatsApp - nunca redirecione a pessoa pra "o WhatsApp da loja".
@@ -698,7 +728,7 @@ Seu trabalho:
 1. Entender o que o cliente procura e ajudar usando SOMENTE o que esta cadastrado abaixo (catalogo, FAQ, mensagens prontas, roteiros, regras).
 2. Manter a etapa do cliente no funil atualizada (update_crm_stage) conforme a conversa avanca.
 3. Nunca invente estoque, prazo de entrega, status de pedido, preco ou politica que nao estejam cadastrados. Nesses casos, mande a pessoa ver no site (link da peca ou da colecao) ou, se precisar mesmo de uma pessoa, use transfer_to_human - nunca mande link de WhatsApp.
-4. Termine sempre com um proximo passo claro: um link, uma opcao ou uma pergunta.${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${genericHandoffLine}${catalogBlock}${stagesBlock}${templatesBlock}${faqBlock}${playbookBlock}
+4. Termine sempre com um proximo passo claro: um link, uma opcao ou uma pergunta.${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${genericHandoffLine}${noRepeatLine}${catalogBlock}${stagesBlock}${templatesBlock}${faqBlock}${playbookBlock}
 
 Responda sempre em portugues do Brasil, em mensagens curtas como quem digita no WhatsApp.${await getActiveRulesPrompt(clinicId)}`;
   }
@@ -716,7 +746,7 @@ Seu trabalho:
 2. Manter a etapa do paciente no funil atualizada (update_crm_stage) conforme a conversa avanca.
 3. Checar disponibilidade real (check_specific_time / check_availability) antes de falar de qualquer data.
 4. Confirmar o horario escolhido com o paciente e so entao usar book_appointment.
-5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${postureLine}${evalFirstLine}${medicalLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}
+5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${postureLine}${evalFirstLine}${medicalLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${noRepeatLine}
 
 Procedimentos oferecidos pela clinica:
 ${procedureList || "(nenhum procedimento cadastrado ainda)"}
@@ -853,6 +883,21 @@ export async function generateReply(
     }
   }
 
+  // Historico de respostas da Alice, pra detectar (e cortar) repeticao.
+  const priorAssistant = history.filter((m) => m.role === "assistant").map((m) => m.content);
+  const lastAssistant = priorAssistant.at(-1) ?? "";
+  const alreadyRepeatingInHistory =
+    priorAssistant.length >= 2 &&
+    replySimilarity(priorAssistant.at(-1)!, priorAssistant.at(-2)!) >= REPEAT_SIMILARITY;
+  if (alreadyRepeatingInHistory) {
+    // Injeta um empurrao forte logo antes de gerar: o modelo ja travou.
+    messages.push({
+      role: "system",
+      content:
+        "ATENCAO: voce mandou a mesma resposta varias vezes seguidas e o cliente nao avancou. NAO repita de novo. Faca uma destas duas coisas: (1) responda de forma DIRETA e diferente a ultima mensagem do cliente, resolvendo exatamente o que ele perguntou; ou (2) se voce ja nao tem como ajudar sozinha, chame transfer_to_human agora com um resumo. Nao reenvie a mesma informacao.",
+    });
+  }
+
   let finalText = "";
   let didTransfer = false;
   for (let turn = 0; turn < 6; turn++) {
@@ -860,6 +905,8 @@ export async function generateReply(
       model: MODEL,
       messages,
       tools,
+      frequency_penalty: 0.3,
+      presence_penalty: 0.2,
     });
 
     const choice = response.choices[0].message;
@@ -904,6 +951,30 @@ export async function generateReply(
   // esta (ja e velha) - o novo agrupamento vai gerar uma resposta atualizada.
   if (opts.guardAgainstNewerThan && after && after.messages.length > 0) {
     return "";
+  }
+
+  // Trava anti-loop: a Alice ia mandar de novo (quase) a mesma resposta que
+  // acabou de dar. Um bom atendimento nao repete - passa pra uma pessoa.
+  if (
+    !didTransfer &&
+    finalText.trim() &&
+    normalizeReply(finalText).length > 25 &&
+    lastAssistant &&
+    replySimilarity(finalText, lastAssistant) >= REPEAT_SIMILARITY
+  ) {
+    const lastUserMsg = history.filter((m) => m.role === "user").at(-1)?.content ?? "";
+    console.warn(`[anti-loop] Alice ia repetir a resposta - transferindo (conv ${conversation.id})`);
+    try {
+      await runTool(clinicId, patient.id, conversation.id, "transfer_to_human", {
+        reason: "Alice repetindo a mesma resposta; cliente sem avancar",
+        summary: `A Alice ia reenviar a mesma resposta de novo e o cliente continuou sem fechar. Ultima mensagem do cliente: "${String(lastUserMsg).slice(0, 300)}".`,
+      });
+    } catch (err) {
+      console.error("[anti-loop] falha ao transferir:", err);
+    }
+    didTransfer = true;
+    const c = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { handoffPhrase: true } });
+    finalText = c?.handoffPhrase?.trim() || "Vou pedir pra uma pessoa da equipe continuar com voce por aqui.";
   }
 
   // Se a Alice transferiu pra equipe nesta rodada e nao produziu texto de
