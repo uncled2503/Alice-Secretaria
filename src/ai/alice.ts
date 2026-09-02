@@ -795,11 +795,13 @@ export async function recordIncomingMessage(params: {
   patientName?: string;
   text: string;
   imageDataUrl?: string;
+  media?: { type: "image" | "video" | "document" | "audio"; dataUrl: string; name?: string };
   referral?: IncomingReferral;
 }): Promise<RecordedMessage | null> {
-  const { clinicId, patientPhone, patientName, text, imageDataUrl, referral } = params;
+  const { clinicId, patientPhone, patientName, text, imageDataUrl, media, referral } = params;
   const trimmed = text.trim();
-  const storedContent = trimmed || (imageDataUrl ? "[imagem]" : "");
+  const mediaPlaceholder: Record<string, string> = { image: "[imagem]", video: "[vídeo]", audio: "[áudio]", document: "[arquivo]" };
+  const storedContent = trimmed || (media ? mediaPlaceholder[media.type] : imageDataUrl ? "[imagem]" : "");
   if (!storedContent) return null;
 
   const existing = await prisma.patient.findUnique({
@@ -838,7 +840,11 @@ export async function recordIncomingMessage(params: {
       conversationId: conversation.id,
       role: "user",
       content: storedContent,
-      ...(imageDataUrl ? { mediaType: "image", mediaUrl: imageDataUrl } : {}),
+      ...(media
+        ? { mediaType: media.type, mediaUrl: media.dataUrl, mediaName: media.name ?? null }
+        : imageDataUrl
+          ? { mediaType: "image", mediaUrl: imageDataUrl }
+          : {}),
     },
   });
   await prisma.conversation.update({

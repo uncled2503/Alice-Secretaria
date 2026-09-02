@@ -32,7 +32,7 @@ test("aceita payload oficial de mensagem e resolve sender_pn", () => {
       text: "Quero agendar",
     },
   });
-  assert.deepEqual(messages, [{ externalId: "ABC123", phone: "5532999999999", text: "Quero agendar", mediaMessageId: undefined, imageMessageId: undefined, pushName: "Maria", referral: undefined }]);
+  assert.deepEqual(messages, [{ externalId: "ABC123", phone: "5532999999999", text: "Quero agendar", mediaMessageId: undefined, imageMessageId: undefined, media: undefined, pushName: "Maria", referral: undefined }]);
 });
 
 test("captura o referral de Click-to-WhatsApp quando presente", () => {
@@ -67,6 +67,29 @@ test("marca audio pra transcrever e imagem pra interpretar", () => {
   assert.equal(img[0].imageMessageId, "I1");
   assert.equal(img[0].text, "tem essa peça?");
   assert.equal(img[0].mediaMessageId, undefined);
+});
+
+test("captura URL / mime / nome do anexo quando o webhook traz", () => {
+  const [img] = parseWebhookPayload({
+    message: {
+      messageid: "M9", sender_pn: "5511988887777@s.whatsapp.net", messageType: "imageMessage",
+      fileURL: "https://cdn.uazapi/x.jpg", mimetype: "image/jpeg",
+    },
+  });
+  assert.equal(img.media.kind, "image");
+  assert.equal(img.media.url, "https://cdn.uazapi/x.jpg");
+  assert.equal(img.media.mime, "image/jpeg");
+  assert.equal(img.imageMessageId, "M9");
+
+  const [doc] = parseWebhookPayload({
+    message: {
+      messageid: "M10", chatid: "5511988887777@s.whatsapp.net",
+      content: { documentMessage: { mimetype: "application/pdf", fileName: "orcamento.pdf", url: "https://cdn.uazapi/o.pdf" } },
+    },
+  });
+  assert.equal(doc.media.kind, "document");
+  assert.equal(doc.media.filename, "orcamento.pdf");
+  assert.equal(doc.media.url, "https://cdn.uazapi/o.pdf");
 });
 
 test("rejeita URL sem HTTPS e remove barra final", () => {
