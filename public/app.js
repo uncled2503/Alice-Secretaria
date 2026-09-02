@@ -4499,9 +4499,10 @@ async function loadChannelStatus() {
   const disconnectBtn = document.getElementById("btn-channel-disconnect");
   const qrLoading = document.getElementById("channel-qr-loading");
 
-  // "Reaplicar webhook": só admin, e só faz sentido com a instância configurada.
-  document.getElementById("btn-channel-reapply-webhook").style.display =
-    state.staff?.role === "admin" && status.configured ? "inline-flex" : "none";
+  // "Reaplicar webhook" / "Diagnóstico de mídia": só admin, instância configurada.
+  const showAdminChannelBtns = state.staff?.role === "admin" && status.configured ? "inline-flex" : "none";
+  document.getElementById("btn-channel-reapply-webhook").style.display = showAdminChannelBtns;
+  document.getElementById("btn-channel-media-debug").style.display = showAdminChannelBtns;
 
   state.channelConnected = !!status.connected;
 
@@ -4688,6 +4689,22 @@ document.getElementById("btn-channel-reapply-webhook").addEventListener("click",
     st.textContent = "✅ Webhook reaplicado.";
   } catch (err) {
     st.textContent = err.detail || "Não foi possível reaplicar.";
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("btn-channel-media-debug").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const out = document.getElementById("channel-media-debug-out");
+  btn.disabled = true;
+  try {
+    const data = await api("/whatsapp/media-debug");
+    const empty = !(data.downloads?.length) && !(data.webhookSamples?.length);
+    out.textContent = empty
+      ? "Nada registrado desde o último restart do servidor. Peça uma foto de teste ao cliente e clique de novo."
+      : JSON.stringify(data, null, 2);
+    out.style.display = "block";
   } finally {
     btn.disabled = false;
   }

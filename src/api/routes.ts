@@ -16,6 +16,7 @@ import {
   reapplyWebhook,
   verifyWebhookSignature,
   enqueueWebhook,
+  getMediaDebug,
 } from "../uazapi/client.js";
 import { getFunnelStages, generateStageId } from "../crm/stages.js";
 import { movePatientToKind, movePatientToRecovery, movePatientToStage } from "../crm/stageAutomation.js";
@@ -734,6 +735,16 @@ apiRouter.post(
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : "Falha ao reaplicar o webhook" });
     }
+  })
+);
+
+// Diagnóstico das últimas mídias recebidas (por que a foto do cliente não
+// apareceu). Só admin.
+apiRouter.get(
+  "/whatsapp/media-debug",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    res.json(getMediaDebug());
   })
 );
 

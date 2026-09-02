@@ -389,6 +389,7 @@ export async function sendMedia(
   opts: { dataUrl: string; kind: OutgoingMediaKind; caption?: string; filename?: string },
 ): Promise<void> {
   const credentials = await clinicCredentials(clinicId);
+  const mimeMatch = opts.dataUrl.match(/^data:([\w.+-]+\/[\w.+-]+);base64,/);
   const body: Record<string, unknown> = {
     number: phone.replace(/\D/g, ""),
     type: opts.kind,
@@ -396,6 +397,7 @@ export async function sendMedia(
     delay: 0,
     async: false,
   };
+  if (mimeMatch) body.mimetype = mimeMatch[1];
   if (opts.caption?.trim()) body.text = opts.caption.trim();
   if (opts.kind === "document" && opts.filename) body.docName = opts.filename;
   await request(credentials, "/send/media", { method: "POST", body: JSON.stringify(body) });
@@ -495,6 +497,18 @@ export function parseWebhookPayload(bodyValue: unknown): IncomingUazapiMessage[]
     const content = record(message.content);
     const text = textValue(message.text, message.caption, message.body, content?.text, content?.conversation);
 
+    // Amostra pro diagnóstico: forma da mensagem recebida (sem conteúdo, só as
+    // chaves) - ajuda quando a foto do cliente não aparece.
+    lastWebhookSamples.unshift({
+      at: new Date().toISOString(),
+      type: textValue(message.messageType, message.type) || "(sem type)",
+      messageKeys: Object.keys(message).join(","),
+      contentKeys: content ? Object.keys(content).join(",") : "(sem content)",
+      hasText: !!text,
+      mimetype: textValue(message.mimetype, content?.mimetype) || "",
+    });
+    if (lastWebhookSamples.length > 15) lastWebhookSamples.length = 15;
+
     // Detecta o tipo de midia por varios sinais (nome do tipo Baileys, no
     // aninhado em content, ou mimetype).
     const mime = textValue(
@@ -577,7 +591,38 @@ async function transcribeAudio(clinicId: string, messageId: string): Promise<str
   }
 }
 
-const MEDIA_MAX_BYTES = 10_000_000; // ~7.5MB de arquivo apos base64
+const MEDIA_MAX_BYTES = 16_000_000; // ~12MB de arquivo (base64)
+
+// Diagnostico das ultimas resolucoes de midia recebida (so em memoria). Fica
+// visivel pro admin em GET /whatsapp/media-debug pra ajudar quando a foto do
+// cliente nao aparece.
+interface MediaDebugEntry {
+  at: string;
+  clinicId: string;
+  kind: string;
+  messageId: string;
+  hadWebhookUrl: boolean;
+  hadWebhookBase64: boolean;
+  downloadKeys?: string;
+  downloadStatus?: string;
+  resolved: boolean;
+}
+const mediaDebug: MediaDebugEntry[] = [];
+function pushMediaDebug(entry: MediaDebugEntry): void {
+  mediaDebug.unshift(entry);
+  if (mediaDebug.length > 15) mediaDebug.length = 15;
+}
+const lastWebhookSamples: {
+  at: string;
+  type: string;
+  messageKeys: string;
+  contentKeys: string;
+  hasText: boolean;
+  mimetype: string;
+}[] = [];
+export function getMediaDebug(): { downloads: MediaDebugEntry[]; webhookSamples: typeof lastWebhookSamples } {
+  return { downloads: mediaDebug, webhookSamples: lastWebhookSamples };
+}
 
 function toDataUri(encoded: string, mimeHint?: string): string | null {
   const raw = encoded.trim();
@@ -607,44 +652,65 @@ async function urlToDataUri(url: string): Promise<string | null> {
 // /message/download -> URL retornada pelo /message/download.
 async function resolveIncomingMedia(
   clinicId: string,
-  media: { messageId: string; url?: string; base64?: string; mime?: string },
+  media: { kind?: string; messageId: string; url?: string; base64?: string; mime?: string },
 ): Promise<string | null> {
+  const dbg: MediaDebugEntry = {
+    at: new Date().toISOString(),
+    clinicId,
+    kind: media.kind ?? "?",
+    messageId: media.messageId,
+    hadWebhookUrl: !!media.url,
+    hadWebhookBase64: !!media.base64,
+    resolved: false,
+  };
+  const done = (uri: string | null) => {
+    dbg.resolved = !!uri;
+    pushMediaDebug(dbg);
+    return uri;
+  };
+
   if (media.base64) {
     const fromB64 = toDataUri(media.base64, media.mime);
-    if (fromB64) return fromB64;
+    if (fromB64) return done(fromB64);
   }
   if (media.url) {
     const fromUrl = await urlToDataUri(media.url);
-    if (fromUrl) return fromUrl;
+    if (fromUrl) return done(fromUrl);
   }
   try {
     const credentials = await clinicCredentials(clinicId);
+    // Resposta documentada: { fileURL, mimetype, base64Data, transcription }
     const response = record(await request(credentials, "/message/download", {
       method: "POST",
-      body: JSON.stringify({ id: media.messageId, messageid: media.messageId, return_base64: true, return_link: true, transcribe: false }),
+      body: JSON.stringify({ id: media.messageId, return_base64: true, return_link: true, transcribe: false }),
     }));
-    const encoded = textValue(
-      response?.base64Data, response?.base64, response?.data, response?.fileBase64,
-      response?.file, response?.media, record(response?.data)?.base64,
-    );
-    const mimeHint = textValue(response?.mimetype, response?.mimeType, record(response?.info)?.mimetype, media.mime) || "image/jpeg";
+    dbg.downloadKeys = Object.keys(response ?? {}).join(",");
+    const encoded = textValue(response?.base64Data, response?.base64, response?.data, response?.fileBase64);
+    const mimeHint = textValue(response?.mimetype, response?.mimeType, media.mime) || "image/jpeg";
     if (encoded) {
       const uri = toDataUri(encoded, mimeHint);
-      if (uri) return uri;
+      if (uri) return done(uri);
+      dbg.downloadStatus = `base64 grande demais (${encoded.length} chars)`;
     }
-    const link = textValue(response?.fileURL, response?.fileUrl, response?.url, response?.link, response?.downloadUrl);
-    if (link) return await urlToDataUri(link);
-    console.warn(`[UAZAPI] /message/download sem midia utilizavel. chaves: ${Object.keys(response ?? {}).join(",")}`);
-    return null;
+    const link = textValue(response?.fileURL, response?.fileUrl, response?.url, response?.link);
+    if (link) {
+      const uri = await urlToDataUri(link);
+      if (!uri) dbg.downloadStatus = "fileURL nao baixou";
+      return done(uri);
+    }
+    dbg.downloadStatus = dbg.downloadStatus || "sem base64Data nem fileURL";
+    console.warn(`[UAZAPI] /message/download sem midia. chaves: ${dbg.downloadKeys}`);
+    return done(null);
   } catch (error) {
+    dbg.downloadStatus = `erro: ${error instanceof Error ? error.message : String(error)}`.slice(0, 200);
     console.error("[UAZAPI] Falha ao baixar midia:", error);
-    return null;
+    return done(null);
   }
 }
 
 // Compat: usado por quem so precisa da imagem (visao da Alice).
 async function downloadImageDataUrl(clinicId: string, messageId: string): Promise<string | null> {
-  return resolveIncomingMedia(clinicId, { messageId, mime: "image/jpeg" });
+  return resolveIncomingMedia(clinicId, { kind: "image", messageId, mime: "image/jpeg" });
 }
 
 // --- Agrupamento de mensagens quebradas ------------------------------------
@@ -708,10 +774,15 @@ async function handleQueuedPayload(clinicId: string, body: unknown): Promise<voi
       if (incoming.media.kind === "audio" && !text) {
         text = await transcribeAudio(clinicId, incoming.media.messageId);
       }
-      const dataUrl = await resolveIncomingMedia(clinicId, incoming.media);
+      const dataUrl = await resolveIncomingMedia(clinicId, { ...incoming.media });
       if (dataUrl) {
         media = { type: incoming.media.kind, dataUrl, name: incoming.media.filename };
         if (incoming.media.kind === "image") imageDataUrl = dataUrl;
+      } else if (!text) {
+        // Nao conseguiu baixar o anexo: registra mesmo assim (com um marcador),
+        // pra conversa nao ficar com um "buraco" e o atendente saber que chegou.
+        const label: Record<string, string> = { image: "foto", video: "vídeo", audio: "áudio", document: "arquivo" };
+        text = `[${label[incoming.media.kind] ?? "anexo"} que não consegui carregar — peça pra reenviar]`;
       }
     } else if (!text && incoming.mediaMessageId) {
       text = await transcribeAudio(clinicId, incoming.mediaMessageId);
