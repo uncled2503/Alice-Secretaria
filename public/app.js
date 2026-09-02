@@ -3256,10 +3256,41 @@ function applyBizMode() {
   if (activeNav && title) title.textContent = navItemLabel(activeNav);
 }
 
+function renderUsageBar(usage) {
+  const bar = document.getElementById("dash-usage");
+  if (!bar) return;
+  if (!usage || !usage.limit || usage.limit <= 0) {
+    bar.hidden = true;
+    return;
+  }
+  const pct = Math.min(100, Math.round((usage.used / usage.limit) * 100));
+  const over = usage.used >= usage.limit;
+  const near = !over && pct >= 85;
+  bar.hidden = false;
+  bar.classList.toggle("usage-bar--over", over);
+  bar.classList.toggle("usage-bar--near", near);
+  bar.innerHTML = "";
+  bar.append(
+    el("div", { class: "usage-bar-top" }, [
+      el("span", {}, [`Atendimentos da Alice este mês: `, el("strong", {}, [`${usage.used} / ${usage.limit}`])]),
+      el("span", { class: "usage-bar-note" }, [
+        over
+          ? "Limite atingido — novos contatos estão indo direto pra equipe."
+          : near
+            ? "Chegando no limite do plano."
+            : "",
+      ]),
+    ]),
+    el("div", { class: "usage-track" }, [el("div", { class: "usage-fill", style: `width:${pct}%` }, [])]),
+  );
+}
+
 async function loadDashboard() {
   const end = new Date();
   const start = new Date(end.getTime() - state.periodDays * 24 * 60 * 60_000);
   const stats = await api(`/dashboard/stats?start=${start.toISOString()}&end=${end.toISOString()}`);
+
+  renderUsageBar(stats.usage);
 
   document.getElementById("stat-attended").textContent = stats.attended;
   document.getElementById("stat-appointments").textContent = stats.appointmentsTotal;
@@ -4271,20 +4302,27 @@ function openClinicPlanModal(clinic) {
   document.getElementById("clinic-plan-days").value = "30";
   document.getElementById("clinic-plan-custom").value = "";
   document.getElementById("clinic-plan-custom-wrap").style.display = "none";
+  document.getElementById("clinic-plan-limit").value =
+    clinic.conversationLimitOverride == null ? "" : String(clinic.conversationLimitOverride);
 
   const current = document.getElementById("clinic-plan-current");
   const d = daysUntil(clinic.planExpiresAt);
+  const planLbl = PLAN_META[clinic.plan]?.label ?? clinic.plan;
+  let line;
   if (!clinic.planExpiresAt) {
-    current.textContent = clinic.planActivatedAt
-      ? `Atualmente: ${PLAN_META[clinic.plan]?.label ?? clinic.plan}, sem prazo definido.`
-      : "Nenhum plano definido ainda.";
+    line = clinic.planActivatedAt ? `Atualmente: ${planLbl}, sem prazo definido.` : "Nenhum plano definido ainda.";
   } else {
     const venc = new Date(clinic.planExpiresAt).toLocaleDateString("pt-BR");
-    current.textContent =
-      d < 0
-        ? `Atualmente: ${PLAN_META[clinic.plan]?.label ?? clinic.plan} — venceu em ${venc} (há ${-d} dias).`
-        : `Atualmente: ${PLAN_META[clinic.plan]?.label ?? clinic.plan} — vence em ${venc} (${d} dias).`;
+    line = d < 0
+      ? `Atualmente: ${planLbl} — venceu em ${venc} (há ${-d} dias).`
+      : `Atualmente: ${planLbl} — vence em ${venc} (${d} dias).`;
   }
+  const nowMonth = new Date().toISOString().slice(0, 7);
+  const used = clinic.usageMonth === nowMonth ? (clinic.usageCount ?? 0) : 0;
+  const planDefault = { realce: 100, prime: 300, prestige: 0 }[clinic.plan] ?? 0;
+  const eff = clinic.conversationLimitOverride == null ? planDefault : clinic.conversationLimitOverride;
+  line += ` · Atendimentos este mês: ${used}${eff > 0 ? ` / ${eff}` : " (ilimitado)"}.`;
+  current.textContent = line;
 
   document.getElementById("clinic-plan-overlay").style.display = "flex";
 }
@@ -4313,6 +4351,12 @@ document.getElementById("clinic-plan-form").addEventListener("submit", async (e)
   } else {
     days = Number(daysSel); // 0 = sem prazo
   }
+  const limitRaw = document.getElementById("clinic-plan-limit").value.trim();
+  const limit = limitRaw === "" ? null : Number(limitRaw);
+  if (limit !== null && (!Number.isInteger(limit) || limit < 0)) {
+    showError("Limite de atendimentos inválido (número inteiro ≥ 0, ou vazio).");
+    return;
+  }
   const saveBtn = document.getElementById("clinic-plan-save");
   saveBtn.disabled = true;
   try {
@@ -4320,6 +4364,11 @@ document.getElementById("clinic-plan-form").addEventListener("submit", async (e)
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ plan, days }),
+    });
+    await api(`/clinics/${id}/conversation-limit`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ limit }),
     });
     closeClinicPlanModal();
     await loadClinicsList();

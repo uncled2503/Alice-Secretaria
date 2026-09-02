@@ -162,7 +162,8 @@ A Alice transcreve os audios que o cliente envia e enxerga as fotos (visao), res
 - Plano Prime: R$897/mes (mais escolhido) - ate 300 conversas/mes, tudo do Realce + follow-up automatico + pos-procedimento + lembrete de renovacao + aniversario + lista de espera + ate 3 profissionais com agenda propria + bloqueio de agenda + notificacoes pra equipe + relatorios de desempenho + grupo de suporte exclusivo.
 - Plano Prestige: R$1.397/mes - conversas ilimitadas, tudo do Prime + profissionais e unidades ilimitados + campanhas de reativacao de base + disparo em massa por etapa do funil + pesquisa de satisfacao (NPS) e avaliacao no Google + modo consultivo/clinica medica + roteiros personalizados e FAQ ilimitada + suporte prioritario e revisao trimestral.
 - Sem fidelidade. Garantia incondicional de 7 dias.
-- Para trocar de plano, ver a vigencia ou tirar duvida de valores, fale com a equipe da Alice no WhatsApp de suporte.
+- Limite de atendimentos/mes: "atendimento" = uma conversa que a Alice atende no mes (conta 1 por conversa). Ao atingir o limite, a Alice para de PEGAR contatos NOVOS - as conversas ja em andamento continuam normal - e os contatos novos vao direto pra equipe. O contador aparece no Inicio do painel ("Atendimentos da Alice este mes: X / Y") e zera todo dia 1o. Prestige nao tem limite.
+- Para trocar de plano, aumentar o limite, ver a vigencia ou tirar duvida de valores, fale com a equipe da Alice no WhatsApp de suporte.
 
 === QUANDO FALAR COM A EQUIPE DA ALICE ===
 So encaminhe nestes casos:

@@ -32,6 +32,7 @@ import { retryMetaEvent } from "../meta/worker.js";
 import { createRuleDraft, RULE_CATEGORIES, seedDefaultRules, reseedRulesForProfile } from "../ai/rules.js";
 import { BRIEFING_TEMPLATE, parseBriefing, applyBriefing, BriefingPlanSchema } from "../ai/briefing.js";
 import { runLearningJob, approveInsight, rejectInsight } from "../ai/learning.js";
+import { usageSnapshot } from "../crm/usage.js";
 import { API_SCOPES, API_SCOPE_IDS, generateApiKey } from "./external/keys.js";
 import { answerSiteQuestion, type SiteMessage } from "../ai/siteAssistant.js";
 import { seedLaleblu } from "../maintenance/seedLaleblu.js";
@@ -178,6 +179,9 @@ apiRouter.get(
         plan: true,
         planActivatedAt: true,
         planExpiresAt: true,
+        conversationLimitOverride: true,
+        usageMonth: true,
+        usageCount: true,
       },
     });
     const withStatus = await Promise.all(clinics.map(async (clinic) => ({ ...clinic, ...(await getStatus(clinic.id)) })));
@@ -842,7 +846,40 @@ apiRouter.get(
       activeConversations,
       byState: leadsByState(attendedPhones.map((p) => p.phone)),
       daily,
+      usage: await usageSnapshot(clinic.id),
     });
+  })
+);
+
+// Ajuste do limite de atendimentos/mês da clínica (admin). limit: número =
+// teto fixo · 0 = ilimitado · null = volta pro padrão do plano.
+apiRouter.put(
+  "/clinics/:id/conversation-limit",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, clinic.id)) return;
+    const { limit } = (req.body ?? {}) as { limit?: number | null };
+    let value: number | null;
+    if (limit === null || limit === undefined) value = null;
+    else {
+      const n = Math.round(Number(limit));
+      if (!Number.isFinite(n) || n < 0 || n > 1_000_000) {
+        res.status(400).json({ error: "limite inválido (0 = ilimitado, ou vazio pra usar o do plano)" });
+        return;
+      }
+      value = n;
+    }
+    await prisma.clinic.update({ where: { id: clinic.id }, data: { conversationLimitOverride: value } });
+    await logActivity({
+      clinicId: clinic.id,
+      type: "plan_updated",
+      area: "clinica",
+      title: "Limite de atendimentos ajustado",
+      description: value === null ? "Voltou pro padrão do plano." : value === 0 ? "Ilimitado." : `${value} atendimentos/mês.`,
+      actorName: req.staff?.name ?? null,
+    });
+    res.json({ ok: true });
   })
 );
 

@@ -530,6 +530,18 @@ tbody tr:hover { background: var(--accent-50); }
   padding: 0.06rem 0.4rem; white-space: nowrap;
 }
 #conversations-list .conv-empty { padding: 1.4rem 1rem; text-align: center; color: var(--text-faint); font-size: 0.82rem; }
+/* Barra de uso (limite de atendimentos do plano) */
+.usage-bar { margin: 0 0 1rem; padding: 0.7rem 0.9rem; border: 1px solid var(--border); border-radius: 10px; background: var(--card-bg); }
+.usage-bar--near { border-color: #f59e0b; background: #fffbeb; }
+.usage-bar--over { border-color: #dc2626; background: #fef2f2; }
+.usage-bar-top { display: flex; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap; font-size: 0.82rem; }
+.usage-bar-note { color: var(--text-muted); }
+.usage-bar--over .usage-bar-note { color: #b91c1c; font-weight: 600; }
+.usage-track { margin-top: 0.45rem; height: 7px; border-radius: 999px; background: var(--border); overflow: hidden; }
+.usage-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.3s; }
+.usage-bar--near .usage-fill { background: #f59e0b; }
+.usage-bar--over .usage-fill { background: #dc2626; }
+
 /* Aprendizado da Alice */
 .learning-card { margin-top: 0.7rem; }
 .learning-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }

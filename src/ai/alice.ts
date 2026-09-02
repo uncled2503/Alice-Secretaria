@@ -16,6 +16,7 @@ import { notifyStaff } from "../crm/notify.js";
 import { logActivity } from "../crm/activity.js";
 import { enqueueLead, enqueueSchedule } from "../meta/events.js";
 import { ctwaClidToFbc } from "../meta/userData.js";
+import { checkAtendimentoLimit } from "../crm/usage.js";
 import type { Procedure } from "@prisma/client";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -897,6 +898,31 @@ export async function generateReply(
   const clinicId = conversation.patient.clinicId;
   const patient = conversation.patient;
   const { imageDataUrl } = opts;
+
+  // Limite de atendimentos do plano: se estourou, a Alice nao pega este contato
+  // novo - passa direto pra equipe. Conversas ja em andamento continuam.
+  const usageClinic = await prisma.clinic.findUnique({
+    where: { id: clinicId },
+    select: { id: true, plan: true, conversationLimitOverride: true, usageMonth: true, usageCount: true, usageLimitNotified: true },
+  });
+  if (usageClinic) {
+    const check = await checkAtendimentoLimit(usageClinic, { id: conversation.id, aliceMonth: conversation.aliceMonth });
+    if (!check.allowed) {
+      await prisma.conversation.update({
+        where: { id: conversation.id },
+        data: { humanTakeover: true, handoffPending: true, handoffReason: "limite de atendimentos do plano" },
+      });
+      await prisma.message.create({
+        data: {
+          conversationId: conversation.id,
+          role: "system",
+          content: `Atendimento encaminhado para a equipe: o limite de atendimentos do plano (${check.limit}/mês) foi atingido.`,
+          authorName: null,
+        },
+      });
+      return "";
+    }
+  }
 
   const history = await prisma.message.findMany({
     where: { conversationId },

@@ -125,6 +125,8 @@
           <span class="badge badge-green">Ativa</span>
         </div>
 
+        <div id="dash-usage" class="usage-bar" hidden></div>
+
         <div class="period-row" id="period-row">
           <button class="period-btn" data-days="0">Hoje</button>
           <button class="period-btn" data-days="1">Ontem</button>
@@ -2106,6 +2108,10 @@
           <label id="clinic-plan-custom-wrap" style="display:none">Quantos dias
             <input id="clinic-plan-custom" type="number" min="1" max="3650" placeholder="ex: 45" />
           </label>
+          <label>Limite de atendimentos/mês
+            <input id="clinic-plan-limit" type="number" min="0" max="1000000" placeholder="vazio = padrão do plano (Realce 100 · Prime 300 · Prestige ilimitado)" />
+          </label>
+          <p class="hint" style="margin:-0.3rem 0 0">Deixe vazio pra usar o padrão do plano. Digite um número pra um teto fixo, ou <strong>0 pra ilimitado</strong>.</p>
           <p id="clinic-plan-current" class="hint" style="margin:0"></p>
           <div class="modal-actions">
             <button type="button" id="clinic-plan-cancel" class="btn-cancel">Cancelar</button>

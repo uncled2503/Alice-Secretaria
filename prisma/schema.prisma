@@ -104,6 +104,13 @@ model Clinic {
   metaEvents    MetaEvent[]
   learningInsights LearningInsight[]
   learningRunAt  DateTime?
+
+  // Limite de atendimentos/mes (conversas que a Alice atende). null no override
+  // = usa o padrao do plano; 0 = ilimitado.
+  conversationLimitOverride Int?
+  usageMonth        String  @default("") // "YYYY-MM" do contador atual
+  usageCount        Int     @default(0)  // atendimentos da Alice no mes corrente
+  usageLimitNotified Boolean @default(false)
 }
 
 // Integracao com a Meta por clinica (Pixel + API de Conversoes). O token da
@@ -420,6 +427,7 @@ model Conversation {
   handoffReason     String?   // motivo curto do ultimo handoff para humano (ex: "pedido de desconto")
   handoffPending    Boolean   @default(false) // "nao lida": precisa de atencao da equipe e ninguem abriu ainda
   archived          Boolean   @default(false) // conversa arquivada (sai da lista principal), estilo WhatsApp
+  aliceMonth        String    @default("")    // "YYYY-MM" da ultima vez que a Alice atendeu (conta 1 atendimento/mes)
   lastFollowUpOrder Int       @default(0) // ultima etapa de recontato ja enviada (0 = nenhuma)
   lastMessageAt     DateTime  @default(now())
   createdAt         DateTime  @default(now())
