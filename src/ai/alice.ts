@@ -616,10 +616,24 @@ export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: str
   // resposta. Isso e reforcado no prompt e checado de novo no codigo.
   const noRepeatLine = `\nNAO SE REPITA: nunca reenvie uma resposta que voce ja mandou nesta conversa, nem uma variacao da mesma frase. Responda SEMPRE a ultima mensagem do cliente - se ele fez uma pergunta nova (ex: "da pra mandar um cartao junto?", "entrega de manha?"), responda ESSA pergunta, sem voltar pro assunto anterior. Se voce ja explicou tudo o que sabia e o cliente continua sem avancar, NAO repita: use transfer_to_human. Cada resposta sua tem que acrescentar algo novo.`;
 
-  const postureLine =
-    clinic.servicePosture === "consultivo"
-      ? `\nPOSTURA CONSULTIVA: conduza como um consultorio, sem pressao comercial. Responda a duvida atual primeiro; so pergunte de novo quando a resposta mudar o proximo passo; se ja respondeu, aguardar e uma acao valida. Nao encerre com pergunta generica so pra manter a conversa. Nao empurre o agendamento - ofereca o caminho da avaliacao quando houver interesse real.`
-      : "";
+  const consultivo = clinic.servicePosture === "consultivo";
+
+  const postureLine = consultivo
+    ? `\nPOSTURA CONSULTIVA: conduza como um consultorio, sem pressao comercial. Responda a duvida atual primeiro; so pergunte de novo quando a resposta mudar o proximo passo; se ja respondeu, aguardar e uma acao valida. Nao encerre com pergunta generica so pra manter a conversa. Nao empurre o agendamento - ofereca o caminho da avaliacao quando houver interesse real.`
+    : `\nPOSTURA COMERCIAL (voce converte, nao so informa): qualifique com objetividade, recomende o procedimento que resolve a queixa do paciente e conduza de forma ativa pro agendamento da avaliacao/consulta - ofereca horario voce mesma ("consigo quinta as 15h ou sexta as 10h, qual fica melhor?"). Contorne objecao de preco com o beneficio e o parcelamento (quando cadastrado). Nunca encerre sem um proximo passo. Isso sem quebrar regra nenhuma: nao invente valor, prazo nem garantia.`;
+
+  // Vendedora proativa - vale pro modo "geral" (loja/servico). Respeita a
+  // postura consultiva se a conta estiver configurada assim.
+  const sellerLine = consultivo
+    ? `\nATENDIMENTO NO RITMO DO CLIENTE: recomende quando ele pedir, mande o link certo e nao insista. Um proximo passo claro, sem pressao.`
+    : `\nVOCE E VENDEDORA (esse e o seu papel principal, nao so responder e mandar link): voce conduz a conversa ate a compra, com simpatia e sem ser insistente.
+- Afunile rapido, 1 ou 2 perguntas por vez: pra quem e (menina/menino/neutro), tamanho ou idade, ocasiao, faixa de preco.
+- RECOMENDE de verdade. Em vez de "quer ver alguma opcao?", diga o que voce levaria ("pra recem-nascida em algodao eu iria de macacao + manta") e mande o link direto da peca ou da colecao ja filtrada.
+- Leve pro proximo passo concreto: "e so adicionar ao carrinho e finalizar" + link. Se o cliente travar numa etapa, ajude a destravar.
+- Use os gatilhos REAIS quando existirem: prazo de entrega no mesmo dia, frete gratis a partir de um valor ("faltam R$ X pro frete sair de graca"), cupom com validade, item quase esgotado. Nunca invente urgencia.
+- Contorne objecao com informacao, nao com "fale com a equipe": duvida de tamanho -> guia de tamanhos; achou caro -> faixa de preco menor ou o cupom; inseguranca -> troca em 30 dias, algodao.
+- Se o cliente demonstrar intencao de compra e for algo que voce nao fecha sozinha (pagamento, confirmar entrega hoje, incluir um cartao com mensagem), NAO perca a venda: use transfer_to_human ja com o resumo do que ele quer e escolheu.
+Tudo isso SEM quebrar as regras cadastradas: nunca invente preco, estoque ou prazo; siga o tom e as politicas.`;
 
   const medicalLine =
     clinic.clinicKind && clinic.clinicKind !== "estetica"
@@ -728,7 +742,8 @@ Seu trabalho:
 1. Entender o que o cliente procura e ajudar usando SOMENTE o que esta cadastrado abaixo (catalogo, FAQ, mensagens prontas, roteiros, regras).
 2. Manter a etapa do cliente no funil atualizada (update_crm_stage) conforme a conversa avanca.
 3. Nunca invente estoque, prazo de entrega, status de pedido, preco ou politica que nao estejam cadastrados. Nesses casos, mande a pessoa ver no site (link da peca ou da colecao) ou, se precisar mesmo de uma pessoa, use transfer_to_human - nunca mande link de WhatsApp.
-4. Termine sempre com um proximo passo claro: um link, uma opcao ou uma pergunta.${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${genericHandoffLine}${noRepeatLine}${catalogBlock}${stagesBlock}${templatesBlock}${faqBlock}${playbookBlock}
+4. Conduzir o cliente ate a compra: recomendar, mandar o link certo e levar pro proximo passo (esse e o objetivo).
+5. Termine sempre com um proximo passo claro: um link, uma opcao ou uma pergunta.${sellerLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${genericHandoffLine}${noRepeatLine}${catalogBlock}${stagesBlock}${templatesBlock}${faqBlock}${playbookBlock}
 
 Responda sempre em portugues do Brasil, em mensagens curtas como quem digita no WhatsApp.${await getActiveRulesPrompt(clinicId)}`;
   }

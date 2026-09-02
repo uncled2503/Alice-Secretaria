@@ -661,11 +661,14 @@ function renderConversationsList() {
   tabs.children[1].textContent = `Alice (${aliceCount})`;
   tabs.children[2].textContent = `Humano (${humanCount})`;
 
-  const filtered = conversations.filter((c) => {
-    if (state.chatFilter === "alice") return !c.humanTakeover;
-    if (state.chatFilter === "human") return c.humanTakeover;
-    return true;
-  });
+  const filtered = conversations
+    .filter((c) => {
+      if (state.chatFilter === "alice") return !c.humanTakeover;
+      if (state.chatFilter === "human") return c.humanTakeover;
+      return true;
+    })
+    // As não lidas (handoff pendente) sobem pro topo; o resto mantém a ordem por data.
+    .sort((a, b) => (b.handoffPending ? 1 : 0) - (a.handoffPending ? 1 : 0));
 
   const list = document.getElementById("conversations-list");
   list.innerHTML = "";
@@ -680,10 +683,12 @@ function renderConversationsList() {
       el("div", { class: "conv-text" }, [
         el("div", { class: "conv-top-row" }, [
           el("div", { class: "name" }, [
-            c.handoffPending ? el("span", { class: "conv-dot", title: "Precisa de atendimento humano" }, []) : "",
+            c.handoffPending ? el("span", { class: "conv-dot", title: "Não lida — precisa de atendimento" }, []) : "",
             c.patient.name ?? c.patient.phone,
           ]),
-          el("div", { class: "conv-time" }, [formatConvTime(c.lastMessageAt)]),
+          c.handoffPending
+            ? el("span", { class: "conv-unread-pill" }, ["Não lida"])
+            : el("div", { class: "conv-time" }, [formatConvTime(c.lastMessageAt)]),
         ]),
         el("div", { class: "preview" }, [
           c.handoffPending
@@ -696,7 +701,7 @@ function renderConversationsList() {
       ]),
       contactBtn,
     ]);
-    if (c.handoffPending) li.classList.add("needs-human");
+    if (c.handoffPending) li.classList.add("needs-human", "unread");
     if (c.id === state.activeConversationId) li.classList.add("active");
     li.addEventListener("click", () => openConversation(c.id));
     list.appendChild(li);
@@ -829,12 +834,12 @@ async function openConversation(id) {
   document.getElementById("chat-controls").style.display = "flex";
   updateToggleButton(conv?.humanTakeover ?? false);
 
-  // Abrir a conversa já a marca como vista: tira o aviso na hora, sem esperar
-  // o próximo poll (o servidor faz o mesmo ao carregar as mensagens).
+  // Clicar na conversa pra atender = marca como vista (só aqui, nunca no poll).
   if (conv?.handoffPending) {
     conv.handoffPending = false;
     renderConversationsList();
     notifyNewHandoffs(state.conversations || []);
+    api(`/conversations/${id}/seen`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => {});
   }
 
   await loadMessages(id, { forceScroll: true });

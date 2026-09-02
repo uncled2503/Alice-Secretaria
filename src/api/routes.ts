@@ -1194,17 +1194,28 @@ apiRouter.get(
     });
     if (!assertClinicAccess(req, res, conversation.patient.clinicId)) return;
 
-    // Abrir a conversa no painel ja conta como "vista": tira o aviso de
-    // handoff pendente da lista de conversas.
-    if (conversation.handoffPending) {
-      await prisma.conversation.update({ where: { id: conversation.id }, data: { handoffPending: false } });
-    }
-
     const messages = await prisma.message.findMany({
       where: { conversationId: req.params.id },
       orderBy: { createdAt: "asc" },
     });
     res.json(messages);
+  })
+);
+
+// Marca a conversa como vista: some o aviso de "não lida" / handoff pendente.
+// Chamado só quando alguém clica na conversa pra atender (nunca no poll).
+apiRouter.post(
+  "/conversations/:id/seen",
+  asyncRoute(async (req, res) => {
+    const conversation = await prisma.conversation.findUniqueOrThrow({
+      where: { id: req.params.id },
+      include: { patient: { select: { clinicId: true } } },
+    });
+    if (!assertClinicAccess(req, res, conversation.patient.clinicId)) return;
+    if (conversation.handoffPending) {
+      await prisma.conversation.update({ where: { id: conversation.id }, data: { handoffPending: false } });
+    }
+    res.json({ ok: true });
   })
 );
 

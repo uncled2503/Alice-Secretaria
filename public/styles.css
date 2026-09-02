@@ -492,10 +492,16 @@ tbody tr:hover { background: var(--accent-50); }
 :root:not([data-theme="light"]) #conversations-list li.needs-human,
 :root[data-theme="dark"] #conversations-list li.needs-human { background: rgba(220, 38, 38, 0.14); }
 #conversations-list .conv-dot {
-  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
   background: #dc2626; margin-right: 5px; vertical-align: middle; flex-shrink: 0;
 }
-#conversations-list li.needs-human .preview { color: #b91c1c; font-weight: 500; }
+#conversations-list li.unread .name { font-weight: 700; }
+#conversations-list li.unread .preview { color: #b91c1c; font-weight: 600; }
+#conversations-list .conv-unread-pill {
+  flex-shrink: 0; font-size: 0.62rem; font-weight: 700; letter-spacing: 0.02em;
+  text-transform: uppercase; color: #fff; background: #dc2626;
+  border-radius: 999px; padding: 0.1rem 0.4rem; align-self: center;
+}
 #conversations-list .conv-text { min-width: 0; flex: 1; }
 #conversations-list .conv-top-row { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; }
 #conversations-list .name { font-weight: 600; font-size: 0.88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
