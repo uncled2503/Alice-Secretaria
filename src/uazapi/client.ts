@@ -494,8 +494,20 @@ export function parseWebhookPayload(bodyValue: unknown): IncomingUazapiMessage[]
     const externalId = textValue(message.messageid, message.messageId, message.message_id, message.id);
     if (!externalId) continue;
     const type = textValue(message.messageType, message.type)?.toLowerCase() ?? "";
-    const content = record(message.content);
-    const text = textValue(message.text, message.caption, message.body, content?.text, content?.conversation);
+    // `content` pode vir como objeto OU como JSON serializado em string (doc:
+    // "Conteudo bruto da mensagem - JSON serializado ou texto").
+    let content = record(message.content);
+    if (!content && typeof message.content === "string" && message.content.trim().startsWith("{")) {
+      try { content = record(JSON.parse(message.content)); } catch { /* ignore */ }
+    }
+    const imgNode = record(content?.imageMessage);
+    const vidNode = record(content?.videoMessage);
+    const audNode = record(content?.audioMessage);
+    const docNode = record(content?.documentMessage);
+    const text = textValue(
+      message.text, message.caption, message.body, content?.text, content?.conversation,
+      imgNode?.caption, vidNode?.caption, docNode?.caption,
+    );
 
     // Amostra pro diagnóstico: forma da mensagem recebida (sem conteúdo, só as
     // chaves) - ajuda quando a foto do cliente não aparece.
@@ -503,46 +515,29 @@ export function parseWebhookPayload(bodyValue: unknown): IncomingUazapiMessage[]
       at: new Date().toISOString(),
       type: textValue(message.messageType, message.type) || "(sem type)",
       messageKeys: Object.keys(message).join(","),
-      contentKeys: content ? Object.keys(content).join(",") : "(sem content)",
+      contentKeys: content ? Object.keys(content).join(",") : `(content: ${typeof message.content})`,
       hasText: !!text,
-      mimetype: textValue(message.mimetype, content?.mimetype) || "",
+      mimetype: textValue(message.mimetype, content?.mimetype, imgNode?.mimetype, docNode?.mimetype) || "",
+      fileURL: textValue(message.fileURL, message.fileUrl, content?.fileURL) || "",
     });
     if (lastWebhookSamples.length > 15) lastWebhookSamples.length = 15;
 
-    // Detecta o tipo de midia por varios sinais (nome do tipo Baileys, no
-    // aninhado em content, ou mimetype).
+    // Detecta o tipo de midia por: messageType, no aninhado em content, mimetype.
     const mime = textValue(
-      message.mimetype,
-      message.mimeType,
-      content?.mimetype,
-      record(content?.imageMessage)?.mimetype,
-      record(content?.videoMessage)?.mimetype,
-      record(content?.audioMessage)?.mimetype,
-      record(content?.documentMessage)?.mimetype,
+      message.mimetype, message.mimeType, content?.mimetype,
+      imgNode?.mimetype, vidNode?.mimetype, audNode?.mimetype, docNode?.mimetype,
     );
     let mediaKind: "image" | "video" | "document" | "audio" | null = null;
-    if (type.includes("image") || content?.imageMessage || mime?.startsWith("image/")) mediaKind = "image";
-    else if (type.includes("video") || content?.videoMessage || mime?.startsWith("video/")) mediaKind = "video";
-    else if (type.includes("audio") || type.includes("ptt") || content?.audioMessage || mime?.startsWith("audio/")) mediaKind = "audio";
-    else if (type.includes("document") || content?.documentMessage || (mime && !mime.startsWith("image/") && !mime.startsWith("video/") && !mime.startsWith("audio/"))) mediaKind = "document";
+    if (type === "image" || type.includes("image") || imgNode || mime?.startsWith("image/")) mediaKind = "image";
+    else if (type === "video" || type === "videoplay" || type === "ptv" || type.includes("video") || vidNode || mime?.startsWith("video/")) mediaKind = "video";
+    else if (["audio", "myaudio", "ptt"].includes(type) || type.includes("audio") || type.includes("ptt") || audNode || mime?.startsWith("audio/")) mediaKind = "audio";
+    else if (type === "document" || type.includes("document") || docNode || (mime && !mime.startsWith("image/") && !mime.startsWith("video/") && !mime.startsWith("audio/") && !mime.startsWith("text/"))) mediaKind = "document";
 
-    const mediaNode =
-      record(content?.imageMessage) ??
-      record(content?.videoMessage) ??
-      record(content?.audioMessage) ??
-      record(content?.documentMessage);
-    const mediaUrl = textValue(
-      message.fileURL, message.fileUrl, message.file_url, message.mediaUrl, message.media_url,
-      message.url, message.downloadUrl, message.download_url,
-      content?.fileURL, content?.url, mediaNode?.url, mediaNode?.directPath,
-    );
-    const mediaBase64 = textValue(
-      message.base64, message.fileBase64, message.file_base64, message.mediaBase64, message.data,
-      content?.base64,
-    );
-    const filename = textValue(
-      message.filename, message.fileName, message.file_name, mediaNode?.fileName, mediaNode?.title,
-    );
+    // So confiamos na fileURL que a propria UAZAPI expoe (nao no url criptografado
+    // do proto do WhatsApp, que nao da pra baixar direto).
+    const mediaUrl = textValue(message.fileURL, message.fileUrl, message.file_url, content?.fileURL);
+    const mediaBase64 = textValue(message.base64, message.fileBase64, message.file_base64, message.mediaBase64, content?.base64);
+    const filename = textValue(message.filename, message.fileName, message.file_name, docNode?.fileName, docNode?.title);
 
     const isAudio = mediaKind === "audio";
 
@@ -619,6 +614,7 @@ const lastWebhookSamples: {
   contentKeys: string;
   hasText: boolean;
   mimetype: string;
+  fileURL: string;
 }[] = [];
 export function getMediaDebug(): { downloads: MediaDebugEntry[]; webhookSamples: typeof lastWebhookSamples } {
   return { downloads: mediaDebug, webhookSamples: lastWebhookSamples };

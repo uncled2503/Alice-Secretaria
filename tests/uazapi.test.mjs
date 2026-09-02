@@ -83,13 +83,25 @@ test("captura URL / mime / nome do anexo quando o webhook traz", () => {
 
   const [doc] = parseWebhookPayload({
     message: {
-      messageid: "M10", chatid: "5511988887777@s.whatsapp.net",
-      content: { documentMessage: { mimetype: "application/pdf", fileName: "orcamento.pdf", url: "https://cdn.uazapi/o.pdf" } },
+      messageid: "M10", chatid: "5511988887777@s.whatsapp.net", messageType: "document",
+      fileURL: "https://cdn.uazapi/o.pdf",
+      content: { documentMessage: { mimetype: "application/pdf", fileName: "orcamento.pdf" } },
     },
   });
   assert.equal(doc.media.kind, "document");
   assert.equal(doc.media.filename, "orcamento.pdf");
   assert.equal(doc.media.url, "https://cdn.uazapi/o.pdf");
+});
+
+test("content como JSON serializado (string) e lido", () => {
+  const [m] = parseWebhookPayload({
+    message: {
+      messageid: "M11", chatid: "5511988887777@s.whatsapp.net", messageType: "image",
+      content: JSON.stringify({ imageMessage: { caption: "essa aqui", mimetype: "image/jpeg" } }),
+    },
+  });
+  assert.equal(m.media.kind, "image");
+  assert.equal(m.text, "essa aqui");
 });
 
 test("rejeita URL sem HTTPS e remove barra final", () => {
