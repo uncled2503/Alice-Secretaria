@@ -790,25 +790,40 @@ async function openConvTagMenu(anchor, conv) {
   };
   renderList();
 
-  const input = el("input", { type: "text", placeholder: "Criar nova etiqueta...", class: "conv-tag-new-input" });
-  const color = el("input", { type: "color", value: "#8b5cf6", class: "conv-tag-new-color" });
-  const createBtn = el("button", { type: "button", class: "conv-tag-new-btn" }, ["Criar"]);
-  createBtn.addEventListener("click", async () => {
-    const label = input.value.trim();
-    if (!label) return;
-    const tag = await api("/tags", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ label, color: color.value }),
+  const input = el("input", { type: "text", placeholder: "Buscar ou criar etiqueta...", class: "conv-tag-new-input", autocomplete: "off" });
+  const createRow = el("div", { class: "conv-tag-create" }, []);
+  const filterAndRender = () => {
+    const raw = input.value.trim();
+    const q = raw.toLowerCase();
+    listBox.querySelectorAll(".conv-tag-opt").forEach((b) => {
+      b.style.display = !q || b.textContent.toLowerCase().includes(q) ? "" : "none";
     });
-    if (!allTags.some((t) => t.id === tag.id)) allTags.push(tag);
-    selected.add(tag.id);
-    input.value = "";
-    renderList();
-    await saveConvTags(conv, selected);
-  });
+    createRow.innerHTML = "";
+    const exact = allTags.some((t) => t.label.toLowerCase() === q);
+    if (raw && !exact) {
+      createRow.appendChild(el("span", { class: "lbl" }, [`Criar "${raw}" —`]));
+      const sw = el("div", { class: "cp-tag-swatches" }, TAG_COLORS.map((c) => {
+        const b = el("button", { type: "button", class: "cp-tag-swatch", style: `background:${c}` }, []);
+        b.addEventListener("click", async () => {
+          const tag = await api("/tags", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ label: raw, color: c }),
+          });
+          if (!allTags.some((t) => t.id === tag.id)) allTags.push(tag);
+          selected.add(tag.id);
+          input.value = "";
+          renderList();
+          filterAndRender();
+          await saveConvTags(conv, selected);
+        });
+        return b;
+      }));
+      createRow.appendChild(sw);
+    }
+  };
+  input.addEventListener("input", filterAndRender);
 
-  menu.append(listBox, el("div", { class: "conv-tag-new" }, [color, input, createBtn]));
+  menu.append(listBox, el("div", { class: "conv-tag-new" }, [input, createRow]));
   document.body.appendChild(menu);
   const r = anchor.getBoundingClientRect();
   menu.style.top = `${r.bottom + 6}px`;
@@ -1019,6 +1034,25 @@ function tagChips(tags) {
   return wrap;
 }
 
+const TAG_COLORS = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#14b8a6", "#3b82f6", "#8b5cf6", "#ec4899", "#64748b"];
+
+function addCpTag(t) {
+  if (!cpState.selected.some((x) => x.id === t.id)) cpState.selected.push(t);
+  document.getElementById("cp-tag-input").value = "";
+  renderCpTags();
+  document.getElementById("cp-tag-input").focus();
+}
+
+async function createCpTag(label, color) {
+  const tag = await api("/tags", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label, color }),
+  });
+  if (!cpState.allTags.some((t) => t.id === tag.id)) cpState.allTags.push(tag);
+  addCpTag(tag);
+}
+
 function renderCpTags() {
   const box = document.getElementById("cp-tags");
   box.innerHTML = "";
@@ -1030,41 +1064,52 @@ function renderCpTags() {
   }
   if (!cpState.selected.length) box.appendChild(el("span", { class: "hint", style: "margin:0" }, ["Sem etiquetas"]));
 
-  const q = document.getElementById("cp-tag-input").value.trim().toLowerCase();
+  const raw = document.getElementById("cp-tag-input").value.trim();
+  const q = raw.toLowerCase();
   const selectedIds = new Set(cpState.selected.map((x) => x.id));
   const sug = document.getElementById("cp-tag-suggestions");
   sug.innerHTML = "";
-  for (const t of cpState.allTags) {
-    if (selectedIds.has(t.id)) continue;
-    if (q && !t.label.toLowerCase().includes(q)) continue;
+
+  const matches = cpState.allTags.filter((t) => !selectedIds.has(t.id) && (!q || t.label.toLowerCase().includes(q)));
+  for (const t of matches.slice(0, 8)) {
     const b = el("button", { type: "button" }, [
       el("span", { class: "contact-tag-dot", style: `background:${t.color}` }, []),
-      " " + t.label,
+      t.label,
     ]);
-    b.addEventListener("click", () => {
-      cpState.selected.push(t);
-      document.getElementById("cp-tag-input").value = "";
-      renderCpTags();
-    });
+    b.addEventListener("click", () => addCpTag(t));
     sug.appendChild(b);
+  }
+
+  const exact = cpState.allTags.some((t) => t.label.toLowerCase() === q);
+  if (raw && !exact) {
+    sug.appendChild(
+      el("div", { class: "cp-tag-create-row" }, [
+        el("span", { class: "lbl" }, [`Criar "${raw}" —`]),
+        el(
+          "div",
+          { class: "cp-tag-swatches" },
+          TAG_COLORS.map((c) => {
+            const sw = el("button", { type: "button", class: "cp-tag-swatch", style: `background:${c}`, title: `Criar com esta cor` }, []);
+            sw.addEventListener("click", () => createCpTag(raw, c));
+            return sw;
+          }),
+        ),
+      ]),
+    );
   }
 }
 
 document.getElementById("cp-tag-input").addEventListener("input", renderCpTags);
-
-document.getElementById("cp-tag-create").addEventListener("click", async () => {
-  const label = document.getElementById("cp-tag-input").value.trim();
-  if (!label) return;
-  const color = document.getElementById("cp-tag-color").value;
-  const tag = await api("/tags", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ label, color }),
-  });
-  if (!cpState.allTags.some((t) => t.id === tag.id)) cpState.allTags.push(tag);
-  if (!cpState.selected.some((t) => t.id === tag.id)) cpState.selected.push(tag);
-  document.getElementById("cp-tag-input").value = "";
-  renderCpTags();
+document.getElementById("cp-tag-input").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  e.preventDefault();
+  const raw = e.target.value.trim();
+  if (!raw) return;
+  const existing = cpState.allTags.find(
+    (t) => t.label.toLowerCase() === raw.toLowerCase() && !cpState.selected.some((s) => s.id === t.id),
+  );
+  if (existing) addCpTag(existing);
+  else createCpTag(raw, TAG_COLORS[6]);
 });
 
 function renderCpAppointments(d) {

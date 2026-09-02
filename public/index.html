@@ -310,13 +310,9 @@
               <label>Nascimento<input id="cp-f-birth" type="date" /></label>
               <label>Observações<textarea id="cp-f-notes" rows="3" placeholder="Anotações úteis para a equipe"></textarea></label>
               <div class="cp-tags-block">
-                <span class="hint" style="margin:0">Etiquetas</span>
+                <span class="cp-tags-title">Etiquetas</span>
                 <div id="cp-tags" class="cp-tags"></div>
-                <div class="cp-tag-add">
-                  <input id="cp-tag-input" type="text" placeholder="Buscar ou criar etiqueta" />
-                  <input id="cp-tag-color" type="color" value="#8b5cf6" title="Cor da nova etiqueta" />
-                  <button type="button" id="cp-tag-create" class="btn-brand btn-brand--secondary btn-brand--sm">Criar</button>
-                </div>
+                <input id="cp-tag-input" type="text" placeholder="Buscar ou criar etiqueta..." autocomplete="off" />
                 <div id="cp-tag-suggestions" class="cp-tag-suggestions"></div>
               </div>
               <button type="button" id="cp-save" class="btn-brand btn-brand--primary" data-biz-label="Salvar contato|Salvar cliente">Salvar contato</button>
