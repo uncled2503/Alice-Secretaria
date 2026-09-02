@@ -939,7 +939,11 @@ async function runHistoryImport(clinicId: string): Promise<void> {
 
         let conversation = await prisma.conversation.findFirst({ where: { patientId: patient.id } });
         if (!conversation) {
-          conversation = await prisma.conversation.create({ data: { patientId: patient.id, status: "closed", humanTakeover: true } });
+          // Ja entra arquivada: e so historico, nao polui o painel. Volta pra
+          // lista automaticamente se o contato mandar mensagem nova.
+          conversation = await prisma.conversation.create({
+            data: { patientId: patient.id, status: "closed", humanTakeover: true, archived: true },
+          });
         }
         stats.conversations++;
 
