@@ -831,6 +831,15 @@ export async function recordIncomingMessage(params: {
     where: { patientId: patient.id, status: { in: ["active", "qualified"] } },
     orderBy: { createdAt: "desc" },
   });
+  // Sem conversa aberta: se o contato tem uma conversa ARQUIVADA (ex: histórico
+  // importado, ou arquivada na mão), reabre ELA - mantém tudo num fio só - em
+  // vez de criar uma conversa nova.
+  if (!conversation) {
+    conversation = await prisma.conversation.findFirst({
+      where: { patientId: patient.id, archived: true },
+      orderBy: { lastMessageAt: "desc" },
+    });
+  }
   if (!conversation) {
     conversation = await prisma.conversation.create({ data: { patientId: patient.id } });
   }
@@ -852,10 +861,11 @@ export async function recordIncomingMessage(params: {
     data: {
       lastMessageAt: new Date(),
       lastFollowUpOrder: 0,
-      // Mensagem nova em conversa que um humano assumiu = "nao lida" ate alguem
-      // abrir. Conversa arquivada volta pra lista (estilo WhatsApp).
-      ...(conversation.humanTakeover ? { handoffPending: true } : {}),
+      // Reabre a conversa: sai de arquivada e volta a ficar "aberta". Se um
+      // humano tinha assumido, marca "nao lida" ate alguem abrir.
       ...(conversation.archived ? { archived: false } : {}),
+      ...(conversation.status === "closed" ? { status: "active" } : {}),
+      ...(conversation.humanTakeover ? { handoffPending: true } : {}),
     },
   });
 
