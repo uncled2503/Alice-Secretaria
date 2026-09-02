@@ -781,6 +781,15 @@ async function toggleArchiveConversation(id, archived) {
   await Promise.all([loadConversations(), loadArchivedConversations()]);
 }
 
+// Apaga uma etiqueta do negócio inteiro (some de todos os contatos).
+async function deleteTagGlobally(tagId, label) {
+  if (!(await showConfirm(`Apagar a etiqueta "${label}"? Ela sai de todos os contatos que a tinham. Não dá pra desfazer.`))) return false;
+  await api(`/tags/${tagId}`, { method: "DELETE" });
+  if (Array.isArray(cpState?.allTags)) cpState.allTags = cpState.allTags.filter((t) => t.id !== tagId);
+  if (Array.isArray(cpState?.selected)) cpState.selected = cpState.selected.filter((t) => t.id !== tagId);
+  return true;
+}
+
 // Menu de etiquetas da conversa (opera sobre o contato, reaproveita /tags).
 async function saveConvTags(conv, selectedIds) {
   await api(`/patients/${conv.patient.id}`, {
@@ -804,18 +813,29 @@ async function openConvTagMenu(anchor, conv) {
     if (!allTags.length) listBox.appendChild(el("div", { class: "hint", style: "margin:0" }, ["Nenhuma etiqueta ainda."]));
     for (const t of allTags) {
       const on = selected.has(t.id);
-      const row = el("button", { type: "button", class: `conv-tag-opt${on ? " on" : ""}` }, [
+      const pick = el("button", { type: "button", class: `conv-tag-pick${on ? " on" : ""}` }, [
         el("span", { class: "contact-tag-dot", style: `background:${t.color}` }, []),
         t.label,
         on ? el("span", { class: "conv-tag-check" }, ["✓"]) : "",
       ]);
-      row.addEventListener("click", async () => {
+      pick.addEventListener("click", async () => {
         if (on) selected.delete(t.id);
         else selected.add(t.id);
         renderList();
         await saveConvTags(conv, selected);
       });
-      listBox.appendChild(row);
+      const del = el("button", { type: "button", class: "conv-tag-del", title: "Apagar etiqueta" }, ["🗑"]);
+      del.addEventListener("click", async () => {
+        if (await deleteTagGlobally(t.id, t.label)) {
+          const i = allTags.indexOf(t);
+          if (i >= 0) allTags.splice(i, 1);
+          selected.delete(t.id);
+          renderList();
+          filterAndRender();
+          await saveConvTags(conv, selected);
+        }
+      });
+      listBox.appendChild(el("div", { class: "conv-tag-opt" }, [pick, del]));
     }
   };
   renderList();
@@ -1100,14 +1120,23 @@ function renderCpTags() {
   const sug = document.getElementById("cp-tag-suggestions");
   sug.innerHTML = "";
 
-  const matches = cpState.allTags.filter((t) => !selectedIds.has(t.id) && (!q || t.label.toLowerCase().includes(q)));
-  for (const t of matches.slice(0, 8)) {
-    const b = el("button", { type: "button" }, [
+  const matches = cpState.allTags.filter((t) => !q || t.label.toLowerCase().includes(q));
+  for (const t of matches.slice(0, 12)) {
+    const on = selectedIds.has(t.id);
+    const pick = el("button", { type: "button", class: on ? "on" : "" }, [
       el("span", { class: "contact-tag-dot", style: `background:${t.color}` }, []),
       t.label,
+      on ? el("span", { class: "cp-tag-check" }, ["✓"]) : "",
     ]);
-    b.addEventListener("click", () => addCpTag(t));
-    sug.appendChild(b);
+    pick.addEventListener("click", () => {
+      if (on) { cpState.selected = cpState.selected.filter((x) => x.id !== t.id); renderCpTags(); }
+      else addCpTag(t);
+    });
+    const del = el("button", { type: "button", class: "cp-tag-del", title: "Apagar etiqueta do negócio" }, ["🗑"]);
+    del.addEventListener("click", async () => {
+      if (await deleteTagGlobally(t.id, t.label)) renderCpTags();
+    });
+    sug.appendChild(el("div", { class: "cp-tag-opt" }, [pick, del]));
   }
 
   const exact = cpState.allTags.some((t) => t.label.toLowerCase() === q);
