@@ -1342,7 +1342,10 @@ apiRouter.post(
       filename?: string;
       voice?: boolean;
     };
-    const m = typeof dataUrl === "string" ? dataUrl.match(/^data:([\w.+-]+\/[\w.+-]+);base64,([\s\S]+)$/) : null;
+    // aceita parametros no mime (ex: data:audio/webm;codecs=opus;base64,...)
+    const m = typeof dataUrl === "string"
+      ? dataUrl.match(/^data:([\w.+-]+\/[\w.+-]+)(?:;[\w.+=%-]+)*;base64,([\s\S]+)$/)
+      : null;
     if (!m) {
       res.status(400).json({ error: "Anexo invalido." });
       return;

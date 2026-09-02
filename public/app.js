@@ -1296,6 +1296,7 @@ document.getElementById("chat-form").addEventListener("submit", async (e) => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ dataUrl: attachment.dataUrl, caption: text, filename: attachment.name, voice: !!attachment.voice }),
+        silentStatuses: [400, 413, 502],
       });
       clearChatAttachment();
     } else {
@@ -1316,6 +1317,8 @@ document.getElementById("chat-form").addEventListener("submit", async (e) => {
       updateToggleButton(true);
       await loadMessages(id, { forceScroll: true });
     }
+  } catch (err) {
+    showError(err.detail || "Não consegui enviar. Tente de novo.");
   } finally {
     sendBtn.disabled = false;
   }
@@ -1342,37 +1345,47 @@ document.getElementById("btn-chat-mic").addEventListener("click", async () => {
     return;
   }
   const chunks = [];
-  const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
+  const cand = ["audio/ogg;codecs=opus", "audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
+  const mime = cand.find((t) => MediaRecorder.isTypeSupported(t)) || "";
   const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
   state.recorder = rec;
+  const startedAt = Date.now();
   btn.classList.add("recording");
   btn.title = "Parar e enviar";
-  rec.ondataavailable = (ev) => ev.data.size && chunks.push(ev.data);
+  rec.ondataavailable = (ev) => ev.data && ev.data.size && chunks.push(ev.data);
   rec.onstop = () => {
     stream.getTracks().forEach((t) => t.stop());
     btn.classList.remove("recording");
     btn.title = "Gravar áudio";
     state.recorder = null;
-    const blob = new Blob(chunks, { type: chunks[0]?.type || "audio/webm" });
-    if (!blob.size) return;
+    const secs = Math.round((Date.now() - startedAt) / 1000);
+    // Tira o ";codecs=..." do tipo: o servidor só aceita data URI com mime simples.
+    const baseType = ((chunks[0] && chunks[0].type) || mime || "audio/webm").split(";")[0] || "audio/webm";
+    const ext = baseType.includes("ogg") ? "ogg" : baseType.includes("mp4") ? "m4a" : "webm";
+    const blob = new Blob(chunks, { type: baseType });
+    if (!blob.size || secs < 1) {
+      showError("Gravação muito curta. Segure e fale por pelo menos 1 segundo.");
+      return;
+    }
     if (blob.size > MAX_ATTACH_BYTES) {
       showError("Áudio muito longo (limite 10 MB).");
       return;
     }
     const reader = new FileReader();
     reader.onload = () => {
-      state.chatAttachment = { dataUrl: reader.result, name: "audio.webm", kind: "audio", voice: true };
+      state.chatAttachment = { dataUrl: reader.result, name: `audio.${ext}`, kind: "audio", voice: true };
       const box = document.getElementById("chat-attach-preview");
       box.hidden = false;
       box.innerHTML = "";
       const player = el("audio", { src: reader.result, controls: "", class: "chat-attach-audio" });
+      const dur = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
       const remove = el("button", { type: "button", class: "chat-attach-x", title: "Descartar" }, ["×"]);
       remove.addEventListener("click", clearChatAttachment);
-      box.append(player, el("span", { class: "chat-attach-hint" }, ["Toque em enviar"]), remove);
+      box.append(player, el("span", { class: "chat-attach-hint" }, [`Áudio ${dur} — toque em enviar`]), remove);
     };
     reader.readAsDataURL(blob);
   };
-  rec.start();
+  rec.start(250);
 });
 
 // --- Agenda ---

@@ -389,7 +389,7 @@ export async function sendMedia(
   opts: { dataUrl: string; kind: OutgoingMediaKind; caption?: string; filename?: string },
 ): Promise<void> {
   const credentials = await clinicCredentials(clinicId);
-  const mimeMatch = opts.dataUrl.match(/^data:([\w.+-]+\/[\w.+-]+);base64,/);
+  const mimeMatch = opts.dataUrl.match(/^data:([\w.+-]+\/[\w.+-]+)(?:;[\w.+=%-]+)*;base64,/);
   const body: Record<string, unknown> = {
     number: phone.replace(/\D/g, ""),
     type: opts.kind,
