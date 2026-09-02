@@ -249,10 +249,11 @@ async function configureWebhook(clinicId: string, credentials: UazapiCredentials
       url,
       events: ["messages", "connection", "presence"],
       excludeMessages: ["wasSentByApi", "fromMeYes", "isGroupYes"],
+      // Estes DOIS ficam false: eles nao incluem a midia no payload - so
+      // adicionam o evento / o tipo da mensagem como path na URL do webhook, o
+      // que quebraria a nossa rota (/api/uazapi/webhook/:clinicId/:signature).
       addUrlEvents: false,
-      // true: a UAZAPI ja inclui uma URL da midia no payload do webhook (foto,
-      // audio, video, documento) - assim o painel consegue mostrar o anexo.
-      addUrlTypesMessages: true,
+      addUrlTypesMessages: false,
     }),
   });
 }
