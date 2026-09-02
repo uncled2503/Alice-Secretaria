@@ -530,6 +530,13 @@ tbody tr:hover { background: var(--accent-50); }
   padding: 0.06rem 0.4rem; white-space: nowrap;
 }
 #conversations-list .conv-empty { padding: 1.4rem 1rem; text-align: center; color: var(--text-faint); font-size: 0.82rem; }
+#chat-bulk-bar { padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--border); background: var(--sidebar-bg); }
+.chat-bulk-btn {
+  width: 100%; padding: 0.45rem 0.6rem; border: 1px dashed var(--border); border-radius: 8px;
+  background: var(--card-bg); color: var(--text-muted); font-size: 0.78rem; font-family: inherit; cursor: pointer;
+}
+.chat-bulk-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
+.chat-bulk-btn:disabled { opacity: 0.6; }
 
 .conv-tag-menu {
   position: fixed; z-index: 200; width: 250px; max-height: 60vh; overflow-y: auto;

@@ -1242,6 +1242,38 @@ apiRouter.post(
   })
 );
 
+// Arquiva em massa as conversas em atendimento humano (limpeza inicial, ex:
+// depois de importar histórico). Só admin.
+apiRouter.post(
+  "/conversations/archive-bulk",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await getClinic(req);
+    const { scope } = (req.body ?? {}) as { scope?: "human" | "all" };
+    const targets = await prisma.conversation.findMany({
+      where: {
+        patient: { clinicId: clinic.id },
+        archived: false,
+        ...(scope === "all" ? {} : { humanTakeover: true }),
+      },
+      select: { id: true },
+    });
+    const r = await prisma.conversation.updateMany({
+      where: { id: { in: targets.map((t) => t.id) } },
+      data: { archived: true, handoffPending: false },
+    });
+    await logActivity({
+      clinicId: clinic.id,
+      type: "clinic_updated",
+      area: "atendimento",
+      title: "Conversas arquivadas em massa",
+      description: `${r.count} conversa(s) ${scope === "all" ? "" : "em atendimento humano "}arquivadas.`,
+      actorName: req.staff?.name ?? null,
+    });
+    res.json({ archived: r.count });
+  })
+);
+
 // Arquiva / desarquiva a conversa (estilo WhatsApp).
 apiRouter.post(
   "/conversations/:id/archive",

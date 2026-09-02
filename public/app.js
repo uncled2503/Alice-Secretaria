@@ -682,6 +682,32 @@ function renderConversationsList() {
     // As não lidas sobem pro topo; o resto mantém a ordem por data.
     .sort((a, b) => (b.handoffPending ? 1 : 0) - (a.handoffPending ? 1 : 0));
 
+  // Ação de limpeza (só admin, aba Humano): arquivar tudo de uma vez.
+  const bulkBar = document.getElementById("chat-bulk-bar");
+  if (state.chatFilter === "human" && state.staff?.role === "admin" && humanCount > 1) {
+    bulkBar.hidden = false;
+    bulkBar.innerHTML = "";
+    const b = el("button", { type: "button", class: "chat-bulk-btn" }, [`🗄 Arquivar todas as ${humanCount} conversas`]);
+    b.addEventListener("click", async () => {
+      if (!(await showConfirm(`Arquivar as ${humanCount} conversas em atendimento humano? Elas saem da lista, mas voltam sozinhas se o cliente mandar mensagem nova. Serve pra começar limpo.`))) return;
+      b.disabled = true;
+      b.textContent = "Arquivando...";
+      try {
+        const r = await api("/conversations/archive-bulk", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scope: "human" }),
+        });
+        showError(`✅ ${r.archived} conversa(s) arquivada(s).`);
+        await Promise.all([loadConversations(), loadArchivedConversations()]);
+      } finally {
+        b.disabled = false;
+      }
+    });
+    bulkBar.appendChild(b);
+  } else {
+    bulkBar.hidden = true;
+    bulkBar.innerHTML = "";
+  }
+
   const list = document.getElementById("conversations-list");
   list.innerHTML = "";
   if (!filtered.length) {
