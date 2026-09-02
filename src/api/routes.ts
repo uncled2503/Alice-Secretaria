@@ -184,7 +184,25 @@ apiRouter.get(
         usageCount: true,
       },
     });
-    const withStatus = await Promise.all(clinics.map(async (clinic) => ({ ...clinic, ...(await getStatus(clinic.id)) })));
+    // So o admin ve o login de acesso do cliente (a primeira conta "client" da clinica).
+    const loginByClinic = new Map<string, string>();
+    if (req.staff?.role === "admin" && clinics.length) {
+      const owners = await prisma.staffUser.findMany({
+        where: { role: "client", clinicId: { in: clinics.map((c) => c.id) } },
+        orderBy: { createdAt: "asc" },
+        select: { clinicId: true, username: true },
+      });
+      for (const o of owners) {
+        if (o.clinicId && !loginByClinic.has(o.clinicId)) loginByClinic.set(o.clinicId, o.username);
+      }
+    }
+    const withStatus = await Promise.all(
+      clinics.map(async (clinic) => ({
+        ...clinic,
+        ...(await getStatus(clinic.id)),
+        clientLogin: loginByClinic.get(clinic.id) ?? null,
+      })),
+    );
     res.json(withStatus);
   })
 );
@@ -376,17 +394,54 @@ apiRouter.put(
   })
 );
 
-// So admin cria clinica nova (onboarding de um cliente novo da Alice).
+// Valida um e-mail de forma simples (o suficiente pra login por e-mail).
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+function normalizeLoginEmail(v: string): string {
+  return v.trim().toLowerCase();
+}
+
+// So admin cria clinica nova (onboarding de um cliente novo da Alice). Aceita,
+// opcionalmente, o e-mail e a senha de acesso do cliente ao painel - se vierem,
+// ja cria a conta "client" presa a essa clinica (login = e-mail).
 apiRouter.post(
   "/clinics",
   asyncRoute(async (req, res) => {
     if (!requireAdmin(req, res)) return;
 
-    const { name, whatsappPhone } = req.body as { name?: string; whatsappPhone?: string };
+    const { name, whatsappPhone, ownerEmail, ownerPassword } = req.body as {
+      name?: string;
+      whatsappPhone?: string;
+      ownerEmail?: string;
+      ownerPassword?: string;
+    };
 
     if (!name || !whatsappPhone) {
       res.status(400).json({ error: "name e whatsappPhone sao obrigatorios" });
       return;
+    }
+
+    // Acesso do cliente e opcional, mas se um campo vier o outro tambem tem que vir.
+    const email = ownerEmail?.trim() ? normalizeLoginEmail(ownerEmail) : "";
+    const password = ownerPassword ?? "";
+    const wantsOwner = Boolean(email || password);
+    if (wantsOwner) {
+      if (!email || !password) {
+        res.status(400).json({ error: "Informe o e-mail e a senha de acesso do cliente (ou deixe os dois em branco)." });
+        return;
+      }
+      if (!EMAIL_RE.test(email)) {
+        res.status(400).json({ error: "E-mail de acesso invalido." });
+        return;
+      }
+      if (password.length < 10) {
+        res.status(400).json({ error: "A senha de acesso precisa ter pelo menos 10 caracteres." });
+        return;
+      }
+      const taken = await prisma.staffUser.findUnique({ where: { username: email } });
+      if (taken) {
+        res.status(409).json({ error: "Ja existe uma conta de acesso com esse e-mail." });
+        return;
+      }
     }
 
     try {
@@ -394,7 +449,18 @@ apiRouter.post(
         data: { name, whatsappPhone: whatsappPhone.replace(/\D/g, "") },
       });
       await seedDefaultRules(clinic.id);
-      res.json(clinic);
+      if (wantsOwner) {
+        await prisma.staffUser.create({
+          data: {
+            clinicId: clinic.id,
+            name,
+            username: email,
+            passwordHash: hashPassword(password),
+            role: "client",
+          },
+        });
+      }
+      res.json({ ...clinic, clientLogin: wantsOwner ? email : null });
     } catch (err: any) {
       if (err?.code === "P2002") {
         res.status(409).json({ error: "Ja existe uma clinica cadastrada com esse numero de WhatsApp" });
@@ -402,6 +468,70 @@ apiRouter.post(
       }
       throw err;
     }
+  })
+);
+
+// Define ou troca o acesso do cliente ao painel (conta "client" da clinica).
+// So admin. Se ja existe uma conta client, atualiza; senao cria. A senha e
+// opcional na troca (em branco = mantem a atual); no cadastro inicial e obrigatoria.
+apiRouter.put(
+  "/clinics/:id/owner",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+
+    const clinicId = req.params.id;
+    const clinic = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { id: true, name: true } });
+    if (!clinic) {
+      res.status(404).json({ error: "Clinica nao encontrada" });
+      return;
+    }
+
+    const { email: rawEmail, password: rawPassword } = req.body as { email?: string; password?: string };
+    const email = rawEmail?.trim() ? normalizeLoginEmail(rawEmail) : "";
+    const password = rawPassword ?? "";
+    if (!email || !EMAIL_RE.test(email)) {
+      res.status(400).json({ error: "Informe um e-mail de acesso valido." });
+      return;
+    }
+
+    // A primeira conta client da clinica (por ordem de criacao) e o "dono".
+    const current = await prisma.staffUser.findFirst({
+      where: { clinicId, role: "client" },
+      orderBy: { createdAt: "asc" },
+    });
+
+    if (password && password.length < 10) {
+      res.status(400).json({ error: "A senha de acesso precisa ter pelo menos 10 caracteres." });
+      return;
+    }
+    if (!current && !password) {
+      res.status(400).json({ error: "Defina uma senha de acesso (mínimo 10 caracteres)." });
+      return;
+    }
+
+    // E-mail nao pode colidir com outra conta.
+    if (email !== current?.username) {
+      const taken = await prisma.staffUser.findUnique({ where: { username: email } });
+      if (taken) {
+        res.status(409).json({ error: "Ja existe uma conta de acesso com esse e-mail." });
+        return;
+      }
+    }
+
+    if (current) {
+      await prisma.staffUser.update({
+        where: { id: current.id },
+        data: {
+          username: email,
+          ...(password ? { passwordHash: hashPassword(password) } : {}),
+        },
+      });
+    } else {
+      await prisma.staffUser.create({
+        data: { clinicId, name: clinic.name, username: email, passwordHash: hashPassword(password), role: "client" },
+      });
+    }
+    res.json({ ok: true, clientLogin: email });
   })
 );
 
@@ -3462,11 +3592,14 @@ apiRouter.post(
   "/staff/login",
   loginRateLimit,
   asyncRoute(async (req, res) => {
-    const { username, password } = req.body as { username?: string; password?: string };
-    if (!username || !password) {
+    const { username: rawUsername, password } = req.body as { username?: string; password?: string };
+    if (!rawUsername || !password) {
       res.status(400).json({ error: "username e password obrigatorios" });
       return;
     }
+    // Login por e-mail e case-insensitive (guardamos sempre em minusculas). Usuario
+    // curto (sem @) fica como foi digitado, pra nao quebrar contas antigas.
+    const username = rawUsername.includes("@") ? rawUsername.trim().toLowerCase() : rawUsername;
 
     const staff = await prisma.staffUser.findUnique({ where: { username } });
     // Verifica a senha mesmo quando o usuario nao existe (contra um dummy hash),
@@ -3514,13 +3647,13 @@ apiRouter.get(
 apiRouter.post(
   "/staff",
   asyncRoute(async (req, res) => {
-    const { name, username, password, role: requestedRole } = req.body as {
+    const { name, username: rawUsername, password, role: requestedRole } = req.body as {
       name?: string;
       username?: string;
       password?: string;
       role?: string;
     };
-    if (!name || !username || !password) {
+    if (!name || !rawUsername || !password) {
       res.status(400).json({ error: "name, username e password sao obrigatorios" });
       return;
     }
@@ -3528,6 +3661,8 @@ apiRouter.post(
       res.status(400).json({ error: "a senha precisa ter pelo menos 10 caracteres" });
       return;
     }
+    // E-mail (login com @) sempre em minusculas, pra bater com o login case-insensitive.
+    const username = rawUsername.includes("@") ? normalizeLoginEmail(rawUsername) : rawUsername.trim();
 
     const callerIsAdmin = req.staff?.role === "admin";
     const role: "admin" | "client" = callerIsAdmin && requestedRole === "admin" ? "admin" : "client";

@@ -4183,6 +4183,11 @@ async function loadClinicsList() {
     const planBtn = el("button", { type: "button", class: "btn-brand btn-brand--secondary btn-brand--sm" }, ["Plano"]);
     planBtn.addEventListener("click", () => openClinicPlanModal(c));
 
+    const ownerBtn = el("button", { type: "button", class: "btn-brand btn-brand--secondary btn-brand--sm" }, [
+      c.clientLogin ? "Acesso" : "Definir acesso",
+    ]);
+    ownerBtn.addEventListener("click", () => openClinicOwnerModal(c));
+
     const planMeta = PLAN_META[c.plan] || { label: c.plan || "—" };
     const st = planStatusBadge(c);
 
@@ -4211,7 +4216,14 @@ async function loadClinicsList() {
 
     body.appendChild(
       el("tr", {}, [
-        el("td", {}, [c.name]),
+        el("td", {}, [
+          el("div", { style: "display:flex;flex-direction:column;gap:.15rem;align-items:flex-start" }, [
+            c.name,
+            c.clientLogin
+              ? el("span", { class: "hint", style: "margin:0;font-size:0.72rem" }, [`login: ${c.clientLogin}`])
+              : el("span", { class: "hint", style: "margin:0;font-size:0.72rem;color:var(--accent-dark)" }, ["sem acesso do cliente"]),
+          ]),
+        ]),
         el("td", {}, [c.whatsappPhone]),
         el("td", {}, [
           el("span", { class: `badge ${c.configured ? "badge-green" : "badge-neutral"}` }, [
@@ -4230,7 +4242,7 @@ async function loadClinicsList() {
             el("span", { class: `badge ${st.cls}` }, [st.text]),
           ]),
         ]),
-        el("td", { class: "actions" }, [planBtn, uazapiBtn, toggleBtn, deleteBtn]),
+        el("td", { class: "actions" }, [planBtn, ownerBtn, uazapiBtn, toggleBtn, deleteBtn]),
       ])
     );
   }
@@ -4407,6 +4419,67 @@ document.getElementById("clinic-plan-form").addEventListener("submit", async (e)
   }
 });
 
+// --- Acesso do cliente ao painel (só admin) ---
+function closeClinicOwnerModal() {
+  document.getElementById("clinic-owner-overlay").style.display = "none";
+}
+
+function openClinicOwnerModal(clinic) {
+  document.getElementById("clinic-owner-id").value = clinic.id;
+  document.getElementById("clinic-owner-title").textContent = `Acesso do cliente — ${clinic.name}`;
+  document.getElementById("clinic-owner-email").value = clinic.clientLogin || "";
+  document.getElementById("clinic-owner-password").value = "";
+  const passHint = document.getElementById("clinic-owner-pass-hint");
+  passHint.textContent = clinic.clientLogin
+    ? "Deixe a senha em branco para manter a atual."
+    : "Defina uma senha (mín. 10 caracteres).";
+  const fb = document.getElementById("clinic-owner-feedback");
+  fb.style.display = "none";
+  document.getElementById("clinic-owner-overlay").style.display = "flex";
+}
+
+document.getElementById("clinic-owner-close").addEventListener("click", closeClinicOwnerModal);
+document.getElementById("clinic-owner-cancel").addEventListener("click", closeClinicOwnerModal);
+document.getElementById("clinic-owner-overlay").addEventListener("click", (e) => {
+  if (e.target.id === "clinic-owner-overlay") closeClinicOwnerModal();
+});
+
+document.getElementById("clinic-owner-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const id = document.getElementById("clinic-owner-id").value;
+  const email = document.getElementById("clinic-owner-email").value.trim();
+  const password = document.getElementById("clinic-owner-password").value;
+  const fb = document.getElementById("clinic-owner-feedback");
+  const saveBtn = document.getElementById("clinic-owner-save");
+  if (!id || !email) return;
+  if (password && password.length < 10) {
+    showError("A senha de acesso precisa ter pelo menos 10 caracteres.");
+    return;
+  }
+  saveBtn.disabled = true;
+  fb.style.display = "none";
+  try {
+    const r = await api(`/clinics/${id}/owner`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, ...(password ? { password } : {}) }),
+      silentStatuses: [400, 409],
+    });
+    fb.textContent = `Acesso salvo. Login: ${r.clientLogin}`;
+    fb.style.color = "var(--green-text)";
+    fb.style.display = "block";
+    await loadClinicsList();
+    setTimeout(closeClinicOwnerModal, 1200);
+  } catch (err) {
+    if (err.status !== 400 && err.status !== 409) throw err;
+    fb.textContent = err.detail || "Não foi possível salvar o acesso.";
+    fb.style.color = "#b91c1c";
+    fb.style.display = "block";
+  } finally {
+    saveBtn.disabled = false;
+  }
+});
+
 document.getElementById("btn-seed-laleblu").addEventListener("click", async (e) => {
   const btn = e.currentTarget;
   const out = document.getElementById("seed-laleblu-result");
@@ -4428,12 +4501,26 @@ document.getElementById("clinic-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const name = document.getElementById("cl-name").value.trim();
   const whatsappPhone = document.getElementById("cl-phone").value.trim();
+  const ownerEmail = document.getElementById("cl-owner-email").value.trim();
+  const ownerPassword = document.getElementById("cl-owner-password").value;
   if (!name || !whatsappPhone) return;
+  if ((ownerEmail || ownerPassword) && (!ownerEmail || !ownerPassword)) {
+    showError("Preencha o e-mail e a senha de acesso do cliente, ou deixe os dois em branco.");
+    return;
+  }
+  if (ownerPassword && ownerPassword.length < 10) {
+    showError("A senha de acesso precisa ter pelo menos 10 caracteres.");
+    return;
+  }
 
   await api("/clinics", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, whatsappPhone }),
+    body: JSON.stringify({
+      name,
+      whatsappPhone,
+      ...(ownerEmail ? { ownerEmail, ownerPassword } : {}),
+    }),
   });
 
   e.target.reset();

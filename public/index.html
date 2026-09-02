@@ -1182,6 +1182,9 @@
           <form id="clinic-form" class="broadcast-form card">
             <input id="cl-name" type="text" placeholder="Nome da clínica" required />
             <input id="cl-phone" type="text" placeholder="Telefone do WhatsApp (só números, ex: 5511999999999)" required />
+            <p class="hint" style="margin:0.2rem 0 0">Acesso do cliente ao painel (opcional — dá pra definir depois pelo botão “Acesso” na lista).</p>
+            <input id="cl-owner-email" type="email" placeholder="E-mail de acesso do cliente" autocomplete="off" />
+            <input id="cl-owner-password" type="password" placeholder="Senha de acesso (mín. 10 caracteres)" minlength="10" autocomplete="new-password" />
             <div class="broadcast-form-row">
               <button type="submit">Cadastrar clínica</button>
             </div>
@@ -2116,6 +2119,31 @@
           <div class="modal-actions">
             <button type="button" id="clinic-plan-cancel" class="btn-cancel">Cancelar</button>
             <button type="submit" id="clinic-plan-save">Salvar plano</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="clinic-owner-overlay" class="modal-overlay" style="display:none">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 id="clinic-owner-title">Acesso do cliente</h3>
+          <button type="button" id="clinic-owner-close" class="modal-close" aria-label="Fechar">&times;</button>
+        </div>
+        <form id="clinic-owner-form">
+          <input type="hidden" id="clinic-owner-id" />
+          <p class="hint" style="margin-top:0">É com este e-mail e senha que o cliente entra no painel dele. O e-mail é o login.</p>
+          <label>E-mail de acesso
+            <input id="clinic-owner-email" type="email" placeholder="cliente@exemplo.com" required autocomplete="off" />
+          </label>
+          <label>Senha
+            <input id="clinic-owner-password" type="password" placeholder="Mín. 10 caracteres" minlength="10" autocomplete="new-password" />
+          </label>
+          <p id="clinic-owner-pass-hint" class="hint" style="margin:0">Deixe a senha em branco para manter a atual.</p>
+          <p id="clinic-owner-feedback" class="hint" style="display:none;margin:0"></p>
+          <div class="modal-actions">
+            <button type="button" id="clinic-owner-cancel" class="btn-cancel">Cancelar</button>
+            <button type="submit" id="clinic-owner-save">Salvar acesso</button>
           </div>
         </form>
       </div>
