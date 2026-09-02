@@ -49,6 +49,15 @@ app.use(helmet({
     },
   },
 }));
+// O envio de anexo no atendimento humano manda um arquivo em data URI (ate
+// ~10MB + base64 infla ~33%) - so essa rota tem o limite maior.
+app.use((req, res, next) => {
+  if (req.method === "POST" && /^\/api\/conversations\/[^/]+\/send-media$/.test(req.path)) {
+    express.json({ limit: "15mb" })(req, res, next);
+  } else {
+    next();
+  }
+});
 // 4mb cobre uma foto de ate ~2.5MB em data URI (base64 infla ~33%). Endpoints
 // que aceitam foto (produtos/profissionais) sao os unicos que chegam perto.
 app.use(express.json({ limit: "4mb" }));

@@ -4,6 +4,8 @@ import { timingSafeEqual, randomBytes } from "crypto";
 import { prisma } from "../db/client.js";
 import {
   sendText,
+  sendMedia,
+  type OutgoingMediaKind,
   connectClinic,
   disconnectClinic,
   getStatus,
@@ -1219,6 +1221,32 @@ apiRouter.post(
   })
 );
 
+// Na PRIMEIRA acao manual da conversa, registra a transferencia pro atendente
+// (evento + aviso + log). Nao repete a cada mensagem.
+async function ensureManualTakeover(
+  conversation: { id: string; humanTakeover: boolean; patient: { clinicId: string; name: string | null; phone: string } },
+  authorName: string | null,
+): Promise<void> {
+  if (conversation.humanTakeover) return;
+  const patientLabel = conversation.patient.name ?? conversation.patient.phone;
+  await prisma.message.create({
+    data: { conversationId: conversation.id, role: "system", content: "Atendimento transferido para o atendente", authorName },
+  });
+  await notifyStaff(
+    conversation.patient.clinicId,
+    "human_handoff",
+    `Atendimento assumido manualmente: ${patientLabel}${authorName ? ` (por ${authorName})` : ""}.`,
+  );
+  await logActivity({
+    clinicId: conversation.patient.clinicId,
+    type: "human_takeover",
+    area: "atendimento",
+    title: "Atendimento assumido por uma pessoa",
+    description: `A Alice parou de responder a conversa com ${patientLabel} para a equipe continuar o atendimento.`,
+    actorName: authorName,
+  });
+}
+
 // Atendente assume a conversa manualmente e manda uma mensagem; Alice para de
 // responder ali ate alguem devolver o controle (endpoint /resume).
 apiRouter.post(
@@ -1237,28 +1265,7 @@ apiRouter.post(
     if (!assertClinicAccess(req, res, conversation.patient.clinicId)) return;
 
     const authorName = req.staff?.name ?? null;
-
-    // So loga o evento de transferencia na PRIMEIRA mensagem manual - nao a
-    // cada mensagem, senao vira um evento por linha de texto.
-    if (!conversation.humanTakeover) {
-      await prisma.message.create({
-        data: { conversationId: conversation.id, role: "system", content: "Atendimento transferido para o atendente", authorName },
-      });
-      const patientLabel = conversation.patient.name ?? conversation.patient.phone;
-      await notifyStaff(
-        conversation.patient.clinicId,
-        "human_handoff",
-        `Atendimento assumido manualmente: ${patientLabel}${authorName ? ` (por ${authorName})` : ""}.`
-      );
-      await logActivity({
-        clinicId: conversation.patient.clinicId,
-        type: "human_takeover",
-        area: "atendimento",
-        title: "Atendimento assumido por uma pessoa",
-        description: `A Alice parou de responder a conversa com ${patientLabel} para a equipe continuar o atendimento.`,
-        actorName: authorName,
-      });
-    }
+    await ensureManualTakeover(conversation, authorName);
 
     await prisma.message.create({
       data: { conversationId: conversation.id, role: "human", content: text, authorName },
@@ -1273,6 +1280,74 @@ apiRouter.post(
     } catch (err) {
       console.error("Falha ao enviar mensagem via WhatsApp:", err);
       res.status(502).json({ ok: false, error: "Mensagem salva, mas falhou ao enviar pelo WhatsApp" });
+      return;
+    }
+
+    res.json({ ok: true });
+  })
+);
+
+// Atendente envia uma foto / video / arquivo pela conversa (atendimento humano).
+// Body: { dataUrl: "data:<mime>;base64,...", caption?, filename? } - limite ~10MB.
+const MEDIA_KIND_BY_PREFIX: Record<string, OutgoingMediaKind> = {
+  image: "image",
+  video: "video",
+  audio: "audio",
+};
+apiRouter.post(
+  "/conversations/:id/send-media",
+  asyncRoute(async (req, res) => {
+    const { dataUrl, caption, filename } = (req.body ?? {}) as { dataUrl?: string; caption?: string; filename?: string };
+    const m = typeof dataUrl === "string" ? dataUrl.match(/^data:([\w.+-]+\/[\w.+-]+);base64,([\s\S]+)$/) : null;
+    if (!m) {
+      res.status(400).json({ error: "Anexo invalido." });
+      return;
+    }
+    const uri = m[0];
+    const mime = m[1].toLowerCase();
+    const bytes = Math.floor((m[2].length * 3) / 4);
+    if (bytes > 10 * 1024 * 1024) {
+      res.status(413).json({ error: "Arquivo muito grande (limite 10 MB)." });
+      return;
+    }
+    const kind: OutgoingMediaKind = MEDIA_KIND_BY_PREFIX[mime.split("/")[0]] ?? "document";
+    const safeName = (filename ?? "").replace(/[^\w.\- ()]/g, "").slice(0, 120) || undefined;
+
+    const conversation = await prisma.conversation.findUniqueOrThrow({
+      where: { id: req.params.id },
+      include: { patient: true },
+    });
+    if (!assertClinicAccess(req, res, conversation.patient.clinicId)) return;
+
+    const authorName = req.staff?.name ?? null;
+    await ensureManualTakeover(conversation, authorName);
+
+    await prisma.message.create({
+      data: {
+        conversationId: conversation.id,
+        role: "human",
+        content: caption?.trim() || "",
+        mediaType: kind,
+        mediaUrl: uri,
+        mediaName: kind === "document" ? safeName ?? null : null,
+        authorName,
+      },
+    });
+    await prisma.conversation.update({
+      where: { id: conversation.id },
+      data: { humanTakeover: true, handoffPending: false, lastMessageAt: new Date() },
+    });
+
+    try {
+      await sendMedia(conversation.patient.clinicId, conversation.patient.phone, {
+        dataUrl: uri,
+        kind,
+        caption: caption?.trim(),
+        filename: safeName,
+      });
+    } catch (err) {
+      console.error("Falha ao enviar anexo via WhatsApp:", err);
+      res.status(502).json({ ok: false, error: "Anexo salvo, mas falhou ao enviar pelo WhatsApp." });
       return;
     }
 

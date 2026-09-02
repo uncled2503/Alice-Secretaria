@@ -585,6 +585,9 @@ model Message {
   conversation   Conversation @relation(fields: [conversationId], references: [id])
   role           String       // user | assistant | human | system (system = evento de transferencia, nao e mensagem de chat)
   content        String
+  mediaType      String?      // image | video | document | audio (quando a mensagem tem anexo)
+  mediaUrl       String?      // data URI do anexo (para mostrar no painel)
+  mediaName      String?      // nome do arquivo (documentos)
   authorName     String?      // nome do atendente logado que enviou/transferiu (null = Alice, ou ninguem logado)
   createdAt      DateTime     @default(now())
 }

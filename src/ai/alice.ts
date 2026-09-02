@@ -834,7 +834,12 @@ export async function recordIncomingMessage(params: {
   }
 
   await prisma.message.create({
-    data: { conversationId: conversation.id, role: "user", content: storedContent },
+    data: {
+      conversationId: conversation.id,
+      role: "user",
+      content: storedContent,
+      ...(imageDataUrl ? { mediaType: "image", mediaUrl: imageDataUrl } : {}),
+    },
   });
   await prisma.conversation.update({
     where: { id: conversation.id },

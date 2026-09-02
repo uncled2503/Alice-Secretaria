@@ -148,6 +148,8 @@ const ICONS = {
   swap: '<path d="M7 4v13M7 17l-3-3M7 17l3-3" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 20V7M17 7l-3 3M17 7l3 3" stroke-linecap="round" stroke-linejoin="round"/>',
   pencil: '<path d="M4 20l1-4.5L15.5 5 19 8.5 8.5 19 4 20z" stroke-linejoin="round"/><path d="M13 7l4 4" stroke-linecap="round"/>',
   plus: '<path d="M12 5v14M5 12h14" stroke-linecap="round"/>',
+  paperclip: '<path d="M20 11l-8.5 8.5a4.5 4.5 0 0 1-6.4-6.4L13 5a3 3 0 0 1 4.3 4.3l-8 8a1.5 1.5 0 0 1-2.1-2.1L14 8" stroke-linecap="round" stroke-linejoin="round"/>',
+  file: '<path d="M6 2h8l4 4v16H6z" stroke-linejoin="round"/><path d="M14 2v4h4" stroke-linejoin="round"/><path d="M9 13h6M9 17h6" stroke-linecap="round"/>',
 };
 
 function renderIcon(name) {
@@ -783,9 +785,25 @@ async function loadMessages(conversationId, { forceScroll = false } = {}) {
     }
 
     const bubble = el("div", { class: `msg ${m.role}` }, [
-      el("span", { class: "msg-text" }, [m.content]),
       el("span", { class: "msg-time" }, [formatMsgTime(m.createdAt)]),
     ]);
+    if (m.mediaUrl) {
+      if (m.mediaType === "image") {
+        const img = el("img", { src: m.mediaUrl, class: "msg-media", alt: "imagem" });
+        img.addEventListener("click", () => window.open(m.mediaUrl, "_blank"));
+        bubble.prepend(img);
+      } else if (m.mediaType === "video") {
+        bubble.prepend(el("video", { src: m.mediaUrl, class: "msg-media", controls: "" }));
+      } else {
+        const link = el("a", { href: m.mediaUrl, download: m.mediaName || "arquivo", class: "msg-file" }, [
+          el("span", { class: "nav-icon", "data-icon": "file" }, []),
+          m.mediaName || "Arquivo",
+        ]);
+        bubble.prepend(link);
+      }
+    }
+    const bodyText = m.mediaUrl && /^\[(imagem|arquivo|foto|v[ií]deo|áudio|audio)\]$/i.test((m.content || "").trim()) ? "" : m.content;
+    if (bodyText) bubble.insertBefore(el("span", { class: "msg-text" }, [bodyText]), bubble.querySelector(".msg-time"));
     if (m.authorName) bubble.prepend(el("div", { class: "msg-author" }, [m.authorName]));
     box.appendChild(bubble);
   }
@@ -1042,25 +1060,89 @@ document.getElementById("btn-toggle-human").addEventListener("click", async () =
   }
 });
 
+// --- Anexo no chat (atendimento humano) ---
+state.chatAttachment = null; // { dataUrl, name, kind }
+const MAX_ATTACH_BYTES = 10 * 1024 * 1024;
+
+function clearChatAttachment() {
+  state.chatAttachment = null;
+  document.getElementById("chat-file-input").value = "";
+  const box = document.getElementById("chat-attach-preview");
+  box.hidden = true;
+  box.innerHTML = "";
+}
+
+document.getElementById("btn-chat-attach").addEventListener("click", () => {
+  document.getElementById("chat-file-input").click();
+});
+
+document.getElementById("chat-file-input").addEventListener("change", (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  if (file.size > MAX_ATTACH_BYTES) {
+    showError("Arquivo muito grande (limite 10 MB).");
+    e.target.value = "";
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    const kind = file.type.startsWith("image/")
+      ? "image"
+      : file.type.startsWith("video/")
+        ? "video"
+        : file.type.startsWith("audio/")
+          ? "audio"
+          : "document";
+    state.chatAttachment = { dataUrl: reader.result, name: file.name, kind };
+    const box = document.getElementById("chat-attach-preview");
+    box.hidden = false;
+    box.innerHTML = "";
+    const thumb =
+      kind === "image"
+        ? el("img", { src: reader.result, class: "chat-attach-thumb" })
+        : el("span", { class: "chat-attach-file" }, [file.name]);
+    const remove = el("button", { type: "button", class: "chat-attach-x", title: "Remover" }, ["×"]);
+    remove.addEventListener("click", clearChatAttachment);
+    box.append(thumb, el("span", { class: "chat-attach-hint" }, ["A legenda vai o que você digitar abaixo"]), remove);
+  };
+  reader.readAsDataURL(file);
+});
+
 document.getElementById("chat-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const input = document.getElementById("chat-input");
   const text = input.value.trim();
-  if (!text || !state.activeConversationId) return;
-  input.value = "";
+  const attachment = state.chatAttachment;
+  if ((!text && !attachment) || !state.activeConversationId) return;
   const id = state.activeConversationId;
-  await api(`/conversations/${id}/send`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
-  });
-  const conv = (state.conversations || []).find((c) => c.id === id);
-  if (conv && !conv.humanTakeover) {
-    await loadConversations();
-    await openConversation(id);
-  } else {
-    updateToggleButton(true);
-    await loadMessages(id, { forceScroll: true });
+  const sendBtn = document.getElementById("chat-send-btn");
+  sendBtn.disabled = true;
+  try {
+    if (attachment) {
+      await api(`/conversations/${id}/send-media`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dataUrl: attachment.dataUrl, caption: text, filename: attachment.name }),
+      });
+      clearChatAttachment();
+    } else {
+      await api(`/conversations/${id}/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+    }
+    input.value = "";
+    const conv = (state.conversations || []).find((c) => c.id === id);
+    if (conv && !conv.humanTakeover) {
+      await loadConversations();
+      await openConversation(id);
+    } else {
+      updateToggleButton(true);
+      await loadMessages(id, { forceScroll: true });
+    }
+  } finally {
+    sendBtn.disabled = false;
   }
 });
 

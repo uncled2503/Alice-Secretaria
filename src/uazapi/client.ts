@@ -367,6 +367,28 @@ export async function sendText(clinicId: string, phone: string, text: string): P
   }
 }
 
+export type OutgoingMediaKind = "image" | "video" | "document" | "audio";
+
+// Envia uma foto / video / arquivo pelo WhatsApp da clinica (atendimento
+// humano). `dataUrl` = data URI (data:<mime>;base64,<...>).
+export async function sendMedia(
+  clinicId: string,
+  phone: string,
+  opts: { dataUrl: string; kind: OutgoingMediaKind; caption?: string; filename?: string },
+): Promise<void> {
+  const credentials = await clinicCredentials(clinicId);
+  const body: Record<string, unknown> = {
+    number: phone.replace(/\D/g, ""),
+    type: opts.kind,
+    file: opts.dataUrl,
+    delay: 0,
+    async: false,
+  };
+  if (opts.caption?.trim()) body.text = opts.caption.trim();
+  if (opts.kind === "document" && opts.filename) body.docName = opts.filename;
+  await request(credentials, "/send/media", { method: "POST", body: JSON.stringify(body) });
+}
+
 export async function getProfilePicUrl(clinicId: string, phone: string): Promise<string | null> {
   const cacheKey = `${clinicId}:${phone}`;
   const cached = avatarCache.get(cacheKey);
