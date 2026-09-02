@@ -220,6 +220,10 @@ function applyRoleUI() {
     if (tab) tab.style.display = isAdmin ? "" : "none";
   }
 
+  // "Analisar agora" custa uma rodada de IA - só admin.
+  const learnRun = document.getElementById("btn-learning-run");
+  if (learnRun) learnRun.style.display = isAdmin ? "" : "none";
+
   const label = document.getElementById("staff-session-label");
   if (label && state.staff) label.textContent = state.staff.name;
 }
@@ -5361,6 +5365,113 @@ async function loadMetaEvents() {
   paintIcons(body);
 }
 
+// --- Aprendizado da Alice ---
+const LEARNING_KIND_STYLE = {
+  faq: { bg: "#0ea5e9", label: "Resposta pronta" },
+  rule: { bg: "#8b5cf6", label: "Regra" },
+  style: { bg: "#14b8a6", label: "Jeito de falar" },
+  retire: { bg: "#dc2626", label: "Aposentar" },
+};
+
+async function loadLearning() {
+  const data = await api("/learning");
+  const runStatus = document.getElementById("learning-run-status");
+  runStatus.textContent = data.lastRunAt
+    ? `Última análise: ${new Date(data.lastRunAt).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}`
+    : "Ainda não rodou.";
+
+  const box = document.getElementById("learning-pending");
+  box.innerHTML = "";
+  if (!data.pending.length) {
+    box.appendChild(el("div", { class: "card", style: "text-align:center;color:var(--text-faint);padding:1.4rem" }, [
+      "Nada pra revisar por enquanto. A Alice analisa as conversas toda madrugada.",
+    ]));
+  }
+  for (const ins of data.pending) {
+    const st = LEARNING_KIND_STYLE[ins.kind] || { bg: "#64748b", label: ins.kind };
+    const card = el("div", { class: "card learning-card" }, []);
+    const head = el("div", { class: "learning-head" }, [
+      el("span", { class: "learning-badge", style: `background:${st.bg}` }, [st.label]),
+      el("strong", {}, [ins.title]),
+      ins.evidenceCount > 1 ? el("span", { class: "learning-ev" }, [`visto ${ins.evidenceCount}×`]) : "",
+    ]);
+    card.appendChild(head);
+
+    if (ins.kind === "retire") {
+      card.appendChild(el("p", { class: "hint", style: "margin:0.4rem 0" }, [
+        "Regra atual: ", el("em", {}, [ins.trigger]),
+      ]));
+      card.appendChild(el("p", { class: "hint", style: "margin:0.4rem 0" }, [ins.suggestion]));
+    } else {
+      if (ins.trigger) card.appendChild(el("p", { class: "hint", style: "margin:0.4rem 0" }, [`Quando: ${ins.trigger}`]));
+      const ta = el("textarea", { class: "learning-text", rows: "3" }, []);
+      ta.value = ins.suggestion;
+      card.appendChild(ta);
+      card._text = ta;
+    }
+
+    const actions = el("div", { class: "learning-actions" }, []);
+    if (ins.exampleConvId) {
+      const link = el("button", { type: "button", class: "btn-brand btn-brand--secondary btn-brand--sm" }, ["Ver conversa"]);
+      link.addEventListener("click", async () => {
+        goToTab("chat");
+        try { await loadConversations(); await loadArchivedConversations(); } catch {}
+        openConversation(ins.exampleConvId);
+      });
+      actions.appendChild(link);
+    }
+    const spacer = el("span", { style: "flex:1" }, []);
+    const approve = el("button", { type: "button", class: "btn-brand btn-brand--primary btn-brand--sm" }, [
+      ins.kind === "retire" ? "Aposentar" : "Aprovar",
+    ]);
+    approve.addEventListener("click", async () => {
+      approve.disabled = true;
+      try {
+        await api(`/learning/${ins.id}/approve`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ suggestion: card._text ? card._text.value.trim() : undefined }),
+        });
+        card.remove();
+        loadLearning();
+      } finally { approve.disabled = false; }
+    });
+    const reject = el("button", { type: "button", class: "btn-brand btn-brand--secondary btn-brand--sm" }, [
+      ins.kind === "retire" ? "Manter regra" : "Descartar",
+    ]);
+    reject.addEventListener("click", async () => {
+      await api(`/learning/${ins.id}/reject`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      card.remove();
+      loadLearning();
+    });
+    actions.append(spacer, reject, approve);
+    card.appendChild(actions);
+    box.appendChild(card);
+  }
+
+  const applied = document.getElementById("learning-applied");
+  applied.innerHTML = "";
+  if (!data.applied.length) applied.textContent = "Nada aplicado ainda.";
+  else {
+    for (const a of data.applied) {
+      applied.appendChild(el("div", { style: "padding:0.35rem 0;border-bottom:1px solid var(--border);font-size:0.82rem" }, [
+        `${(LEARNING_KIND_STYLE[a.kind] || {}).label || a.kind}: ${a.title}`,
+      ]));
+    }
+  }
+}
+
+document.getElementById("btn-learning-run").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const st = document.getElementById("learning-run-status");
+  btn.disabled = true;
+  st.textContent = "Analisando conversas... (pode levar 1-2 minutos)";
+  try {
+    const r = await api("/learning/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    st.textContent = `Pronto: ${r.analyzed} conversas, ${r.created} novo(s) aprendizado(s), ${r.bumped} reforçado(s).`;
+    await loadLearning();
+  } finally { btn.disabled = false; }
+});
+
 const SETTINGS_SUB_LOADERS = {
   "clinic-data": () => {
     loadClinicDataForm();
@@ -5389,6 +5500,7 @@ const SETTINGS_SUB_LOADERS = {
   team: loadTeam,
   "external-api": loadApiKeys,
   meta: loadMetaConfig,
+  learning: loadLearning,
 };
 
 function openSettingsSub(sub) {

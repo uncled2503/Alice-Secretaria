@@ -102,6 +102,8 @@ model Clinic {
   uazapiWebhookEvents UazapiWebhookEvent[]
   metaConfig    MetaConfig?
   metaEvents    MetaEvent[]
+  learningInsights LearningInsight[]
+  learningRunAt  DateTime?
 }
 
 // Integracao com a Meta por clinica (Pixel + API de Conversoes). O token da
@@ -499,6 +501,35 @@ model BroadcastRecipient {
 // a mudanca"). A IA classifica numa categoria e escreve a instrucao final, ou
 // devolve uma pergunta se faltar informacao. So entra no prompt da Alice
 // depois que o admin aprova (status=active).
+// "Aprendizado da Alice": o robô noturno lê as conversas, tira lições (resposta
+// que um humano deu, erro que a Alice cometeu, jeito de falar da equipe) e cria
+// insights aqui. NADA afeta a Alice até um humano aprovar - aprovar promove o
+// insight pra ClinicFaq / CustomRule de verdade (ou aposenta a regra alvo).
+model LearningInsight {
+  id            String   @id @default(cuid())
+  clinicId      String
+  clinic        Clinic   @relation(fields: [clinicId], references: [id])
+  kind          String   // faq | rule | style | retire
+  status        String   @default("pending") // pending | approved | rejected
+  title         String   // resumo curto pra lista
+  trigger       String   @default("") // "quando o cliente pergunta X" (vira a pergunta da FAQ)
+  suggestion    String   // a lição / resposta / regra sugerida
+  category      String?  // categoria do CustomRule (kind=rule/style)
+  targetType    String?  // kind=retire: "rule" | "faq"
+  targetId      String?  // kind=retire: id do alvo
+  source        String   // handoff | failure | style | contradiction
+  evidenceCount Int      @default(1)
+  exampleConvId String?
+  fingerprint   String   @default("") // normalizado, pra deduplicar
+  lastSeenAt    DateTime @default(now())
+  createdAt     DateTime @default(now())
+  reviewedAt    DateTime?
+  reviewedBy    String?
+  appliedRefId  String?  // id do ClinicFaq/CustomRule criado ao aprovar
+
+  @@index([clinicId, status])
+}
+
 model CustomRule {
   id                 String   @id @default(cuid())
   clinicId           String

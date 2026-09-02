@@ -505,6 +505,7 @@
           <button data-sub="blocks" class="biz-clinica-only">Bloqueios de agenda</button>
           <button data-sub="waitlist" class="biz-clinica-only">Lista de espera</button>
           <button data-sub="history">Histórico</button>
+          <button data-sub="learning">Aprendizado da Alice</button>
           <button data-sub="rules">Personalizar Alice</button>
           <button data-sub="clinics">Clínicas</button>
           <button data-sub="team">Equipe</button>
@@ -961,6 +962,21 @@
             <div style="text-align:center;padding:0.8rem 0">
               <button type="button" id="activity-more" class="btn-brand btn-brand--secondary btn-brand--sm" style="display:none">Carregar mais</button>
             </div>
+          </div>
+        </div>
+
+        <div id="sub-learning" class="settings-subpanel">
+          <p class="hint" style="margin-top:0">Toda madrugada a Alice revê as conversas atendidas e tira lições: respostas que a equipe deu, erros que ela cometeu, o jeito de vocês falarem. <strong>Nada muda no comportamento dela até você aprovar aqui.</strong> Aprovar transforma a lição numa resposta pronta ou numa regra de verdade.</p>
+          <div class="card">
+            <div class="broadcast-form-row" style="align-items:center">
+              <button type="button" id="btn-learning-run" class="btn-brand btn-brand--secondary btn-brand--sm">Analisar conversas agora</button>
+              <span id="learning-run-status" class="hint" style="margin:0"></span>
+            </div>
+          </div>
+          <div id="learning-pending"></div>
+          <div class="card" style="margin-top:0.8rem">
+            <div class="section-header" style="margin-top:0">Já aplicados</div>
+            <div id="learning-applied" class="hint" style="margin:0">—</div>
           </div>
         </div>
 

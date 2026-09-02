@@ -31,6 +31,7 @@ import { enqueueTestLead, enqueueSchedule, META_MAX_ATTEMPTS } from "../meta/eve
 import { retryMetaEvent } from "../meta/worker.js";
 import { createRuleDraft, RULE_CATEGORIES, seedDefaultRules, reseedRulesForProfile } from "../ai/rules.js";
 import { BRIEFING_TEMPLATE, parseBriefing, applyBriefing, BriefingPlanSchema } from "../ai/briefing.js";
+import { runLearningJob, approveInsight, rejectInsight } from "../ai/learning.js";
 import { API_SCOPES, API_SCOPE_IDS, generateApiKey } from "./external/keys.js";
 import { answerSiteQuestion, type SiteMessage } from "../ai/siteAssistant.js";
 import { seedLaleblu } from "../maintenance/seedLaleblu.js";
@@ -2719,6 +2720,76 @@ apiRouter.post(
     }
     const summary = await applyBriefing(clinic.id, parsed.data, req.staff?.name ?? null);
     res.json(summary);
+  })
+);
+
+// ======================= APRENDIZADO DA ALICE ==============================
+// O robo noturno cria LearningInsight "pending". Aqui a equipe revisa: aprovar
+// promove pra FAQ/regra de verdade; rejeitar descarta (e nao ressuscita).
+apiRouter.get(
+  "/learning",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const [pending, applied, clinicRow] = await Promise.all([
+      prisma.learningInsight.findMany({
+        where: { clinicId: clinic.id, status: "pending" },
+        orderBy: [{ evidenceCount: "desc" }, { lastSeenAt: "desc" }],
+        take: 100,
+      }),
+      prisma.learningInsight.findMany({
+        where: { clinicId: clinic.id, status: "approved" },
+        orderBy: { reviewedAt: "desc" },
+        take: 30,
+      }),
+      prisma.clinic.findUnique({ where: { id: clinic.id }, select: { learningRunAt: true } }),
+    ]);
+    const KIND_LABEL: Record<string, string> = { faq: "Resposta pronta", rule: "Regra", style: "Jeito de falar", retire: "Aposentar" };
+    const map = (i: (typeof pending)[number]) => ({
+      id: i.id,
+      kind: i.kind,
+      kindLabel: KIND_LABEL[i.kind] ?? i.kind,
+      title: i.title,
+      trigger: i.trigger,
+      suggestion: i.suggestion,
+      category: i.category,
+      source: i.source,
+      evidenceCount: i.evidenceCount,
+      exampleConvId: i.exampleConvId,
+      createdAt: i.createdAt,
+      reviewedAt: i.reviewedAt,
+    });
+    res.json({ pending: pending.map(map), applied: applied.map(map), lastRunAt: clinicRow?.learningRunAt ?? null });
+  })
+);
+
+apiRouter.post(
+  "/learning/run",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await getClinic(req);
+    const r = await runLearningJob(clinic.id);
+    res.json(r);
+  })
+);
+
+apiRouter.post(
+  "/learning/:id/approve",
+  asyncRoute(async (req, res) => {
+    const { suggestion } = (req.body ?? {}) as { suggestion?: string };
+    const ins = await prisma.learningInsight.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, ins.clinicId)) return;
+    await approveInsight(ins.id, suggestion, req.staff?.name ?? null);
+    res.json({ ok: true });
+  })
+);
+
+apiRouter.post(
+  "/learning/:id/reject",
+  asyncRoute(async (req, res) => {
+    const ins = await prisma.learningInsight.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, ins.clinicId)) return;
+    await rejectInsight(ins.id, req.staff?.name ?? null);
+    res.json({ ok: true });
   })
 );
 
