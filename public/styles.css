@@ -710,8 +710,33 @@ tbody tr:hover { background: var(--accent-50); }
   display: flex; align-items: center; justify-content: center;
 }
 #btn-chat-mic.recording { background: #dc2626; border-color: #dc2626; color: #fff; animation: micpulse 1s infinite; }
-@keyframes micpulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
+@keyframes micpulse { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
 .chat-attach-audio { max-width: 200px; height: 34px; }
+
+/* Barra "Gravando..." */
+.rec-dot { width: 10px; height: 10px; border-radius: 50%; background: #dc2626; flex-shrink: 0; animation: recpulse 1s ease-in-out infinite; }
+@keyframes recpulse { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.5); opacity: 0.4; } }
+.rec-label { font-size: 0.82rem; color: #b91c1c; font-weight: 600; }
+.rec-time { font-size: 0.82rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.rec-stop {
+  flex-shrink: 0; width: 30px; height: 30px; border-radius: 50%; border: none; cursor: pointer;
+  background: #dc2626; color: #fff; font-size: 0.7rem; display: flex; align-items: center; justify-content: center;
+}
+.rec-stop:hover { background: #b91c1c; }
+
+/* Player compacto do áudio anexado */
+.chat-audio-mini { display: inline-flex; align-items: center; gap: 0.5rem; }
+.chat-audio-play {
+  flex-shrink: 0; width: 30px; height: 30px; border-radius: 50%; border: none; cursor: pointer;
+  background: var(--accent); color: #fff; font-size: 0.72rem; display: flex; align-items: center; justify-content: center;
+}
+.chat-audio-time { font-size: 0.78rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.chat-audio-wave {
+  width: 46px; height: 16px; flex-shrink: 0;
+  background: repeating-linear-gradient(90deg, var(--accent) 0 2px, transparent 2px 5px);
+  -webkit-mask: linear-gradient(90deg, #000 0 100%);
+  opacity: 0.5;
+}
 #chat-attach-preview {
   display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0.7rem;
   background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px;
