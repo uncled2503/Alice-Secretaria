@@ -516,6 +516,40 @@ tbody tr:hover { background: var(--accent-50); }
 .conv-contact-btn:hover { border-color: var(--accent); color: var(--text); }
 @media (hover: none) { .conv-contact-btn { opacity: 1; } }
 
+#conversations-list .conv-actions { display: flex; flex-direction: column; gap: 0.25rem; align-self: center; flex-shrink: 0; }
+.conv-archive-btn {
+  background: var(--card-bg); border: 1px solid var(--border); color: var(--text-muted);
+  border-radius: 6px; padding: 0.2rem 0.4rem; font-size: 0.78rem; cursor: pointer; opacity: 0; transition: opacity 0.12s;
+}
+#conversations-list li:hover .conv-archive-btn { opacity: 1; }
+.conv-archive-btn:hover { border-color: var(--accent); color: var(--text); }
+@media (hover: none) { .conv-archive-btn { opacity: 1; } }
+#conversations-list .conv-tags, .chat-header-id .conv-tags { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.25rem; }
+.conv-tag {
+  font-size: 0.62rem; font-weight: 600; color: #fff; border-radius: 999px;
+  padding: 0.06rem 0.4rem; white-space: nowrap;
+}
+#conversations-list .conv-empty { padding: 1.4rem 1rem; text-align: center; color: var(--text-faint); font-size: 0.82rem; }
+
+.conv-tag-menu {
+  position: fixed; z-index: 200; width: 250px; max-height: 60vh; overflow-y: auto;
+  background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.18); padding: 0.5rem;
+}
+.conv-tag-menu-list { display: flex; flex-direction: column; gap: 0.15rem; }
+.conv-tag-opt {
+  display: flex; align-items: center; gap: 0.4rem; width: 100%; text-align: left;
+  background: transparent; border: none; padding: 0.4rem 0.5rem; border-radius: 6px;
+  cursor: pointer; font-size: 0.82rem; color: var(--text); font-family: inherit;
+}
+.conv-tag-opt:hover { background: var(--accent-50); }
+.conv-tag-opt.on { font-weight: 600; }
+.conv-tag-check { margin-left: auto; color: var(--accent-dark); }
+.conv-tag-new { display: flex; gap: 0.35rem; align-items: center; margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--border); }
+.conv-tag-new-color { width: 28px; height: 28px; padding: 0; border: 1px solid var(--border); border-radius: 6px; flex-shrink: 0; }
+.conv-tag-new-input { flex: 1; min-width: 0; padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius: 6px; font-size: 0.8rem; background: var(--card-bg); color: var(--text); }
+.conv-tag-new-btn { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 0.35rem 0.6rem; font-size: 0.8rem; cursor: pointer; flex-shrink: 0; }
+
 .avatar-img { width: 100%; height: 100%; object-fit: cover; display: block; }
 #conversations-list .avatar {
   width: 44px; height: 44px; border-radius: 50%; background: var(--accent-100); color: var(--accent-dark);
@@ -614,6 +648,7 @@ tbody tr:hover { background: var(--accent-50); }
 .msg-text { white-space: pre-wrap; word-break: break-word; }
 .msg-time { align-self: flex-end; font-size: 0.68rem; color: var(--text-faint); }
 .msg-media { max-width: 100%; max-height: 320px; border-radius: 8px; cursor: pointer; display: block; }
+.msg-audio { max-width: 240px; }
 .msg-file {
   display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.6rem; border-radius: 8px;
   background: rgba(0,0,0,0.06); color: inherit; text-decoration: none; font-size: 0.82rem; word-break: break-all;
@@ -649,8 +684,16 @@ tbody tr:hover { background: var(--accent-50); }
   background: var(--card-bg); border: 1px solid var(--border); color: var(--text-muted);
   display: flex; align-items: center; justify-content: center;
 }
-#btn-chat-attach:hover { color: var(--accent-dark); border-color: var(--accent-100); }
-#btn-chat-attach .nav-icon { width: 18px; height: 18px; }
+#btn-chat-attach:hover, #btn-chat-mic:hover { color: var(--accent-dark); border-color: var(--accent-100); }
+#btn-chat-attach .nav-icon, #btn-chat-mic .nav-icon { width: 18px; height: 18px; }
+#btn-chat-mic {
+  width: 38px; height: 38px; padding: 0; border-radius: 50%; flex-shrink: 0; cursor: pointer;
+  background: var(--card-bg); border: 1px solid var(--border); color: var(--text-muted);
+  display: flex; align-items: center; justify-content: center;
+}
+#btn-chat-mic.recording { background: #dc2626; border-color: #dc2626; color: #fff; animation: micpulse 1s infinite; }
+@keyframes micpulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
+.chat-attach-audio { max-width: 200px; height: 34px; }
 #chat-attach-preview {
   display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0.7rem;
   background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px;

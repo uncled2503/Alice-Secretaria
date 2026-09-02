@@ -367,7 +367,7 @@ export async function sendText(clinicId: string, phone: string, text: string): P
   }
 }
 
-export type OutgoingMediaKind = "image" | "video" | "document" | "audio";
+export type OutgoingMediaKind = "image" | "video" | "document" | "audio" | "ptt";
 
 // Envia uma foto / video / arquivo pelo WhatsApp da clinica (atendimento
 // humano). `dataUrl` = data URI (data:<mime>;base64,<...>).

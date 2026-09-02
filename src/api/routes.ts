@@ -1155,11 +1155,13 @@ apiRouter.get(
   "/conversations",
   asyncRoute(async (req, res) => {
     const clinic = await getClinic(req);
+    const onlyArchived = req.query.archived === "1" || req.query.archived === "true";
     const conversations = await prisma.conversation.findMany({
-      where: { patient: { clinicId: clinic.id } },
+      where: { patient: { clinicId: clinic.id }, archived: onlyArchived },
       orderBy: { lastMessageAt: "desc" },
+      ...(onlyArchived ? { take: 200 } : {}),
       include: {
-        patient: true,
+        patient: { include: { tags: { include: { tag: { select: { id: true, label: true, color: true } } } } } },
         messages: { orderBy: { createdAt: "desc" }, take: 1 },
       },
     });
@@ -1171,6 +1173,7 @@ apiRouter.get(
         humanTakeover: c.humanTakeover,
         handoffReason: c.handoffReason,
         handoffPending: c.handoffPending,
+        archived: c.archived,
         lastMessageAt: c.lastMessageAt,
         patient: {
           id: c.patient.id,
@@ -1178,14 +1181,21 @@ apiRouter.get(
           phone: c.patient.phone,
           birthDate: c.patient.birthDate,
           avatarUrl: await getProfilePicUrl(clinic.id, c.patient.phone),
+          tags: c.patient.tags.map((pt) => pt.tag),
         },
-        lastMessage: c.messages[0]?.content ?? null,
+        lastMessage: c.messages[0]?.mediaType
+          ? mediaPreviewLabel(c.messages[0].mediaType)
+          : c.messages[0]?.content ?? null,
       }))
     );
 
     res.json(withAvatars);
   })
 );
+
+function mediaPreviewLabel(kind: string): string {
+  return kind === "image" ? "📷 Foto" : kind === "video" ? "🎥 Vídeo" : kind === "audio" || kind === "ptt" ? "🎤 Áudio" : "📎 Arquivo";
+}
 
 apiRouter.get(
   "/conversations/:id/messages",
@@ -1217,6 +1227,24 @@ apiRouter.post(
     if (conversation.handoffPending) {
       await prisma.conversation.update({ where: { id: conversation.id }, data: { handoffPending: false } });
     }
+    res.json({ ok: true });
+  })
+);
+
+// Arquiva / desarquiva a conversa (estilo WhatsApp).
+apiRouter.post(
+  "/conversations/:id/archive",
+  asyncRoute(async (req, res) => {
+    const { archived } = (req.body ?? {}) as { archived?: boolean };
+    const conversation = await prisma.conversation.findUniqueOrThrow({
+      where: { id: req.params.id },
+      include: { patient: { select: { clinicId: true } } },
+    });
+    if (!assertClinicAccess(req, res, conversation.patient.clinicId)) return;
+    await prisma.conversation.update({
+      where: { id: conversation.id },
+      data: { archived: archived !== false, ...(archived !== false ? { handoffPending: false } : {}) },
+    });
     res.json({ ok: true });
   })
 );
@@ -1297,7 +1325,12 @@ const MEDIA_KIND_BY_PREFIX: Record<string, OutgoingMediaKind> = {
 apiRouter.post(
   "/conversations/:id/send-media",
   asyncRoute(async (req, res) => {
-    const { dataUrl, caption, filename } = (req.body ?? {}) as { dataUrl?: string; caption?: string; filename?: string };
+    const { dataUrl, caption, filename, voice } = (req.body ?? {}) as {
+      dataUrl?: string;
+      caption?: string;
+      filename?: string;
+      voice?: boolean;
+    };
     const m = typeof dataUrl === "string" ? dataUrl.match(/^data:([\w.+-]+\/[\w.+-]+);base64,([\s\S]+)$/) : null;
     if (!m) {
       res.status(400).json({ error: "Anexo invalido." });
@@ -1310,7 +1343,8 @@ apiRouter.post(
       res.status(413).json({ error: "Arquivo muito grande (limite 10 MB)." });
       return;
     }
-    const kind: OutgoingMediaKind = MEDIA_KIND_BY_PREFIX[mime.split("/")[0]] ?? "document";
+    const prefixKind = MEDIA_KIND_BY_PREFIX[mime.split("/")[0]] ?? "document";
+    const kind: OutgoingMediaKind = voice && prefixKind === "audio" ? "ptt" : prefixKind;
     const safeName = (filename ?? "").replace(/[^\w.\- ()]/g, "").slice(0, 120) || undefined;
 
     const conversation = await prisma.conversation.findUniqueOrThrow({

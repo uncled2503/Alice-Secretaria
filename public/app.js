@@ -150,6 +150,7 @@ const ICONS = {
   plus: '<path d="M12 5v14M5 12h14" stroke-linecap="round"/>',
   paperclip: '<path d="M20 11l-8.5 8.5a4.5 4.5 0 0 1-6.4-6.4L13 5a3 3 0 0 1 4.3 4.3l-8 8a1.5 1.5 0 0 1-2.1-2.1L14 8" stroke-linecap="round" stroke-linejoin="round"/>',
   file: '<path d="M6 2h8l4 4v16H6z" stroke-linejoin="round"/><path d="M14 2v4h4" stroke-linejoin="round"/><path d="M9 13h6M9 17h6" stroke-linecap="round"/>',
+  mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" stroke-linecap="round"/>',
 };
 
 function renderIcon(name) {
@@ -232,6 +233,7 @@ async function bootApp() {
   }
   hideAuthGate();
   await refreshAll();
+  loadArchivedConversations().catch(() => {}); // popula o contador "Arquivadas"
   if (!state.pollHandle) state.pollHandle = setInterval(refreshAll, 5000);
 }
 
@@ -624,6 +626,11 @@ async function loadConversations() {
   renderConversationsList();
 }
 
+async function loadArchivedConversations() {
+  state.archivedConversations = await api("/conversations?archived=1");
+  if (state.chatFilter === "archived") renderConversationsList();
+}
+
 // Avisa (toast + selo no menu) quando aparece uma conversa que a Alice
 // transferiu pra uma pessoa e que ninguém abriu ainda - senão o handoff passa
 // despercebido no painel. O selo/contador mostra só os pendentes (não vistos).
@@ -633,7 +640,7 @@ function notifyNewHandoffs(conversations) {
     for (const c of conversations) {
       if (c.handoffPending && !state._knownHandoffIds.has(c.id) && c.id !== state.activeConversationId) {
         const who = c.patient?.name || c.patient?.phone || "um contato";
-        showError(`🔔 Precisa de atendimento humano: ${who}${c.handoffReason ? ` — ${c.handoffReason}` : ""}`);
+        showError(`🔔 Conversa não lida: ${who}${c.handoffReason ? ` — ${c.handoffReason}` : ""}`);
       }
     }
   }
@@ -656,36 +663,60 @@ function notifyNewHandoffs(conversations) {
 
 function renderConversationsList() {
   const conversations = state.conversations || [];
+  const archived = state.archivedConversations || [];
   const aliceCount = conversations.filter((c) => !c.humanTakeover).length;
   const humanCount = conversations.filter((c) => c.humanTakeover).length;
   const tabs = document.getElementById("chat-filter-tabs");
   tabs.children[0].textContent = `Todos (${conversations.length})`;
   tabs.children[1].textContent = `Alice (${aliceCount})`;
   tabs.children[2].textContent = `Humano (${humanCount})`;
+  tabs.children[3].textContent = archived.length ? `Arquivadas (${archived.length})` : "Arquivadas";
 
-  const filtered = conversations
+  const source = state.chatFilter === "archived" ? archived : conversations;
+  const filtered = source
     .filter((c) => {
       if (state.chatFilter === "alice") return !c.humanTakeover;
       if (state.chatFilter === "human") return c.humanTakeover;
       return true;
     })
-    // As não lidas (handoff pendente) sobem pro topo; o resto mantém a ordem por data.
+    // As não lidas sobem pro topo; o resto mantém a ordem por data.
     .sort((a, b) => (b.handoffPending ? 1 : 0) - (a.handoffPending ? 1 : 0));
 
   const list = document.getElementById("conversations-list");
   list.innerHTML = "";
+  if (!filtered.length) {
+    list.appendChild(el("li", { class: "conv-empty" }, [
+      state.chatFilter === "archived" ? "Nenhuma conversa arquivada." : "Nenhuma conversa aqui.",
+    ]));
+    return;
+  }
   for (const c of filtered) {
     const contactBtn = el("button", { type: "button", class: "conv-contact-btn", title: "Ver ficha do contato" }, ["Contato"]);
     contactBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       openContactPanel(c.patient);
     });
+    const archiveBtn = el("button", {
+      type: "button",
+      class: "conv-archive-btn",
+      title: c.archived ? "Desarquivar" : "Arquivar",
+    }, [c.archived ? "↩" : "🗄"]);
+    archiveBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleArchiveConversation(c.id, !c.archived);
+    });
+
+    const tagChipRow = (c.patient.tags || []).length
+      ? el("div", { class: "conv-tags" }, c.patient.tags.map((t) =>
+          el("span", { class: "conv-tag", style: `background:${t.color}` }, [t.label])))
+      : "";
+
     const li = el("li", { "data-id": c.id }, [
       avatarNode(c.patient.name, c.patient.avatarUrl, "avatar"),
       el("div", { class: "conv-text" }, [
         el("div", { class: "conv-top-row" }, [
           el("div", { class: "name" }, [
-            c.handoffPending ? el("span", { class: "conv-dot", title: "Não lida — precisa de atendimento" }, []) : "",
+            c.handoffPending ? el("span", { class: "conv-dot", title: "Não lida" }, []) : "",
             c.patient.name ?? c.patient.phone,
           ]),
           c.handoffPending
@@ -693,15 +724,12 @@ function renderConversationsList() {
             : el("div", { class: "conv-time" }, [formatConvTime(c.lastMessageAt)]),
         ]),
         el("div", { class: "preview" }, [
-          c.handoffPending
-            ? `⚑ Precisa de atendimento${c.handoffReason ? ` (${c.handoffReason})` : ""} — `
-            : c.humanTakeover && c.handoffReason
-              ? `⚑ ${c.handoffReason} — `
-              : "",
+          c.humanTakeover && c.handoffReason ? `⚑ ${c.handoffReason} — ` : "",
           c.lastMessage ?? "",
         ]),
+        tagChipRow,
       ]),
-      contactBtn,
+      el("div", { class: "conv-actions" }, [contactBtn, archiveBtn]),
     ]);
     if (c.handoffPending) li.classList.add("needs-human", "unread");
     if (c.id === state.activeConversationId) li.classList.add("active");
@@ -710,12 +738,100 @@ function renderConversationsList() {
   }
 }
 
+async function toggleArchiveConversation(id, archived) {
+  await api(`/conversations/${id}/archive`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ archived }),
+  });
+  if (state.activeConversationId === id && archived) {
+    state.activeConversationId = null;
+    resetChatPane();
+  }
+  await Promise.all([loadConversations(), loadArchivedConversations()]);
+}
+
+// Menu de etiquetas da conversa (opera sobre o contato, reaproveita /tags).
+async function saveConvTags(conv, selectedIds) {
+  await api(`/patients/${conv.patient.id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tagIds: [...selectedIds] }),
+  });
+  await Promise.all([loadConversations(), loadArchivedConversations()]);
+  if (state.activeConversationId === conv.id) openConversation(conv.id);
+}
+
+async function openConvTagMenu(anchor, conv) {
+  document.getElementById("conv-tag-menu")?.remove();
+  const allTags = await api("/tags");
+  const selected = new Set((conv.patient.tags || []).map((t) => t.id));
+
+  const menu = el("div", { id: "conv-tag-menu", class: "conv-tag-menu" }, []);
+  const listBox = el("div", { class: "conv-tag-menu-list" }, []);
+  const renderList = () => {
+    listBox.innerHTML = "";
+    if (!allTags.length) listBox.appendChild(el("div", { class: "hint", style: "margin:0" }, ["Nenhuma etiqueta ainda."]));
+    for (const t of allTags) {
+      const on = selected.has(t.id);
+      const row = el("button", { type: "button", class: `conv-tag-opt${on ? " on" : ""}` }, [
+        el("span", { class: "contact-tag-dot", style: `background:${t.color}` }, []),
+        t.label,
+        on ? el("span", { class: "conv-tag-check" }, ["✓"]) : "",
+      ]);
+      row.addEventListener("click", async () => {
+        if (on) selected.delete(t.id);
+        else selected.add(t.id);
+        renderList();
+        await saveConvTags(conv, selected);
+      });
+      listBox.appendChild(row);
+    }
+  };
+  renderList();
+
+  const input = el("input", { type: "text", placeholder: "Criar nova etiqueta...", class: "conv-tag-new-input" });
+  const color = el("input", { type: "color", value: "#8b5cf6", class: "conv-tag-new-color" });
+  const createBtn = el("button", { type: "button", class: "conv-tag-new-btn" }, ["Criar"]);
+  createBtn.addEventListener("click", async () => {
+    const label = input.value.trim();
+    if (!label) return;
+    const tag = await api("/tags", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label, color: color.value }),
+    });
+    if (!allTags.some((t) => t.id === tag.id)) allTags.push(tag);
+    selected.add(tag.id);
+    input.value = "";
+    renderList();
+    await saveConvTags(conv, selected);
+  });
+
+  menu.append(listBox, el("div", { class: "conv-tag-new" }, [color, input, createBtn]));
+  document.body.appendChild(menu);
+  const r = anchor.getBoundingClientRect();
+  menu.style.top = `${r.bottom + 6}px`;
+  menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8))}px`;
+
+  setTimeout(() => {
+    const close = (e) => {
+      if (!menu.contains(e.target) && e.target !== anchor) {
+        menu.remove();
+        document.removeEventListener("mousedown", close);
+      }
+    };
+    document.addEventListener("mousedown", close);
+  }, 0);
+}
+
 document.getElementById("chat-filter-tabs").addEventListener("click", (e) => {
   const btn = e.target.closest("button");
   if (!btn) return;
   document.querySelectorAll("#chat-filter-tabs button").forEach((b) => b.classList.remove("active"));
   btn.classList.add("active");
   state.chatFilter = btn.dataset.filter;
+  if (btn.dataset.filter === "archived") loadArchivedConversations();
   renderConversationsList();
 });
 
@@ -794,6 +910,8 @@ async function loadMessages(conversationId, { forceScroll = false } = {}) {
         bubble.prepend(img);
       } else if (m.mediaType === "video") {
         bubble.prepend(el("video", { src: m.mediaUrl, class: "msg-media", controls: "" }));
+      } else if (m.mediaType === "audio" || m.mediaType === "ptt") {
+        bubble.prepend(el("audio", { src: m.mediaUrl, class: "msg-audio", controls: "" }));
       } else {
         const link = el("a", { href: m.mediaUrl, download: m.mediaName || "arquivo", class: "msg-file" }, [
           el("span", { class: "nav-icon", "data-icon": "file" }, []),
@@ -823,7 +941,9 @@ async function openConversation(id) {
     li.classList.toggle("active", li.dataset.id === id);
   });
 
-  const conv = (state.conversations || []).find((c) => c.id === id);
+  const conv =
+    (state.conversations || []).find((c) => c.id === id) ||
+    (state.archivedConversations || []).find((c) => c.id === id);
   const header = document.getElementById("chat-header");
   document.getElementById("chat-empty").style.display = "none";
   document.getElementById("chat-messages").style.display = "flex";
@@ -832,9 +952,13 @@ async function openConversation(id) {
     header.innerHTML = "";
     header.appendChild(avatarNode(conv.patient.name, conv.patient.avatarUrl, "chat-avatar"));
     header.appendChild(
-      el("div", {}, [
+      el("div", { class: "chat-header-id" }, [
         el("div", { class: "name" }, [conv.patient.name ?? "(sem nome)"]),
         el("div", { class: "phone" }, [conv.patient.phone]),
+        (conv.patient.tags || []).length
+          ? el("div", { class: "conv-tags" }, conv.patient.tags.map((t) =>
+              el("span", { class: "conv-tag", style: `background:${t.color}` }, [t.label])))
+          : "",
       ])
     );
 
@@ -843,9 +967,13 @@ async function openConversation(id) {
         conv.humanTakeover ? "Humano" : "Alice",
       ]),
     ]);
+    const tagBtn = el("button", { type: "button", class: "btn-chat-action", title: "Etiquetas" }, ["🏷 Etiquetas"]);
+    tagBtn.addEventListener("click", (e) => openConvTagMenu(e.currentTarget, conv));
+    const archBtn = el("button", { type: "button", class: "btn-chat-action" }, [conv.archived ? "Desarquivar" : "Arquivar"]);
+    archBtn.addEventListener("click", () => toggleArchiveConversation(conv.id, !conv.archived));
     const detailsBtn = el("button", { type: "button", class: "btn-chat-action" }, ["Detalhes"]);
     detailsBtn.addEventListener("click", () => openContactPanel(conv.patient));
-    actions.appendChild(detailsBtn);
+    actions.append(tagBtn, archBtn, detailsBtn);
     header.appendChild(actions);
   }
 
@@ -1122,7 +1250,7 @@ document.getElementById("chat-form").addEventListener("submit", async (e) => {
       await api(`/conversations/${id}/send-media`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dataUrl: attachment.dataUrl, caption: text, filename: attachment.name }),
+        body: JSON.stringify({ dataUrl: attachment.dataUrl, caption: text, filename: attachment.name, voice: !!attachment.voice }),
       });
       clearChatAttachment();
     } else {
@@ -1133,7 +1261,9 @@ document.getElementById("chat-form").addEventListener("submit", async (e) => {
       });
     }
     input.value = "";
-    const conv = (state.conversations || []).find((c) => c.id === id);
+    const conv =
+      (state.conversations || []).find((c) => c.id === id) ||
+      (state.archivedConversations || []).find((c) => c.id === id);
     if (conv && !conv.humanTakeover) {
       await loadConversations();
       await openConversation(id);
@@ -1144,6 +1274,60 @@ document.getElementById("chat-form").addEventListener("submit", async (e) => {
   } finally {
     sendBtn.disabled = false;
   }
+});
+
+// --- Gravar áudio (voice note) no chat ---
+state.recorder = null;
+
+document.getElementById("btn-chat-mic").addEventListener("click", async () => {
+  const btn = document.getElementById("btn-chat-mic");
+  if (state.recorder && state.recorder.state === "recording") {
+    state.recorder.stop();
+    return;
+  }
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    showError("Seu navegador não permite gravar áudio aqui. Use o clipe pra enviar um arquivo de áudio.");
+    return;
+  }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch {
+    showError("Não consegui acessar o microfone. Verifique a permissão do navegador.");
+    return;
+  }
+  const chunks = [];
+  const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
+  const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  state.recorder = rec;
+  btn.classList.add("recording");
+  btn.title = "Parar e enviar";
+  rec.ondataavailable = (ev) => ev.data.size && chunks.push(ev.data);
+  rec.onstop = () => {
+    stream.getTracks().forEach((t) => t.stop());
+    btn.classList.remove("recording");
+    btn.title = "Gravar áudio";
+    state.recorder = null;
+    const blob = new Blob(chunks, { type: chunks[0]?.type || "audio/webm" });
+    if (!blob.size) return;
+    if (blob.size > MAX_ATTACH_BYTES) {
+      showError("Áudio muito longo (limite 10 MB).");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      state.chatAttachment = { dataUrl: reader.result, name: "audio.webm", kind: "audio", voice: true };
+      const box = document.getElementById("chat-attach-preview");
+      box.hidden = false;
+      box.innerHTML = "";
+      const player = el("audio", { src: reader.result, controls: "", class: "chat-attach-audio" });
+      const remove = el("button", { type: "button", class: "chat-attach-x", title: "Descartar" }, ["×"]);
+      remove.addEventListener("click", clearChatAttachment);
+      box.append(player, el("span", { class: "chat-attach-hint" }, ["Toque em enviar"]), remove);
+    };
+    reader.readAsDataURL(blob);
+  };
+  rec.start();
 });
 
 // --- Agenda ---
@@ -2787,6 +2971,7 @@ async function refreshAll() {
     loadContacts(),
     loadCrmBoard(),
     loadConversations(),
+    state.chatFilter === "archived" ? loadArchivedConversations() : Promise.resolve(),
     // Agenda so recarrega em background quando esta aberta - evita resetar
     // a navegacao/filtros que o usuario acabou de mexer.
     activeTab === "agenda" ? loadAgenda() : Promise.resolve(),

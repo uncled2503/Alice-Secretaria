@@ -843,7 +843,14 @@ export async function recordIncomingMessage(params: {
   });
   await prisma.conversation.update({
     where: { id: conversation.id },
-    data: { lastMessageAt: new Date(), lastFollowUpOrder: 0 },
+    data: {
+      lastMessageAt: new Date(),
+      lastFollowUpOrder: 0,
+      // Mensagem nova em conversa que um humano assumiu = "nao lida" ate alguem
+      // abrir. Conversa arquivada volta pra lista (estilo WhatsApp).
+      ...(conversation.humanTakeover ? { handoffPending: true } : {}),
+      ...(conversation.archived ? { archived: false } : {}),
+    },
   });
 
   const clinic = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { replyDelaySeconds: true } });

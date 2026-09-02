@@ -252,6 +252,7 @@
                 <button data-filter="all" class="active">Todos</button>
                 <button data-filter="alice">Alice</button>
                 <button data-filter="human">Humano</button>
+                <button data-filter="archived">Arquivadas</button>
               </div>
               <ul id="conversations-list"></ul>
             </div>
@@ -267,9 +268,12 @@
                 <button id="btn-toggle-human"></button>
                 <div id="chat-attach-preview" hidden></div>
                 <form id="chat-form">
-                  <input id="chat-file-input" type="file" accept="image/*,video/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt,.csv" hidden />
+                  <input id="chat-file-input" type="file" accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt,.csv" hidden />
                   <button type="button" id="btn-chat-attach" title="Anexar foto ou arquivo">
                     <span class="nav-icon" data-icon="paperclip"></span>
+                  </button>
+                  <button type="button" id="btn-chat-mic" title="Gravar áudio">
+                    <span class="nav-icon" data-icon="mic"></span>
                   </button>
                   <input id="chat-input" type="text" placeholder="Escreva uma mensagem..." autocomplete="off" />
                   <button type="submit" id="chat-send-btn" title="Enviar">
