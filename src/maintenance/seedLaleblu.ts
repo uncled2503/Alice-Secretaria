@@ -60,9 +60,10 @@ const FAQS: { question: string; alternates: string; answer: string }[] = [
   },
   {
     question: "Onde ficam as lojas? Qual o horário?",
-    alternates: "loja\nlojas\nendereço\nhorário\nshopping\nmoema\nbertioga\nriviera\njardins\ncidade jardim\nonde fica\nvocês têm loja física",
+    alternates:
+      "loja\nlojas\nendereço\nhorário\nshopping\nmoema\nbertioga\nriviera\njardins\ncidade jardim\nonde fica\nvocês têm loja física\nloja perto\ntem loja em sp\nquantas lojas",
     answer:
-      "Você pode nos visitar em 4 lojas:\n📍 Moema — Av. Bem-te-vi, 177 (estacionamento grátis) · seg a sáb, 10h às 19h · fechada dom e feriados\n📍 Shops Jardins — Rua Haddock Lobo, 1626 · seg a sáb, 10h às 22h · dom e feriados, 14h às 20h\n📍 Shopping Cidade Jardim — Av. Magalhães de Castro, 12.000 · seg a sáb, 10h às 22h · dom e feriados, 14h às 20h\n📍 Shopping Riviera de São Lourenço — Av. da Riviera, 1256, Bertioga · todos os dias, 10h às 22h\nWhatsApp das lojas: Moema (11) 95965-5533 · Jardins (11) 91497-8851 · Cidade Jardim (11) 94535-7349. Ver no mapa: https://laleblu.com.br/pages/nossas-lojas",
+      "Temos 4 lojas físicas (e a loja online, que entrega pro Brasil todo) 💙\n📍 Moema — Av. Bem-te-vi, 177 (CEP 04524-030), loja de rua · seg a sáb 10h–19h, fechada dom e feriados · WhatsApp (11) 95965-5533\n📍 Shopping Cidade Jardim — Av. Magalhães de Castro, 12.000, 3º piso · seg a sáb 10h–22h, dom e feriados 14h–20h · WhatsApp (11) 94535-7349\n📍 Shops Jardins — Rua Haddock Lobo, 1626, 1º piso · seg a sáb 10h–22h, dom e feriados 14h–20h · WhatsApp (11) 91497-8851\n📍 Shopping Riviera de São Lourenço — Av. da Riviera, 1256, Bertioga (CEP 11250-000), quiosque · todos os dias 10h–22h · (fala pelo WhatsApp de Moema)\nVer todas no mapa: https://laleblu.com.br/pages/nossas-lojas",
   },
   {
     question: "Quero criar meu chá de bebê / encontrar uma lista",
@@ -146,7 +147,27 @@ const FAQS: { question: string; alternates: string; answer: string }[] = [
     question: "Qual o contato / WhatsApp de vocês?",
     alternates: "contato\ntelefone\nwhatsapp\nnúmero\nzap\nfalar com vocês\nfalar com atendente\nfalar com uma pessoa",
     answer:
-      "Você já está no nosso WhatsApp oficial, é aqui mesmo que a gente te atende 💙 Se quiser, eu chamo uma pessoa da equipe pra continuar com você.\nPra falar direto com uma loja: Moema (11) 95965-5533 · Jardins (11) 91497-8851 · Cidade Jardim (11) 94535-7349. Ver as lojas: https://laleblu.com.br/pages/nossas-lojas",
+      "Você já está no nosso WhatsApp oficial, é aqui mesmo que a gente te atende 💙 Se quiser, eu chamo uma pessoa da equipe pra continuar com você.\nPra falar direto com uma loja: Moema (11) 95965-5533 · Cidade Jardim (11) 94535-7349 · Shops Jardins (11) 91497-8851. A loja da Riviera (Bertioga) atende pelo WhatsApp de Moema. Ver as lojas: https://laleblu.com.br/pages/nossas-lojas",
+  },
+  {
+    question: "Qual o WhatsApp de uma loja específica?",
+    alternates:
+      "whatsapp da loja\ncontato da loja\nfalar com a loja\nnúmero da moema\nzap da moema\nnúmero de jardins\nnúmero de cidade jardim\ntelefone da loja\nligar na loja",
+    answer:
+      "Os contatos por loja:\n• Moema: (11) 95965-5533 — https://wa.me/5511959655533\n• Shopping Cidade Jardim: (11) 94535-7349 — https://wa.me/5511945357349\n• Shops Jardins: (11) 91497-8851 — https://wa.me/5511914978851\n• Riviera de São Lourenço (Bertioga): ainda sem WhatsApp próprio — fale com Moema (11) 95965-5533\nMe diz qual loja que eu te passo o link certo.",
+  },
+  {
+    question: "As lojas abrem domingo e feriado?",
+    alternates: "domingo\nferiado\nfim de semana\nsábado\nabre hoje\naberto agora\nhorário de domingo\nfunciona no feriado",
+    answer:
+      "Domingos e feriados abrem: Shopping Cidade Jardim e Shops Jardins (14h às 20h) e o quiosque da Riviera de São Lourenço, em Bertioga (10h às 22h). A loja de Moema NÃO abre aos domingos e feriados. De segunda a sábado, todas abrem.",
+  },
+  {
+    question: "Vocês têm essa peça na loja física? Dá pra reservar?",
+    alternates:
+      "tem na loja\ntem em estoque na loja\nreservar\nseparar\ndisponível na loja\nretirar na loja\nir buscar na loja\ntem no shopping",
+    answer:
+      "Pra confirmar se uma peça está na loja e reservar, o melhor é falar direto com a unidade: Moema (11) 95965-5533 · Cidade Jardim (11) 94535-7349 · Shops Jardins (11) 91497-8851 (a Riviera, em Bertioga, atende pelo WhatsApp de Moema). Me diz qual loja que eu te passo o link.",
   },
   {
     question: "O que é o Clube VIP?",
@@ -439,7 +460,9 @@ const RULES: { category: string; instruction: string }[] = [
   { category: "procedimentos", instruction: "Quando a cliente pedir algo específico (gênero, tamanho, cor, tecido ou faixa de preço), monte o link da coleção já filtrado seguindo o roteiro 'Montar link do site com filtro' e mande pronto. Se não tiver certeza da URL exata da categoria, mande o link da categoria sem filtro (ou toda-a-loja com o filtro). Nunca invente um endereço de coleção: use só os que estão nas FAQ e nos roteiros." },
   { category: "procedimentos", instruction: "Mantas, cueiros, naninhas e acessórios são tamanho único e não aparecem em links filtrados por tamanho: nesses casos mande o link da categoria, sem o filtro de tamanho." },
   // chamar a equipe
-  { category: "chamar_equipe", instruction: "A Alice atende PELO próprio WhatsApp oficial da Laleblu. É proibido, em qualquer resposta: mandar link de WhatsApp (wa.me), escrever um número de telefone pra 'falar com a equipe', ou mandar a pessoa procurar o atendimento em outro canal. Esta conversa já é o atendimento. Quando precisa de uma pessoa, é sempre a ferramenta transfer_to_human — alguém da equipe assume esta mesma conversa. (Os números das lojas físicas só entram se a pessoa pedir explicitamente para ligar numa loja específica.)" },
+  { category: "chamar_equipe", instruction: "A Alice atende PELO próprio WhatsApp oficial da Laleblu. É proibido, em qualquer resposta: mandar link de WhatsApp (wa.me) ou número pra 'falar com a equipe' de forma genérica, ou mandar a pessoa procurar o atendimento em outro canal. Esta conversa já é o atendimento. Quando precisa de uma pessoa, é sempre transfer_to_human. EXCEÇÃO: os números/links das LOJAS FÍSICAS podem ser enviados quando a pessoa pede o contato de uma loja, quer confirmar/reservar uma peça numa loja, ou é do litoral/Bertioga — são números das lojas, diferentes deste atendimento central." },
+  { category: "procedimentos", instruction: "Lojas físicas (endereço · horário · WhatsApp): Moema — Av. Bem-te-vi, 177, loja de rua · seg-sáb 10h-19h, fechada dom e feriados · (11) 95965-5533 (wa.me/5511959655533). Shopping Cidade Jardim — Av. Magalhães de Castro, 12.000, 3º piso · seg-sáb 10h-22h, dom e feriados 14h-20h · (11) 94535-7349 (wa.me/5511945357349). Shops Jardins — Rua Haddock Lobo, 1626, 1º piso · mesmos horários de Cidade Jardim · (11) 91497-8851 (wa.me/5511914978851). Riviera de São Lourenço — Av. da Riviera, 1256, Bertioga, quiosque · todos os dias 10h-22h · ainda sem WhatsApp próprio, usar o de Moema. Página: https://laleblu.com.br/pages/nossas-lojas" },
+  { category: "procedimentos", instruction: "Domingo e feriado: abrem só Shopping Cidade Jardim e Shops Jardins (14h-20h) e a Riviera de São Lourenço, em Bertioga (10h-22h). Moema não abre. Cliente do litoral / Bertioga / Riviera: indicar a unidade Riviera de São Lourenço." },
   { category: "chamar_equipe", instruction: "Pedido, troca, devolução, rastreio e problema de pagamento: peça o número do pedido (começa com #) ou o e-mail da compra e chame transfer_to_human com esse resumo. Não tente consultar nem resolver o pedido sozinha." },
   { category: "chamar_equipe", instruction: "O atendimento humano é de segunda a sexta, das 9h às 17h. Ao usar transfer_to_human nesse horário, diga que uma pessoa da equipe já continua por aqui. Fora do horário, diga que a mensagem ficou registrada e uma pessoa responde no próximo horário de atendimento." },
   { category: "chamar_equipe", instruction: "Se a pessoa marcar a loja num story (foto do bebê com a peça), agradeça e pergunte se pode repostar. Se ela autorizar, use transfer_to_human com o motivo 'autorização de repost'." },
