@@ -514,8 +514,9 @@ export async function seedLaleblu(): Promise<SeedLalebluResult> {
       workStartHour: 9,
       workEndHour: 17,
       replyDelaySeconds: 10,
-      // notifyPhone NAO entra aqui de proposito: e configurado no painel e nao
-      // pode ser o proprio numero conectado (WhatsApp nao manda mensagem pra si).
+      // notifyPhone NAO entra aqui de proposito: fica como a Laleblu configurou
+      // no painel (pode ser ate o proprio numero conectado - cai na conversa
+      // "Mensagem pra mim" e o eco e ignorado no webhook).
       notifyEvents: "human_handoff",
       handoffPhrase: HANDOFF_PHRASE,
       npsEnabled: false,
@@ -541,14 +542,6 @@ export async function seedLaleblu(): Promise<SeedLalebluResult> {
     },
   });
   console.log(`Clinica: ${clinic.name} (${clinic.id}) — businessType=${clinic.businessType}`);
-
-  // O numero de avisos nao pode ser o proprio numero conectado (WhatsApp nao
-  // envia pra si mesmo). Se ficou assim de um seed antigo, limpa - sem mexer
-  // num numero de verdade que a Laleblu tenha configurado no painel.
-  if (clinic.notifyPhone && clinic.notifyPhone.replace(/\D/g, "") === WA) {
-    await prisma.clinic.update({ where: { id: clinic.id }, data: { notifyPhone: "" } });
-    console.log("notifyPhone: limpo (era o proprio numero conectado) — configure um numero da equipe no painel");
-  }
 
   // 2. Conta de acesso ao painel
   const passwordHash = hashPassword(PASSWORD);

@@ -676,19 +676,8 @@ export async function applyBriefing(clinicId: string, plan: BriefingPlan, actorN
   if (c.allowEmojis !== undefined) clinicData.allowEmojis = c.allowEmojis;
   setIf("schedulingLink", c.schedulingLink);
 
-  // O numero de avisos nao pode ser o proprio numero conectado (WhatsApp nao
-  // manda pra si mesmo).
-  if (typeof clinicData.notifyPhone === "string") {
-    const connected = (
-      (typeof clinicData.whatsappPhone === "string" ? clinicData.whatsappPhone : "") ||
-      (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { whatsappPhone: true } }))?.whatsappPhone ||
-      ""
-    ).replace(/\D/g, "");
-    if (connected && clinicData.notifyPhone.replace(/\D/g, "") === connected) {
-      delete clinicData.notifyPhone;
-      plan.warnings.push("O número de avisos era igual ao número conectado e foi ignorado — configure um celular da equipe em Dados da clínica.");
-    }
-  }
+  // O numero de avisos pode ser o proprio numero conectado (cai na conversa
+  // "Mensagem pra mim"; o eco e ignorado no webhook, sem loop).
 
   const clinicFields = Object.keys(clinicData);
   if (clinicFields.length) await prisma.clinic.update({ where: { id: clinicId }, data: clinicData });

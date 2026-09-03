@@ -281,15 +281,8 @@ apiRouter.put(
       return;
     }
 
-    // O numero de avisos NAO pode ser o proprio numero conectado: o WhatsApp
-    // nao manda mensagem pra si mesmo (foi o erro cometido no seed da Laleblu).
-    if (notifyPhone) {
-      const connected = (whatsappPhone ?? (await prisma.clinic.findUnique({ where: { id: req.params.id }, select: { whatsappPhone: true } }))?.whatsappPhone ?? "").replace(/\D/g, "");
-      if (connected && notifyPhone.replace(/\D/g, "") === connected) {
-        res.status(400).json({ error: "O número de avisos precisa ser diferente do número conectado ao WhatsApp — o WhatsApp não envia mensagem pra ele mesmo. Use o celular de alguém da equipe." });
-        return;
-      }
-    }
+    // O numero de avisos pode ser o proprio numero conectado (cai na conversa
+    // "Mensagem pra mim"; o eco e ignorado no webhook, sem loop).
 
     try {
       const clinic = await prisma.clinic.update({

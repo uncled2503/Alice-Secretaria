@@ -261,15 +261,19 @@ export async function seedHarmonizze(): Promise<SeedHarmonizzeResult> {
     (await prisma.clinic.findFirst({ where: { whatsappPhone: { in: WA_FALLBACKS } } }));
   const created = !existingClinic;
 
-  // Campos que o seed controla a partir do briefing. notifyPhone, active e
-  // plan ficam de fora do update: sao definidos no painel adm e re-rodar o
-  // seed nao deve reverte-los (so os define ao criar a conta).
+  // Campos que o seed controla a partir do briefing. active e plan ficam de
+  // fora do update: sao definidos no painel adm e re-rodar o seed nao deve
+  // reverte-los (so os define ao criar a conta).
   const config = {
     name: "Harmonizze Clinic Medicina e Odontologia",
     timezone: "America/Sao_Paulo",
     workStartHour: 9,
     workEndHour: 18,
     workDays: "1,2,3,4,5",
+    // Briefing: avisos vao pro proprio numero de atendimento (conversa
+    // "Mensagem pra mim"). A equipe troca por um celular dedicado no painel
+    // quando tiver um.
+    notifyPhone: WA,
     notifyEvents: "new_appointment,reschedule,cancel,confirmed,human_handoff",
     assistantPersona: "clinic_secretary",
     assistantPersonaName: null,
@@ -288,14 +292,7 @@ export async function seedHarmonizze(): Promise<SeedHarmonizzeResult> {
 
   const clinic = existingClinic
     ? await prisma.clinic.update({ where: { id: existingClinic.id }, data: { ...config, whatsappPhone: WA } })
-    : await prisma.clinic.create({ data: { ...config, whatsappPhone: WA, notifyPhone: "", active: true, plan: "prime" } });
-
-  // O numero de avisos nao pode ser o proprio numero conectado (o WhatsApp nao
-  // manda mensagem pra si). Se ficou assim de um cadastro manual, limpa - sem
-  // mexer num numero de equipe de verdade configurado no painel.
-  if (clinic.notifyPhone && clinic.notifyPhone.replace(/\D/g, "") === WA) {
-    await prisma.clinic.update({ where: { id: clinic.id }, data: { notifyPhone: "" } });
-  }
+    : await prisma.clinic.create({ data: { ...config, whatsappPhone: WA, active: true, plan: "prime" } });
 
   const existingStaff = await prisma.staffUser.findUnique({ where: { username: LOGIN } });
   if (INITIAL_PASSWORD.length < 10) {
@@ -524,7 +521,7 @@ export async function seedHarmonizze(): Promise<SeedHarmonizzeResult> {
     },
     pending: [
       "endereços completos e informação definitiva de estacionamento das duas unidades",
-      "quem assume quando a Alice transfere (pessoa/perfil) e número dessa pessoa para os avisos (não pode ser o mesmo WhatsApp conectado)",
+      "quem assume quando a Alice transfere (pessoa/perfil); os avisos estão indo pro próprio número de atendimento, trocar por um celular dedicado da equipe se quiser separar",
       "valor do sinal e dados/link de pagamento",
       "duração real da avaliação e dos procedimentos que não foram detalhados",
       "periodicidade dos retornos dos planos anuais",
