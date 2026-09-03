@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { fileURLToPath } from "url";
 import { prisma } from "../db/client.js";
-import { hashPassword, verifyPassword } from "../api/passwords.js";
+import { hashPassword } from "../api/passwords.js";
 import { seedDefaultRules } from "../ai/rules.js";
 import { getFunnelStages } from "../crm/stages.js";
 
@@ -9,9 +9,15 @@ import { getFunnelStages } from "../crm/stages.js";
 // 03/09/2026. O seed e idempotente: atualiza apenas os registros que ele
 // gerencia e pode ser executado novamente sem criar duplicatas.
 
-const WA = "5511925585764";
+const WA = "5511925585764"; // formato canonico 55DDDNUMERO
+// Formas sem DDI que um cadastro manual no painel pode ter gravado antes do
+// pareamento (o painel so remove os nao-digitos, nao acrescenta o 55). Sem
+// isso, o seed nao acharia a clinica e criaria uma duplicada.
+const WA_FALLBACKS = ["11925585764"];
 const LOGIN = "harmonizze@aliceconversa.com";
-const INITIAL_PASSWORD = process.env.HARMONIZZE_INITIAL_PASSWORD?.trim() ?? "";
+// Senha inicial da conta de acesso. So e aplicada quando a conta e criada;
+// re-rodar o seed nunca sobrescreve uma senha que o cliente ja trocou.
+const INITIAL_PASSWORD = process.env.HARMONIZZE_INITIAL_PASSWORD?.trim() || "harmonizze1234";
 const SEED_MARKER = "seed:harmonizze";
 
 const PROCEDURES = [
@@ -244,81 +250,62 @@ export interface SeedHarmonizzeResult {
   clinicId: string;
   login: string;
   created: boolean;
-  passwordVerified: boolean | null;
+  password: string | null; // senha inicial - so quando a conta de acesso foi criada agora
   counts: Record<string, number>;
   pending: string[];
 }
 
 export async function seedHarmonizze(): Promise<SeedHarmonizzeResult> {
-  const existingClinic = await prisma.clinic.findUnique({ where: { whatsappPhone: WA } });
+  const existingClinic =
+    (await prisma.clinic.findUnique({ where: { whatsappPhone: WA } })) ??
+    (await prisma.clinic.findFirst({ where: { whatsappPhone: { in: WA_FALLBACKS } } }));
   const created = !existingClinic;
-  const clinic = await prisma.clinic.upsert({
-    where: { whatsappPhone: WA },
-    update: {
-      name: "Harmonizze Clinic Medicina e Odontologia",
-      timezone: "America/Sao_Paulo",
-      workStartHour: 9,
-      workEndHour: 18,
-      workDays: "1,2,3,4,5",
-      active: true,
-      notifyPhone: "",
-      notifyEvents: "new_appointment,reschedule,cancel,confirmed,human_handoff",
-      assistantPersona: "clinic_secretary",
-      assistantPersonaName: null,
-      assistantName: "Alice",
-      activityArea: "harmonização facial, cirurgias faciais, medicina e odontologia",
-      handoffPhrase: "Estou transferindo para o responsável por essa parte.",
-      requireDepositProof: true,
-      businessType: "clinica",
-      servicePosture: "consultivo",
-      clinicKind: "ambas",
-      evaluationFirst: true,
-      allowEmojis: true,
-      schedulingLink: null,
-      replyDelaySeconds: 10,
-    },
-    create: {
-      name: "Harmonizze Clinic Medicina e Odontologia",
-      whatsappPhone: WA,
-      timezone: "America/Sao_Paulo",
-      workStartHour: 9,
-      workEndHour: 18,
-      workDays: "1,2,3,4,5",
-      active: true,
-      notifyPhone: "",
-      notifyEvents: "new_appointment,reschedule,cancel,confirmed,human_handoff",
-      assistantPersona: "clinic_secretary",
-      assistantName: "Alice",
-      activityArea: "harmonização facial, cirurgias faciais, medicina e odontologia",
-      handoffPhrase: "Estou transferindo para o responsável por essa parte.",
-      requireDepositProof: true,
-      businessType: "clinica",
-      servicePosture: "consultivo",
-      clinicKind: "ambas",
-      evaluationFirst: true,
-      allowEmojis: true,
-      schedulingLink: null,
-      replyDelaySeconds: 10,
-      plan: "prime",
-    },
-  });
+
+  // Campos que o seed controla a partir do briefing. notifyPhone, active e
+  // plan ficam de fora do update: sao definidos no painel adm e re-rodar o
+  // seed nao deve reverte-los (so os define ao criar a conta).
+  const config = {
+    name: "Harmonizze Clinic Medicina e Odontologia",
+    timezone: "America/Sao_Paulo",
+    workStartHour: 9,
+    workEndHour: 18,
+    workDays: "1,2,3,4,5",
+    notifyEvents: "new_appointment,reschedule,cancel,confirmed,human_handoff",
+    assistantPersona: "clinic_secretary",
+    assistantPersonaName: null,
+    assistantName: "Alice",
+    activityArea: "harmonização facial, cirurgias faciais, medicina e odontologia",
+    handoffPhrase: "Estou transferindo para o responsável por essa parte.",
+    requireDepositProof: true,
+    businessType: "clinica",
+    servicePosture: "consultivo",
+    clinicKind: "ambas",
+    evaluationFirst: true,
+    allowEmojis: true,
+    schedulingLink: null,
+    replyDelaySeconds: 10,
+  };
+
+  const clinic = existingClinic
+    ? await prisma.clinic.update({ where: { id: existingClinic.id }, data: { ...config, whatsappPhone: WA } })
+    : await prisma.clinic.create({ data: { ...config, whatsappPhone: WA, notifyPhone: "", active: true, plan: "prime" } });
+
+  // O numero de avisos nao pode ser o proprio numero conectado (o WhatsApp nao
+  // manda mensagem pra si). Se ficou assim de um cadastro manual, limpa - sem
+  // mexer num numero de equipe de verdade configurado no painel.
+  if (clinic.notifyPhone && clinic.notifyPhone.replace(/\D/g, "") === WA) {
+    await prisma.clinic.update({ where: { id: clinic.id }, data: { notifyPhone: "" } });
+  }
 
   const existingStaff = await prisma.staffUser.findUnique({ where: { username: LOGIN } });
-  if (!INITIAL_PASSWORD && !existingStaff) {
-    throw new Error("Defina HARMONIZZE_INITIAL_PASSWORD somente durante a primeira execucao do seed.");
-  }
-  if (INITIAL_PASSWORD && INITIAL_PASSWORD.length < 10) {
-    throw new Error("HARMONIZZE_INITIAL_PASSWORD precisa ter pelo menos 10 caracteres.");
+  if (INITIAL_PASSWORD.length < 10) {
+    throw new Error("A senha inicial da Harmonizze precisa ter pelo menos 10 caracteres.");
   }
   if (existingStaff) {
+    // Nao mexe na senha: pode ter sido trocada pelo cliente.
     await prisma.staffUser.update({
       where: { username: LOGIN },
-      data: {
-        name: "Harmonizze Clinic",
-        role: "client",
-        clinicId: clinic.id,
-        ...(INITIAL_PASSWORD ? { passwordHash: hashPassword(INITIAL_PASSWORD) } : {}),
-      },
+      data: { name: "Harmonizze Clinic", role: "client", clinicId: clinic.id },
     });
   } else {
     await prisma.staffUser.create({
@@ -430,8 +417,13 @@ export async function seedHarmonizze(): Promise<SeedHarmonizzeResult> {
   }
 
   for (const followup of FOLLOWUPS) {
-    const current = await prisma.followUpRule.findFirst({ where: { clinicId: clinic.id, name: followup.name } });
+    // (clinicId, order) e unico: se ja existe uma regra ocupando o slot, o seed
+    // assume esse slot em vez de estourar a constraint ao criar.
+    const current =
+      (await prisma.followUpRule.findFirst({ where: { clinicId: clinic.id, name: followup.name } })) ??
+      (await prisma.followUpRule.findFirst({ where: { clinicId: clinic.id, order: followup.order } }));
     const data = {
+      name: followup.name,
       order: followup.order,
       afterDays: followup.afterDays,
       afterMinutes: 0,
@@ -444,10 +436,17 @@ export async function seedHarmonizze(): Promise<SeedHarmonizzeResult> {
       active: true,
     };
     if (current) await prisma.followUpRule.update({ where: { id: current.id }, data });
-    else await prisma.followUpRule.create({ data: { clinicId: clinic.id, name: followup.name, ...data } });
+    else await prisma.followUpRule.create({ data: { clinicId: clinic.id, ...data } });
   }
 
-  const allProcedureIds = [...procedureIds.values()].join(",");
+  // Pos-procedimento nunca vale pra "Avaliação" (e uma consulta, nao um
+  // tratamento): so pros procedimentos de verdade, e a trilha cirurgica so
+  // pras cirurgias.
+  const EVALUATION_NAME = "Avaliação com a Dra. Hellen Matias";
+  const treatmentIds = [...procedureIds.entries()]
+    .filter(([name]) => name !== EVALUATION_NAME)
+    .map(([, id]) => id)
+    .join(",");
   const surgicalIds = SURGICAL_PROCEDURES.map((name) => procedureIds.get(name)).filter((id): id is string => !!id).join(",");
   for (const post of POST_PROCEDURE_MESSAGES) {
     const current = await prisma.postProcedureRule.findFirst({ where: { clinicId: clinic.id, name: post.name } });
@@ -456,7 +455,7 @@ export async function seedHarmonizze(): Promise<SeedHarmonizzeResult> {
       intervalValue: post.intervalValue,
       intervalUnit: post.intervalUnit,
       onlyIfCompleted: true,
-      procedureIds: post.name.startsWith("Pós-cirúrgico") ? surgicalIds : allProcedureIds,
+      procedureIds: post.name.startsWith("Pós-cirúrgico") ? surgicalIds : treatmentIds,
       active: true,
     };
     if (current) await prisma.postProcedureRule.update({ where: { id: current.id }, data });
@@ -489,8 +488,6 @@ export async function seedHarmonizze(): Promise<SeedHarmonizzeResult> {
 
   await getFunnelStages(clinic.id);
 
-  const staff = await prisma.staffUser.findUniqueOrThrow({ where: { username: LOGIN } });
-  const passwordVerified = INITIAL_PASSWORD ? verifyPassword(INITIAL_PASSWORD, staff.passwordHash) : null;
   const [procedureCount, professionalCount, locationCount, faqCount, templateCount, ruleCount, playbookCount, reminderCount, followupCount, postProcedureCount, renewalCount, birthdayCount] = await Promise.all([
     prisma.procedure.count({ where: { clinicId: clinic.id } }),
     prisma.professional.count({ where: { clinicId: clinic.id } }),
@@ -510,7 +507,7 @@ export async function seedHarmonizze(): Promise<SeedHarmonizzeResult> {
     clinicId: clinic.id,
     login: LOGIN,
     created,
-    passwordVerified,
+    password: created ? INITIAL_PASSWORD : null,
     counts: {
       procedures: procedureCount,
       professionals: professionalCount,
@@ -527,7 +524,7 @@ export async function seedHarmonizze(): Promise<SeedHarmonizzeResult> {
     },
     pending: [
       "endereços completos e informação definitiva de estacionamento das duas unidades",
-      "número de uma pessoa da equipe para receber os avisos (não pode ser o mesmo WhatsApp conectado)",
+      "quem assume quando a Alice transfere (pessoa/perfil) e número dessa pessoa para os avisos (não pode ser o mesmo WhatsApp conectado)",
       "valor do sinal e dados/link de pagamento",
       "duração real da avaliação e dos procedimentos que não foram detalhados",
       "periodicidade dos retornos dos planos anuais",

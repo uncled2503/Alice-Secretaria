@@ -36,6 +36,7 @@ import { usageSnapshot } from "../crm/usage.js";
 import { API_SCOPES, API_SCOPE_IDS, generateApiKey } from "./external/keys.js";
 import { answerSiteQuestion, type SiteMessage } from "../ai/siteAssistant.js";
 import { seedLaleblu } from "../maintenance/seedLaleblu.js";
+import { seedHarmonizze } from "../maintenance/seedHarmonizze.js";
 import { notifyStaff } from "../crm/notify.js";
 import { hashPassword, verifyPassword } from "./passwords.js";
 import { createSessionCookie, clearSessionCookie } from "./staffSession.js";
@@ -675,6 +676,28 @@ apiRouter.post(
       area: "clinica",
       title: result.created ? "Conta Laleblu criada" : "Treino da Laleblu reaplicado",
       description: `${result.faqs} FAQ, ${result.templates} mensagens prontas, ${result.playbooks} roteiros, ${result.rules} regras.`,
+      actorName: req.staff?.name ?? null,
+    });
+    res.json(result);
+  })
+);
+
+// Cria/atualiza a conta da Harmonizze Clinic (harmonizacao facial e cirurgias
+// faciais, Dra. Hellen Matias) e aplica a configuracao versionada do briefing:
+// dados da clinica, unidades, procedimentos, profissional, FAQ, mensagens,
+// roteiros, regras e automacoes. Idempotente. So admin.
+apiRouter.post(
+  "/clinics/seed-harmonizze",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const result = await seedHarmonizze();
+    const c = result.counts;
+    await logActivity({
+      clinicId: result.clinicId,
+      type: "briefing_applied",
+      area: "clinica",
+      title: result.created ? "Conta Harmonizze criada" : "Configuração da Harmonizze reaplicada",
+      description: `${c.procedures} procedimentos, ${c.faqs} FAQ, ${c.activeRules} regras, ${c.playbooks} roteiros, ${c.reminders} lembretes.`,
       actorName: req.staff?.name ?? null,
     });
     res.json(result);

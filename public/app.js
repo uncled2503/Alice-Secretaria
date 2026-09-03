@@ -4497,6 +4497,27 @@ document.getElementById("btn-seed-laleblu").addEventListener("click", async (e) 
   }
 });
 
+document.getElementById("btn-seed-harmonizze").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const out = document.getElementById("seed-harmonizze-result");
+  if (!await showConfirm("Aplicar a configuração da Harmonizze Clinic? Recria FAQ, mensagens, roteiros, regras e automações dela pelo que está no código; não mexe em contatos, conversas nem no número de avisos.")) return;
+  btn.disabled = true;
+  out.hidden = true;
+  try {
+    const r = await api("/clinics/seed-harmonizze", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const c = r.counts || {};
+    const senha = r.password ? ` · senha: ${r.password}` : "";
+    let txt = `${r.created ? "Conta criada" : "Configuração reaplicada"}. Login: ${r.login}${senha}. ${c.procedures || 0} procedimentos, ${c.faqs || 0} FAQ, ${c.activeRules || 0} regras, ${c.playbooks || 0} roteiros, ${c.reminders || 0} lembretes.`;
+    if (Array.isArray(r.pending) && r.pending.length) txt += `\nPendências pra completar depois: ${r.pending.join("; ")}.`;
+    out.textContent = txt;
+    out.hidden = false;
+    await loadClinicsList();
+    await loadClinics();
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 document.getElementById("clinic-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const name = document.getElementById("cl-name").value.trim();
