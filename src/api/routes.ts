@@ -32,6 +32,7 @@ import { retryMetaEvent } from "../meta/worker.js";
 import { createRuleDraft, RULE_CATEGORIES, seedDefaultRules, reseedRulesForProfile } from "../ai/rules.js";
 import { BRIEFING_TEMPLATE, parseBriefing, applyBriefing, BriefingPlanSchema } from "../ai/briefing.js";
 import { runLearningJob, approveInsight, rejectInsight } from "../ai/learning.js";
+import { ensureManualTakeover } from "../ai/alice.js";
 import { usageSnapshot } from "../crm/usage.js";
 import { isFreePlan } from "../crm/plan.js";
 import { upsellStats } from "../crm/upsell.js";
@@ -1491,31 +1492,9 @@ apiRouter.post(
   })
 );
 
-// Na PRIMEIRA acao manual da conversa, registra a transferencia pro atendente
-// (evento + aviso + log). Nao repete a cada mensagem.
-async function ensureManualTakeover(
-  conversation: { id: string; humanTakeover: boolean; patient: { clinicId: string; name: string | null; phone: string } },
-  authorName: string | null,
-): Promise<void> {
-  if (conversation.humanTakeover) return;
-  const patientLabel = conversation.patient.name ?? conversation.patient.phone;
-  await prisma.message.create({
-    data: { conversationId: conversation.id, role: "system", content: "Atendimento transferido para o atendente", authorName },
-  });
-  await notifyStaff(
-    conversation.patient.clinicId,
-    "human_handoff",
-    `Atendimento assumido manualmente: ${patientLabel}${authorName ? ` (por ${authorName})` : ""}.`,
-  );
-  await logActivity({
-    clinicId: conversation.patient.clinicId,
-    type: "human_takeover",
-    area: "atendimento",
-    title: "Atendimento assumido por uma pessoa",
-    description: `A Alice parou de responder a conversa com ${patientLabel} para a equipe continuar o atendimento.`,
-    actorName: authorName,
-  });
-}
+// ensureManualTakeover mora em ai/alice.ts (compartilhada com
+// recordOutgoingFromDevice, que registra quando alguem responde pelo
+// celular/WhatsApp Web direto, sem passar pelo painel).
 
 // Atendente assume a conversa manualmente e manda uma mensagem; Alice para de
 // responder ali ate alguem devolver o controle (endpoint /resume).

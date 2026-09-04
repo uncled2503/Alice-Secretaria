@@ -2,7 +2,7 @@ import crypto, { timingSafeEqual } from "crypto";
 import OpenAI from "openai";
 import { toFile } from "openai";
 import { prisma } from "../db/client.js";
-import { recordIncomingMessage, generateReply } from "../ai/alice.js";
+import { recordIncomingMessage, generateReply, recordOutgoingFromDevice } from "../ai/alice.js";
 import { isFreePlan } from "../crm/plan.js";
 
 type JsonRecord = Record<string, unknown>;
@@ -39,6 +39,11 @@ export interface IncomingUazapiMessage {
   };
   pushName?: string;
   referral?: IncomingReferralData; // Click-to-WhatsApp (so no 1o contato)
+  // true = a mensagem SAIU deste WhatsApp, mas nao foi a Alice nem o painel -
+  // a pessoa respondeu direto pelo celular ou pelo WhatsApp Web (ver
+  // recordOutgoingFromDevice). O eco do que a propria API envia (wasSentByApi)
+  // continua descartado antes de chegar aqui.
+  fromMe?: boolean;
 }
 
 export interface IncomingReferralData {
@@ -263,7 +268,11 @@ async function configureWebhook(clinicId: string, credentials: UazapiCredentials
       enabled: true,
       url,
       events: ["messages", "connection", "presence"],
-      excludeMessages: ["wasSentByApi", "fromMeYes", "isGroupYes"],
+      // "fromMeYes" NAO entra aqui de proposito: precisamos receber o que sai
+      // deste WhatsApp pelo celular/WhatsApp Web direto, pra sincronizar no
+      // painel (ver fromMe em parseWebhookPayload). O eco da propria API
+      // (wasSentByApi) continua excluido - esse ja foi gravado no envio.
+      excludeMessages: ["wasSentByApi", "isGroupYes"],
       // Estes DOIS ficam false: eles nao incluem a midia no payload - so
       // adicionam o evento / o tipo da mensagem como path na URL do webhook, o
       // que quebraria a nossa rota (/api/uazapi/webhook/:clinicId/:signature).
@@ -499,8 +508,13 @@ export function parseWebhookPayload(bodyValue: unknown): IncomingUazapiMessage[]
   const output: IncomingUazapiMessage[] = [];
 
   for (const message of messageCandidates(body)) {
-    if (boolValue(message.fromMe, message.from_me, message.wasSentByApi, message.was_sent_by_api)) continue;
+    // Eco do que a propria API mandou (Alice, painel): sempre descarta - ja foi
+    // gravado no momento do envio. Mensagem so "fromMe" (sem ter saido pela API)
+    // e a PROPRIA clinica respondendo pelo celular/WhatsApp Web direto - essa
+    // passa e e tratada mais abaixo (fromMe, ver handleQueuedPayload).
+    if (boolValue(message.wasSentByApi, message.was_sent_by_api)) continue;
     if (boolValue(message.isGroup, message.is_group)) continue;
+    const fromMe = boolValue(message.fromMe, message.from_me);
 
     const phone =
       phoneFromJid(chat.phone, true) ??
@@ -578,6 +592,7 @@ export function parseWebhookPayload(bodyValue: unknown): IncomingUazapiMessage[]
         : undefined,
       pushName: textValue(message.senderName, message.sender_name, message.pushName, message.push_name),
       referral: extractReferral(message),
+      fromMe,
     });
   }
   return output;
@@ -788,6 +803,26 @@ async function handleQueuedPayload(clinicId: string, body: unknown): Promise<voi
     let text = incoming.text ?? null;
     let imageDataUrl: string | undefined;
     let media: { type: "image" | "video" | "document" | "audio"; dataUrl: string; name?: string } | undefined;
+
+    // Mensagem que SAIU deste WhatsApp sem passar pela Alice nem pelo painel -
+    // a clínica respondeu direto pelo celular ou pelo WhatsApp Web. So resolve
+    // midia (pra aparecer no painel) e grava como atendimento humano: sem
+    // transcrever audio, sem gerar resposta da Alice.
+    if (incoming.fromMe) {
+      if (incoming.media) {
+        const dataUrl = await resolveIncomingMedia(clinicId, { ...incoming.media });
+        if (dataUrl) media = { type: incoming.media.kind, dataUrl, name: incoming.media.filename };
+      }
+      if (!text && !media) continue;
+      await recordOutgoingFromDevice({
+        clinicId,
+        patientPhone: incoming.phone,
+        patientName: incoming.pushName,
+        text: text ?? "",
+        media,
+      });
+      continue;
+    }
 
     if (incoming.media) {
       // Audio sem legenda: transcreve pra Alice entender. Os outros (e audio com

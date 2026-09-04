@@ -882,6 +882,116 @@ export async function recordIncomingMessage(params: {
   };
 }
 
+// Na PRIMEIRA acao manual da conversa, registra a transferencia pro atendente
+// (evento + aviso + log). Nao repete a cada mensagem. Usado tanto quando
+// alguem responde pelo painel (routes.ts) quanto quando responde direto pelo
+// celular/WhatsApp Web (recordOutgoingFromDevice, abaixo).
+export async function ensureManualTakeover(
+  conversation: { id: string; humanTakeover: boolean; patient: { clinicId: string; name: string | null; phone: string } },
+  authorName: string | null,
+): Promise<void> {
+  if (conversation.humanTakeover) return;
+  const patientLabel = conversation.patient.name ?? conversation.patient.phone;
+  await prisma.message.create({
+    data: { conversationId: conversation.id, role: "system", content: "Atendimento transferido para o atendente", authorName },
+  });
+  await notifyStaff(
+    conversation.patient.clinicId,
+    "human_handoff",
+    `Atendimento assumido manualmente: ${patientLabel}${authorName ? ` (por ${authorName})` : ""}.`,
+  );
+  await logActivity({
+    clinicId: conversation.patient.clinicId,
+    type: "human_takeover",
+    area: "atendimento",
+    title: "Atendimento assumido por uma pessoa",
+    description: `A Alice parou de responder a conversa com ${patientLabel} para a equipe continuar o atendimento.`,
+    actorName: authorName,
+  });
+}
+
+export interface RecordedDeviceMessage {
+  conversationId: string;
+  patientId: string;
+}
+
+// Rotulo de authorName pras mensagens que chegam pelo webhook como "fromMe":
+// nao da pra saber QUAL pessoa da equipe respondeu (o WhatsApp nao expoe isso
+// por aqui), so que saiu direto do celular/WhatsApp Web, nao do painel.
+const DEVICE_AUTHOR_LABEL = "Enviado pelo WhatsApp (celular)";
+
+// Mensagem que SAIU deste WhatsApp sem passar pela Alice nem pelo painel - a
+// clinica respondeu direto pelo celular ou pelo WhatsApp Web. Grava na
+// conversa certa como atendimento humano (mesma trava de humanTakeover que o
+// envio pelo painel usa) e NUNCA gera resposta da Alice.
+//
+// Diferente de recordIncomingMessage: nao captura atribuicao de anuncio nem
+// dispara evento de Lead pra Meta - quem comecou esse contato foi a propria
+// clinica, nao uma campanha.
+export async function recordOutgoingFromDevice(params: {
+  clinicId: string;
+  patientPhone: string;
+  patientName?: string;
+  text: string;
+  media?: { type: "image" | "video" | "document" | "audio"; dataUrl: string; name?: string };
+}): Promise<RecordedDeviceMessage | null> {
+  const { clinicId, patientPhone, patientName, text, media } = params;
+  const mediaPlaceholder: Record<string, string> = { image: "[imagem]", video: "[vídeo]", audio: "[áudio]", document: "[arquivo]" };
+  const storedContent = text.trim() || (media ? mediaPlaceholder[media.type] : "");
+  if (!storedContent) return null;
+
+  const existing = await prisma.patient.findUnique({
+    where: { clinicId_phone: { clinicId, phone: patientPhone } },
+    select: { id: true, name: true },
+  });
+  const patient = existing
+    ? patientName && !existing.name
+      ? await prisma.patient.update({ where: { id: existing.id }, data: { name: patientName } })
+      : existing
+    : await prisma.patient.create({ data: { clinicId, phone: patientPhone, name: patientName ?? null } });
+
+  let conversation = await prisma.conversation.findFirst({
+    where: { patientId: patient.id, status: { in: ["active", "qualified"] } },
+    orderBy: { createdAt: "desc" },
+  });
+  if (!conversation) {
+    conversation = await prisma.conversation.findFirst({
+      where: { patientId: patient.id, archived: true },
+      orderBy: { lastMessageAt: "desc" },
+    });
+  }
+  if (!conversation) {
+    conversation = await prisma.conversation.create({ data: { patientId: patient.id } });
+  }
+
+  await ensureManualTakeover(
+    { id: conversation.id, humanTakeover: conversation.humanTakeover, patient: { clinicId, name: patient.name ?? null, phone: patientPhone } },
+    null,
+  );
+
+  await prisma.message.create({
+    data: {
+      conversationId: conversation.id,
+      role: "human",
+      content: storedContent,
+      authorName: DEVICE_AUTHOR_LABEL,
+      ...(media ? { mediaType: media.type, mediaUrl: media.dataUrl, mediaName: media.name ?? null } : {}),
+    },
+  });
+  await prisma.conversation.update({
+    where: { id: conversation.id },
+    data: {
+      humanTakeover: true,
+      handoffPending: false,
+      lastMessageAt: new Date(),
+      ...(conversation.archived ? { archived: false } : {}),
+      ...(conversation.status === "closed" ? { status: "active" } : {}),
+    },
+  });
+
+  return { conversationId: conversation.id, patientId: patient.id };
+}
+
 // PASSO 2 (pode ser adiado): olha TODAS as mensagens acumuladas da conversa,
 // gera a resposta da Alice, grava e devolve o texto pra enviar. Devolve "" se
 // nao deve responder (humano assumiu, ou chegou mensagem nova durante a geracao).

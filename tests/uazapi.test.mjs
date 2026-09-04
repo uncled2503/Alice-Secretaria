@@ -32,7 +32,23 @@ test("aceita payload oficial de mensagem e resolve sender_pn", () => {
       text: "Quero agendar",
     },
   });
-  assert.deepEqual(messages, [{ externalId: "ABC123", phone: "5532999999999", text: "Quero agendar", mediaMessageId: undefined, imageMessageId: undefined, media: undefined, pushName: "Maria", referral: undefined }]);
+  assert.deepEqual(messages, [{ externalId: "ABC123", phone: "5532999999999", text: "Quero agendar", mediaMessageId: undefined, imageMessageId: undefined, media: undefined, pushName: "Maria", referral: undefined, fromMe: false }]);
+});
+
+test("mensagem enviada direto do celular (fromMe, sem ter saido pela API) passa e vem marcada", () => {
+  const messages = parseWebhookPayload({
+    message: {
+      messageid: "OUT1",
+      sender_pn: "5532999999999@s.whatsapp.net",
+      messageType: "text",
+      text: "Oi! Já te respondo",
+      fromMe: true,
+    },
+  });
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].fromMe, true);
+  assert.equal(messages[0].phone, "5532999999999");
+  assert.equal(messages[0].text, "Oi! Já te respondo");
 });
 
 test("captura o referral de Click-to-WhatsApp quando presente", () => {
@@ -51,6 +67,8 @@ test("captura o referral de Click-to-WhatsApp quando presente", () => {
 
 test("ignora eco da API e mensagens de grupo", () => {
   assert.equal(parseWebhookPayload({ message: { messageid: "1", sender_pn: "5532999999999@s.whatsapp.net", text: "eco", wasSentByApi: true } }).length, 0);
+  // Eco de verdade (Alice/painel enviando): sempre vem com os dois marcados.
+  assert.equal(parseWebhookPayload({ message: { messageid: "1b", sender_pn: "5532999999999@s.whatsapp.net", text: "eco", fromMe: true, wasSentByApi: true } }).length, 0);
   assert.equal(parseWebhookPayload({ message: { messageid: "2", sender: "120363000000@g.us", text: "grupo", isGroup: true } }).length, 0);
 });
 
