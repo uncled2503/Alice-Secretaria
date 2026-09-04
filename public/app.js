@@ -3190,14 +3190,14 @@ function currentPlan() {
   return c?.plan || "prime";
 }
 
-// No plano grátis o Chat continua aberto (atendimento humano). O que a Alice
-// faria sozinha fica TRANCADO, não escondido: o cadeado é o argumento de venda.
-// Clicar num item trancado abre o modal de upgrade (ver openUpsell).
-const PLAN_FREE_BLOCKED_TABS = new Set(["agenda"]);
+// No plano grátis o Chat e a Agenda ficam abertos (atendimento e agendamento na
+// mão). O que a Alice faria SOZINHA fica TRANCADO, não escondido: o cadeado é o
+// argumento de venda. Clicar num item trancado abre o modal de upgrade.
+// Nenhuma aba do topo fica trancada hoje - só sub-abas de automação.
+const PLAN_FREE_BLOCKED_TABS = new Set();
 const PLAN_FREE_BLOCKED_SUBS = new Set([
-  "briefing", "products", "procedures", "staff", "broadcasts", "appt-reminder",
-  "post-procedure", "renewal", "birthday", "followup", "blocks", "waitlist",
-  "learning", "rules", "external-api",
+  "briefing", "broadcasts", "appt-reminder", "post-procedure", "renewal",
+  "birthday", "followup", "waitlist", "learning", "rules", "external-api",
 ]);
 
 function applyPlanMode() {
@@ -3242,13 +3242,23 @@ const UPSELL_COPY = {
     ],
   },
   agenda: {
-    title: "O paciente marca sozinho, na conversa",
-    lead: "Cada horário que você marca hoje custa uma ida e volta: consultar a agenda, oferecer, esperar, confirmar. E o horário vago continua vago enquanto isso.",
+    title: "A Alice preenche a agenda sozinha",
+    lead: "No plano Grátis você marca cada horário na mão: consultar a agenda, oferecer, esperar o paciente responder, confirmar. Cada agendamento come vários minutos seus — e enquanto isso o horário vago continua vago.",
     bullets: [
-      "A Alice consulta a agenda real e oferece só o que existe",
-      "Confirma o horário e registra sem você tocar em nada",
+      "O paciente escolhe o horário na própria conversa, sem falar com você",
+      "A Alice consulta a agenda real e oferece só o que existe de verdade",
+      "Confirma e registra na agenda sem você tocar em nada",
       "Só fecha depois do comprovante do sinal, se você exigir",
-      "Remarca e cancela sozinha, mantendo a agenda limpa",
+      "Remarca, cancela e chama a lista de espera sozinha",
+    ],
+  },
+  "lista-espera": {
+    title: "Vaga que abre, vaga que some",
+    lead: "O paciente pediu um horário lotado e topou esperar. Quando abre uma vaga por cancelamento, alguém precisa lembrar dele e ligar — e quase nunca dá tempo.",
+    bullets: [
+      "A Alice põe quem quer na lista de espera durante a conversa",
+      "Abriu vaga compatível, ela avisa o primeiro da fila na hora",
+      "A vaga é preenchida antes de esfriar, sem ninguém correr atrás",
     ],
   },
   recontato: {
@@ -3278,15 +3288,6 @@ const UPSELL_COPY = {
       "Retorno de toxina, preenchimento e planos no tempo certo",
       "Mensagem de aniversário no horário que você escolher",
       "Pesquisa de satisfação e convite pra avaliar no Google",
-    ],
-  },
-  catalogo: {
-    title: "Ela precisa saber o que você vende",
-    lead: "Sem catálogo, toda pergunta de preço, duração ou indicação vira mensagem pra alguém responder.",
-    bullets: [
-      "Cadastre procedimentos, produtos e profissionais uma vez só",
-      "A Alice responde valor, duração e indicação sem inventar nada",
-      "Ela nunca oferece algo que você não cadastrou",
     ],
   },
   broadcasts: {
@@ -3594,9 +3595,10 @@ async function loadDashboard() {
 
   renderStateMap(stats.byState || []);
 
-  // No modo loja (e no plano grátis) o gráfico de agendamentos e o calendário
-  // operacional ficam escondidos - não vale renderizar.
-  if (document.body.dataset.biz === "loja" || document.body.dataset.plan === "free") return;
+  // No modo loja o gráfico de agendamentos e o calendário operacional ficam
+  // escondidos - não vale renderizar. (No plano grátis a agenda é manual, mas
+  // funciona, então o gráfico entra normal.)
+  if (document.body.dataset.biz === "loja") return;
 
   const totalAppts = stats.daily.reduce((sum, d) => sum + d.count, 0);
   document.getElementById("chart-total").textContent = `${totalAppts} no período`;

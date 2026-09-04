@@ -69,7 +69,7 @@
 
         <div class="nav-group">
           <div class="nav-group-label">Operação</div>
-          <button data-tab="agenda" class="nav-item biz-clinica-only" data-plan-lock="agenda">
+          <button data-tab="agenda" class="nav-item biz-clinica-only">
             <span class="nav-icon" data-icon="calendar"></span> <span class="nav-label">Agenda</span>
           </button>
           <button data-tab="reports" class="nav-item">
@@ -163,7 +163,7 @@
             <div class="stat-value" id="stat-attended">—</div>
             <div class="stat-hint">Contatos únicos com resposta no período</div>
           </div>
-          <div class="card stat-card biz-clinica-only" data-plan-paid>
+          <div class="card stat-card biz-clinica-only">
             <div class="stat-card-header">
               <span class="stat-label">Agendamentos realizados</span>
               <span class="stat-icon" data-icon="calendar"></span>
@@ -171,7 +171,7 @@
             <div class="stat-value" id="stat-appointments">—</div>
             <div class="stat-hint" id="stat-appointments-hint">&nbsp;</div>
           </div>
-          <div class="card stat-card biz-clinica-only" data-plan-paid>
+          <div class="card stat-card biz-clinica-only">
             <div class="stat-card-header">
               <span class="stat-label">Atendimentos concluídos</span>
               <span class="stat-icon" data-icon="check"></span>
@@ -197,7 +197,7 @@
           </div>
         </div>
 
-        <div class="dash-columns biz-clinica-only" data-plan-paid>
+        <div class="dash-columns biz-clinica-only">
           <div class="card dash-chart-card">
             <div class="card-title-row">
               <h3>Atendimentos por dia</h3>
@@ -380,6 +380,13 @@
       </div>
 
       <section id="tab-agenda" class="tab-panel">
+        <div class="upsell-strip" data-plan-free>
+          <div>
+            <strong>Você está marcando cada horário na mão.</strong>
+            <span>Consultar a agenda, oferecer, esperar o paciente responder, confirmar — tudo isso a Alice faz sozinha na conversa, oferece só horário que existe, cobra o sinal e já registra aqui. Você só abre a agenda e vê preenchida.</span>
+          </div>
+          <button type="button" class="upsell-btn upsell-btn--sm" data-upsell="agenda">A Alice agenda sozinha</button>
+        </div>
         <div class="ag-toolbar">
           <div class="ag-toolbar-nav">
             <button id="ag-today" type="button" class="btn-chat-action">Hoje</button>
@@ -503,12 +510,12 @@
           </div>
         </div>
 
-        <div class="card biz-clinica-only" data-plan-paid style="margin-top:1rem">
+        <div class="card biz-clinica-only" style="margin-top:1rem">
           <h3>Faturamento por dia</h3>
           <div id="rp-daily" class="dash-chart"></div>
         </div>
 
-        <div class="dash-columns biz-clinica-only" data-plan-paid style="grid-template-columns:1fr 1fr;margin-top:1rem">
+        <div class="dash-columns biz-clinica-only" style="grid-template-columns:1fr 1fr;margin-top:1rem">
           <div class="card">
             <h3>Faturamento por procedimento</h3>
             <div id="rp-proc" class="rp-bars"></div>
@@ -542,9 +549,9 @@
         <div class="settings-tabs" id="settings-tabs">
           <button data-sub="clinic-data" class="active" data-biz-label="Dados da clínica|Dados da loja">Dados da clínica</button>
           <button data-sub="briefing" data-plan-lock="briefing">Briefing</button>
-          <button data-sub="products" data-plan-lock="catalogo">Produtos</button>
-          <button data-sub="procedures" class="biz-clinica-only" data-plan-lock="catalogo">Procedimentos</button>
-          <button data-sub="staff" class="biz-clinica-only" data-plan-lock="catalogo">Profissionais</button>
+          <button data-sub="products">Produtos</button>
+          <button data-sub="procedures" class="biz-clinica-only">Procedimentos</button>
+          <button data-sub="staff" class="biz-clinica-only">Profissionais</button>
           <button data-sub="channels">Canais</button>
           <button data-sub="broadcasts" data-plan-lock="broadcasts">Mensagens Programadas</button>
           <button data-sub="appt-reminder" class="biz-clinica-only" data-plan-lock="lembrete">Lembrete de Consulta</button>
@@ -553,8 +560,8 @@
           <button data-sub="birthday" data-plan-lock="posvenda">Aniversário</button>
           <button data-sub="followup" data-plan-lock="recontato">Recontato</button>
           <button data-sub="funnel">Funil</button>
-          <button data-sub="blocks" class="biz-clinica-only" data-plan-lock="agenda">Bloqueios de agenda</button>
-          <button data-sub="waitlist" class="biz-clinica-only" data-plan-lock="agenda">Lista de espera</button>
+          <button data-sub="blocks" class="biz-clinica-only">Bloqueios de agenda</button>
+          <button data-sub="waitlist" class="biz-clinica-only" data-plan-lock="lista-espera">Lista de espera</button>
           <button data-sub="history">Histórico</button>
           <button data-sub="learning" data-plan-lock="aprendizado">Aprendizado da Alice</button>
           <button data-sub="rules" data-plan-lock="alice">Personalizar Alice</button>

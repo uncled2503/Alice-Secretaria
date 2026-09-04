@@ -1,13 +1,15 @@
 // ---------------------------------------------------------------------------
 // Plano "Grátis": CRM (funil + contatos) + integração com a Meta + atendimento
-// HUMANO no chat. Serve pra clínica usar o painel como ferramenta de campanha -
-// capta o lead do anúncio (com atribuição), responde na mão, trabalha o lead no
-// kanban, e cada movimento vira evento de conversão pra Meta.
+// HUMANO no chat + agenda MANUAL. Serve pra clínica usar o painel como
+// ferramenta de campanha - capta o lead do anúncio (com atribuição), responde
+// na mão, marca o horário na mão, trabalha o lead no kanban, e cada movimento
+// (inclusive o agendamento) vira evento de conversão pra Meta.
 //
-// O que NAO tem: a Alice respondendo sozinha, agenda e todas as automações.
-// É de proposito: o plano grátis existe pra mostrar o trabalho manual que a
-// Alice tiraria da frente. O painel puxa esse contraste o tempo todo (ver os
-// blocos [data-plan-free] em index.html).
+// O que NAO tem: a Alice respondendo/agendando sozinha e todas as automações
+// (lembrete, recontato, pós-venda, lista de espera). É de proposito: o plano
+// grátis existe pra mostrar o trabalho manual que a Alice tiraria da frente. O
+// painel puxa esse contraste o tempo todo (ver os blocos [data-plan-free] em
+// index.html).
 //
 // Os outros planos (realce/prime/prestige) continuam com tudo liberado; a
 // única diferença entre eles é o limite de atendimentos/mês (ver usage.ts).
@@ -33,17 +35,18 @@ const BLOCKED_ALL_METHODS: RegExp[] = [/^\/conversations\/[^/]+\/resume$/];
 
 // Bloqueadas só nos métodos de escrita - GET fica liberado porque devolve lista
 // vazia e não quebra nenhum componente compartilhado do painel.
+//
+// A agenda manual e o catalogo (procedimentos, profissionais, produtos,
+// bloqueios) NAO entram aqui: a clinica marca horario na mao. O que fica pro
+// upgrade e a Alice fazendo isso sozinha e as automacoes (lembrete, recontato,
+// pos-venda, lista de espera).
 const BLOCKED_WRITE_ONLY = [
-  "/procedures",
-  "/professionals",
-  "/appointments",
-  "/schedule-blocks",
-  "/waitlist",
   "/reminder-rules",
   "/post-procedure-rules",
   "/renewal-rules",
   "/birthday-rules",
   "/followup-rules",
+  "/waitlist",
   "/broadcasts",
   "/message-templates",
   "/playbooks",

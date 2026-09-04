@@ -13,19 +13,36 @@ test("isFreePlan so reconhece o plano gratis", () => {
   assert.equal(isFreePlan(undefined), false);
 });
 
-test("freePlanBlocksPath bloqueia agenda, automacoes e devolver-pra-Alice", () => {
+test("freePlanBlocksPath bloqueia automacoes e devolver-pra-Alice", () => {
   // "Devolver a conversa para a Alice" nao existe no plano gratis
   assert.equal(freePlanBlocksPath("POST", "/conversations/abc/resume"), true);
-  // Escrita em area de plano pago
-  assert.equal(freePlanBlocksPath("POST", "/procedures"), true);
-  assert.equal(freePlanBlocksPath("DELETE", "/procedures/p1"), true);
-  assert.equal(freePlanBlocksPath("POST", "/appointments"), true);
+  // Automacoes: o que a Alice faria sozinha
   assert.equal(freePlanBlocksPath("PUT", "/reminder-rules/r1"), true);
   assert.equal(freePlanBlocksPath("POST", "/followup-rules"), true);
+  assert.equal(freePlanBlocksPath("POST", "/post-procedure-rules"), true);
+  assert.equal(freePlanBlocksPath("POST", "/renewal-rules"), true);
+  assert.equal(freePlanBlocksPath("POST", "/birthday-rules"), true);
+  assert.equal(freePlanBlocksPath("POST", "/waitlist"), true);
   assert.equal(freePlanBlocksPath("POST", "/broadcasts"), true);
   assert.equal(freePlanBlocksPath("PATCH", "/rules/x"), true);
+  assert.equal(freePlanBlocksPath("POST", "/faqs"), true);
   assert.equal(freePlanBlocksPath("POST", "/briefing/apply"), true);
+  assert.equal(freePlanBlocksPath("POST", "/learning-insights/x"), true);
+  assert.equal(freePlanBlocksPath("POST", "/nps"), true);
   assert.equal(freePlanBlocksPath("POST", "/api-keys"), true);
+});
+
+test("freePlanBlocksPath NAO bloqueia a agenda manual e o catalogo", () => {
+  // A clinica marca horario na mao no plano gratis
+  assert.equal(freePlanBlocksPath("POST", "/appointments"), false);
+  assert.equal(freePlanBlocksPath("PUT", "/appointments/a1"), false);
+  assert.equal(freePlanBlocksPath("DELETE", "/appointments/a1"), false);
+  assert.equal(freePlanBlocksPath("POST", "/schedule-blocks"), false);
+  // Precisa de servico/profissional pra poder agendar
+  assert.equal(freePlanBlocksPath("POST", "/procedures"), false);
+  assert.equal(freePlanBlocksPath("DELETE", "/procedures/p1"), false);
+  assert.equal(freePlanBlocksPath("POST", "/professionals"), false);
+  assert.equal(freePlanBlocksPath("POST", "/products"), false);
 });
 
 test("freePlanBlocksPath NAO bloqueia o chat humano", () => {
@@ -52,8 +69,7 @@ test("freePlanBlocksPath NAO bloqueia CRM, Meta e leitura", () => {
   assert.equal(freePlanBlocksPath("POST", "/meta/test-event"), false);
   // Canais (conexao do WhatsApp - pipe de captacao)
   assert.equal(freePlanBlocksPath("POST", "/uazapi/connect"), false);
-  // Leitura das areas pagas fica liberada (devolve lista vazia)
-  assert.equal(freePlanBlocksPath("GET", "/procedures"), false);
+  // Leitura das areas trancadas fica liberada (devolve lista vazia)
   assert.equal(freePlanBlocksPath("GET", "/reminder-rules"), false);
   assert.equal(freePlanBlocksPath("GET", "/broadcasts"), false);
 });
