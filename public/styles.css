@@ -96,6 +96,16 @@ body[data-biz="loja"] p.biz-loja-only,
 body[data-biz="loja"] div.biz-loja-only,
 body[data-biz="loja"] li.biz-loja-only { display: block; }
 
+/* --- Plano Grátis (só CRM + Meta) ---
+   body[data-plan="free"] esconde tudo que o plano grátis não tem: aba Chat e
+   Agenda, sub-abas de atendimento/automação, cards de agenda no dashboard.
+   [data-plan-free] são os blocos que só aparecem no plano grátis. */
+body[data-plan="free"] [data-plan-paid] { display: none !important; }
+[data-plan-free] { display: none; }
+body[data-plan="free"] [data-plan-free] { display: block; }
+/* no plano grátis os cards "de loja" (contatos novos, conversas) valem também */
+body[data-plan="free"] .stat-card.biz-loja-only { display: flex; }
+
 /* --- Shell / Sidebar --- */
 .app-shell { display: flex; min-height: 100vh; }
 

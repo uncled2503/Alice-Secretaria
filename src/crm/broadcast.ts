@@ -1,6 +1,7 @@
 import cron from "node-cron";
 import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
+import { PAID_CLINIC_WHERE } from "./plan.js";
 
 // Envia aos poucos pra nao estourar limite de taxa do WhatsApp e nao
 // disparar centenas de mensagens de uma vez so (risco real de banimento).
@@ -89,7 +90,7 @@ async function reactivationRecipients(clinicId: string, config: string | null): 
 
 async function activateDueCampaigns(): Promise<void> {
   const due = await prisma.broadcastCampaign.findMany({
-    where: { status: "scheduled", scheduledFor: { lte: new Date() } },
+    where: { status: "scheduled", scheduledFor: { lte: new Date() }, clinic: PAID_CLINIC_WHERE },
   });
 
   for (const campaign of due) {
@@ -124,7 +125,7 @@ async function activateDueCampaigns(): Promise<void> {
 }
 
 async function sendNextBatch(): Promise<void> {
-  const sendingCampaigns = await prisma.broadcastCampaign.findMany({ where: { status: "sending" } });
+  const sendingCampaigns = await prisma.broadcastCampaign.findMany({ where: { status: "sending", clinic: PAID_CLINIC_WHERE } });
 
   for (const campaign of sendingCampaigns) {
     const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: campaign.clinicId } });

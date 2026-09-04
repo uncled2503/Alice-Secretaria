@@ -4,6 +4,7 @@ import cron from "node-cron";
 import { prisma } from "../db/client.js";
 import { normalizeReply, replySimilarity } from "./alice.js";
 import { logActivity } from "../crm/activity.js";
+import { FREE_PLAN } from "../crm/plan.js";
 
 // ---------------------------------------------------------------------------
 // APRENDIZADO DA ALICE
@@ -351,7 +352,7 @@ export function startLearningJob(): void {
   // 04:10 todo dia. Roda clinica por clinica com pausa, sem travar o processo.
   cron.schedule("10 4 * * *", async () => {
     try {
-      const clinics = await prisma.clinic.findMany({ where: { active: true }, select: { id: true, name: true } });
+      const clinics = await prisma.clinic.findMany({ where: { active: true, plan: { not: FREE_PLAN } }, select: { id: true, name: true } });
       for (const c of clinics) {
         try {
           const r = await runLearningJob(c.id);

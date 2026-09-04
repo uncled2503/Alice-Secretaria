@@ -17,6 +17,7 @@ import { logActivity } from "../crm/activity.js";
 import { enqueueLead, enqueueSchedule } from "../meta/events.js";
 import { ctwaClidToFbc } from "../meta/userData.js";
 import { checkAtendimentoLimit } from "../crm/usage.js";
+import { isFreePlan } from "../crm/plan.js";
 import type { Procedure } from "@prisma/client";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -905,6 +906,10 @@ export async function generateReply(
     where: { id: clinicId },
     select: { id: true, plan: true, conversationLimitOverride: true, usageMonth: true, usageCount: true, usageLimitNotified: true },
   });
+  // Plano grátis: a Alice nao atende. O lead e o evento Lead ja foram criados
+  // em recordIncomingMessage (atribuicao da Meta intacta); a conversa fica so
+  // pra virar evento de CRM quando a equipe mover o lead no funil.
+  if (isFreePlan(usageClinic?.plan)) return "";
   if (usageClinic) {
     const check = await checkAtendimentoLimit(usageClinic, { id: conversation.id, aliceMonth: conversation.aliceMonth });
     if (!check.allowed) {

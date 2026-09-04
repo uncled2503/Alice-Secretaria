@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js";
+import { PAID_CLINIC_WHERE } from "../crm/plan.js";
 
 const DAY_MS = 24 * 60 * 60_000;
 const MAX_DAYS = 2 * 365; // limite de 2 anos
@@ -16,7 +17,7 @@ function intervalDays(value: number, unit: string): number {
 // filtro de procedimentos (procedureIds vazio = todos).
 export function startRenewalJob(): void {
   cron.schedule("0 */6 * * *", async () => {
-    const rules = await prisma.renewalRule.findMany({ where: { active: true } });
+    const rules = await prisma.renewalRule.findMany({ where: { active: true, clinic: PAID_CLINIC_WHERE } });
     const clinicInfoCache = new Map<string, Awaited<ReturnType<typeof getClinicTemplateInfo>>>();
 
     for (const rule of rules) {

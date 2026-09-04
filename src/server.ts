@@ -19,6 +19,7 @@ import { startUazapiWebhookWorker } from "./uazapi/client.js";
 import { apiRouter } from "./api/routes.js";
 import { externalApiRouter } from "./api/external/router.js";
 import { readStaffSession } from "./api/staffSession.js";
+import { isFreePlan, freePlanBlocksPath } from "./crm/plan.js";
 import { prisma } from "./db/client.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -206,10 +207,19 @@ app.use(
 
     // Clinica bloqueada (ex: inadimplencia): conta client dessa clinica para
     // de conseguir usar a API, mesmo com um cookie de sessao ainda valido.
+    // Plano gratis: bloqueia as areas que ele nao tem (atendimento, agenda,
+    // automacoes) - so CRM + Meta passam.
     if (req.staff && req.staff.role !== "admin" && req.staff.clinicId) {
-      const clinic = await prisma.clinic.findUnique({ where: { id: req.staff.clinicId }, select: { active: true } });
+      const clinic = await prisma.clinic.findUnique({
+        where: { id: req.staff.clinicId },
+        select: { active: true, plan: true },
+      });
       if (!clinic || !clinic.active) {
         res.status(403).json({ error: "Conta bloqueada temporariamente. Entre em contato com o suporte." });
+        return;
+      }
+      if (isFreePlan(clinic.plan) && freePlanBlocksPath(req.method, req.path)) {
+        res.status(403).json({ error: "Recurso não disponível no plano Grátis." });
         return;
       }
     }

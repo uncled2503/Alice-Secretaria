@@ -3,6 +3,7 @@ import OpenAI from "openai";
 import { toFile } from "openai";
 import { prisma } from "../db/client.js";
 import { recordIncomingMessage, generateReply } from "../ai/alice.js";
+import { isFreePlan } from "../crm/plan.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -94,6 +95,18 @@ async function clinicCredentials(clinicId: string): Promise<UazapiCredentials> {
     throw new Error("Configure a URL do servidor e o token da instancia desta clinica");
   }
   return { baseUrl: normalizeUazapiBaseUrl(clinic.uazapiBaseUrl), token: clinic.uazapiToken };
+}
+
+// Plano grátis: o WhatsApp fica conectado só pra captar o lead do anúncio; a
+// clínica não tem atendimento, então NADA é enviado pelo número. Guarda de
+// última linha (a Alice e os crons já pulam o plano grátis antes disso).
+async function clinicOutboundBlocked(clinicId: string): Promise<boolean> {
+  const clinic = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { plan: true } });
+  if (isFreePlan(clinic?.plan)) {
+    console.warn(`[uazapi] envio bloqueado: clinica ${clinicId} esta no plano gratuito (sem atendimento).`);
+    return true;
+  }
+  return false;
 }
 
 // Traduz as falhas mais comuns de configuracao (URL do servidor errada ou
@@ -358,6 +371,7 @@ function splitMessage(text: string, maxParts: number): string[] {
 }
 
 export async function sendText(clinicId: string, phone: string, text: string): Promise<void> {
+  if (await clinicOutboundBlocked(clinicId)) return;
   const [credentials, config] = await Promise.all([
     clinicCredentials(clinicId),
     prisma.clinic.findUnique({
@@ -388,6 +402,7 @@ export async function sendMedia(
   phone: string,
   opts: { dataUrl: string; kind: OutgoingMediaKind; caption?: string; filename?: string },
 ): Promise<void> {
+  if (await clinicOutboundBlocked(clinicId)) return;
   const credentials = await clinicCredentials(clinicId);
   const mimeMatch = opts.dataUrl.match(/^data:([\w.+-]+\/[\w.+-]+)(?:;[\w.+=%-]+)*;base64,/);
   const body: Record<string, unknown> = {
@@ -759,6 +774,12 @@ export function bumpTypingWait(clinicId: string, phone: string, extraMs: number)
 }
 
 async function handleQueuedPayload(clinicId: string, body: unknown): Promise<void> {
+  // Plano grátis: o lead ainda entra (recordIncomingMessage cria contato +
+  // evento Lead + atribuicao), mas a Alice nao responde e nao gastamos
+  // transcricao de audio.
+  const planClinic = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { plan: true } });
+  const freePlan = isFreePlan(planClinic?.plan);
+
   for (const incoming of parseWebhookPayload(body)) {
     let text = incoming.text ?? null;
     let imageDataUrl: string | undefined;
@@ -767,7 +788,7 @@ async function handleQueuedPayload(clinicId: string, body: unknown): Promise<voi
     if (incoming.media) {
       // Audio sem legenda: transcreve pra Alice entender. Os outros (e audio com
       // legenda) sao baixados pra aparecer no painel.
-      if (incoming.media.kind === "audio" && !text) {
+      if (incoming.media.kind === "audio" && !text && !freePlan) {
         text = await transcribeAudio(clinicId, incoming.media.messageId);
       }
       const dataUrl = await resolveIncomingMedia(clinicId, { ...incoming.media });
@@ -781,7 +802,7 @@ async function handleQueuedPayload(clinicId: string, body: unknown): Promise<voi
         text = `[${label[incoming.media.kind] ?? "anexo"} que não consegui carregar — peça pra reenviar]`;
       }
     } else if (!text && incoming.mediaMessageId) {
-      text = await transcribeAudio(clinicId, incoming.mediaMessageId);
+      text = freePlan ? "[áudio]" : await transcribeAudio(clinicId, incoming.mediaMessageId);
     }
 
     if (!text && !media) continue;
@@ -796,6 +817,9 @@ async function handleQueuedPayload(clinicId: string, body: unknown): Promise<voi
       referral: incoming.referral,
     });
     if (!recorded || recorded.humanTakeover) continue;
+
+    // Plano grátis: registrou o lead, mas nao ha atendimento - nao responde.
+    if (freePlan) continue;
 
     if (recorded.replyDelayMs > 0) {
       scheduleGroupedReply(clinicId, incoming.phone, recorded.conversationId, recorded.replyDelayMs, imageDataUrl);

@@ -4,6 +4,7 @@ import { sendText } from "../uazapi/client.js";
 import { getFunnelStages } from "./stages.js";
 import { movePatientToKind, movePatientToStage } from "./stageAutomation.js";
 import { renderMessageTemplate, getClinicTemplateInfo, type ClinicTemplateInfo } from "./template.js";
+import { PAID_CLINIC_WHERE } from "./plan.js";
 
 // Cache simples por execucao do job.
 const stagesCache = new Map<string, Awaited<ReturnType<typeof getFunnelStages>>>();
@@ -64,7 +65,7 @@ export async function runFollowUpCheck(): Promise<void> {
   rulesCache.clear();
 
   const conversations = await prisma.conversation.findMany({
-    where: { status: "active", humanTakeover: false },
+    where: { status: "active", humanTakeover: false, patient: { clinic: PAID_CLINIC_WHERE } },
     include: {
       patient: true,
       messages: { where: { role: "user" }, orderBy: { createdAt: "desc" }, take: 1 },

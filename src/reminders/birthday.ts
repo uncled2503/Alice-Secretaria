@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js";
+import { PAID_CLINIC_WHERE } from "../crm/plan.js";
 
 // { hour, month (1-12), day } na timezone informada, no instante `at`.
 function localParts(at: Date, timeZone: string): { hour: number; month: number; day: number } {
@@ -22,7 +23,7 @@ function localParts(at: Date, timeZone: string): { hour: number; month: number; 
 export function startBirthdayJob(): void {
   cron.schedule("5 * * * *", async () => {
     const rules = await prisma.birthdayRule.findMany({
-      where: { active: true },
+      where: { active: true, clinic: PAID_CLINIC_WHERE },
       include: { clinic: { select: { timezone: true } } },
     });
 

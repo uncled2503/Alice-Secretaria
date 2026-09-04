@@ -624,6 +624,7 @@ async function moveStage(patientId, stage) {
 state.chatFilter = "all";
 
 async function loadConversations() {
+  if (currentPlan() === "free") return; // plano grátis não tem atendimento
   const conversations = await api("/conversations");
   state.conversations = conversations;
   notifyNewHandoffs(conversations);
@@ -631,6 +632,7 @@ async function loadConversations() {
 }
 
 async function loadArchivedConversations() {
+  if (currentPlan() === "free") return;
   state.archivedConversations = await api("/conversations?archived=1");
   if (state.chatFilter === "archived") renderConversationsList();
 }
@@ -3175,12 +3177,38 @@ function updateBrandName() {
   document.getElementById("brand-clinic-name").textContent = name;
   document.getElementById("dash-greeting").textContent = `Olá, ${name}!`;
   applyBizMode();
+  applyPlanMode();
 }
 
 // --- Modo do painel: clínica x loja (dirigido por Clinic.businessType) ---
 function currentBusinessType() {
   const c = (state.clinics || []).find((x) => x.id === state.clinicId);
   return c?.businessType === "geral" ? "loja" : "clinica";
+}
+
+// --- Plano da clínica selecionada. "free" = só CRM + Meta; o resto some. ---
+function currentPlan() {
+  const c = (state.clinics || []).find((x) => x.id === state.clinicId);
+  return c?.plan || "prime";
+}
+
+// Esconde do painel tudo que o plano grátis não tem (via CSS em [data-plan]) e
+// tira o usuário de uma aba/sub-aba bloqueada se ele estiver numa.
+const PLAN_FREE_BLOCKED_TABS = new Set(["chat", "agenda"]);
+const PLAN_FREE_BLOCKED_SUBS = new Set([
+  "briefing", "products", "procedures", "staff", "broadcasts", "appt-reminder",
+  "post-procedure", "renewal", "birthday", "followup", "blocks", "waitlist",
+  "learning", "rules", "external-api",
+]);
+
+function applyPlanMode() {
+  const free = currentPlan() === "free";
+  document.body.dataset.plan = free ? "free" : "paid";
+  if (!free) return;
+  const activeTab = document.querySelector(".nav-item.active")?.dataset.tab;
+  if (activeTab && PLAN_FREE_BLOCKED_TABS.has(activeTab)) goToTab("dashboard");
+  const activeSub = document.querySelector("#settings-tabs button.active")?.dataset.sub;
+  if (activeSub && PLAN_FREE_BLOCKED_SUBS.has(activeSub)) openSettingsSub("clinic-data");
 }
 
 // Troca de vocabulário clínica -> loja aplicada em todo o texto do painel no
@@ -3336,9 +3364,9 @@ async function loadDashboard() {
 
   renderStateMap(stats.byState || []);
 
-  // No modo loja o gráfico de agendamentos e o calendário operacional ficam
-  // escondidos - não vale renderizar.
-  if (document.body.dataset.biz === "loja") return;
+  // No modo loja (e no plano grátis) o gráfico de agendamentos e o calendário
+  // operacional ficam escondidos - não vale renderizar.
+  if (document.body.dataset.biz === "loja" || document.body.dataset.plan === "free") return;
 
   const totalAppts = stats.daily.reduce((sum, d) => sum + d.count, 0);
   document.getElementById("chart-total").textContent = `${totalAppts} no período`;
@@ -4079,6 +4107,7 @@ document.getElementById("professional-form").addEventListener("submit", async (e
 });
 
 const PLAN_META = {
+  free: { label: "Grátis", price: "R$ 0" },
   realce: { label: "Realce", price: "R$ 597" },
   prime: { label: "Prime", price: "R$ 897" },
   prestige: { label: "Prestige", price: "R$ 1.397" },
@@ -4360,7 +4389,7 @@ function openClinicPlanModal(clinic) {
   }
   const nowMonth = new Date().toISOString().slice(0, 7);
   const used = clinic.usageMonth === nowMonth ? (clinic.usageCount ?? 0) : 0;
-  const planDefault = { realce: 100, prime: 300, prestige: 0 }[clinic.plan] ?? 0;
+  const planDefault = { free: 0, realce: 100, prime: 300, prestige: 0 }[clinic.plan] ?? 0;
   const eff = clinic.conversationLimitOverride == null ? planDefault : clinic.conversationLimitOverride;
   line += ` · Atendimentos este mês: ${used}${eff > 0 ? ` / ${eff}` : " (ilimitado)"}.`;
   current.textContent = line;
@@ -5692,6 +5721,8 @@ const SETTINGS_SUB_LOADERS = {
 function openSettingsSub(sub) {
   // Abas so da administracao da Alice - cliente cai em "Dados da clinica".
   if ((sub === "briefing" || sub === "clinics" || sub === "meta") && state.staff?.role !== "admin") sub = "clinic-data";
+  // Plano gratis: abas de atendimento/automacao nao existem - cai em "Dados da clinica".
+  if (document.body.dataset.plan === "free" && PLAN_FREE_BLOCKED_SUBS.has(sub)) sub = "clinic-data";
   // No modo loja, abas de clinica nao existem - cai em "Dados da loja".
   const tabBtn = document.querySelector(`#settings-tabs button[data-sub="${sub}"]`);
   if (document.body.dataset.biz === "loja" && tabBtn?.classList.contains("biz-clinica-only")) sub = "clinic-data";
@@ -5709,6 +5740,8 @@ document.getElementById("settings-tabs").addEventListener("click", (e) => {
 });
 
 function goToTab(tab) {
+  // Plano gratis: sem aba Chat nem Agenda - manda pro Início.
+  if (document.body.dataset.plan === "free" && PLAN_FREE_BLOCKED_TABS.has(tab)) tab = "dashboard";
   document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
   document.getElementById(`tab-${tab}`).classList.add("active");

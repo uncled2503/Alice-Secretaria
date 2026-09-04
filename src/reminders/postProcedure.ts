@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js";
+import { PAID_CLINIC_WHERE } from "../crm/plan.js";
 
 function intervalMs(value: number, unit: string): number {
   const hourMs = 60 * 60_000;
@@ -13,7 +14,7 @@ function intervalMs(value: number, unit: string): number {
 // procedimentos (procedureIds vazio = vale pra todos).
 export function startPostProcedureJob(): void {
   cron.schedule("*/15 * * * *", async () => {
-    const rules = await prisma.postProcedureRule.findMany({ where: { active: true } });
+    const rules = await prisma.postProcedureRule.findMany({ where: { active: true, clinic: PAID_CLINIC_WHERE } });
     const clinicInfoCache = new Map<string, Awaited<ReturnType<typeof getClinicTemplateInfo>>>();
 
     for (const rule of rules) {

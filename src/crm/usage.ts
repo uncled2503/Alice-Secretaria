@@ -11,6 +11,7 @@ import { notifyStaff } from "./notify.js";
 
 // 0 = ilimitado
 const PLAN_CONVERSATION_LIMIT: Record<string, number> = {
+  free: 0, // plano gratis: a Alice nem atende (barrada antes deste ponto)
   realce: 100,
   prime: 300,
   prestige: 0,

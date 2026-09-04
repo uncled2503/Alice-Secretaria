@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 import { getClinicTemplateInfo } from "../crm/template.js";
+import { FREE_PLAN } from "../crm/plan.js";
 
 const DEFAULT_MESSAGE =
   "Oi {primeiro_nome}! Passando so pra saber como foi sua experiencia com a gente. Numa escala de 0 a 10, o quanto voce recomendaria a {unidade} pra um amigo?";
@@ -13,7 +14,7 @@ const DEFAULT_MESSAGE =
 export function startNpsJob(): void {
   cron.schedule("*/15 * * * *", async () => {
     const clinics = await prisma.clinic.findMany({
-      where: { npsEnabled: true },
+      where: { npsEnabled: true, plan: { not: FREE_PLAN } },
       select: { id: true, npsHoursAfter: true, npsMessage: true, name: true },
     });
 

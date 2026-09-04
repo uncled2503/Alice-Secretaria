@@ -2,13 +2,14 @@ import cron from "node-cron";
 import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js";
+import { PAID_CLINIC_WHERE } from "../crm/plan.js";
 
 // Roda a cada 15min. Cada regra ativa dispara uma vez por agendamento (marca
 // em ReminderSent) - assim da pra ter mais de uma regra (ex: 24h antes e 2h
 // antes) sem mandar a mesma coisa duas vezes nem perder uma por causa da outra.
 export function startReminderJob(): void {
   cron.schedule("*/15 * * * *", async () => {
-    const rules = await prisma.reminderRule.findMany({ where: { active: true } });
+    const rules = await prisma.reminderRule.findMany({ where: { active: true, clinic: PAID_CLINIC_WHERE } });
     const clinicInfoCache = new Map<string, Awaited<ReturnType<typeof getClinicTemplateInfo>>>();
 
     for (const rule of rules) {

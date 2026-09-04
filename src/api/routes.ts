@@ -610,8 +610,8 @@ apiRouter.delete(
 // Plano contratado da clinica. So a administracao da Alice define. Ao escolher
 // o plano, informa por quantos dias vale (days) - o painel adm avisa quando a
 // vigencia acaba (ver src/reminders/planExpiry.ts). days = 0 / null = sem prazo.
-const PLAN_IDS = ["realce", "prime", "prestige"] as const;
-const PLAN_LABEL: Record<string, string> = { realce: "Realce", prime: "Prime", prestige: "Prestige" };
+const PLAN_IDS = ["free", "realce", "prime", "prestige"] as const;
+const PLAN_LABEL: Record<string, string> = { free: "Grátis", realce: "Realce", prime: "Prime", prestige: "Prestige" };
 
 apiRouter.put(
   "/clinics/:id/plan",
