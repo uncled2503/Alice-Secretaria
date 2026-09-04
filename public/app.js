@@ -624,7 +624,6 @@ async function moveStage(patientId, stage) {
 state.chatFilter = "all";
 
 async function loadConversations() {
-  if (currentPlan() === "free") return; // plano grátis não tem atendimento
   const conversations = await api("/conversations");
   state.conversations = conversations;
   notifyNewHandoffs(conversations);
@@ -632,7 +631,6 @@ async function loadConversations() {
 }
 
 async function loadArchivedConversations() {
-  if (currentPlan() === "free") return;
   state.archivedConversations = await api("/conversations?archived=1");
   if (state.chatFilter === "archived") renderConversationsList();
 }
@@ -3192,9 +3190,10 @@ function currentPlan() {
   return c?.plan || "prime";
 }
 
-// Esconde do painel tudo que o plano grátis não tem (via CSS em [data-plan]) e
-// tira o usuário de uma aba/sub-aba bloqueada se ele estiver numa.
-const PLAN_FREE_BLOCKED_TABS = new Set(["chat", "agenda"]);
+// No plano grátis o Chat continua aberto (atendimento humano). O que a Alice
+// faria sozinha fica TRANCADO, não escondido: o cadeado é o argumento de venda.
+// Clicar num item trancado abre o modal de upgrade (ver openUpsell).
+const PLAN_FREE_BLOCKED_TABS = new Set(["agenda"]);
 const PLAN_FREE_BLOCKED_SUBS = new Set([
   "briefing", "products", "procedures", "staff", "broadcasts", "appt-reminder",
   "post-procedure", "renewal", "birthday", "followup", "blocks", "waitlist",
@@ -3205,10 +3204,237 @@ function applyPlanMode() {
   const free = currentPlan() === "free";
   document.body.dataset.plan = free ? "free" : "paid";
   if (!free) return;
+  if (state.chatFilter === "alice") state.chatFilter = "all";
   const activeTab = document.querySelector(".nav-item.active")?.dataset.tab;
   if (activeTab && PLAN_FREE_BLOCKED_TABS.has(activeTab)) goToTab("dashboard");
   const activeSub = document.querySelector("#settings-tabs button.active")?.dataset.sub;
   if (activeSub && PLAN_FREE_BLOCKED_SUBS.has(activeSub)) openSettingsSub("clinic-data");
+}
+
+// --- Venda da Alice para quem está no plano grátis ---------------------------
+// Cada recurso trancado tem a sua própria dor. O modal fala da dor primeiro e
+// só depois do recurso.
+const UPSELL_WA = "https://wa.me/553298095202";
+
+const UPSELL_COPY = {
+  geral: {
+    title: "A Alice trabalha enquanto você dorme",
+    lead: "Você já paga pelo anúncio que traz o lead. O que decide se ele vira paciente é o tempo até a primeira resposta — e hoje esse tempo depende de alguém estar livre pra digitar.",
+    bullets: [
+      "Responde em segundos, 24h por dia, inclusive fim de semana e feriado",
+      "Fala com o seu tom, com as suas regras e com os seus preços",
+      "Qualifica, tira dúvida, agenda e cobra o sinal sozinha",
+      "Busca de volta quem parou de responder, sem ninguém lembrar",
+      "Passa pra uma pessoa da equipe na hora que o caso pede",
+    ],
+  },
+  alice: {
+    title: "Pare de digitar a mesma resposta",
+    lead: "As mesmas cinco perguntas chegam todo dia: preço, horário, endereço, se dói, se pode parcelar. Hoje alguém da sua equipe responde uma por uma.",
+    bullets: [
+      "A Alice responde todas na hora, do jeito que você escreveu",
+      "Você define o que ela pode e o que ela nunca pode dizer",
+      "Nada de resposta inventada: só o que está cadastrado",
+      "Quando é caso pra humano, ela chama a equipe na mesma conversa",
+    ],
+  },
+  agenda: {
+    title: "O paciente marca sozinho, na conversa",
+    lead: "Cada horário que você marca hoje custa uma ida e volta: consultar a agenda, oferecer, esperar, confirmar. E o horário vago continua vago enquanto isso.",
+    bullets: [
+      "A Alice consulta a agenda real e oferece só o que existe",
+      "Confirma o horário e registra sem você tocar em nada",
+      "Só fecha depois do comprovante do sinal, se você exigir",
+      "Remarca e cancela sozinha, mantendo a agenda limpa",
+    ],
+  },
+  recontato: {
+    title: "Quem sumiu não volta sozinho",
+    lead: "O lead pergunta o preço, some, e ninguém volta nele. Não é falta de interesse: é falta de alguém com tempo pra lembrar dele dois dias depois.",
+    bullets: [
+      "Recontato automático no tempo que você definir",
+      "Para na hora que a pessoa responde ou já tem horário marcado",
+      "Só dentro do horário comercial, sem parecer robô",
+      "Reativação da base inteira quando você quiser encher a agenda",
+    ],
+  },
+  lembrete: {
+    title: "Falta menos quando alguém lembra",
+    lead: "Toda falta é um horário que não volta e uma cadeira parada. E lembrar paciente por paciente, na mão, ninguém faz todo dia.",
+    bullets: [
+      "Lembrete automático quantas horas antes você quiser",
+      "O paciente confirma respondendo a própria mensagem",
+      "Se ele cancelar, a Alice já oferece a vaga pra lista de espera",
+    ],
+  },
+  posvenda: {
+    title: "O pós é onde o paciente volta",
+    lead: "Depois do procedimento a conversa morre. Aí o retorno não acontece, a manutenção passa do ponto e o paciente vai fazer em outro lugar.",
+    bullets: [
+      "Acompanhamento no dia seguinte, perguntando como ele está",
+      "Retorno de toxina, preenchimento e planos no tempo certo",
+      "Mensagem de aniversário no horário que você escolher",
+      "Pesquisa de satisfação e convite pra avaliar no Google",
+    ],
+  },
+  catalogo: {
+    title: "Ela precisa saber o que você vende",
+    lead: "Sem catálogo, toda pergunta de preço, duração ou indicação vira mensagem pra alguém responder.",
+    bullets: [
+      "Cadastre procedimentos, produtos e profissionais uma vez só",
+      "A Alice responde valor, duração e indicação sem inventar nada",
+      "Ela nunca oferece algo que você não cadastrou",
+    ],
+  },
+  broadcasts: {
+    title: "Sua base inteira em dois cliques",
+    lead: "Você tem uma lista de contatos que já falaram com você. Hoje ela está parada.",
+    bullets: [
+      "Dispare pra base toda, por etapa do funil ou por contato escolhido",
+      "Envio aos poucos e só no horário comercial, sem queimar o número",
+      "Reativação de quem fez procedimento há X meses",
+    ],
+  },
+  briefing: {
+    title: "Configure tudo colando um texto",
+    lead: "Montar a base de conhecimento na mão leva horas. Colando o seu briefing, leva minutos.",
+    bullets: [
+      "Cole como a sua clínica funciona e a Alice se configura sozinha",
+      "Ela monta FAQ, regras, roteiros e catálogo a partir do texto",
+      "Você revisa antes de qualquer coisa entrar no ar",
+    ],
+  },
+  aprendizado: {
+    title: "Ela fica melhor a cada conversa",
+    lead: "Toda vez que um humano corrige a Alice, tem uma lição ali. Sem isso, o mesmo erro se repete.",
+    bullets: [
+      "Um robô lê as conversas toda noite e tira lições",
+      "Nada muda sem você aprovar",
+      "Aprovar vira FAQ ou regra de verdade",
+    ],
+  },
+  api: {
+    title: "Conecte com o resto do seu sistema",
+    lead: "Seu site, seu formulário e o seu sistema de gestão podem alimentar o funil direto.",
+    bullets: [
+      "Chaves de API com escopo por permissão",
+      "Empurre leads e agendamentos de fora pra dentro",
+    ],
+  },
+};
+
+function upsellWaLink(key) {
+  const clinic = (state.clinics || []).find((x) => x.id === state.clinicId);
+  const nome = clinic?.name ? ` Sou da ${clinic.name}.` : "";
+  const texto = `Oi! Estou no plano Grátis do painel da Alice e quero ativar a Alice.${nome}`;
+  return `${UPSELL_WA}?text=${encodeURIComponent(texto)}`;
+}
+
+// Prova social é bom; prova com o dado do próprio cliente é melhor. Monta as
+// frases a partir do que o /dashboard/stats devolveu em `upsell`.
+function upsellProofLines(u) {
+  if (!u) return [];
+  const lines = [];
+  if (u.foraDoHorario > 0) lines.push(`<strong>${u.foraDoHorario}</strong> ${u.foraDoHorario === 1 ? "lead chegou" : "leads chegaram"} fora do seu horário de atendimento. A Alice teria respondido na hora.`);
+  if (u.semResposta > 0) lines.push(`<strong>${u.semResposta}</strong> ${u.semResposta === 1 ? "conversa está" : "conversas estão"} esperando resposta desde a última mensagem do cliente.`);
+  if (u.demoraramMaisDeUmaHora > 0) lines.push(`<strong>${u.demoraramMaisDeUmaHora}</strong> ${u.demoraramMaisDeUmaHora === 1 ? "lead esperou" : "leads esperaram"} mais de uma hora pela primeira resposta.`);
+  if (u.minutosNoChat >= 30) {
+    const h = Math.floor(u.minutosNoChat / 60);
+    const m = u.minutosNoChat % 60;
+    const label = h > 0 ? `${h}h${m ? String(m).padStart(2, "0") : ""}` : `${m} min`;
+    lines.push(`Sua equipe digitou <strong>${u.respostasNaMao}</strong> respostas no período — cerca de <strong>${label}</strong> só no chat.`);
+  }
+  return lines;
+}
+
+function openUpsell(key) {
+  const copy = UPSELL_COPY[key] || UPSELL_COPY.geral;
+  document.getElementById("upsell-modal-title").textContent = copy.title;
+  document.getElementById("upsell-modal-lead").textContent = copy.lead;
+  const list = document.getElementById("upsell-modal-list");
+  list.innerHTML = "";
+  for (const b of copy.bullets) list.appendChild(el("li", {}, [b]));
+
+  const proof = document.getElementById("upsell-modal-proof");
+  const lines = upsellProofLines(state.upsell);
+  if (lines.length) {
+    proof.innerHTML = `<div class="upsell-proof-title">No seu painel, nos últimos ${state.periodDays || 30} dias</div>` +
+      lines.map((l) => `<p>${l}</p>`).join("");
+    proof.hidden = false;
+  } else {
+    proof.hidden = true;
+  }
+
+  document.getElementById("upsell-modal-cta").href = upsellWaLink(key);
+  document.getElementById("upsell-overlay").style.display = "flex";
+}
+
+function closeUpsell() {
+  document.getElementById("upsell-overlay").style.display = "none";
+}
+
+document.getElementById("upsell-close").addEventListener("click", closeUpsell);
+document.getElementById("upsell-overlay").addEventListener("click", (e) => {
+  if (e.target.id === "upsell-overlay") closeUpsell();
+});
+
+// Qualquer botão com data-upsell="<chave>" abre o modal.
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-upsell]");
+  if (!btn || document.body.dataset.plan !== "free") return;
+  e.preventDefault();
+  const key = btn.dataset.upsell;
+  if (key === "tour") { goToTab("settings"); openSettingsSub("clinic-data"); return; }
+  openUpsell(key);
+});
+
+// Preenche o bloco de venda do Início com os números reais da clínica.
+function renderUpsellHero(u) {
+  state.upsell = u || null;
+  const box = document.getElementById("upsell-metrics");
+  if (!box) return;
+  box.innerHTML = "";
+  if (!u) return;
+
+  const cards = [];
+  if (u.leads > 0) cards.push({ n: u.leads, label: u.leads === 1 ? "lead novo no período" : "leads novos no período" });
+  if (u.foraDoHorario > 0) cards.push({ n: u.foraDoHorario, label: "chegaram fora do seu horário", warn: true });
+  if (u.semResposta > 0) cards.push({ n: u.semResposta, label: "esperando resposta agora", warn: true });
+  if (u.tempoRespostaMin != null) cards.push({ n: `${u.tempoRespostaMin} min`, label: "de espera até a sua resposta", warn: u.tempoRespostaMin > 15 });
+  if (u.respostasNaMao > 0) cards.push({ n: u.respostasNaMao, label: "respostas digitadas na mão" });
+
+  for (const c of cards.slice(0, 4)) {
+    box.appendChild(
+      el("div", { class: `upsell-metric${c.warn ? " upsell-metric--warn" : ""}` }, [
+        el("div", { class: "upsell-metric-n" }, [String(c.n)]),
+        el("div", { class: "upsell-metric-l" }, [c.label]),
+      ]),
+    );
+  }
+
+  // Manchete personalizada: a dor mais forte que o dado mostrar.
+  const title = document.getElementById("upsell-hero-title");
+  const lead = document.getElementById("upsell-hero-lead");
+  if (u.semResposta > 0) {
+    title.textContent = `${u.semResposta} ${u.semResposta === 1 ? "pessoa está" : "pessoas estão"} esperando você responder.`;
+    lead.textContent = "Enquanto essa mensagem fica sem resposta, o lead que você pagou pra trazer vai esfriando — e provavelmente já está falando com outra clínica.";
+  } else if (u.foraDoHorario > 0) {
+    title.textContent = `${u.foraDoHorario} ${u.foraDoHorario === 1 ? "lead chegou" : "leads chegaram"} quando a clínica estava fechada.`;
+    lead.textContent = "Eles não escolhem a hora de mandar mensagem. A Alice não precisa que a clínica esteja aberta pra responder.";
+  } else if (u.respostasNaMao > 0) {
+    title.textContent = `Sua equipe digitou ${u.respostasNaMao} respostas na mão.`;
+    lead.textContent = "Cada uma delas é tempo que saiu de outra coisa. A Alice responderia todas em segundos, sem tirar ninguém do lugar.";
+  }
+
+  // Rodapé do botão da barra lateral
+  const sub = document.getElementById("unlock-cta-sub");
+  if (sub) {
+    sub.textContent = u.semResposta > 0
+      ? `${u.semResposta} ${u.semResposta === 1 ? "lead esperando" : "leads esperando"}`
+      : u.foraDoHorario > 0
+        ? `${u.foraDoHorario} fora do horário`
+        : "Pare de responder na mão";
+  }
 }
 
 // Troca de vocabulário clínica -> loja aplicada em todo o texto do painel no
@@ -3348,6 +3574,7 @@ async function loadDashboard() {
   const stats = await api(`/dashboard/stats?start=${start.toISOString()}&end=${end.toISOString()}`);
 
   renderUsageBar(stats.usage);
+  renderUpsellHero(stats.upsell);
 
   document.getElementById("stat-attended").textContent = stats.attended;
   document.getElementById("stat-appointments").textContent = stats.appointmentsTotal;
@@ -5721,8 +5948,11 @@ const SETTINGS_SUB_LOADERS = {
 function openSettingsSub(sub) {
   // Abas so da administracao da Alice - cliente cai em "Dados da clinica".
   if ((sub === "briefing" || sub === "clinics" || sub === "meta") && state.staff?.role !== "admin") sub = "clinic-data";
-  // Plano gratis: abas de atendimento/automacao nao existem - cai em "Dados da clinica".
-  if (document.body.dataset.plan === "free" && PLAN_FREE_BLOCKED_SUBS.has(sub)) sub = "clinic-data";
+  // Plano grátis: a sub-aba está trancada - em vez de abrir, vende a Alice.
+  if (document.body.dataset.plan === "free" && PLAN_FREE_BLOCKED_SUBS.has(sub)) {
+    openUpsell(document.querySelector(`#settings-tabs button[data-sub="${sub}"]`)?.dataset.planLock || "geral");
+    return;
+  }
   // No modo loja, abas de clinica nao existem - cai em "Dados da loja".
   const tabBtn = document.querySelector(`#settings-tabs button[data-sub="${sub}"]`);
   if (document.body.dataset.biz === "loja" && tabBtn?.classList.contains("biz-clinica-only")) sub = "clinic-data";
@@ -5740,8 +5970,11 @@ document.getElementById("settings-tabs").addEventListener("click", (e) => {
 });
 
 function goToTab(tab) {
-  // Plano gratis: sem aba Chat nem Agenda - manda pro Início.
-  if (document.body.dataset.plan === "free" && PLAN_FREE_BLOCKED_TABS.has(tab)) tab = "dashboard";
+  // Plano grátis: a aba está trancada - em vez de abrir, vende a Alice.
+  if (document.body.dataset.plan === "free" && PLAN_FREE_BLOCKED_TABS.has(tab)) {
+    openUpsell(document.querySelector(`.nav-item[data-tab="${tab}"]`)?.dataset.planLock || "geral");
+    return;
+  }
   document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
   document.getElementById(`tab-${tab}`).classList.add("active");

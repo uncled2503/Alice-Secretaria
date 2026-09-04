@@ -97,13 +97,15 @@ async function clinicCredentials(clinicId: string): Promise<UazapiCredentials> {
   return { baseUrl: normalizeUazapiBaseUrl(clinic.uazapiBaseUrl), token: clinic.uazapiToken };
 }
 
-// Plano grátis: o WhatsApp fica conectado só pra captar o lead do anúncio; a
-// clínica não tem atendimento, então NADA é enviado pelo número. Guarda de
-// última linha (a Alice e os crons já pulam o plano grátis antes disso).
-async function clinicOutboundBlocked(clinicId: string): Promise<boolean> {
+// Plano grátis: a equipe responde na mão (manual = true passa direto), mas
+// NADA sai automaticamente pelo número - nem a Alice, nem lembrete, nem
+// recontato. Guarda de última linha; a Alice e os crons já pulam o plano
+// grátis antes de chegar aqui.
+async function automatedSendBlocked(clinicId: string, manual: boolean): Promise<boolean> {
+  if (manual) return false;
   const clinic = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { plan: true } });
   if (isFreePlan(clinic?.plan)) {
-    console.warn(`[uazapi] envio bloqueado: clinica ${clinicId} esta no plano gratuito (sem atendimento).`);
+    console.warn(`[uazapi] envio automatico bloqueado: clinica ${clinicId} esta no plano gratuito.`);
     return true;
   }
   return false;
@@ -370,8 +372,10 @@ function splitMessage(text: string, maxParts: number): string[] {
   return parts;
 }
 
-export async function sendText(clinicId: string, phone: string, text: string): Promise<void> {
-  if (await clinicOutboundBlocked(clinicId)) return;
+// `manual` = mensagem escrita por uma pessoa da equipe no painel. Só isso pode
+// sair pelo WhatsApp de uma clinica no plano gratuito.
+export async function sendText(clinicId: string, phone: string, text: string, opts: { manual?: boolean } = {}): Promise<void> {
+  if (await automatedSendBlocked(clinicId, opts.manual === true)) return;
   const [credentials, config] = await Promise.all([
     clinicCredentials(clinicId),
     prisma.clinic.findUnique({
@@ -400,9 +404,9 @@ export type OutgoingMediaKind = "image" | "video" | "document" | "audio" | "ptt"
 export async function sendMedia(
   clinicId: string,
   phone: string,
-  opts: { dataUrl: string; kind: OutgoingMediaKind; caption?: string; filename?: string },
+  opts: { dataUrl: string; kind: OutgoingMediaKind; caption?: string; filename?: string; manual?: boolean },
 ): Promise<void> {
-  if (await clinicOutboundBlocked(clinicId)) return;
+  if (await automatedSendBlocked(clinicId, opts.manual === true)) return;
   const credentials = await clinicCredentials(clinicId);
   const mimeMatch = opts.dataUrl.match(/^data:([\w.+-]+\/[\w.+-]+)(?:;[\w.+=%-]+)*;base64,/);
   const body: Record<string, unknown> = {
@@ -816,10 +820,19 @@ async function handleQueuedPayload(clinicId: string, body: unknown): Promise<voi
       media,
       referral: incoming.referral,
     });
-    if (!recorded || recorded.humanTakeover) continue;
+    if (!recorded) continue;
 
-    // Plano grátis: registrou o lead, mas nao ha atendimento - nao responde.
-    if (freePlan) continue;
+    // Plano grátis: a Alice nao atende. A conversa e sempre da equipe e entra
+    // como "nao lida" pra alguem responder na mao.
+    if (freePlan) {
+      await prisma.conversation.update({
+        where: { id: recorded.conversationId },
+        data: { humanTakeover: true, handoffPending: true },
+      });
+      continue;
+    }
+
+    if (recorded.humanTakeover) continue;
 
     if (recorded.replyDelayMs > 0) {
       scheduleGroupedReply(clinicId, incoming.phone, recorded.conversationId, recorded.replyDelayMs, imageDataUrl);

@@ -12,11 +12,9 @@ test("isFreePlan so reconhece o plano gratis", () => {
   assert.equal(isFreePlan(undefined), false);
 });
 
-test("freePlanBlocksPath bloqueia atendimento, agenda e automacoes", () => {
-  // Chat: qualquer metodo
-  assert.equal(freePlanBlocksPath("GET", "/conversations"), true);
-  assert.equal(freePlanBlocksPath("GET", "/conversations/abc/messages"), true);
-  assert.equal(freePlanBlocksPath("POST", "/conversations/abc/send"), true);
+test("freePlanBlocksPath bloqueia agenda, automacoes e devolver-pra-Alice", () => {
+  // "Devolver a conversa para a Alice" nao existe no plano gratis
+  assert.equal(freePlanBlocksPath("POST", "/conversations/abc/resume"), true);
   // Escrita em area de plano pago
   assert.equal(freePlanBlocksPath("POST", "/procedures"), true);
   assert.equal(freePlanBlocksPath("DELETE", "/procedures/p1"), true);
@@ -27,6 +25,18 @@ test("freePlanBlocksPath bloqueia atendimento, agenda e automacoes", () => {
   assert.equal(freePlanBlocksPath("PATCH", "/rules/x"), true);
   assert.equal(freePlanBlocksPath("POST", "/briefing/apply"), true);
   assert.equal(freePlanBlocksPath("POST", "/api-keys"), true);
+});
+
+test("freePlanBlocksPath NAO bloqueia o chat humano", () => {
+  // O plano gratis atende na mao: ler e responder conversa tem que passar
+  assert.equal(freePlanBlocksPath("GET", "/conversations"), false);
+  assert.equal(freePlanBlocksPath("GET", "/conversations?archived=1"), false);
+  assert.equal(freePlanBlocksPath("GET", "/conversations/abc/messages"), false);
+  assert.equal(freePlanBlocksPath("POST", "/conversations/abc/send"), false);
+  assert.equal(freePlanBlocksPath("POST", "/conversations/abc/send-media"), false);
+  assert.equal(freePlanBlocksPath("POST", "/conversations/abc/takeover"), false);
+  assert.equal(freePlanBlocksPath("POST", "/conversations/abc/seen"), false);
+  assert.equal(freePlanBlocksPath("POST", "/conversations/abc/archive"), false);
 });
 
 test("freePlanBlocksPath NAO bloqueia CRM, Meta e leitura", () => {

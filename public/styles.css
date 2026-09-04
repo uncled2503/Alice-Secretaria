@@ -96,15 +96,114 @@ body[data-biz="loja"] p.biz-loja-only,
 body[data-biz="loja"] div.biz-loja-only,
 body[data-biz="loja"] li.biz-loja-only { display: block; }
 
-/* --- Plano Grátis (só CRM + Meta) ---
-   body[data-plan="free"] esconde tudo que o plano grátis não tem: aba Chat e
-   Agenda, sub-abas de atendimento/automação, cards de agenda no dashboard.
-   [data-plan-free] são os blocos que só aparecem no plano grátis. */
+/* --- Plano Grátis (CRM + Meta + atendimento humano) ---
+   [data-plan-paid]  -> some no plano grátis (cards sem dado, botões sem função)
+   [data-plan-lock]  -> FICA visível, com cadeado; clicar abre o modal de venda
+   [data-plan-free]  -> blocos que só aparecem no plano grátis (a venda em si) */
 body[data-plan="free"] [data-plan-paid] { display: none !important; }
 [data-plan-free] { display: none; }
 body[data-plan="free"] [data-plan-free] { display: block; }
-/* no plano grátis os cards "de loja" (contatos novos, conversas) valem também */
+/* os blocos de venda que são flex precisam recuperar o display certo */
+body[data-plan="free"] .upsell-strip[data-plan-free] { display: flex; }
 body[data-plan="free"] .stat-card.biz-loja-only { display: flex; }
+
+body[data-plan="free"] [data-plan-lock] { position: relative; opacity: 0.62; }
+body[data-plan="free"] [data-plan-lock]::after {
+  content: "🔒"; font-size: 0.72em; margin-left: 0.35rem; line-height: 1;
+}
+body[data-plan="free"] [data-plan-lock]:hover { opacity: 1; }
+body[data-plan="free"] .nav-item[data-plan-lock] .nav-label::after { content: ""; }
+
+/* Bloco grande de venda no Início */
+.upsell-hero {
+  border-radius: 14px; padding: 1.25rem 1.4rem; margin-bottom: 1rem;
+  background: linear-gradient(135deg, var(--brand-orange) 0%, #7c2d12 100%);
+  color: #fff; box-shadow: 0 10px 30px rgba(124, 45, 18, 0.25);
+}
+.upsell-tag {
+  display: inline-block; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em;
+  text-transform: uppercase; background: rgba(255, 255, 255, 0.18);
+  padding: 0.2rem 0.55rem; border-radius: 999px; margin-bottom: 0.6rem;
+}
+.upsell-hero h2 { margin: 0 0 0.4rem; font-size: 1.45rem; line-height: 1.2; color: #fff; }
+.upsell-hero p { margin: 0; color: rgba(255, 255, 255, 0.9); font-size: 0.92rem; line-height: 1.5; }
+.upsell-close { margin-top: 0.9rem !important; font-weight: 500; }
+.upsell-metrics { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 1rem; }
+.upsell-metric {
+  background: rgba(255, 255, 255, 0.13); border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 10px; padding: 0.6rem 0.85rem; min-width: 118px;
+}
+.upsell-metric--warn { background: rgba(255, 255, 255, 0.22); border-color: rgba(255, 255, 255, 0.4); }
+.upsell-metric-n { font-size: 1.5rem; font-weight: 700; line-height: 1.1; }
+.upsell-metric-l { font-size: 0.72rem; color: rgba(255, 255, 255, 0.85); margin-top: 0.15rem; }
+.upsell-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 1.1rem; }
+
+.upsell-btn {
+  display: inline-block; background: #fff; color: var(--brand-orange); border: 0;
+  border-radius: 9px; padding: 0.6rem 1.1rem; font-weight: 700; font-size: 0.88rem;
+  cursor: pointer; text-decoration: none; text-align: center;
+}
+.upsell-btn:hover { background: #fff7ed; }
+.upsell-btn--sm { padding: 0.45rem 0.9rem; font-size: 0.8rem; white-space: nowrap; }
+.upsell-btn--block { display: block; width: 100%; margin-top: 0.9rem; background: var(--brand-orange); color: #fff; }
+.upsell-btn--block:hover { background: var(--brand-orange-hover); }
+.upsell-btn-ghost {
+  background: transparent; color: #fff; border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 9px; padding: 0.6rem 1.1rem; font-weight: 600; font-size: 0.88rem; cursor: pointer;
+}
+.upsell-btn-ghost:hover { background: rgba(255, 255, 255, 0.12); }
+
+/* Faixa de venda no topo do Chat / CRM / Contatos */
+.upsell-strip {
+  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  flex-wrap: wrap; border: 1px solid var(--brand-orange-ring);
+  background: var(--brand-orange-soft); border-left: 3px solid var(--brand-orange);
+  border-radius: 10px; padding: 0.7rem 0.95rem; margin-bottom: 0.9rem;
+}
+.upsell-strip strong { display: block; color: var(--text); font-size: 0.9rem; }
+.upsell-strip span { display: block; color: var(--text-muted); font-size: 0.82rem; margin-top: 0.15rem; }
+.upsell-strip .upsell-btn { background: var(--brand-orange); color: #fff; }
+.upsell-strip .upsell-btn:hover { background: var(--brand-orange-hover); }
+
+/* Botão fixo na barra lateral */
+.unlock-cta {
+  width: 100%; display: block; text-align: left; cursor: pointer; margin-bottom: 0.5rem;
+  background: linear-gradient(135deg, var(--brand-orange) 0%, #7c2d12 100%);
+  color: #fff; border: 0; border-radius: 10px; padding: 0.6rem 0.75rem;
+}
+.unlock-cta:hover { filter: brightness(1.08); }
+.unlock-cta-top { display: block; font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.85; }
+.unlock-cta-main { display: block; font-size: 0.95rem; font-weight: 700; line-height: 1.25; }
+.unlock-cta-sub { display: block; font-size: 0.7rem; opacity: 0.85; margin-top: 0.1rem; }
+
+/* Modal de upgrade */
+.upsell-modal { max-width: 520px; }
+.upsell-modal-lead { color: var(--text-muted); font-size: 0.9rem; line-height: 1.55; margin: 0 0 0.9rem; }
+.upsell-list { margin: 0; padding: 0; list-style: none; }
+.upsell-list li {
+  position: relative; padding: 0.3rem 0 0.3rem 1.5rem; font-size: 0.88rem; color: var(--text);
+}
+.upsell-list li::before {
+  content: "✓"; position: absolute; left: 0; top: 0.3rem;
+  color: var(--brand-orange); font-weight: 700;
+}
+.upsell-modal-proof {
+  margin-top: 1rem; border: 1px solid var(--border); border-radius: 10px;
+  padding: 0.75rem 0.9rem; background: var(--bg);
+}
+.upsell-proof-title {
+  font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-faint); font-weight: 700; margin-bottom: 0.4rem;
+}
+.upsell-modal-proof p { margin: 0.25rem 0; font-size: 0.85rem; color: var(--text); line-height: 1.45; }
+.upsell-modal-proof strong { color: var(--brand-orange); }
+.upsell-modal-foot { margin: 0.7rem 0 0; text-align: center; }
+
+@media (max-width: 640px) {
+  .upsell-hero h2 { font-size: 1.2rem; }
+  .upsell-strip { flex-direction: column; align-items: flex-start; }
+  .upsell-strip .upsell-btn { width: 100%; }
+}
 
 /* --- Shell / Sidebar --- */
 .app-shell { display: flex; min-height: 100vh; }

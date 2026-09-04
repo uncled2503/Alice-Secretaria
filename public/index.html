@@ -62,14 +62,14 @@
           <button data-tab="crm" class="nav-item">
             <span class="nav-icon" data-icon="grid"></span> <span class="nav-label">CRM</span>
           </button>
-          <button data-tab="chat" class="nav-item" data-plan-paid>
+          <button data-tab="chat" class="nav-item">
             <span class="nav-icon" data-icon="chat"></span> <span class="nav-label">Chat</span>
           </button>
         </div>
 
         <div class="nav-group">
           <div class="nav-group-label">Operação</div>
-          <button data-tab="agenda" class="nav-item biz-clinica-only" data-plan-paid>
+          <button data-tab="agenda" class="nav-item biz-clinica-only" data-plan-lock="agenda">
             <span class="nav-icon" data-icon="calendar"></span> <span class="nav-label">Agenda</span>
           </button>
           <button data-tab="reports" class="nav-item">
@@ -86,6 +86,11 @@
       </nav>
 
       <div class="sidebar-footer">
+        <button type="button" id="btn-unlock-alice" class="unlock-cta" data-plan-free data-upsell="geral">
+          <span class="unlock-cta-top">Sua Alice está desligada</span>
+          <span class="unlock-cta-main">Ativar a Alice</span>
+          <span class="unlock-cta-sub" id="unlock-cta-sub">Pare de responder na mão</span>
+        </button>
         <button id="btn-staff-session" class="theme-toggle" style="margin-bottom:0.5rem">
           <span class="nav-icon" data-icon="user"></span> <span id="staff-session-label">—</span>
         </button>
@@ -127,9 +132,18 @@
 
         <div id="dash-usage" class="usage-bar" hidden></div>
 
-        <div class="card" data-plan-free style="border-left:3px solid var(--accent)">
-          <strong>Plano Grátis — CRM + Meta.</strong>
-          <p class="hint" style="margin:0.3rem 0 0">Você capta o lead do anúncio (com a atribuição da Meta), trabalha ele no funil, e cada movimento vira evento de conversão pra melhorar a campanha. O atendimento pela Alice, a agenda e as automações entram no upgrade.</p>
+        <div class="upsell-hero" data-plan-free>
+          <div class="upsell-hero-body">
+            <span class="upsell-tag">Plano Grátis</span>
+            <h2 id="upsell-hero-title">Você está fazendo o trabalho da Alice.</h2>
+            <p id="upsell-hero-lead">Os leads chegam do anúncio, entram no funil e mandam evento pra Meta. Só que quem responde cada um deles, uma mensagem por vez, é você.</p>
+            <div class="upsell-metrics" id="upsell-metrics"></div>
+            <p class="upsell-close" id="upsell-hero-close">A Alice responde em segundos, 24 horas por dia, 7 dias por semana — no seu WhatsApp, com o seu tom, com as suas regras. E nunca deixa um lead esperando.</p>
+            <div class="upsell-actions">
+              <button type="button" class="upsell-btn" data-upsell="geral">Quero ativar a Alice</button>
+              <button type="button" class="upsell-btn-ghost" data-upsell="tour">Ver tudo que está bloqueado</button>
+            </div>
+          </div>
         </div>
 
         <div class="period-row" id="period-row">
@@ -231,6 +245,14 @@
           <input id="contacts-search" type="text" placeholder="Buscar por nome ou telefone..." class="search-input" />
         </div>
 
+        <div class="upsell-strip" data-plan-free>
+          <div>
+            <strong id="upsell-contacts-title">Essa lista só cresce.</strong>
+            <span>No plano Grátis, cada contato aqui depende de alguém lembrar de falar com ele. Com a Alice, todos são atendidos, qualificados e reativados no automático.</span>
+          </div>
+          <button type="button" class="upsell-btn upsell-btn--sm" data-upsell="geral">Ativar a Alice</button>
+        </div>
+
         <div class="card">
           <table>
             <thead><tr><th data-biz-label="Contato|Cliente">Contato</th><th>Telefone</th><th>Origem</th><th>Desde</th><th></th></tr></thead>
@@ -247,17 +269,31 @@
         <div class="toolbar">
           <input id="crm-search" type="text" placeholder="Buscar por nome ou telefone..." class="search-input" />
         </div>
+        <div class="upsell-strip" data-plan-free>
+          <div>
+            <strong>Cada card parado aqui é dinheiro esfriando.</strong>
+            <span id="upsell-crm-line">Lead que não recebe retorno em minutos vira lead perdido. A Alice responde na hora, qualifica e ainda busca de volta quem sumiu — sem você lembrar de nada.</span>
+          </div>
+          <button type="button" class="upsell-btn upsell-btn--sm" data-upsell="recontato">Ativar a Alice</button>
+        </div>
         <div id="crm-board" class="crm-board"></div>
       </section>
 
       <section id="tab-chat" class="tab-panel">
         <div class="page-header"><h1>Conversas</h1></div>
+        <div class="upsell-strip" data-plan-free>
+          <div>
+            <strong>Todas essas respostas estão saindo do seu tempo.</strong>
+            <span id="upsell-chat-line">No plano Grátis é você quem digita cada uma. A Alice responderia em segundos, inclusive de madrugada.</span>
+          </div>
+          <button type="button" class="upsell-btn upsell-btn--sm" data-upsell="alice">Ativar a Alice</button>
+        </div>
         <div class="card chat-card">
           <div class="chat-layout">
             <div class="chat-list-pane">
               <div class="chat-filter-tabs" id="chat-filter-tabs">
                 <button data-filter="all" class="active">Todos</button>
-                <button data-filter="alice">Alice</button>
+                <button data-filter="alice" data-plan-paid>Alice</button>
                 <button data-filter="human">Humano</button>
                 <button data-filter="archived">Arquivadas</button>
               </div>
@@ -273,7 +309,7 @@
               <div id="chat-header" style="display:none"></div>
               <div id="chat-messages" style="display:none"></div>
               <div id="chat-controls" style="display:none">
-                <button id="btn-toggle-human"></button>
+                <button id="btn-toggle-human" data-plan-paid></button>
                 <div id="chat-attach-preview" hidden></div>
                 <form id="chat-form">
                   <input id="chat-file-input" type="file" accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt,.csv" hidden />
@@ -495,28 +531,36 @@
       <section id="tab-settings" class="tab-panel">
         <div class="page-header"><h1>Personalizar Alice</h1></div>
 
+        <div class="upsell-strip" data-plan-free>
+          <div>
+            <strong>Tudo com 🔒 aqui já está pronto esperando você.</strong>
+            <span>Não é preciso migrar nada nem começar de novo: sua base, seu funil e suas conversas continuam onde estão. A Alice só é ligada por cima e assume o atendimento no mesmo número.</span>
+          </div>
+          <button type="button" class="upsell-btn upsell-btn--sm" data-upsell="geral">Ativar a Alice</button>
+        </div>
+
         <div class="settings-tabs" id="settings-tabs">
           <button data-sub="clinic-data" class="active" data-biz-label="Dados da clínica|Dados da loja">Dados da clínica</button>
-          <button data-sub="briefing" data-plan-paid>Briefing</button>
-          <button data-sub="products" data-plan-paid>Produtos</button>
-          <button data-sub="procedures" class="biz-clinica-only" data-plan-paid>Procedimentos</button>
-          <button data-sub="staff" class="biz-clinica-only" data-plan-paid>Profissionais</button>
+          <button data-sub="briefing" data-plan-lock="briefing">Briefing</button>
+          <button data-sub="products" data-plan-lock="catalogo">Produtos</button>
+          <button data-sub="procedures" class="biz-clinica-only" data-plan-lock="catalogo">Procedimentos</button>
+          <button data-sub="staff" class="biz-clinica-only" data-plan-lock="catalogo">Profissionais</button>
           <button data-sub="channels">Canais</button>
-          <button data-sub="broadcasts" data-plan-paid>Mensagens Programadas</button>
-          <button data-sub="appt-reminder" class="biz-clinica-only" data-plan-paid>Lembrete de Consulta</button>
-          <button data-sub="post-procedure" class="biz-clinica-only" data-plan-paid>Pós-procedimento</button>
-          <button data-sub="renewal" class="biz-clinica-only" data-plan-paid>Renovação</button>
-          <button data-sub="birthday" data-plan-paid>Aniversário</button>
-          <button data-sub="followup" data-plan-paid>Recontato</button>
+          <button data-sub="broadcasts" data-plan-lock="broadcasts">Mensagens Programadas</button>
+          <button data-sub="appt-reminder" class="biz-clinica-only" data-plan-lock="lembrete">Lembrete de Consulta</button>
+          <button data-sub="post-procedure" class="biz-clinica-only" data-plan-lock="posvenda">Pós-procedimento</button>
+          <button data-sub="renewal" class="biz-clinica-only" data-plan-lock="posvenda">Renovação</button>
+          <button data-sub="birthday" data-plan-lock="posvenda">Aniversário</button>
+          <button data-sub="followup" data-plan-lock="recontato">Recontato</button>
           <button data-sub="funnel">Funil</button>
-          <button data-sub="blocks" class="biz-clinica-only" data-plan-paid>Bloqueios de agenda</button>
-          <button data-sub="waitlist" class="biz-clinica-only" data-plan-paid>Lista de espera</button>
+          <button data-sub="blocks" class="biz-clinica-only" data-plan-lock="agenda">Bloqueios de agenda</button>
+          <button data-sub="waitlist" class="biz-clinica-only" data-plan-lock="agenda">Lista de espera</button>
           <button data-sub="history">Histórico</button>
-          <button data-sub="learning" data-plan-paid>Aprendizado da Alice</button>
-          <button data-sub="rules" data-plan-paid>Personalizar Alice</button>
+          <button data-sub="learning" data-plan-lock="aprendizado">Aprendizado da Alice</button>
+          <button data-sub="rules" data-plan-lock="alice">Personalizar Alice</button>
           <button data-sub="clinics">Clínicas</button>
           <button data-sub="team">Equipe</button>
-          <button data-sub="external-api" data-plan-paid>API Externa</button>
+          <button data-sub="external-api" data-plan-lock="api">API Externa</button>
           <button data-sub="meta">Meta / Pixel</button>
         </div>
 
@@ -2062,6 +2106,21 @@
             <button type="submit">Salvar</button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <!-- Upgrade do plano Grátis: abre ao clicar num recurso bloqueado ou num CTA. -->
+    <div id="upsell-overlay" class="modal-overlay" style="display:none">
+      <div class="modal-card upsell-modal">
+        <div class="modal-header">
+          <h3 id="upsell-modal-title">Ativar a Alice</h3>
+          <button type="button" id="upsell-close" class="modal-close" aria-label="Fechar">&times;</button>
+        </div>
+        <p class="upsell-modal-lead" id="upsell-modal-lead"></p>
+        <ul class="upsell-list" id="upsell-modal-list"></ul>
+        <div class="upsell-modal-proof" id="upsell-modal-proof" hidden></div>
+        <a id="upsell-modal-cta" class="upsell-btn upsell-btn--block" href="#" target="_blank" rel="noopener">Falar com a gente e ativar</a>
+        <p class="hint upsell-modal-foot">Sua conta, seus contatos e seu funil continuam exatamente como estão. A Alice só entra por cima e assume o atendimento.</p>
       </div>
     </div>
 

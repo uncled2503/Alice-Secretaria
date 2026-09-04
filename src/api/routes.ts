@@ -33,6 +33,8 @@ import { createRuleDraft, RULE_CATEGORIES, seedDefaultRules, reseedRulesForProfi
 import { BRIEFING_TEMPLATE, parseBriefing, applyBriefing, BriefingPlanSchema } from "../ai/briefing.js";
 import { runLearningJob, approveInsight, rejectInsight } from "../ai/learning.js";
 import { usageSnapshot } from "../crm/usage.js";
+import { isFreePlan } from "../crm/plan.js";
+import { upsellStats } from "../crm/upsell.js";
 import { API_SCOPES, API_SCOPE_IDS, generateApiKey } from "./external/keys.js";
 import { answerSiteQuestion, type SiteMessage } from "../ai/siteAssistant.js";
 import { seedLaleblu } from "../maintenance/seedLaleblu.js";
@@ -993,6 +995,9 @@ apiRouter.get(
       byState: leadsByState(attendedPhones.map((p) => p.phone)),
       daily,
       usage: await usageSnapshot(clinic.id),
+      // Plano gratis: os numeros do proprio historico que mostram o custo de
+      // atender na mao (alimentam os blocos de upgrade do painel).
+      upsell: isFreePlan(clinic.plan) ? await upsellStats(clinic.id, startDate, endDate) : null,
     });
   })
 );
@@ -1541,7 +1546,7 @@ apiRouter.post(
     });
 
     try {
-      await sendText(conversation.patient.clinicId, conversation.patient.phone, text);
+      await sendText(conversation.patient.clinicId, conversation.patient.phone, text, { manual: true });
     } catch (err) {
       console.error("Falha ao enviar mensagem via WhatsApp:", err);
       res.status(502).json({ ok: false, error: "Mensagem salva, mas falhou ao enviar pelo WhatsApp" });
@@ -1618,6 +1623,7 @@ apiRouter.post(
         kind,
         caption: caption?.trim(),
         filename: safeName,
+        manual: true,
       });
     } catch (err) {
       console.error("Falha ao enviar anexo via WhatsApp:", err);
