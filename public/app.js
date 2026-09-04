@@ -3201,7 +3201,10 @@ const PLAN_FREE_BLOCKED_SUBS = new Set([
 ]);
 
 function applyPlanMode() {
-  const free = currentPlan() === "free";
+  // A administração da Alice nunca é gateada nem recebe a venda: ela precisa
+  // configurar a clínica do cliente. O backend isenta admin do mesmo jeito
+  // (ver o middleware em server.ts).
+  const free = currentPlan() === "free" && state.staff?.role !== "admin";
   document.body.dataset.plan = free ? "free" : "paid";
   if (!free) return;
   if (state.chatFilter === "alice") state.chatFilter = "all";

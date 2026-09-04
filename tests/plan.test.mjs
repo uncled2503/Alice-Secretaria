@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import fs from "node:fs";
 
 const { FREE_PLAN, isFreePlan, freePlanBlocksPath } = await import("../dist/crm/plan.js");
 
@@ -62,4 +63,36 @@ test("freePlanBlocksPath nao confunde prefixo parecido", () => {
   assert.equal(freePlanBlocksPath("POST", "/rules-export"), false);
   assert.equal(freePlanBlocksPath("POST", "/rules"), true);
   assert.equal(freePlanBlocksPath("POST", "/rules/123"), true);
+});
+
+// Regressao: a venda da Alice ja vazou pros planos pagos porque .upsell-strip e
+// .unlock-cta declaravam `display` e, com a mesma especificidade do gate
+// [data-plan-free], ganhavam por virem depois no arquivo. Quem carrega o
+// atributo nao pode declarar display: so o gate manda nisso.
+test("blocos de venda nao declaram display proprio (senao vazam pro plano pago)", () => {
+  const css = fs.readFileSync(new URL("../public/styles.css", import.meta.url), "utf8");
+  const html = fs.readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
+
+  // Classes dos elementos que carregam data-plan-free no HTML
+  const carriers = new Set();
+  for (const m of html.matchAll(/<[^>]*\bdata-plan-free\b[^>]*>/g)) {
+    const cls = m[0].match(/class="([^"]*)"/);
+    if (cls) for (const c of cls[1].trim().split(/\s+/)) carriers.add(c);
+  }
+  assert.ok(carriers.size > 0, "esperava achar elementos com data-plan-free no index.html");
+
+  for (const cls of carriers) {
+    // regra que casa exatamente `.classe {` (nao pega descendentes tipo `.classe strong {`)
+    const rule = new RegExp(`(^|\\})\\s*\\.${cls}\\s*\\{([^}]*)\\}`, "m");
+    const found = css.match(rule);
+    if (!found) continue;
+    assert.ok(
+      !/(^|;)\s*display\s*:/.test(found[2]),
+      `.${cls} declara display proprio - isso faz o bloco de venda aparecer em plano pago`,
+    );
+  }
+
+  // E o gate precisa continuar sendo !important nos dois sentidos
+  assert.match(css, /\[data-plan-free\]\s*\{\s*display:\s*none\s*!important/);
+  assert.match(css, /body\[data-plan="free"\]\s*\[data-plan-free\]\s*\{\s*display:\s*block\s*!important/);
 });

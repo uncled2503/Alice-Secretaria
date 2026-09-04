@@ -101,10 +101,15 @@ body[data-biz="loja"] li.biz-loja-only { display: block; }
    [data-plan-lock]  -> FICA visível, com cadeado; clicar abre o modal de venda
    [data-plan-free]  -> blocos que só aparecem no plano grátis (a venda em si) */
 body[data-plan="free"] [data-plan-paid] { display: none !important; }
-[data-plan-free] { display: none; }
-body[data-plan="free"] [data-plan-free] { display: block; }
-/* os blocos de venda que são flex precisam recuperar o display certo */
-body[data-plan="free"] .upsell-strip[data-plan-free] { display: flex; }
+
+/* NADA de venda aparece fora do plano grátis. O !important trava isso de
+   propósito: as classes dos próprios blocos (.upsell-strip, .unlock-cta) são
+   definidas mais abaixo no arquivo e, com a mesma especificidade do gate,
+   ganhavam no desempate por ordem - foi assim que a venda vazou pros planos
+   pagos. Só o gate abaixo controla o display desses blocos. */
+[data-plan-free] { display: none !important; }
+body[data-plan="free"] [data-plan-free] { display: block !important; }
+body[data-plan="free"] .upsell-strip[data-plan-free] { display: flex !important; }
 body[data-plan="free"] .stat-card.biz-loja-only { display: flex; }
 
 body[data-plan="free"] [data-plan-lock] { position: relative; opacity: 0.62; }
@@ -153,9 +158,10 @@ body[data-plan="free"] .nav-item[data-plan-lock] .nav-label::after { content: ""
 }
 .upsell-btn-ghost:hover { background: rgba(255, 255, 255, 0.12); }
 
-/* Faixa de venda no topo do Chat / CRM / Contatos */
+/* Faixa de venda no topo do Chat / CRM / Contatos.
+   Sem `display` aqui: quem liga/desliga é o gate [data-plan-free] lá em cima. */
 .upsell-strip {
-  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+  align-items: center; justify-content: space-between; gap: 1rem;
   flex-wrap: wrap; border: 1px solid var(--brand-orange-ring);
   background: var(--brand-orange-soft); border-left: 3px solid var(--brand-orange);
   border-radius: 10px; padding: 0.7rem 0.95rem; margin-bottom: 0.9rem;
@@ -165,9 +171,9 @@ body[data-plan="free"] .nav-item[data-plan-lock] .nav-label::after { content: ""
 .upsell-strip .upsell-btn { background: var(--brand-orange); color: #fff; }
 .upsell-strip .upsell-btn:hover { background: var(--brand-orange-hover); }
 
-/* Botão fixo na barra lateral */
+/* Botão fixo na barra lateral (display fica com o gate [data-plan-free]) */
 .unlock-cta {
-  width: 100%; display: block; text-align: left; cursor: pointer; margin-bottom: 0.5rem;
+  width: 100%; text-align: left; cursor: pointer; margin-bottom: 0.5rem;
   background: linear-gradient(135deg, var(--brand-orange) 0%, #7c2d12 100%);
   color: #fff; border: 0; border-radius: 10px; padding: 0.6rem 0.75rem;
 }
