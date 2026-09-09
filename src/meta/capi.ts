@@ -124,24 +124,28 @@ export async function sendCapiEvent(
   };
 }
 
-// GET no proprio pixel: valida token + pixel de uma vez.
+// Valida token + pixel mandando um evento de sonda pro proprio endpoint
+// /events (a mesma permissao usada em producao). Um GET no node do pixel
+// exige permissao de leitura de anuncios que os tokens da API de Conversoes /
+// Dataset Quality API nao tem - dava "(#100) Missing Permission" mesmo com o
+// envio de eventos funcionando. A sonda vai sempre com test_event_code, entao
+// nunca conta como conversao.
 export async function testCapiConnection(
-  config: Pick<MetaConfig, "pixelId" | "accessTokenEnc" | "graphVersion">,
+  config: Pick<MetaConfig, "pixelId" | "accessTokenEnc" | "graphVersion" | "siteUrl" | "testEventCode">,
 ): Promise<{ ok: boolean; detail: string }> {
   if (!config.pixelId || !config.accessTokenEnc) return { ok: false, detail: "Pixel/token nao configurados" };
-  let token: string;
-  try {
-    token = decryptSecret(config.accessTokenEnc);
-  } catch {
-    return { ok: false, detail: "Nao foi possivel ler o token" };
+  const probe: CapiEvent = {
+    event_name: "Lead",
+    event_time: Math.floor(Date.now() / 1000),
+    event_id: `conn-test:${Date.now()}`,
+    action_source: "website",
+    event_source_url: config.siteUrl || process.env.PUBLIC_BASE_URL?.trim() || "https://alice",
+    user_data: { external_id: ["connection-test"] },
+    custom_data: { test: true },
+  };
+  const r = await sendCapiEvent(config, probe, config.testEventCode || "CONN_TEST");
+  if (r.ok && (r.eventsReceived ?? 0) > 0) {
+    return { ok: true, detail: `Token e pixel OK - a Meta recebeu o evento de sonda${r.fbtraceId ? ` (trace ${r.fbtraceId})` : ""}.` };
   }
-  const url = `https://graph.facebook.com/${graphVersionOf(config)}/${encodeURIComponent(config.pixelId)}?fields=id,name&access_token=${encodeURIComponent(token)}`;
-  try {
-    const r = await fetch(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
-    const body = (await r.json().catch(() => null)) as { id?: string; name?: string; error?: { message?: string } } | null;
-    if (r.ok && body?.id) return { ok: true, detail: `Pixel "${body.name ?? body.id}" acessivel.` };
-    return { ok: false, detail: body?.error?.message?.slice(0, 200) || `HTTP ${r.status}` };
-  } catch (err) {
-    return { ok: false, detail: err instanceof Error ? err.name : "falha de rede" };
-  }
+  return { ok: false, detail: (r.error || r.messages?.join("; ") || `HTTP ${r.httpStatus}`).slice(0, 250) };
 }

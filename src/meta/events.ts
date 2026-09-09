@@ -12,6 +12,8 @@ export const metaEventId = {
   crmStage: (leadId: string, transitionId: string) => `crmstage:${leadId}:${transitionId}`,
   disqualified: (leadId: string, transitionId: string) => `disqualified:${leadId}:${transitionId}`,
   qualified: (leadId: string, transitionId: string) => `qualified:${leadId}:${transitionId}`,
+  won: (leadId: string, transitionId: string) => `won:${leadId}:${transitionId}`,
+  lost: (leadId: string, transitionId: string) => `lost:${leadId}:${transitionId}`,
 };
 
 const RETRYABLE_STATUSES = ["pending", "error"];
@@ -162,7 +164,8 @@ export async function enqueueSchedule(clinicId: string, appointmentId: string): 
 }
 
 // Chamado no choke point de mudanca de etapa do CRM (applyMove). Decide entre
-// CRMStageChanged / DisqualifiedLead / QualifiedLead conforme o mapeamento.
+// CRMStageChanged / QualifiedLead / DisqualifiedLead / Purchase / LostLead
+// conforme o mapeamento das colunas.
 export async function enqueueStageChange(params: {
   clinicId: string;
   patientId: string;
@@ -180,8 +183,17 @@ export async function enqueueStageChange(params: {
     const config = await prisma.metaConfig.findUnique({ where: { clinicId: params.clinicId } });
     if (!config || !config.capiEnabled) return;
 
+    // Colunas mapeadas (qualificado/desqualificado/venda/perdido) sempre enviam
+    // o evento delas, mesmo se tambem estiverem na lista de ignoradas - a lista
+    // so silencia o CRMStageChanged generico das colunas "de passagem".
     const ignored = config.stagesIgnored.split(",").map((s) => s.trim()).filter(Boolean);
-    if (ignored.includes(params.newStageId)) return; // coluna que nao envia evento
+    const mappedStage =
+      params.newStageId === config.stageQualified ||
+      params.newStageId === config.stageDisqualified ||
+      params.newStageId === config.stageWon ||
+      params.newStageId === config.stageLost;
+    const genericSilenced = ignored.includes(params.newStageId);
+    if (genericSilenced && !mappedStage) return; // coluna de passagem: nao envia nada
 
     const patient = await prisma.patient.findUnique({
       where: { id: params.patientId },
@@ -207,15 +219,17 @@ export async function enqueueStageChange(params: {
       ...(patient.utmCampaign ? { utm_campaign: patient.utmCampaign } : {}),
     };
 
-    // CRMStageChanged: toda movimentacao valida
-    await enqueue({
-      clinicId: params.clinicId,
-      eventName: "CRMStageChanged",
-      eventId: metaEventId.crmStage(params.patientId, params.transitionId),
-      leadId: params.patientId,
-      patient,
-      customData: base,
-    });
+    // CRMStageChanged: toda movimentacao valida que nao esteja silenciada
+    if (!genericSilenced) {
+      await enqueue({
+        clinicId: params.clinicId,
+        eventName: "CRMStageChanged",
+        eventId: metaEventId.crmStage(params.patientId, params.transitionId),
+        leadId: params.patientId,
+        patient,
+        customData: base,
+      });
+    }
 
     // DisqualifiedLead: SO na coluna de desqualificado. NUNCA na de "perdido".
     if (config.stageDisqualified && params.newStageId === config.stageDisqualified && params.newStageId !== config.stageLost) {
@@ -235,6 +249,32 @@ export async function enqueueStageChange(params: {
         clinicId: params.clinicId,
         eventName: "QualifiedLead",
         eventId: metaEventId.qualified(params.patientId, params.transitionId),
+        leadId: params.patientId,
+        patient,
+        customData: base,
+      });
+    }
+
+    // Purchase: coluna de "Venda ganha". Evento padrao da Meta pra otimizacao;
+    // sem value/currency por enquanto (a Alice nao tem o ticket do procedimento).
+    if (config.stageWon && params.newStageId === config.stageWon) {
+      await enqueue({
+        clinicId: params.clinicId,
+        eventName: "Purchase",
+        eventId: metaEventId.won(params.patientId, params.transitionId),
+        leadId: params.patientId,
+        patient,
+        customData: base,
+      });
+    }
+
+    // LostLead: coluna de "Perdido". Evento custom pra dar pra filtrar/excluir
+    // esses leads em publicos e relatorios.
+    if (config.stageLost && params.newStageId === config.stageLost) {
+      await enqueue({
+        clinicId: params.clinicId,
+        eventName: "LostLead",
+        eventId: metaEventId.lost(params.patientId, params.transitionId),
         leadId: params.patientId,
         patient,
         customData: base,

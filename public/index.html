@@ -1345,7 +1345,7 @@
             <label>Colunas que NÃO devem enviar evento
               <div id="meta-stages-ignored" class="procedures-checklist" style="max-height:130px"></div>
             </label>
-            <p class="hint" style="margin:0">DisqualifiedLead sai só quando o lead entra na coluna de desqualificado — <strong>nunca</strong> na de Perdido. QualifiedLead só sai se você mapear a coluna de qualificado.</p>
+            <p class="hint" style="margin:0">Cada coluna mapeada acima manda o evento dela (QualifiedLead, DisqualifiedLead, Purchase na "Venda ganha", LostLead no "Perdido") mesmo que também esteja marcada abaixo — a lista de baixo só silencia o <strong>CRMStageChanged</strong> genérico das colunas de passagem. DisqualifiedLead nunca sai na coluna de Perdido.</p>
 
             <div class="broadcast-form-row" style="align-items:center;margin-top:0.6rem">
               <button type="submit">Salvar</button>

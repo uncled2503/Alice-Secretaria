@@ -14,6 +14,8 @@ test("event_id e estavel e no formato acordado", () => {
   assert.equal(metaEventId.schedule("ap1"), "schedule:ap1");
   assert.equal(metaEventId.disqualified("l1", "t1"), "disqualified:l1:t1");
   assert.equal(metaEventId.qualified("l1", "t1"), "qualified:l1:t1");
+  assert.equal(metaEventId.won("l1", "t1"), "won:l1:t1");
+  assert.equal(metaEventId.lost("l1", "t1"), "lost:l1:t1");
   assert.equal(metaEventId.crmStage("l1", "t1"), "crmstage:l1:t1");
 });
 
