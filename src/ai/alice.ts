@@ -574,19 +574,40 @@ function describeProcedureForPrompt(p: Procedure): string {
   return lines.join("\n");
 }
 
+// Concordancia em portugues: o nome de uma PESSOA leva "de" ("secretaria de
+// Ana"), mas um titulo define o genero ("secretaria do Dr. Joao", "da Dra.
+// Ana"). Sem isso a Alice fala "secretaria de Dr. Isac".
+function prepPessoa(name: string): string {
+  const n = name.trim();
+  if (/^(dra\.?|doutora)\b/i.test(n)) return `da ${n}`;
+  if (/^(dr\.?|doutor)\b/i.test(n)) return `do ${n}`;
+  return `de ${n}`;
+}
+
+// Nome de ESTABELECIMENTO: "da Clinica X", mas "do Consultorio X" / "do Espaco
+// X". Default "da" (clinica, casa, unidade e nomes proprios soltos).
+function prepLugar(name: string): string {
+  const n = name.trim();
+  if (/^(consult[oó]rio|espa[cç]o|centro|instituto|est[uú]dio|studio|sal[aã]o|hospital|laborat[oó]rio|grupo|ambulat[oó]rio|nucleo|n[uú]cleo)\b/i.test(n)) {
+    return `do ${n}`;
+  }
+  return `da ${n}`;
+}
+
 // Como a Alice se apresenta pro paciente - ela NUNCA diz que e IA/assistente
 // virtual, so uma destas tres formas (escolhida pela clinica no painel).
 function personaInstruction(clinic: { name: string; assistantName: string; assistantPersona: string; assistantPersonaName: string | null }): string {
   const a = clinic.assistantName || "Alice";
   const who = clinic.assistantPersonaName?.trim();
+  const grammar = " Sempre com a concordancia e as contracoes corretas do portugues (ex: \"do Dr.\", \"da Dra.\", \"da Clinica\", \"do Consultorio\", \"da equipe do Consultorio\") - nunca \"de Dr.\" nem \"da Consultorio\".";
   if (clinic.assistantPersona === "clinic_secretary") {
-    return `Voce se apresenta como secretaria da ${clinic.name}. Ex: "Oi! Aqui e a ${a}, secretaria da ${clinic.name}".`;
+    return `Voce se apresenta como secretaria ${prepLugar(clinic.name)}. Ex: "Oi! Aqui e a ${a}, secretaria ${prepLugar(clinic.name)}".${grammar}`;
   }
   if (clinic.assistantPersona === "professional_secretary" && who) {
-    return `Voce se apresenta como secretaria de ${who} (da ${clinic.name}). Ex: "Oi! Aqui e a ${a}, secretaria de ${who}".`;
+    return `Voce se apresenta como secretaria ${prepPessoa(who)} (${prepLugar(clinic.name)}). Ex: "Oi! Aqui e a ${a}, secretaria ${prepPessoa(who)}".${grammar}`;
   }
   // team (padrao) - e tambem o fallback do professional_secretary sem nome
-  return `Voce se apresenta apenas como parte da equipe da ${clinic.name}, sem citar cargo. Ex: "Oi! Aqui e a ${a}, da equipe da ${clinic.name}".`;
+  return `Voce se apresenta apenas como parte da equipe ${prepLugar(clinic.name)}, sem citar cargo. Ex: "Oi! Aqui e a ${a}, da equipe ${prepLugar(clinic.name)}".${grammar}`;
 }
 
 export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: string } = {}): Promise<string> {
@@ -747,7 +768,7 @@ Seu trabalho:
 4. Conduzir o cliente ate a compra: recomendar, mandar o link certo e levar pro proximo passo (esse e o objetivo).
 5. Termine sempre com um proximo passo claro: um link, uma opcao ou uma pergunta.${sellerLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${genericHandoffLine}${noRepeatLine}${catalogBlock}${stagesBlock}${templatesBlock}${faqBlock}${playbookBlock}
 
-Responda sempre em portugues do Brasil, em mensagens curtas como quem digita no WhatsApp.${await getActiveRulesPrompt(clinicId)}`;
+Responda sempre em portugues do Brasil, em mensagens curtas como quem digita no WhatsApp. Escreva com gramatica correta: concordancia verbal e nominal, e contracoes de preposicao ("do"/"da" em vez de "de o"/"de a", "no"/"na" em vez de "em o"/"em a"). Ex: "secretaria do Dr. Joao", "da equipe do Consultorio", nunca "secretaria de Dr." nem "da equipe da Consultorio".${await getActiveRulesPrompt(clinicId)}`;
   }
 
   const clinicNoun = clinic.clinicKind === "medica" ? "clinica" : clinic.clinicKind === "ambas" ? "clinica" : "clinica de estetica";
@@ -770,7 +791,7 @@ ${procedureList || "(nenhum procedimento cadastrado ainda)"}
 
 Use so os dados de valor, beneficio, indicacao e prazo que estao cadastrados acima em cada procedimento. Se o paciente perguntar algo que nao esta ali (preco de um item sem valor, prazo de um item sem prazo cadastrado, etc.), diga que precisa confirmar na avaliacao/com a equipe - nunca invente numero, garantia ou prazo.${scheduleBlock}${stagesBlock}${templatesBlock}${faqBlock}${playbookBlock}
 
-Responda sempre em portugues do Brasil, em mensagens curtas como quem digita no WhatsApp.${await getActiveRulesPrompt(clinicId)}`;
+Responda sempre em portugues do Brasil, em mensagens curtas como quem digita no WhatsApp. Escreva com gramatica correta: concordancia verbal e nominal, e contracoes de preposicao ("do"/"da" em vez de "de o"/"de a", "no"/"na" em vez de "em o"/"em a"). Ex: "secretaria do Dr. Joao", "da equipe do Consultorio", nunca "secretaria de Dr." nem "da equipe da Consultorio".${await getActiveRulesPrompt(clinicId)}`;
 }
 
 export interface IncomingReferral {
