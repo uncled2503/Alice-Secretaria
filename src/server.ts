@@ -205,22 +205,32 @@ app.use(
       return;
     }
 
-    // Clinica bloqueada (ex: inadimplencia): conta client dessa clinica para
-    // de conseguir usar a API, mesmo com um cookie de sessao ainda valido.
-    // Plano gratis: bloqueia as areas que ele nao tem (atendimento, agenda,
-    // automacoes) - so CRM + Meta passam.
-    if (req.staff && req.staff.role !== "admin" && req.staff.clinicId) {
-      const clinic = await prisma.clinic.findUnique({
-        where: { id: req.staff.clinicId },
-        select: { active: true, plan: true },
+    if (req.staff) {
+      // Uma consulta so resolve tres coisas: (1) a conta ainda existe, (2) o
+      // cookie nao foi invalidado por troca de senha / "desconectar acessos"
+      // (sessionEpoch), (3) estado da clinica pro cliente.
+      const user = await prisma.staffUser.findUnique({
+        where: { id: req.staff.id },
+        select: { sessionEpoch: true, clinic: { select: { active: true, plan: true } } },
       });
-      if (!clinic || !clinic.active) {
-        res.status(403).json({ error: "Conta bloqueada temporariamente. Entre em contato com o suporte." });
+      if (!user || user.sessionEpoch !== req.staff.epoch) {
+        res.status(401).json({ error: "Sessão encerrada. Entre novamente." });
         return;
       }
-      if (isFreePlan(clinic.plan) && freePlanBlocksPath(req.method, req.path)) {
-        res.status(403).json({ error: "Recurso não disponível no plano Grátis." });
-        return;
+
+      // Clinica bloqueada (ex: inadimplencia): conta client dessa clinica para
+      // de conseguir usar a API, mesmo com um cookie de sessao ainda valido.
+      // Plano gratis: bloqueia as areas que ele nao tem (atendimento, agenda,
+      // automacoes) - so CRM + Meta passam.
+      if (req.staff.role !== "admin" && req.staff.clinicId) {
+        if (!user.clinic || !user.clinic.active) {
+          res.status(403).json({ error: "Conta bloqueada temporariamente. Entre em contato com o suporte." });
+          return;
+        }
+        if (isFreePlan(user.clinic.plan) && freePlanBlocksPath(req.method, req.path)) {
+          res.status(403).json({ error: "Recurso não disponível no plano Grátis." });
+          return;
+        }
       }
     }
 

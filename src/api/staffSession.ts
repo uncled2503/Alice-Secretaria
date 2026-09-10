@@ -25,6 +25,7 @@ export interface StaffSession {
   name: string;
   clinicId: string | null;
   role: "admin" | "client";
+  epoch: number; // tem que bater com StaffUser.sessionEpoch (checado no middleware)
   exp: number;
 }
 
@@ -32,8 +33,17 @@ function sign(payload: string): string {
   return createHmac("sha256", SECRET).update(payload).digest("hex");
 }
 
-export function createSessionCookie(staff: { id: string; name: string; clinicId: string | null; role: "admin" | "client" }): string {
-  const payload = Buffer.from(JSON.stringify({ ...staff, exp: Date.now() + MAX_AGE_MS })).toString("base64url");
+export function createSessionCookie(staff: {
+  id: string;
+  name: string;
+  clinicId: string | null;
+  role: "admin" | "client";
+  sessionEpoch: number;
+}): string {
+  const { sessionEpoch, ...rest } = staff;
+  const payload = Buffer.from(
+    JSON.stringify({ ...rest, epoch: sessionEpoch, exp: Date.now() + MAX_AGE_MS }),
+  ).toString("base64url");
   const sig = sign(payload);
   return `${COOKIE_NAME}=${payload}.${sig}; HttpOnly; Path=/; Max-Age=${Math.floor(MAX_AGE_MS / 1000)}; SameSite=Lax${cookieSecurityAttributes()}`;
 }
@@ -70,6 +80,9 @@ export function readStaffSession(cookieHeader: string | undefined): StaffSession
   try {
     const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as StaffSession;
     if (typeof data.exp !== "number" || data.exp < Date.now()) return null;
+    // Cookies emitidos antes do sessionEpoch nao trazem o campo - trata como 0
+    // (que e o default da coluna), entao continuam valendo ate alguem bumpar.
+    if (typeof data.epoch !== "number") data.epoch = 0;
     return data;
   } catch {
     return null;

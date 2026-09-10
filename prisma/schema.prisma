@@ -286,6 +286,26 @@ model StaffUser {
   passwordHash String
   role         String   @default("client") // admin | client
   createdAt    DateTime @default(now())
+  // Versao da sessao: vai dentro do cookie assinado. Bumpar (troca de senha ou
+  // botao "desconectar todos os acessos") invalida na hora todo cookie antigo
+  // dessa conta, sem mexer nas outras.
+  sessionEpoch Int      @default(0)
+  loginEvents  LoginEvent[]
+}
+
+// Um registro por login bem-sucedido (IP + navegador + quando). So pra
+// auditoria e pro admin ver "quem entrou na conta do cliente".
+model LoginEvent {
+  id        String    @id @default(cuid())
+  staffId   String
+  staff     StaffUser @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  clinicId  String? // copiado do StaffUser no momento do login (facilita filtrar)
+  ip        String    @default("")
+  userAgent String    @default("")
+  createdAt DateTime  @default(now())
+
+  @@index([clinicId, createdAt])
+  @@index([staffId, createdAt])
 }
 
 model Procedure {

@@ -520,7 +520,8 @@ apiRouter.put(
         where: { id: current.id },
         data: {
           username: email,
-          ...(password ? { passwordHash: hashPassword(password) } : {}),
+          // Trocar a senha derruba as sessoes antigas dessa conta na hora.
+          ...(password ? { passwordHash: hashPassword(password), sessionEpoch: { increment: 1 } } : {}),
         },
       });
     } else {
@@ -528,7 +529,51 @@ apiRouter.put(
         data: { clinicId, name: clinic.name, username: email, passwordHash: hashPassword(password), role: "client" },
       });
     }
-    res.json({ ok: true, clientLogin: email });
+    res.json({ ok: true, clientLogin: email, sessionsRevoked: Boolean(current && password) });
+  })
+);
+
+// Desconecta TODAS as sessoes das contas dessa clinica na hora (bump do
+// sessionEpoch). Quem estiver logado cai pro login na proxima requisicao.
+// So admin. Nao mexe na senha - o cliente entra de novo com a senha atual.
+apiRouter.post(
+  "/clinics/:id/revoke-access",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinicId = req.params.id;
+    const clinic = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { id: true } });
+    if (!clinic) {
+      res.status(404).json({ error: "Clinica nao encontrada" });
+      return;
+    }
+    const r = await prisma.staffUser.updateMany({
+      where: { clinicId, role: "client" },
+      data: { sessionEpoch: { increment: 1 } },
+    });
+    res.json({ ok: true, accounts: r.count });
+  })
+);
+
+// Ultimos logins das contas da clinica (IP + navegador + quando). So admin.
+apiRouter.get(
+  "/clinics/:id/login-events",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinicId = req.params.id;
+    const take = Math.min(Number(req.query.limit) || 20, 100);
+    const events = await prisma.loginEvent.findMany({
+      where: { clinicId },
+      orderBy: { createdAt: "desc" },
+      take,
+      select: {
+        id: true,
+        ip: true,
+        userAgent: true,
+        createdAt: true,
+        staff: { select: { name: true, username: true } },
+      },
+    });
+    res.json(events);
   })
 );
 
@@ -3584,7 +3629,10 @@ apiRouter.post(
     const staff = await prisma.staffUser.create({
       data: { clinicId: null, name, username, passwordHash: hashPassword(password), role: "admin" },
     });
-    res.setHeader("Set-Cookie", createSessionCookie({ id: staff.id, name: staff.name, clinicId: null, role: "admin" }));
+    res.setHeader(
+      "Set-Cookie",
+      createSessionCookie({ id: staff.id, name: staff.name, clinicId: null, role: "admin", sessionEpoch: staff.sessionEpoch }),
+    );
     res.json({ id: staff.id, name: staff.name, role: "admin" });
   })
 );
@@ -3622,7 +3670,22 @@ apiRouter.post(
       }
     }
 
-    res.setHeader("Set-Cookie", createSessionCookie({ id: staff.id, name: staff.name, clinicId: staff.clinicId, role }));
+    // Auditoria: um registro por login. Nunca derruba o login se falhar.
+    await prisma.loginEvent
+      .create({
+        data: {
+          staffId: staff.id,
+          clinicId: staff.clinicId,
+          ip: (req.ip ?? "").slice(0, 45),
+          userAgent: (req.get("user-agent") ?? "").slice(0, 300),
+        },
+      })
+      .catch((err) => console.error("[login] falha ao registrar LoginEvent:", err));
+
+    res.setHeader(
+      "Set-Cookie",
+      createSessionCookie({ id: staff.id, name: staff.name, clinicId: staff.clinicId, role, sessionEpoch: staff.sessionEpoch }),
+    );
     res.json({ id: staff.id, name: staff.name, role, clinicId: staff.clinicId });
   })
 );

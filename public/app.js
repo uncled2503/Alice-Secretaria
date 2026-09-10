@@ -4685,6 +4685,43 @@ function closeClinicOwnerModal() {
   document.getElementById("clinic-owner-overlay").style.display = "none";
 }
 
+function shortUserAgent(ua) {
+  if (!ua) return "navegador desconhecido";
+  const os = /Windows/i.test(ua) ? "Windows"
+    : /iPhone|iPad|iOS/i.test(ua) ? "iPhone/iPad"
+    : /Android/i.test(ua) ? "Android"
+    : /Mac OS X|Macintosh/i.test(ua) ? "Mac"
+    : /Linux/i.test(ua) ? "Linux" : "";
+  const browser = /Edg\//i.test(ua) ? "Edge"
+    : /OPR\/|Opera/i.test(ua) ? "Opera"
+    : /Chrome\//i.test(ua) ? "Chrome"
+    : /Firefox\//i.test(ua) ? "Firefox"
+    : /Safari\//i.test(ua) ? "Safari" : "";
+  return [browser, os].filter(Boolean).join(" · ") || ua.slice(0, 40);
+}
+
+async function loadClinicOwnerLogins(clinicId) {
+  const box = document.getElementById("clinic-owner-logins");
+  box.textContent = "Carregando…";
+  try {
+    const events = await api(`/clinics/${clinicId}/login-events?limit=20`);
+    box.innerHTML = "";
+    if (!events.length) {
+      box.textContent = "Nenhum login registrado ainda.";
+      return;
+    }
+    for (const ev of events) {
+      const when = new Date(ev.createdAt).toLocaleString("pt-BR");
+      const row = el("div", { style: "padding:0.25rem 0;border-bottom:1px solid var(--border)" }, [
+        `${when} — ${ev.ip || "IP desconhecido"} — ${shortUserAgent(ev.userAgent)}`,
+      ]);
+      box.appendChild(row);
+    }
+  } catch {
+    box.textContent = "Não foi possível carregar os acessos.";
+  }
+}
+
 function openClinicOwnerModal(clinic) {
   document.getElementById("clinic-owner-id").value = clinic.id;
   document.getElementById("clinic-owner-title").textContent = `Acesso do cliente — ${clinic.name}`;
@@ -4692,12 +4729,42 @@ function openClinicOwnerModal(clinic) {
   document.getElementById("clinic-owner-password").value = "";
   const passHint = document.getElementById("clinic-owner-pass-hint");
   passHint.textContent = clinic.clientLogin
-    ? "Deixe a senha em branco para manter a atual."
+    ? "Deixe a senha em branco para manter a atual. Trocar a senha desconecta quem já está logado."
     : "Defina uma senha (mín. 10 caracteres).";
   const fb = document.getElementById("clinic-owner-feedback");
   fb.style.display = "none";
+  document.getElementById("clinic-owner-revoke-fb").textContent = "";
+
+  // Seção de acessos só faz sentido quando já existe conta de cliente.
+  const hasLogin = Boolean(clinic.clientLogin);
+  document.getElementById("clinic-owner-sessions").style.display = hasLogin ? "flex" : "none";
+  document.getElementById("clinic-owner-sessions-body").style.display = hasLogin ? "block" : "none";
+  if (hasLogin) loadClinicOwnerLogins(clinic.id);
+
   document.getElementById("clinic-owner-overlay").style.display = "flex";
 }
+
+document.getElementById("clinic-owner-revoke").addEventListener("click", async () => {
+  const id = document.getElementById("clinic-owner-id").value;
+  if (!id) return;
+  const ok = await showConfirm(
+    "Desconectar todos os acessos desta conta? Quem estiver logado (inclusive no celular) cai pra tela de login na hora. A senha atual continua valendo — é só entrar de novo.",
+  );
+  if (!ok) return;
+  const btn = document.getElementById("clinic-owner-revoke");
+  const fb = document.getElementById("clinic-owner-revoke-fb");
+  btn.disabled = true;
+  try {
+    const r = await api(`/clinics/${id}/revoke-access`, { method: "POST" });
+    fb.textContent = r.accounts ? "Acessos desconectados." : "Nenhuma conta de cliente pra desconectar.";
+    fb.style.color = "var(--green-text)";
+  } catch {
+    fb.textContent = "Não foi possível desconectar.";
+    fb.style.color = "#b91c1c";
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 document.getElementById("clinic-owner-close").addEventListener("click", closeClinicOwnerModal);
 document.getElementById("clinic-owner-cancel").addEventListener("click", closeClinicOwnerModal);
@@ -4726,11 +4793,13 @@ document.getElementById("clinic-owner-form").addEventListener("submit", async (e
       body: JSON.stringify({ email, ...(password ? { password } : {}) }),
       silentStatuses: [400, 409],
     });
-    fb.textContent = `Acesso salvo. Login: ${r.clientLogin}`;
+    fb.textContent = r.sessionsRevoked
+      ? `Acesso salvo e sessões antigas desconectadas. Login: ${r.clientLogin}`
+      : `Acesso salvo. Login: ${r.clientLogin}`;
     fb.style.color = "var(--green-text)";
     fb.style.display = "block";
     await loadClinicsList();
-    setTimeout(closeClinicOwnerModal, 1200);
+    setTimeout(closeClinicOwnerModal, r.sessionsRevoked ? 2200 : 1200);
   } catch (err) {
     if (err.status !== 400 && err.status !== 409) throw err;
     fb.textContent = err.detail || "Não foi possível salvar o acesso.";

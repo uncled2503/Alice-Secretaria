@@ -2217,13 +2217,24 @@
           <label>Senha
             <input id="clinic-owner-password" type="password" placeholder="Mín. 10 caracteres" minlength="10" autocomplete="new-password" />
           </label>
-          <p id="clinic-owner-pass-hint" class="hint" style="margin:0">Deixe a senha em branco para manter a atual.</p>
+          <p id="clinic-owner-pass-hint" class="hint" style="margin:0">Deixe a senha em branco para manter a atual. Trocar a senha desconecta quem já está logado.</p>
           <p id="clinic-owner-feedback" class="hint" style="display:none;margin:0"></p>
           <div class="modal-actions">
             <button type="button" id="clinic-owner-cancel" class="btn-cancel">Cancelar</button>
             <button type="submit" id="clinic-owner-save">Salvar acesso</button>
           </div>
         </form>
+        <div id="clinic-owner-sessions" class="section-header" style="margin-top:1.4rem;display:none">
+          <span class="nav-icon" data-icon="users"></span> Acessos
+        </div>
+        <div id="clinic-owner-sessions-body" style="display:none">
+          <div style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;margin-bottom:0.6rem">
+            <button type="button" id="clinic-owner-revoke" class="btn-brand btn-brand--secondary btn-brand--sm">Desconectar todos os acessos</button>
+            <span id="clinic-owner-revoke-fb" class="hint" style="margin:0"></span>
+          </div>
+          <p class="hint" style="margin:0 0 0.4rem">Últimos logins nesta conta (não bloqueia por IP — serve pra você ver quem entrou):</p>
+          <div id="clinic-owner-logins" class="hint" style="margin:0"></div>
+        </div>
       </div>
     </div>
 
