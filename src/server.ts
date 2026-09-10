@@ -18,7 +18,7 @@ import { startBroadcastJob } from "./crm/broadcast.js";
 import { startUazapiWebhookWorker } from "./uazapi/client.js";
 import { apiRouter } from "./api/routes.js";
 import { externalApiRouter } from "./api/external/router.js";
-import { readStaffSession } from "./api/staffSession.js";
+import { readStaffSession, clearSessionCookie } from "./api/staffSession.js";
 import { isFreePlan, freePlanBlocksPath } from "./crm/plan.js";
 import { prisma } from "./db/client.js";
 
@@ -200,10 +200,7 @@ app.use(
   async (req, res, next) => {
     req.staff = readStaffSession(req.headers.cookie);
     const isUazapiWebhook = req.method === "POST" && req.path.startsWith("/uazapi/webhook/");
-    if (!req.staff && !PUBLIC_API_PATHS.has(req.path) && !isUazapiWebhook) {
-      res.status(401).json({ error: "Login necessario" });
-      return;
-    }
+    const isPublicPath = PUBLIC_API_PATHS.has(req.path) || isUazapiWebhook;
 
     if (req.staff) {
       // Uma consulta so resolve tres coisas: (1) a conta ainda existe, (2) o
@@ -214,15 +211,22 @@ app.use(
         select: { sessionEpoch: true, clinic: { select: { active: true, plan: true } } },
       });
       if (!user || user.sessionEpoch !== req.staff.epoch) {
-        res.status(401).json({ error: "Sessão encerrada. Entre novamente." });
-        return;
-      }
-
-      // Clinica bloqueada (ex: inadimplencia): conta client dessa clinica para
-      // de conseguir usar a API, mesmo com um cookie de sessao ainda valido.
-      // Plano gratis: bloqueia as areas que ele nao tem (atendimento, agenda,
-      // automacoes) - so CRM + Meta passam.
-      if (req.staff.role !== "admin" && req.staff.clinicId) {
+        // Cookie invalidado (troca de senha / "desconectar acessos") ou conta
+        // apagada. Limpa o cookie velho e trata como deslogado. Numa rota
+        // publica (ex: POST /staff/login) NAO pode responder 401 aqui: o
+        // navegador segue mandando o cookie velho e a pessoa nunca conseguiria
+        // logar de novo - o proprio login ficaria barrado pela sessao morta.
+        req.staff = null;
+        res.setHeader("Set-Cookie", clearSessionCookie());
+        if (!isPublicPath) {
+          res.status(401).json({ error: "Sessão encerrada. Entre novamente." });
+          return;
+        }
+      } else if (req.staff.role !== "admin" && req.staff.clinicId) {
+        // Clinica bloqueada (ex: inadimplencia): conta client dessa clinica para
+        // de conseguir usar a API, mesmo com um cookie de sessao ainda valido.
+        // Plano gratis: bloqueia as areas que ele nao tem (atendimento, agenda,
+        // automacoes) - so CRM + Meta passam.
         if (!user.clinic || !user.clinic.active) {
           res.status(403).json({ error: "Conta bloqueada temporariamente. Entre em contato com o suporte." });
           return;
@@ -232,6 +236,11 @@ app.use(
           return;
         }
       }
+    }
+
+    if (!req.staff && !isPublicPath) {
+      res.status(401).json({ error: "Login necessario" });
+      return;
     }
 
     next();
