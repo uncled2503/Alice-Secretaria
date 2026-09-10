@@ -107,9 +107,9 @@ const FAQS: { question: string; alternates: string; answer: string }[] = [
   {
     question: "Tem cupom de desconto? Como faço pra parcelar?",
     alternates:
-      "cupom\ncoupom\ndesconto\npromoção\nprimeira compra\ncódigo de desconto\ntem desconto\nvip10\nparcelar\nparcelamento\nquantas vezes\nsem juros\n6x",
+      "cupom\ncoupom\ndesconto\npromoção\nprimeira compra\ncódigo de desconto\ntem desconto\nparcelar\nparcelamento\nquantas vezes\nsem juros\n6x",
     answer:
-      "Cupons que você pode usar:\n• PRIMEIRACOMPRA — 5% na primeira compra (cupom da newsletter, sem valor mínimo)\n• VIP10 — 10% em compras acima de R$ 299, válido até 30/11/2026 (Clube VIP: https://laleblu.com.br/pages/clube-vip)\nÉ um cupom por pedido e eles não acumulam entre si. O parcelamento é em até 6x sem juros no cartão. Formas de pagamento: https://laleblu.com.br/pages/formas-de-pagamento",
+      "O cupom que você pode usar é o PRIMEIRACOMPRA — 5% na primeira compra (cupom da newsletter, sem valor mínimo). É um cupom por pedido e eles não acumulam entre si. O parcelamento é em até 6x sem juros no cartão. Formas de pagamento: https://laleblu.com.br/pages/formas-de-pagamento",
   },
   {
     question: "Vocês têm moda praia para bebê?",
@@ -463,7 +463,7 @@ const RULES: { category: string; instruction: string }[] = [
   { category: "procedimentos", instruction: "Frete grátis vale só para compras com preço regular, não vale em Sale nem Black Friday." },
   { category: "procedimentos", instruction: "Em Sale e Black Friday não há troca, apenas devolução e peça com defeito." },
   // pagamento / cupom
-  { category: "pagamento", instruction: "Cupons que podem ser informados: PRIMEIRACOMPRA (5% na primeira compra, cupom da newsletter, sem valor mínimo) e VIP10 (10% em compras acima de R$ 299, válido até 30/11/2026, do Clube VIP). Um cupom por pedido, não acumulam entre si. Nenhum outro código de promoção deve ser informado: convide para o Clube VIP. Se pedirem outro código específico, use transfer_to_human." },
+  { category: "pagamento", instruction: "O único cupom que pode ser informado é o PRIMEIRACOMPRA (5% na primeira compra, cupom da newsletter, sem valor mínimo). Um cupom por pedido, não acumulam entre si. Nenhum outro código de promoção deve ser informado (nem VIP10 nem qualquer outro): convide para o Clube VIP. Se pedirem outro código específico, use transfer_to_human." },
   { category: "pagamento", instruction: "O parcelamento é em até 6x sem juros no cartão. O Pix tem aprovação imediata. Formas de pagamento: https://laleblu.com.br/pages/formas-de-pagamento" },
   { category: "procedimentos", instruction: "A opção de entrega mais rápida da loja é a entrega expressa (São Paulo e região): R$ 29,90, chega no próximo dia útil até as 22h - é sempre no dia útil seguinte, nunca no mesmo dia. NUNCA diga que essa entrega é 'no mesmo dia', NUNCA chame de 'motoboy no mesmo dia' e NUNCA cote preço ou prazo para 'entrega no mesmo dia' - a Laleblu não tem esse serviço nem esses dados. O valor e o prazo do frete aparecem no carrinho quando a cliente coloca o CEP. Se a cliente insistir em algo mais rápido que o próximo dia útil, use transfer_to_human." },
   { category: "procedimentos", instruction: "Quando a cliente pedir algo específico (gênero, tamanho, cor, tecido ou faixa de preço), monte o link da coleção já filtrado seguindo o roteiro 'Montar link do site com filtro' e mande pronto. Se não tiver certeza da URL exata da categoria, mande o link da categoria sem filtro (ou toda-a-loja com o filtro). Nunca invente um endereço de coleção: use só os que estão nas FAQ e nos roteiros." },
