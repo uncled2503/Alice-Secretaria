@@ -245,7 +245,14 @@ model ActivityLog {
   actorName   String?  // nome do atendente; null = acao automatica do sistema
   createdAt   DateTime @default(now())
 
+  // Preenchido quando o evento e sobre um lead especifico - alimenta a
+  // "Timeline" do card do CRM (ver src/crm/dossier.ts). Null = evento geral
+  // da clinica, sem dono (continua no historico normal).
+  patientId   String?
+  patient     Patient? @relation(fields: [patientId], references: [id])
+
   @@index([clinicId, createdAt])
+  @@index([patientId, createdAt])
 }
 
 // Unidade/endereco fisico da clinica. Uma clinica pode ter varias (rede com
@@ -291,6 +298,7 @@ model StaffUser {
   // dessa conta, sem mexer nas outras.
   sessionEpoch Int      @default(0)
   loginEvents  LoginEvent[]
+  assignedPatients Patient[] @relation("PatientAssignedTo") // leads em que esta conta e a "Responsavel" no card do CRM
 }
 
 // Um registro por login bem-sucedido (IP + navegador + quando). So pra
@@ -404,6 +412,16 @@ model Patient {
 
   createdAt     DateTime  @default(now())
 
+  // Card do CRM (modal "detalhes do lead" no quadro): dados comerciais que nao
+  // vem da conversa - a equipe preenche na mao. Nada disso afeta a Alice.
+  estimatedValue  Float?    // valor estimado do negocio, em reais
+  leadTemperature String?   // frio | morno | quente (null = sem temperatura)
+  assignedToId    String?
+  assignedTo      StaffUser? @relation("PatientAssignedTo", fields: [assignedToId], references: [id])
+  nextActionAt    DateTime? // proxima acao comercial marcada (retorno, ligacao...)
+  nextActionNote  String?   // o que fazer nessa proxima acao
+  crmHidden       Boolean   @default(false) // "Remover do CRM": sai do quadro sem apagar contato/historico
+
   conversations Conversation[]
   appointments  Appointment[]
   broadcastRecipients BroadcastRecipient[]
@@ -411,6 +429,7 @@ model Patient {
   waitlist      WaitlistEntry[]
   tags          PatientTag[]
   satisfactionSurveys SatisfactionSurvey[]
+  activityLogs  ActivityLog[]
 
   @@unique([clinicId, phone])
 }
@@ -436,6 +455,7 @@ model PatientTag {
   tag       Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
 
   @@id([patientId, tagId])
+  @@index([tagId])
 }
 
 model Conversation {
@@ -454,6 +474,8 @@ model Conversation {
 
   messages          Message[]
   followUpSent      FollowUpSent[]
+
+  @@index([archived, lastMessageAt])
 }
 
 // Cascata de recontato: dispara mensagens automaticas quando o paciente fica
@@ -604,6 +626,8 @@ model ApiKey {
   createdAt     DateTime  @default(now())
 
   idempotencyKeys ApiIdempotencyKey[]
+
+  @@index([clinicId])
 }
 
 // Guarda a resposta de uma requisicao com Idempotency-Key para repetir a mesma

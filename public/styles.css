@@ -724,6 +724,8 @@ tbody tr:hover { background: var(--accent-50); }
   border-radius: 6px; padding: 0.35rem 0.7rem; cursor: pointer; font-size: 0.76rem; font-family: inherit;
 }
 .btn-chat-action:hover { border-color: var(--accent); color: var(--text); }
+.btn-chat-action:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-chat-action:disabled:hover { border-color: var(--border); color: var(--text-muted); }
 
 /* --- Painel de contato no chat (drawer com fundo borrado) --- */
 .contact-panel-overlay {
@@ -747,14 +749,16 @@ tbody tr:hover { background: var(--accent-50); }
   font-size: 0.8rem; padding: 0.3rem 0.5rem; border-radius: 6px; cursor: pointer;
 }
 .contact-panel-tabs button[data-cpt].active { background: var(--accent); color: #fff; }
-#cp-schedule { margin-left: auto; }
+#cp-open-chat { margin-left: auto; }
 .contact-panel-body { display: none; padding: 1rem; overflow-y: auto; flex: 1; }
 .contact-panel-body.active { display: block; }
 .contact-panel-body label { display: block; font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.7rem; }
-.contact-panel-body label input, .contact-panel-body label textarea {
+.contact-panel-body label input, .contact-panel-body label textarea, .contact-panel-body label select {
   display: block; width: 100%; margin-top: 0.2rem; border: 1px solid var(--border); border-radius: 6px;
   padding: 0.4rem 0.5rem; background: var(--bg); color: var(--text); font-family: inherit; font-size: 0.85rem;
 }
+.cp-crm-row { display: flex; gap: 0.7rem; }
+.cp-crm-row label { flex: 1; min-width: 0; }
 .cp-section-title { font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-muted); margin-bottom: 0.5rem; }
 .cp-tags-block { margin: 0.4rem 0 1rem; }
 .cp-tags-title { font-size: 0.78rem; font-weight: 600; color: var(--text-muted); }
@@ -794,6 +798,24 @@ tbody tr:hover { background: var(--accent-50); }
 .cp-appt-row .meta { color: var(--text-muted); font-size: 0.76rem; }
 .cp-auto-row { display: flex; justify-content: space-between; gap: 0.5rem; border-bottom: 1px solid var(--border); padding: 0.4rem 0; font-size: 0.8rem; }
 .cp-auto-row .k { color: var(--accent); font-weight: 600; font-size: 0.72rem; }
+
+.cp-timeline-row { border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.6rem; margin-bottom: 0.5rem; font-size: 0.82rem; }
+.cp-timeline-row .cp-tl-top { display: flex; justify-content: space-between; gap: 0.5rem; align-items: baseline; }
+.cp-timeline-row .title { font-weight: 600; }
+.cp-timeline-row .when { color: var(--text-faint); font-size: 0.72rem; white-space: nowrap; }
+.cp-timeline-row .desc { color: var(--text-muted); font-size: 0.78rem; margin-top: 0.2rem; }
+.cp-timeline-row .actor { color: var(--text-faint); font-size: 0.72rem; margin-top: 0.2rem; }
+
+.contact-panel-footer {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.6rem;
+  padding: 0.75rem 1rem; border-top: 1px solid var(--border); flex-shrink: 0;
+}
+.cp-footer-right { display: flex; align-items: center; gap: 0.6rem; }
+.btn-danger-solid {
+  background: #ef4444; border: 1px solid #ef4444; color: #fff; border-radius: 8px;
+  padding: 0.5rem 0.9rem; cursor: pointer; font-size: 0.82rem; font-weight: 600; font-family: inherit;
+}
+.btn-danger-solid:hover { background: #dc2626; border-color: #dc2626; }
 .contact-tags { display: inline-flex; gap: 0.25rem; flex-wrap: wrap; vertical-align: middle; }
 .contact-tag-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
 .contact-tag-chip { font-size: 0.68rem; padding: 0.08rem 0.4rem; border-radius: 999px; color: #fff; }

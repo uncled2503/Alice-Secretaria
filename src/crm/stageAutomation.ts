@@ -40,6 +40,7 @@ async function applyMove(
         title: "Paciente movido no funil",
         description: `${fromLabel ?? "—"} → ${targetLabel}${opts.note ? ` · ${opts.note}` : ""}`,
         actorName: opts.actorName ?? null,
+        patientId,
       },
     });
     transitionId = log.id;

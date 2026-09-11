@@ -450,6 +450,14 @@ function formatDateSep(iso) {
 }
 
 // --- CRM ---
+// Clicar num card do CRM abre o painel de detalhes do lead (dados, tags,
+// campos comerciais, timeline) E JA leva pro atendimento no Chat, se o
+// contato ja tiver conversa - o painel fica flutuando por cima.
+async function openCrmCard(patient) {
+  await openContactPanel(patient);
+  if (cpState.conversationId) await openPatientChat(cpState.conversationId);
+}
+
 async function loadCrmBoard() {
   const columns = await api("/crm/board");
   state.crmColumns = columns;
@@ -494,6 +502,10 @@ function renderCrmBoard(columns, query) {
         card.classList.add("dragging");
       });
       card.addEventListener("dragend", () => card.classList.remove("dragging"));
+      card.addEventListener("click", (e) => {
+        if (e.target.closest("select")) return; // trocar a etapa no proprio card nao abre o modal
+        openCrmCard(p);
+      });
 
       cardsBox.appendChild(card);
     }
@@ -633,6 +645,16 @@ async function loadConversations() {
 async function loadArchivedConversations() {
   state.archivedConversations = await api("/conversations?archived=1");
   if (state.chatFilter === "archived") renderConversationsList();
+}
+
+// Vai pra aba Chat e abre a conversa - usado pelo card do CRM e pelo botao
+// "Abrir atendimento" do painel de contato. Garante a lista carregada primeiro
+// (a conversa pode estar arquivada, ou o poll da aba Chat ainda nao rodou).
+async function openPatientChat(conversationId) {
+  if (!conversationId) return;
+  await Promise.all([loadConversations(), loadArchivedConversations()]);
+  goToTab("chat");
+  await openConversation(conversationId);
 }
 
 // Avisa (toast + selo no menu) quando aparece uma conversa que a Alice
@@ -1062,8 +1084,39 @@ function updateToggleButton(humanTakeover) {
   btn.dataset.humanTakeover = String(humanTakeover);
 }
 
-// --- Painel "Contato no chat" ---
-const cpState = { patientId: null, allTags: [], selected: [] };
+// --- Painel "Contato no chat" (tambem serve de card do CRM) ---
+const cpState = { patientId: null, allTags: [], selected: [], conversationId: null };
+
+// yyyy-MM-ddThh:mm em hora local, pro input datetime-local - Date#toISOString
+// e sempre UTC, entao monta na mao.
+function toDatetimeLocalValue(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function renderCpTimeline(timeline) {
+  const box = document.getElementById("cp-timeline");
+  box.innerHTML = "";
+  if (!timeline || !timeline.length) {
+    box.appendChild(el("div", { class: "hint", style: "margin:0" }, ["Nenhum evento ainda."]));
+    return;
+  }
+  for (const ev of timeline) {
+    const when = new Date(ev.at).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+    box.appendChild(
+      el("div", { class: "cp-timeline-row" }, [
+        el("div", { class: "cp-tl-top" }, [
+          el("span", { class: "title" }, [ev.title]),
+          el("span", { class: "when" }, [when]),
+        ]),
+        ev.description ? el("div", { class: "desc" }, [ev.description]) : "",
+        ev.actorName ? el("div", { class: "actor" }, [`por ${ev.actorName}`]) : "",
+      ])
+    );
+  }
+}
 
 function tagChip(t, onRemove) {
   const chip = el("span", { class: "cp-tag", style: `background:${t.color}` }, [t.label]);
@@ -1215,18 +1268,32 @@ async function openContactPanel(patient) {
   document.getElementById("cp-save-status").textContent = "";
   switchCpTab("resumo");
 
-  const [dossier, tags] = await Promise.all([api(`/patients/${patient.id}/dossier`), api("/tags")]);
+  const [dossier, tags, staff] = await Promise.all([api(`/patients/${patient.id}/dossier`), api("/tags"), api("/staff")]);
   cpState.allTags = tags;
   cpState.selected = dossier.patient.tags.slice();
+  cpState.conversationId = dossier.patient.conversationId;
 
   document.getElementById("cp-f-name").value = dossier.patient.name ?? "";
   document.getElementById("cp-f-email").value = dossier.patient.email ?? "";
   document.getElementById("cp-f-cpf").value = dossier.patient.cpf ?? "";
   document.getElementById("cp-f-birth").value = dossier.patient.birthDate ? String(dossier.patient.birthDate).slice(0, 10) : "";
   document.getElementById("cp-f-notes").value = dossier.patient.notes ?? "";
+  document.getElementById("cp-f-value").value = dossier.patient.estimatedValue ?? "";
+  document.getElementById("cp-f-temp").value = dossier.patient.leadTemperature ?? "";
+  document.getElementById("cp-f-next-at").value = toDatetimeLocalValue(dossier.patient.nextActionAt);
+  document.getElementById("cp-f-next-note").value = dossier.patient.nextActionNote ?? "";
+
+  const assigneeSelect = document.getElementById("cp-f-assignee");
+  assigneeSelect.innerHTML = "";
+  assigneeSelect.appendChild(el("option", { value: "" }, ["Sem responsável"]));
+  for (const s of staff) assigneeSelect.appendChild(el("option", { value: s.id }, [s.name]));
+  assigneeSelect.value = dossier.patient.assignedToId ?? "";
+
+  document.getElementById("cp-open-chat").disabled = !cpState.conversationId;
   renderCpTags();
   renderCpAppointments(dossier);
   renderCpAutomations(dossier);
+  renderCpTimeline(dossier.timeline);
 }
 
 function switchCpTab(name) {
@@ -1250,6 +1317,7 @@ document.getElementById("cp-save").addEventListener("click", async () => {
   if (!cpState.patientId) return;
   const status = document.getElementById("cp-save-status");
   status.textContent = "Salvando...";
+  const valueRaw = document.getElementById("cp-f-value").value.trim();
   await api(`/patients/${cpState.patientId}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -1260,11 +1328,21 @@ document.getElementById("cp-save").addEventListener("click", async () => {
       notes: document.getElementById("cp-f-notes").value.trim(),
       birthDate: document.getElementById("cp-f-birth").value || null,
       tagIds: cpState.selected.map((t) => t.id),
+      estimatedValue: valueRaw ? Number(valueRaw) : null,
+      leadTemperature: document.getElementById("cp-f-temp").value || null,
+      assignedToId: document.getElementById("cp-f-assignee").value || null,
+      nextActionAt: document.getElementById("cp-f-next-at").value || null,
+      nextActionNote: document.getElementById("cp-f-next-note").value.trim(),
     }),
   });
   status.textContent = "Salvo.";
   document.getElementById("cp-name").textContent = document.getElementById("cp-f-name").value.trim() || "(sem nome)";
-  await Promise.all([loadConversations(), loadContacts().catch(() => {})]);
+  await Promise.all([
+    loadConversations(),
+    loadContacts().catch(() => {}),
+    state.crmColumns ? loadCrmBoard().catch(() => {}) : Promise.resolve(),
+    api(`/patients/${cpState.patientId}/dossier`).then((d) => renderCpTimeline(d.timeline)).catch(() => {}),
+  ]);
 });
 
 document.getElementById("cp-schedule").addEventListener("click", () => {
@@ -1275,6 +1353,22 @@ document.getElementById("cp-schedule").addEventListener("click", () => {
   document.getElementById("ap-name").value = name;
   document.getElementById("ap-phone").value = phone;
   closeContactPanel();
+});
+
+// "Abrir atendimento": vai pra aba Chat e abre a conversa deste contato, sem
+// fechar o painel (ele flutua por cima, ver .contact-panel-overlay).
+document.getElementById("cp-open-chat").addEventListener("click", async () => {
+  if (!cpState.conversationId) return;
+  await openPatientChat(cpState.conversationId);
+});
+
+document.getElementById("cp-remove-crm").addEventListener("click", async () => {
+  if (!cpState.patientId) return;
+  const name = document.getElementById("cp-f-name").value.trim() || "este contato";
+  if (!(await showConfirm(`Remover "${name}" do CRM? Ele some do quadro, mas a conversa e o histórico continuam intactos.`))) return;
+  await api(`/patients/${cpState.patientId}/crm-remove`, { method: "POST" });
+  closeContactPanel();
+  if (state.crmColumns) await loadCrmBoard().catch(() => {});
 });
 
 document.getElementById("btn-toggle-human").addEventListener("click", async () => {

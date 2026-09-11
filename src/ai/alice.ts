@@ -849,6 +849,7 @@ export async function recordIncomingMessage(params: {
     : await prisma.patient.create({ data: { clinicId, phone: patientPhone, name: patientName, ...attribution } });
 
   if (!existing) {
+    void logActivity({ clinicId, patientId: patient.id, type: "patient_created", area: "crm", title: "Card criado" });
     void enqueueLead(clinicId, patient.id).catch((err) => console.error("[meta] enqueueLead:", err));
   }
 
@@ -992,6 +993,9 @@ export async function recordOutgoingFromDevice(params: {
       ? await prisma.patient.update({ where: { id: existing.id }, data: { name: patientName } })
       : existing
     : await prisma.patient.create({ data: { clinicId, phone: patientPhone, name: patientName ?? null } });
+  if (!existing) {
+    void logActivity({ clinicId, patientId: patient.id, type: "patient_created", area: "crm", title: "Card criado" });
+  }
 
   let conversation = await prisma.conversation.findFirst({
     where: { patientId: patient.id, status: { in: ["active", "qualified"] } },

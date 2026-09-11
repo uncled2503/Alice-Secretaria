@@ -1734,7 +1734,7 @@ apiRouter.get(
     const [stages, patients] = await Promise.all([
       getFunnelStages(clinic.id),
       prisma.patient.findMany({
-        where: { clinicId: clinic.id },
+        where: { clinicId: clinic.id, crmHidden: false },
         orderBy: { createdAt: "desc" },
         include: { tags: { include: { tag: { select: { id: true, label: true, color: true } } } } },
       }),
@@ -1772,14 +1772,45 @@ apiRouter.put(
     const patient = await prisma.patient.findUniqueOrThrow({ where: { id: req.params.id } });
     if (!assertClinicAccess(req, res, patient.clinicId)) return;
 
-    const { name, birthDate, email, cpf, notes, tagIds } = req.body as {
+    const { name, birthDate, email, cpf, notes, tagIds, estimatedValue, leadTemperature, assignedToId, nextActionAt, nextActionNote } = req.body as {
       name?: string;
       birthDate?: string | null;
       email?: string | null;
       cpf?: string | null;
       notes?: string | null;
       tagIds?: string[];
+      estimatedValue?: number | null;
+      leadTemperature?: string | null;
+      assignedToId?: string | null;
+      nextActionAt?: string | null;
+      nextActionNote?: string | null;
     };
+
+    const LEAD_TEMPERATURES = new Set(["frio", "morno", "quente"]);
+    if (leadTemperature !== undefined && leadTemperature !== null && !LEAD_TEMPERATURES.has(leadTemperature)) {
+      res.status(400).json({ error: "leadTemperature invalido, use frio, morno ou quente" });
+      return;
+    }
+    if (assignedToId) {
+      const owner = await prisma.staffUser.findUnique({ where: { id: assignedToId }, select: { clinicId: true } });
+      if (!owner || owner.clinicId !== patient.clinicId) {
+        res.status(400).json({ error: "responsavel invalido - precisa ser da equipe desta clinica" });
+        return;
+      }
+    }
+    let parsedNextActionAt: Date | null | undefined;
+    if (nextActionAt !== undefined) {
+      if (!nextActionAt) {
+        parsedNextActionAt = null;
+      } else {
+        const d = new Date(nextActionAt);
+        if (isNaN(d.getTime())) {
+          res.status(400).json({ error: "nextActionAt invalido" });
+          return;
+        }
+        parsedNextActionAt = d;
+      }
+    }
     let parsedBirth: Date | null | undefined;
     if (birthDate !== undefined) {
       if (!birthDate) {
@@ -1812,9 +1843,64 @@ apiRouter.put(
         ...(email !== undefined ? { email: email?.trim() || null } : {}),
         ...(cpf !== undefined ? { cpf: cpf?.replace(/\D/g, "") || null } : {}),
         ...(notes !== undefined ? { notes: notes?.trim() || null } : {}),
+        ...(estimatedValue !== undefined ? { estimatedValue: estimatedValue === null ? null : Number(estimatedValue) } : {}),
+        ...(leadTemperature !== undefined ? { leadTemperature } : {}),
+        ...(assignedToId !== undefined ? { assignedToId: assignedToId || null } : {}),
+        ...(parsedNextActionAt !== undefined ? { nextActionAt: parsedNextActionAt } : {}),
+        ...(nextActionNote !== undefined ? { nextActionNote: nextActionNote?.trim() || null } : {}),
       },
     });
+
+    // Timeline do card: um evento so, resumindo o que mudou nos campos
+    // comerciais (nome/tag/notas ja tem seu proprio historico implicito).
+    const crmChanges: string[] = [];
+    if (estimatedValue !== undefined && estimatedValue !== patient.estimatedValue) {
+      crmChanges.push(`valor estimado: ${estimatedValue == null ? "—" : `R$ ${Number(estimatedValue).toFixed(2)}`}`);
+    }
+    if (leadTemperature !== undefined && leadTemperature !== patient.leadTemperature) {
+      crmChanges.push(`temperatura: ${leadTemperature ?? "—"}`);
+    }
+    if (assignedToId !== undefined && (assignedToId || null) !== patient.assignedToId) {
+      crmChanges.push(`responsável: ${updated.assignedToId ? "definido" : "removido"}`);
+    }
+    if (parsedNextActionAt !== undefined && parsedNextActionAt?.getTime() !== patient.nextActionAt?.getTime()) {
+      crmChanges.push(`próxima ação: ${parsedNextActionAt ? parsedNextActionAt.toLocaleString("pt-BR") : "—"}`);
+    }
+    if (crmChanges.length) {
+      void logActivity({
+        clinicId: patient.clinicId,
+        patientId: patient.id,
+        type: "crm_card_updated",
+        area: "crm",
+        title: "Card do CRM atualizado",
+        description: crmChanges.join(" · "),
+        actorName: req.staff?.name ?? null,
+      });
+    }
+
     res.json({ id: updated.id, name: updated.name, birthDate: updated.birthDate });
+  })
+);
+
+// "Remover do CRM": sai do quadro sem apagar contato, conversa nem historico -
+// pra leads invalidos (numero errado, spam) sem perder nada. So admin/client
+// da propria clinica.
+apiRouter.post(
+  "/patients/:id/crm-remove",
+  asyncRoute(async (req, res) => {
+    const patient = await prisma.patient.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, patient.clinicId)) return;
+
+    await prisma.patient.update({ where: { id: patient.id }, data: { crmHidden: true } });
+    void logActivity({
+      clinicId: patient.clinicId,
+      patientId: patient.id,
+      type: "crm_card_removed",
+      area: "crm",
+      title: "Removido do CRM",
+      actorName: req.staff?.name ?? null,
+    });
+    res.json({ ok: true });
   })
 );
 

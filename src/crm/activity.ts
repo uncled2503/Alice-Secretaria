@@ -40,6 +40,9 @@ export const ACTIVITY_TYPES: Record<string, string> = {
   stage_created: "Etapa do funil criada",
   stage_removed: "Etapa do funil removida",
   broadcast_scheduled: "Mensagem programada agendada",
+  patient_created: "Card criado",
+  crm_card_updated: "Card do CRM atualizado",
+  crm_card_removed: "Removido do CRM",
 };
 
 export interface ActivityEntry {
@@ -49,6 +52,7 @@ export interface ActivityEntry {
   title: string;
   description?: string | null;
   actorName?: string | null; // null/ausente = ação automática do sistema
+  patientId?: string | null; // preenchido = aparece na Timeline do card do CRM desse lead
 }
 
 // Registra uma atividade. NUNCA lanca - o historico e secundario, uma falha
@@ -63,6 +67,7 @@ export async function logActivity(entry: ActivityEntry): Promise<void> {
         title: entry.title,
         description: entry.description ?? null,
         actorName: entry.actorName ?? null,
+        patientId: entry.patientId ?? null,
       },
     });
   } catch (err) {

@@ -344,6 +344,8 @@
               <button data-cpt="resumo" class="active">Resumo</button>
               <button data-cpt="agendamentos" class="biz-clinica-only">Agendamentos</button>
               <button data-cpt="automacoes">Automações</button>
+              <button data-cpt="timeline">Timeline</button>
+              <button type="button" id="cp-open-chat" class="btn-chat-action">Abrir atendimento</button>
               <button type="button" id="cp-schedule" class="btn-brand btn-brand--primary btn-brand--sm biz-clinica-only">Agendar</button>
             </div>
 
@@ -359,8 +361,23 @@
                 <input id="cp-tag-input" type="text" placeholder="Buscar ou criar etiqueta..." autocomplete="off" />
                 <div id="cp-tag-suggestions" class="cp-tag-suggestions"></div>
               </div>
-              <button type="button" id="cp-save" class="btn-brand btn-brand--primary" data-biz-label="Salvar contato|Salvar cliente">Salvar contato</button>
-              <span id="cp-save-status" class="hint" style="margin:0"></span>
+              <div class="cp-section-title" style="margin-top:1rem">CRM</div>
+              <div class="cp-crm-row">
+                <label>Valor estimado<input id="cp-f-value" type="number" min="0" step="0.01" placeholder="R$" /></label>
+                <label>Temperatura
+                  <select id="cp-f-temp">
+                    <option value="">Sem temperatura</option>
+                    <option value="frio">Frio</option>
+                    <option value="morno">Morno</option>
+                    <option value="quente">Quente</option>
+                  </select>
+                </label>
+              </div>
+              <label>Responsável<select id="cp-f-assignee"><option value="">Sem responsável</option></select></label>
+              <div class="cp-crm-row">
+                <label>Próxima ação<input id="cp-f-next-at" type="datetime-local" /></label>
+                <label>Nota da próxima ação<input id="cp-f-next-note" type="text" placeholder="Ex: ligar de volta" /></label>
+              </div>
             </div>
 
             <div id="cpt-agendamentos" class="contact-panel-body">
@@ -375,6 +392,18 @@
               <div id="cp-auto-pending"></div>
               <div class="cp-section-title" style="margin-top:1rem">Já recebeu</div>
               <div id="cp-auto-sent"></div>
+            </div>
+
+            <div id="cpt-timeline" class="contact-panel-body">
+              <div id="cp-timeline"></div>
+            </div>
+
+            <div class="contact-panel-footer">
+              <button type="button" id="cp-remove-crm" class="btn-danger-solid">Remover do CRM</button>
+              <div class="cp-footer-right">
+                <span id="cp-save-status" class="hint" style="margin:0"></span>
+                <button type="button" id="cp-save" class="btn-brand btn-brand--primary" data-biz-label="Salvar contato|Salvar cliente">Salvar contato</button>
+              </div>
             </div>
           </div>
       </div>
