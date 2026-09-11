@@ -1177,6 +1177,13 @@ td.actions { display: flex; gap: 0.4rem; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 0.6rem; }
 .modal-actions .btn-cancel { margin-right: auto; }
 
+.modal-inline-title { margin: 0 0 0.3rem; font-weight: 700; font-size: 1rem; }
+.crm-inline-modal label { display: block; font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.7rem; }
+.crm-inline-modal label input, .crm-inline-modal label select {
+  display: block; width: 100%; margin-top: 0.25rem; border: 1px solid var(--border); border-radius: 6px;
+  padding: 0.45rem 0.55rem; background: var(--bg); color: var(--text); font-family: inherit; font-size: 0.88rem;
+}
+
 .modal-form-row { display: flex; gap: 0.8rem; flex-wrap: wrap; }
 .modal-form-row label { flex: 1 1 8rem; }
 .modal-section {

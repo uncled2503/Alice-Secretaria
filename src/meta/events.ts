@@ -40,6 +40,7 @@ type PatientLite = {
   adsetName: string | null;
   adName: string | null;
   sourceUrl: string | null;
+  estimatedValue: number | null;
 };
 
 const PATIENT_META_SELECT = {
@@ -58,6 +59,7 @@ const PATIENT_META_SELECT = {
   adsetName: true,
   adName: true,
   sourceUrl: true,
+  estimatedValue: true,
 } as const;
 
 // custom_data com a atribuicao do lead (NUNCA PII aqui).
@@ -255,8 +257,9 @@ export async function enqueueStageChange(params: {
       });
     }
 
-    // Purchase: coluna de "Venda ganha". Evento padrao da Meta pra otimizacao;
-    // sem value/currency por enquanto (a Alice nao tem o ticket do procedimento).
+    // Purchase: coluna de "Venda ganha". Evento padrao da Meta pra otimizacao -
+    // manda value/currency quando a equipe informou o valor da venda ao
+    // arrastar o card (Patient.estimatedValue), essencial pro ROAS da Meta.
     if (config.stageWon && params.newStageId === config.stageWon) {
       await enqueue({
         clinicId: params.clinicId,
@@ -264,7 +267,10 @@ export async function enqueueStageChange(params: {
         eventId: metaEventId.won(params.patientId, params.transitionId),
         leadId: params.patientId,
         patient,
-        customData: base,
+        customData: {
+          ...base,
+          ...(typeof patient.estimatedValue === "number" ? { value: patient.estimatedValue, currency: "BRL" } : {}),
+        },
       });
     }
 

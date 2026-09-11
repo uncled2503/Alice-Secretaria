@@ -1962,13 +1962,14 @@ apiRouter.delete(
 apiRouter.post(
   "/patients/:id/stage",
   asyncRoute(async (req, res) => {
-    const { stage } = req.body as { stage?: string };
+    const { stage, saleValue } = req.body as { stage?: string; saleValue?: number };
     const patient = await prisma.patient.findUniqueOrThrow({ where: { id: req.params.id } });
     if (!assertClinicAccess(req, res, patient.clinicId)) return;
 
     const result = await movePatientToStage(patient.clinicId, patient.id, String(stage ?? ""), {
       actorName: req.staff?.name ?? null,
       note: "movido no painel",
+      ...(typeof saleValue === "number" && !isNaN(saleValue) ? { saleValue } : {}),
     });
     if (!result.ok) {
       const stages = await getFunnelStages(patient.clinicId);

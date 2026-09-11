@@ -2277,6 +2277,33 @@
       </div>
     </div>
 
+    <!-- Arrastar card do CRM pra coluna "Venda ganha": pede o valor pra alimentar o Purchase da Meta. -->
+    <div id="crm-value-overlay" class="modal-overlay crm-inline-modal" style="display:none">
+      <div class="modal-card" style="max-width:380px">
+        <p class="modal-inline-title">Valor da venda</p>
+        <p class="hint" style="margin:0 0 0.8rem">Alimenta o evento de Compra enviado pro Meta.</p>
+        <label>Valor (R$)<input id="crm-value-input" type="number" min="0" step="0.01" placeholder="0,00" /></label>
+        <div class="modal-actions">
+          <button type="button" id="crm-value-cancel" class="btn-cancel">Cancelar</button>
+          <button type="button" id="crm-value-ok" class="btn-save">Confirmar</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Arrastar card do CRM pra coluna "Agendado": agenda de verdade (cria o Appointment). -->
+    <div id="crm-schedule-overlay" class="modal-overlay crm-inline-modal" style="display:none">
+      <div class="modal-card" style="max-width:420px">
+        <p class="modal-inline-title">Agendar</p>
+        <label>Procedimento<select id="crm-sch-procedure" required></select></label>
+        <label>Profissional<select id="crm-sch-professional"><option value="">Não atribuído</option></select></label>
+        <label>Data/hora<input id="crm-sch-when" type="datetime-local" required /></label>
+        <div class="modal-actions">
+          <button type="button" id="crm-sch-cancel" class="btn-cancel">Cancelar</button>
+          <button type="button" id="crm-sch-ok" class="btn-save">Agendar</button>
+        </div>
+      </div>
+    </div>
+
     <button class="panel-ai-fab" id="panel-ai-fab" type="button" aria-label="Abrir ajuda da Alice" aria-expanded="false">
       <span class="panel-ai-fab-label">Precisa de ajuda?</span>
       <img src="/assets/logo-personagem.webp" alt="" />

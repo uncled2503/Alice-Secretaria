@@ -15,6 +15,7 @@ interface MoveOpts {
   actorName?: string | null; // null/ausente = acao automatica
   note?: string; // motivo, aparece no historico
   allowFromTerminal?: boolean; // deixa mover mesmo saindo de ganho/perdido
+  saleValue?: number; // preenchido ao arrastar pro "Venda ganha" - vira o value do Purchase na Meta
 }
 
 async function applyMove(
@@ -26,7 +27,16 @@ async function applyMove(
   fromLabel: string | undefined,
   opts: MoveOpts,
 ): Promise<void> {
-  await prisma.patient.update({ where: { id: patientId }, data: { funnelStage: targetStageId } });
+  await prisma.patient.update({
+    where: { id: patientId },
+    data: {
+      funnelStage: targetStageId,
+      // Valor da venda (pedido ao arrastar pro "Venda ganha"): atualiza o
+      // "valor estimado" do card com o valor real e da pro enqueueStageChange
+      // ler na sequencia pra montar o value do Purchase.
+      ...(typeof opts.saleValue === "number" && !isNaN(opts.saleValue) ? { estimatedValue: opts.saleValue } : {}),
+    },
+  });
 
   // Registra a transicao (o id deste log serve de transitionId estavel pra
   // deduplicar os eventos de CRM na Meta). Nunca deixa o log derrubar o move.

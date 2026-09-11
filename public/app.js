@@ -67,6 +67,87 @@ function showConfirm(message) {
   });
 }
 
+// Pede o valor da venda ao arrastar um card do CRM pra coluna "Venda ganha" -
+// alimenta o Purchase que vai pra Meta. "Confirmar" sempre move o card (com
+// valor, se preenchido); so "Cancelar"/fechar aborta o movimento - por isso
+// retorna undefined pra cancelado, e number|null (sem valor) pra confirmado.
+function promptSaleValue() {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById("crm-value-overlay");
+    const input = document.getElementById("crm-value-input");
+    const okBtn = document.getElementById("crm-value-ok");
+    const cancelBtn = document.getElementById("crm-value-cancel");
+    input.value = "";
+
+    const cleanup = (result) => {
+      overlay.style.display = "none";
+      okBtn.removeEventListener("click", onOk);
+      cancelBtn.removeEventListener("click", onCancel);
+      overlay.removeEventListener("click", onOverlayClick);
+      resolve(result);
+    };
+    const onOk = () => {
+      const v = input.value.trim();
+      cleanup(v ? Number(v) : null);
+    };
+    const onCancel = () => cleanup(undefined);
+    const onOverlayClick = (e) => { if (e.target === overlay) cleanup(undefined); };
+
+    okBtn.addEventListener("click", onOk);
+    cancelBtn.addEventListener("click", onCancel);
+    overlay.addEventListener("click", onOverlayClick);
+    overlay.style.display = "flex";
+    setTimeout(() => input.focus(), 50);
+  });
+}
+
+// Pede procedimento + profissional + data/hora ao arrastar um card do CRM pra
+// coluna "Agendado" - cria o agendamento de verdade (POST /appointments, o
+// mesmo endpoint do form manual da Agenda). Retorna {procedureId,
+// professionalId, when} ou null se cancelou.
+function promptSchedule() {
+  return new Promise(async (resolve) => {
+    const overlay = document.getElementById("crm-schedule-overlay");
+    const procedureSelect = document.getElementById("crm-sch-procedure");
+    const professionalSelect = document.getElementById("crm-sch-professional");
+    const whenInput = document.getElementById("crm-sch-when");
+    const okBtn = document.getElementById("crm-sch-ok");
+    const cancelBtn = document.getElementById("crm-sch-cancel");
+
+    const [procedures, professionals] = await Promise.all([api("/procedures"), api("/professionals")]);
+    procedureSelect.innerHTML = "";
+    for (const p of procedures) procedureSelect.appendChild(el("option", { value: p.id }, [`${p.name} (${p.durationMin}min)`]));
+    professionalSelect.innerHTML = '<option value="">Não atribuído</option>';
+    for (const p of professionals) if (p.active) professionalSelect.appendChild(el("option", { value: p.id }, [p.name]));
+    whenInput.value = "";
+
+    if (!procedures.length) {
+      showError("Cadastre um procedimento em Personalizar Alice antes de agendar pelo CRM.");
+      resolve(null);
+      return;
+    }
+
+    const cleanup = (result) => {
+      overlay.style.display = "none";
+      okBtn.removeEventListener("click", onOk);
+      cancelBtn.removeEventListener("click", onCancel);
+      overlay.removeEventListener("click", onOverlayClick);
+      resolve(result);
+    };
+    const onOk = () => {
+      if (!whenInput.value) { whenInput.focus(); return; }
+      cleanup({ procedureId: procedureSelect.value, professionalId: professionalSelect.value || null, when: whenInput.value });
+    };
+    const onCancel = () => cleanup(null);
+    const onOverlayClick = (e) => { if (e.target === overlay) cleanup(null); };
+
+    okBtn.addEventListener("click", onOk);
+    cancelBtn.addEventListener("click", onCancel);
+    overlay.addEventListener("click", onOverlayClick);
+    overlay.style.display = "flex";
+  });
+}
+
 // Captura QUALQUER erro de JS (nao so falha de fetch) e mostra no banner.
 // Sem isso, um bug num pedaco do script trava tudo que vem depois em silencio
 // (nenhum listener registrado apos o ponto do erro chega a existir) e a unica
@@ -467,6 +548,8 @@ async function loadCrmBoard() {
 function renderCrmBoard(columns, query) {
   const q = (query || "").trim().toLowerCase();
   const stageOptions = columns.map((c) => ({ id: c.id, label: c.label }));
+  const colById = new Map(columns.map((c) => [c.id, c]));
+  const patientById = new Map(columns.flatMap((c) => c.patients).map((p) => [p.id, p]));
   const board = document.getElementById("crm-board");
   board.innerHTML = "";
 
@@ -483,7 +566,10 @@ function renderCrmBoard(columns, query) {
         stageOptions.map((opt) => el("option", { value: opt.id }, [opt.label]))
       );
       select.value = col.id;
-      select.addEventListener("change", () => moveStage(p.id, select.value));
+      select.addEventListener("change", () => {
+        const target = colById.get(select.value);
+        if (target) requestStageMove(p, target);
+      });
       select.addEventListener("mousedown", (e) => e.stopPropagation()); // nao inicia drag ao abrir o select
 
       const card = el("div", { class: "crm-card", draggable: "true" }, [
@@ -520,7 +606,8 @@ function renderCrmBoard(columns, query) {
       e.preventDefault();
       cardsBox.classList.remove("drag-over");
       const patientId = e.dataTransfer.getData("text/plain");
-      if (patientId) moveStage(patientId, col.id);
+      const patient = patientById.get(patientId);
+      if (patient) requestStageMove(patient, col);
     });
 
     board.appendChild(
@@ -623,13 +710,53 @@ document.getElementById("stage-form").addEventListener("submit", async (e) => {
   await loadCrmBoard();
 });
 
-async function moveStage(patientId, stage) {
+async function moveStage(patientId, stage, opts = {}) {
   await api(`/patients/${patientId}/stage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ stage }),
+    body: JSON.stringify({ stage, ...opts }),
   });
   await loadCrmBoard();
+}
+
+// Ponto unico por onde um card muda de coluna (drag-and-drop ou o select do
+// card). Colunas especiais pedem um dado extra antes de mover de verdade:
+// "Venda ganha" pede o valor (alimenta o Purchase da Meta); "Agendado" pede
+// procedimento+data/hora e AGENDA DE VERDADE (cria o Appointment - dai a
+// Alice enxerga o horario ocupado igual a qualquer outro agendamento).
+// Cancelar so re-renderiza do estado ja carregado (sem chamada nova).
+async function requestStageMove(patient, col) {
+  const resetView = () => renderCrmBoard(state.crmColumns, document.getElementById("crm-search").value);
+  if (col.patients.some((x) => x.id === patient.id)) return; // ja esta nessa coluna - drop/reordenacao sem efeito
+
+  if (col.kind === "ganho") {
+    const value = await promptSaleValue();
+    if (value === undefined) { resetView(); return; } // cancelou - nao move
+    await moveStage(patient.id, col.id, value === null || isNaN(value) ? {} : { saleValue: value });
+    return;
+  }
+
+  if (col.kind === "avaliacao_agendada" && document.body.dataset.biz !== "loja") {
+    const sched = await promptSchedule();
+    if (!sched) { resetView(); return; }
+    await api("/appointments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        patientName: patient.name || undefined,
+        patientPhone: patient.phone,
+        procedureId: sched.procedureId,
+        professionalId: sched.professionalId,
+        scheduledAt: new Date(sched.when).toISOString(),
+      }),
+    });
+    // POST /appointments ja move o paciente pra "avaliacao_agendada" no
+    // servidor - so precisa recarregar o quadro pra refletir.
+    await loadCrmBoard();
+    return;
+  }
+
+  await moveStage(patient.id, col.id);
 }
 
 // --- Chat ---
