@@ -637,7 +637,8 @@ export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: str
 
   // Trava anti-loop: o modelo (gpt-4o-mini) as vezes trava repetindo a mesma
   // resposta. Isso e reforcado no prompt e checado de novo no codigo.
-  const noRepeatLine = `\nNAO SE REPITA: nunca reenvie uma resposta que voce ja mandou nesta conversa, nem uma variacao da mesma frase. Responda SEMPRE a ultima mensagem do cliente - se ele fez uma pergunta nova (ex: "da pra mandar um cartao junto?", "entrega de manha?"), responda ESSA pergunta, sem voltar pro assunto anterior. Se voce ja explicou tudo o que sabia e o cliente continua sem avancar, NAO repita: use transfer_to_human. Cada resposta sua tem que acrescentar algo novo.`;
+  const noRepeatLine = `\nNAO SE REPITA: nunca reenvie uma resposta que voce ja mandou nesta conversa, nem uma variacao da mesma frase. Responda SEMPRE a ultima mensagem do cliente - se ele fez uma pergunta nova (ex: "da pra mandar um cartao junto?", "entrega de manha?"), responda ESSA pergunta, sem voltar pro assunto anterior. Se voce ja explicou tudo o que sabia e o cliente continua sem avancar, NAO repita: use transfer_to_human. Cada resposta sua tem que acrescentar algo novo.
+NAO FIQUE SE DESPEDINDO: se voce ja se despediu ou disse "fico a disposicao"/"e so chamar" nesta conversa e o cliente so respondeu com um agradecimento ou confirmacao sem pedir nada novo (ex: "obrigado", "valeu", "ok", "de nada", um emoji), a conversa ja terminou - NAO mande mais uma mensagem de despedida. Um atendimento bom sabe ficar em silencio quando ja resolveu tudo.`;
 
   const consultivo = clinic.servicePosture === "consultivo";
 
@@ -807,6 +808,7 @@ export interface RecordedMessage {
   patientId: string;
   humanTakeover: boolean;
   replyDelayMs: number; // 0 = responder na hora; >0 = agrupar mensagens quebradas
+  probableEcho: boolean; // true = provavel eco da propria mensagem que a Alice/equipe acabou de mandar - nao gerar resposta
 }
 
 // PASSO 1 (imediato, por mensagem): grava a mensagem do cliente, cuida do
@@ -867,6 +869,25 @@ export async function recordIncomingMessage(params: {
     conversation = await prisma.conversation.create({ data: { patientId: patient.id } });
   }
 
+  // Trava anti-eco: se o que "chegou do cliente" e quase identico a ULTIMA
+  // mensagem que SAIU dessa conversa (Alice ou humano) a poucos minutos, e
+  // bem mais provavel que seja um eco da propria mensagem voltando (bug de
+  // webhook/entrega) do que o cliente repetindo palavra por palavra o que a
+  // Alice acabou de dizer. Sem essa trava a Alice responde ao proprio eco, o
+  // eco volta de novo, e ela entra num loop conversando sozinha.
+  const lastOutgoing = await prisma.message.findFirst({
+    where: { conversationId: conversation.id, role: { in: ["assistant", "human"] } },
+    orderBy: { createdAt: "desc" },
+  });
+  const probableEcho =
+    !!lastOutgoing &&
+    Date.now() - lastOutgoing.createdAt.getTime() < 5 * 60_000 &&
+    normalizeReply(storedContent).length > 8 &&
+    replySimilarity(storedContent, lastOutgoing.content) >= REPEAT_SIMILARITY;
+  if (probableEcho) {
+    console.warn(`[eco?] mensagem "recebida" quase identica ao que a propria conversa acabou de mandar - pulando resposta (conv ${conversation.id})`);
+  }
+
   await prisma.message.create({
     data: {
       conversationId: conversation.id,
@@ -900,6 +921,7 @@ export async function recordIncomingMessage(params: {
     patientId: patient.id,
     humanTakeover: conversation.humanTakeover,
     replyDelayMs: delaySec * 1000,
+    probableEcho,
   };
 }
 
@@ -1212,6 +1234,6 @@ export async function handleIncomingMessage(params: {
   referral?: IncomingReferral;
 }): Promise<string> {
   const rec = await recordIncomingMessage(params);
-  if (!rec || rec.humanTakeover) return "";
+  if (!rec || rec.humanTakeover || rec.probableEcho) return "";
   return generateReply(rec.conversationId, { imageDataUrl: params.imageDataUrl });
 }

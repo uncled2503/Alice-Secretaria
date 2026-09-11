@@ -868,6 +868,7 @@ async function handleQueuedPayload(clinicId: string, body: unknown): Promise<voi
     }
 
     if (recorded.humanTakeover) continue;
+    if (recorded.probableEcho) continue;
 
     if (recorded.replyDelayMs > 0) {
       scheduleGroupedReply(clinicId, incoming.phone, recorded.conversationId, recorded.replyDelayMs, imageDataUrl);
