@@ -40,7 +40,6 @@ type PatientLite = {
   adsetName: string | null;
   adName: string | null;
   sourceUrl: string | null;
-  estimatedValue: number | null;
 };
 
 const PATIENT_META_SELECT = {
@@ -59,7 +58,6 @@ const PATIENT_META_SELECT = {
   adsetName: true,
   adName: true,
   sourceUrl: true,
-  estimatedValue: true,
 } as const;
 
 // custom_data com a atribuicao do lead (NUNCA PII aqui).
@@ -180,6 +178,11 @@ export async function enqueueStageChange(params: {
   pipelineName?: string;
   changedAt?: Date;
   actorName?: string | null;
+  // Valor da venda informado NESTA transicao (arrastar pro "Venda ganha").
+  // So vai pro Purchase quando vem daqui - nunca reaproveita o "valor
+  // estimado" que já estava salvo no card (pode ser uma estimativa antiga
+  // e sem relação com o valor real fechado agora).
+  saleValue?: number;
 }): Promise<void> {
   try {
     const config = await prisma.metaConfig.findUnique({ where: { clinicId: params.clinicId } });
@@ -258,8 +261,11 @@ export async function enqueueStageChange(params: {
     }
 
     // Purchase: coluna de "Venda ganha". Evento padrao da Meta pra otimizacao -
-    // manda value/currency quando a equipe informou o valor da venda ao
-    // arrastar o card (Patient.estimatedValue), essencial pro ROAS da Meta.
+    // manda value/currency SO quando a equipe informou o valor da venda
+    // NESTA transicao (params.saleValue). Nao reaproveita Patient.estimatedValue
+    // aqui: esse campo e o "valor estimado" editavel a qualquer momento no
+    // card - podia ficar uma estimativa velha e sem relacao mandada como se
+    // fosse o valor real fechado agora.
     if (config.stageWon && params.newStageId === config.stageWon) {
       await enqueue({
         clinicId: params.clinicId,
@@ -269,7 +275,7 @@ export async function enqueueStageChange(params: {
         patient,
         customData: {
           ...base,
-          ...(typeof patient.estimatedValue === "number" ? { value: patient.estimatedValue, currency: "BRL" } : {}),
+          ...(typeof params.saleValue === "number" && !isNaN(params.saleValue) ? { value: params.saleValue, currency: "BRL" } : {}),
         },
       });
     }

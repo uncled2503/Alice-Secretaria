@@ -71,6 +71,7 @@ export async function offerFreedSlotToWaitlist(params: {
 
     await logActivity({
       clinicId,
+      patientId: entry.patientId,
       type: "waitlist_offer",
       area: "agenda",
       title: "Vaga oferecida da lista de espera",

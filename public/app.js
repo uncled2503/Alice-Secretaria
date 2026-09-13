@@ -36,7 +36,6 @@ function showError(message) {
   toast.addEventListener("transitionend", () => toast.remove());
   setTimeout(() => toast.remove(), 5000); // rede de seguranca se o transitionend nao disparar
 }
-
 // Modal de confirmacao no meio da tela, no lugar do dialogo nativo feio do
 // navegador. Retorna uma Promise<boolean> - so pode ser usado dentro de
 // uma funcao async, com "if (!(await showConfirm(msg))) return;".
@@ -114,7 +113,14 @@ function promptSchedule() {
     const okBtn = document.getElementById("crm-sch-ok");
     const cancelBtn = document.getElementById("crm-sch-cancel");
 
-    const [procedures, professionals] = await Promise.all([api("/procedures"), api("/professionals")]);
+    let procedures, professionals;
+    try {
+      [procedures, professionals] = await Promise.all([api("/procedures"), api("/professionals")]);
+    } catch {
+      // api() ja mostrou o erro (toast) - so evita deixar a promise pendurada pra sempre.
+      resolve(null);
+      return;
+    }
     procedureSelect.innerHTML = "";
     for (const p of procedures) procedureSelect.appendChild(el("option", { value: p.id }, [`${p.name} (${p.durationMin}min)`]));
     professionalSelect.innerHTML = '<option value="">Não atribuído</option>';
@@ -520,6 +526,11 @@ function formatMsgTime(iso) {
   return new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
 }
 
+// "dd/mm/aaaa hh:mm" - usado no painel de contato (agendamentos e timeline do CRM).
+function formatDateTimeShort(iso) {
+  return new Date(iso).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
 function formatDateSep(iso) {
   const d = new Date(iso);
   const now = new Date();
@@ -729,34 +740,40 @@ async function requestStageMove(patient, col) {
   const resetView = () => renderCrmBoard(state.crmColumns, document.getElementById("crm-search").value);
   if (col.patients.some((x) => x.id === patient.id)) return; // ja esta nessa coluna - drop/reordenacao sem efeito
 
-  if (col.kind === "ganho") {
-    const value = await promptSaleValue();
-    if (value === undefined) { resetView(); return; } // cancelou - nao move
-    await moveStage(patient.id, col.id, value === null || isNaN(value) ? {} : { saleValue: value });
-    return;
-  }
+  try {
+    if (col.kind === "ganho") {
+      const value = await promptSaleValue();
+      if (value === undefined) { resetView(); return; } // cancelou - nao move
+      await moveStage(patient.id, col.id, value === null || isNaN(value) ? {} : { saleValue: value });
+      return;
+    }
 
-  if (col.kind === "avaliacao_agendada" && document.body.dataset.biz !== "loja") {
-    const sched = await promptSchedule();
-    if (!sched) { resetView(); return; }
-    await api("/appointments", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        patientName: patient.name || undefined,
-        patientPhone: patient.phone,
-        procedureId: sched.procedureId,
-        professionalId: sched.professionalId,
-        scheduledAt: new Date(sched.when).toISOString(),
-      }),
-    });
-    // POST /appointments ja move o paciente pra "avaliacao_agendada" no
-    // servidor - so precisa recarregar o quadro pra refletir.
-    await loadCrmBoard();
-    return;
-  }
+    if (col.kind === "avaliacao_agendada" && document.body.dataset.biz !== "loja") {
+      const sched = await promptSchedule();
+      if (!sched) { resetView(); return; }
+      await api("/appointments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          patientName: patient.name || undefined,
+          patientPhone: patient.phone,
+          procedureId: sched.procedureId,
+          professionalId: sched.professionalId,
+          scheduledAt: new Date(sched.when).toISOString(),
+        }),
+      });
+      // POST /appointments ja move o paciente pra "avaliacao_agendada" no
+      // servidor - so precisa recarregar o quadro pra refletir.
+      await loadCrmBoard();
+      return;
+    }
 
-  await moveStage(patient.id, col.id);
+    await moveStage(patient.id, col.id);
+  } catch {
+    // api() ja mostrou o erro (toast) - so garante que o card/select nao
+    // fiquem visualmente "movidos" quando a mudanca nao foi salva de verdade.
+    resetView();
+  }
 }
 
 // --- Chat ---
@@ -1231,7 +1248,7 @@ function renderCpTimeline(timeline) {
     return;
   }
   for (const ev of timeline) {
-    const when = new Date(ev.at).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+    const when = formatDateTimeShort(ev.at);
     box.appendChild(
       el("div", { class: "cp-timeline-row" }, [
         el("div", { class: "cp-tl-top" }, [
@@ -1354,7 +1371,7 @@ document.getElementById("cp-tag-input").addEventListener("keydown", (e) => {
 function renderCpAppointments(d) {
   const fmt = (a) =>
     el("div", { class: "cp-appt-row" }, [
-      el("div", { class: "when" }, [new Date(a.scheduledAt).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })]),
+      el("div", { class: "when" }, [formatDateTimeShort(a.scheduledAt)]),
       el("div", { class: "meta" }, [`${a.procedure}${a.professional ? " · " + a.professional : ""} · ${a.status}${a.patientConfirmed ? " · confirmado" : ""}`]),
     ]);
   const up = document.getElementById("cp-appts-upcoming");

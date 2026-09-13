@@ -474,7 +474,7 @@ async function runTool(
     });
     const patient = await prisma.patient.findUnique({ where: { id: patientId } });
     await logActivity({
-      clinicId, type: "waitlist_added", area: "agenda",
+      clinicId, patientId, type: "waitlist_added", area: "agenda",
       title: "Paciente entrou na lista de espera",
       description: `${patientLabelOf(patient)}${procedure ? ` — ${procedure.name}` : ""}${input.note ? ` (${input.note})` : ""}.`,
       actorName: null,
@@ -515,7 +515,7 @@ async function runTool(
     const patient = await prisma.patient.findUnique({ where: { id: patientId } });
     const who = patientLabelOf(patient);
     await logActivity({
-      clinicId, type: "satisfaction_recorded", area: "atendimento",
+      clinicId, patientId, type: "satisfaction_recorded", area: "atendimento",
       title: "Pesquisa de satisfação respondida",
       description: `${who} deu nota ${score}${input.comment ? `: "${String(input.comment).slice(0, 200)}"` : "."}`,
       actorName: null,
@@ -593,6 +593,11 @@ function prepLugar(name: string): string {
   }
   return `da ${n}`;
 }
+
+// Reforco de gramatica usado em mais de um ponto do prompt (self-apresentacao
+// e o fechamento geral) - um lugar so pra nao desalinhar exemplo/redacao entre eles.
+const GRAMMAR_REMINDER =
+  'Escreva com gramatica correta: concordancia verbal e nominal, e contracoes de preposicao ("do"/"da" em vez de "de o"/"de a", "no"/"na" em vez de "em o"/"em a"). Ex: "secretaria do Dr. Joao", "da equipe do Consultorio", nunca "secretaria de Dr." nem "da equipe da Consultorio".';
 
 // Como a Alice se apresenta pro paciente - ela NUNCA diz que e IA/assistente
 // virtual, so uma destas tres formas (escolhida pela clinica no painel).
@@ -769,7 +774,7 @@ Seu trabalho:
 4. Conduzir o cliente ate a compra: recomendar, mandar o link certo e levar pro proximo passo (esse e o objetivo).
 5. Termine sempre com um proximo passo claro: um link, uma opcao ou uma pergunta.${sellerLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${genericHandoffLine}${noRepeatLine}${catalogBlock}${stagesBlock}${templatesBlock}${faqBlock}${playbookBlock}
 
-Responda sempre em portugues do Brasil, em mensagens curtas como quem digita no WhatsApp. Escreva com gramatica correta: concordancia verbal e nominal, e contracoes de preposicao ("do"/"da" em vez de "de o"/"de a", "no"/"na" em vez de "em o"/"em a"). Ex: "secretaria do Dr. Joao", "da equipe do Consultorio", nunca "secretaria de Dr." nem "da equipe da Consultorio".${await getActiveRulesPrompt(clinicId)}`;
+Responda sempre em portugues do Brasil, em mensagens curtas como quem digita no WhatsApp. ${GRAMMAR_REMINDER}${await getActiveRulesPrompt(clinicId)}`;
   }
 
   const clinicNoun = clinic.clinicKind === "medica" ? "clinica" : clinic.clinicKind === "ambas" ? "clinica" : "clinica de estetica";
@@ -792,7 +797,7 @@ ${procedureList || "(nenhum procedimento cadastrado ainda)"}
 
 Use so os dados de valor, beneficio, indicacao e prazo que estao cadastrados acima em cada procedimento. Se o paciente perguntar algo que nao esta ali (preco de um item sem valor, prazo de um item sem prazo cadastrado, etc.), diga que precisa confirmar na avaliacao/com a equipe - nunca invente numero, garantia ou prazo.${scheduleBlock}${stagesBlock}${templatesBlock}${faqBlock}${playbookBlock}
 
-Responda sempre em portugues do Brasil, em mensagens curtas como quem digita no WhatsApp. Escreva com gramatica correta: concordancia verbal e nominal, e contracoes de preposicao ("do"/"da" em vez de "de o"/"de a", "no"/"na" em vez de "em o"/"em a"). Ex: "secretaria do Dr. Joao", "da equipe do Consultorio", nunca "secretaria de Dr." nem "da equipe da Consultorio".${await getActiveRulesPrompt(clinicId)}`;
+Responda sempre em portugues do Brasil, em mensagens curtas como quem digita no WhatsApp. ${GRAMMAR_REMINDER}${await getActiveRulesPrompt(clinicId)}`;
 }
 
 export interface IncomingReferral {
@@ -901,18 +906,23 @@ export async function recordIncomingMessage(params: {
           : {}),
     },
   });
-  await prisma.conversation.update({
-    where: { id: conversation.id },
-    data: {
-      lastMessageAt: new Date(),
-      lastFollowUpOrder: 0,
-      // Reabre a conversa: sai de arquivada e volta a ficar "aberta". Se um
-      // humano tinha assumido, marca "nao lida" ate alguem abrir.
-      ...(conversation.archived ? { archived: false } : {}),
-      ...(conversation.status === "closed" ? { status: "active" } : {}),
-      ...(conversation.humanTakeover ? { handoffPending: true } : {}),
-    },
-  });
+  // Eco provavel: nao reabre conversa arquivada nem marca "nao lida" - nada
+  // disso faz sentido pra uma mensagem que nem era realmente nova. Sem essa
+  // trava, cada eco reabria a conversa e reacendia o aviso de handoff sozinho.
+  if (!probableEcho) {
+    await prisma.conversation.update({
+      where: { id: conversation.id },
+      data: {
+        lastMessageAt: new Date(),
+        lastFollowUpOrder: 0,
+        // Reabre a conversa: sai de arquivada e volta a ficar "aberta". Se um
+        // humano tinha assumido, marca "nao lida" ate alguem abrir.
+        ...(conversation.archived ? { archived: false } : {}),
+        ...(conversation.status === "closed" ? { status: "active" } : {}),
+        ...(conversation.humanTakeover ? { handoffPending: true } : {}),
+      },
+    });
+  }
 
   const clinic = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { replyDelaySeconds: true } });
   const delaySec = Math.min(Math.max(clinic?.replyDelaySeconds ?? 0, 0), 60);

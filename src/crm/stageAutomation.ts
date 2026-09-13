@@ -68,6 +68,7 @@ async function applyMove(
       newStageId: targetStageId,
       newStageName: targetLabel,
       actorName: opts.actorName ?? null,
+      saleValue: opts.saleValue,
     }).catch((err) => console.error("[meta] enqueueStageChange:", err));
   }
 }

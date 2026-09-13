@@ -560,7 +560,8 @@ apiRouter.get(
   asyncRoute(async (req, res) => {
     if (!requireAdmin(req, res)) return;
     const clinicId = req.params.id;
-    const take = Math.min(Number(req.query.limit) || 20, 100);
+    const rawLimit = Number(req.query.limit);
+    const take = Math.min(Number.isFinite(rawLimit) && rawLimit >= 0 ? rawLimit : 20, 100);
     const events = await prisma.loginEvent.findMany({
       where: { clinicId },
       orderBy: { createdAt: "desc" },
@@ -1683,6 +1684,7 @@ apiRouter.post(
       );
       await logActivity({
         clinicId: conversation.patient.clinicId,
+        patientId: conversation.patientId,
         type: "human_takeover",
         area: "atendimento",
         title: "Atendimento assumido por uma pessoa",
@@ -1717,6 +1719,7 @@ apiRouter.post(
     });
     await logActivity({
       clinicId: conversation.patient.clinicId,
+      patientId: conversation.patientId,
       type: "human_resume",
       area: "atendimento",
       title: "Atendimento devolvido para a Alice",
@@ -1789,6 +1792,10 @@ apiRouter.put(
     const LEAD_TEMPERATURES = new Set(["frio", "morno", "quente"]);
     if (leadTemperature !== undefined && leadTemperature !== null && !LEAD_TEMPERATURES.has(leadTemperature)) {
       res.status(400).json({ error: "leadTemperature invalido, use frio, morno ou quente" });
+      return;
+    }
+    if (estimatedValue !== undefined && estimatedValue !== null && (typeof estimatedValue !== "number" || isNaN(estimatedValue))) {
+      res.status(400).json({ error: "estimatedValue invalido" });
       return;
     }
     if (assignedToId) {
@@ -2147,6 +2154,7 @@ apiRouter.post(
     });
     await logActivity({
       clinicId: clinic.id,
+      patientId: patient.id,
       type: "appointment_booked",
       area: "agenda",
       title: "Agendamento criado",
@@ -2207,7 +2215,7 @@ apiRouter.put(
     if (status === "cancelled" && existing.status !== "cancelled") {
       await notifyStaff(existing.clinicId, "cancel", `Agendamento cancelado: ${patientLabel} - ${appointment.procedure.name}.`);
       await logActivity({
-        clinicId: existing.clinicId, type: "appointment_cancelled", area: "agenda",
+        clinicId: existing.clinicId, patientId: existing.patientId, type: "appointment_cancelled", area: "agenda",
         title: "Agendamento cancelado",
         description: `${patientLabel} — ${appointment.procedure.name}.`, actorName,
       });
@@ -2223,7 +2231,7 @@ apiRouter.put(
     } else if (patientConfirmed === true && !existing.patientConfirmed) {
       await notifyStaff(existing.clinicId, "confirmed", `Presenca confirmada: ${patientLabel} - ${appointment.procedure.name}.`);
       await logActivity({
-        clinicId: existing.clinicId, type: "appointment_confirmed", area: "agenda",
+        clinicId: existing.clinicId, patientId: existing.patientId, type: "appointment_confirmed", area: "agenda",
         title: "Presença confirmada pelo paciente",
         description: `${patientLabel} — ${appointment.procedure.name}.`, actorName,
       });
@@ -2233,13 +2241,13 @@ apiRouter.put(
         note: `${appointment.procedure.name} concluído`,
       });
       await logActivity({
-        clinicId: existing.clinicId, type: "appointment_completed", area: "agenda",
+        clinicId: existing.clinicId, patientId: existing.patientId, type: "appointment_completed", area: "agenda",
         title: "Atendimento concluído",
         description: `${patientLabel} — ${appointment.procedure.name}.`, actorName,
       });
     } else if (status === "no_show" && existing.status !== "no_show") {
       await logActivity({
-        clinicId: existing.clinicId, type: "appointment_no_show", area: "agenda",
+        clinicId: existing.clinicId, patientId: existing.patientId, type: "appointment_no_show", area: "agenda",
         title: "Paciente não compareceu",
         description: `${patientLabel} — ${appointment.procedure.name}.`, actorName,
       });
@@ -2256,7 +2264,7 @@ apiRouter.put(
         `Agendamento remarcado: ${patientLabel} - ${appointment.procedure.name} agora em ${appointment.scheduledAt.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}.`
       );
       await logActivity({
-        clinicId: existing.clinicId, type: "appointment_rescheduled", area: "agenda",
+        clinicId: existing.clinicId, patientId: existing.patientId, type: "appointment_rescheduled", area: "agenda",
         title: "Agendamento remarcado",
         description: `${patientLabel} — ${appointment.procedure.name} agora em ${appointment.scheduledAt.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}.`,
         actorName,

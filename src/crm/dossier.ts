@@ -13,23 +13,22 @@ export async function patientDossier(clinicId: string, patientId: string) {
   });
 
   // Conversa mais recente (aberta ou arquivada) - pra o painel abrir o
-  // atendimento direto do card do CRM.
-  const lastConversation = await prisma.conversation.findFirst({
-    where: { patientId },
-    orderBy: { lastMessageAt: "desc" },
-    select: { id: true },
-  });
-
-  // Timeline do card: eventos registrados sobre este lead. Patient criado
-  // antes desse recurso existir nao tem o evento "patient_created" gravado -
-  // sintetiza um a partir de createdAt pra sempre mostrar quando o card nasceu.
-  const activityLog = await prisma.activityLog.findMany({
-    where: { patientId },
-    orderBy: { createdAt: "desc" },
-    take: 50,
-    select: { id: true, type: true, title: true, description: true, actorName: true, createdAt: true },
-  });
-  const hasCreatedEvent = activityLog.some((e) => e.type === "patient_created");
+  // atendimento direto do card do CRM. Timeline do card: eventos registrados
+  // sobre este lead. Patient criado antes desse recurso existir nao tem o
+  // evento "patient_created" gravado - sintetiza um a partir de createdAt pra
+  // sempre mostrar quando o card nasceu (checagem em consulta separada, nao
+  // no `take: 50` de baixo - senao um lead com mais de 50 eventos registrados
+  // perderia o "Card criado" da lista paginada e ganharia um sintetico duplicado).
+  const [lastConversation, activityLog, hasCreatedEvent] = await Promise.all([
+    prisma.conversation.findFirst({ where: { patientId }, orderBy: { lastMessageAt: "desc" }, select: { id: true } }),
+    prisma.activityLog.findMany({
+      where: { patientId },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+      select: { id: true, type: true, title: true, description: true, actorName: true, createdAt: true },
+    }),
+    prisma.activityLog.findFirst({ where: { patientId, type: "patient_created" }, select: { id: true } }).then(Boolean),
+  ]);
   const timeline = [
     ...activityLog.map((e) => ({
       id: e.id,
