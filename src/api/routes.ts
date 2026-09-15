@@ -40,6 +40,7 @@ import { API_SCOPES, API_SCOPE_IDS, generateApiKey } from "./external/keys.js";
 import { answerSiteQuestion, type SiteMessage } from "../ai/siteAssistant.js";
 import { seedLaleblu } from "../maintenance/seedLaleblu.js";
 import { seedHarmonizze } from "../maintenance/seedHarmonizze.js";
+import { seedDrSaulo } from "../maintenance/seedDrSaulo.js";
 import { notifyStaff } from "../crm/notify.js";
 import { hashPassword, verifyPassword } from "./passwords.js";
 import { createSessionCookie, clearSessionCookie } from "./staffSession.js";
@@ -739,6 +740,29 @@ apiRouter.post(
       type: "briefing_applied",
       area: "clinica",
       title: result.created ? "Conta Harmonizze criada" : "Configuração da Harmonizze reaplicada",
+      description: `${c.procedures} procedimentos, ${c.faqs} FAQ, ${c.activeRules} regras, ${c.playbooks} roteiros, ${c.reminders} lembretes.`,
+      actorName: req.staff?.name ?? null,
+    });
+    res.json(result);
+  })
+);
+
+// Cria/atualiza a conta da Clinica Dr. Saulo Silva (medicina de precisao,
+// emagrecimento, performance e longevidade) e aplica a configuracao
+// versionada do manual de experiencia concierge: dados da clinica,
+// procedimentos, profissional, FAQ, mensagens, roteiros, regras e
+// automacoes. Idempotente. So admin.
+apiRouter.post(
+  "/clinics/seed-dr-saulo",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const result = await seedDrSaulo();
+    const c = result.counts;
+    await logActivity({
+      clinicId: result.clinicId,
+      type: "briefing_applied",
+      area: "clinica",
+      title: result.created ? "Conta Dr. Saulo criada" : "Configuração da Dr. Saulo reaplicada",
       description: `${c.procedures} procedimentos, ${c.faqs} FAQ, ${c.activeRules} regras, ${c.playbooks} roteiros, ${c.reminders} lembretes.`,
       actorName: req.staff?.name ?? null,
     });
