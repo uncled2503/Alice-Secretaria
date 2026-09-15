@@ -846,6 +846,17 @@ tbody tr:hover { background: var(--accent-50); }
 .msg-text { white-space: pre-wrap; word-break: break-word; }
 .msg-time { align-self: flex-end; font-size: 0.68rem; color: var(--text-faint); }
 .msg-media { max-width: 100%; max-height: 320px; border-radius: 8px; cursor: pointer; display: block; }
+.msg-media-wrap { position: relative; display: inline-block; }
+.msg-media-wrap video { cursor: default; }
+.msg-media-expand { position: absolute; top: 6px; right: 6px; font-size: 0.7rem; padding: 0.2rem 0.45rem; border: 0; border-radius: 6px; background: rgba(0,0,0,0.6); color: #fff; cursor: pointer; }
+.msg-media-expand:hover { background: rgba(0,0,0,0.8); }
+
+/* Visualizador de anexo em tela cheia (imagem e video). */
+.media-viewer { position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.88); display: flex; align-items: center; justify-content: center; padding: 2.5rem 1rem; }
+.media-viewer-item { max-width: 95vw; max-height: 85vh; border-radius: 10px; display: block; }
+.media-viewer-close { position: absolute; top: 0.6rem; right: 0.9rem; font-size: 2rem; line-height: 1; background: none; border: 0; color: #fff; cursor: pointer; padding: 0.2rem 0.6rem; }
+.media-viewer-download { position: absolute; bottom: 1rem; left: 50%; transform: translateX(-50%); color: #fff; font-size: 0.85rem; text-decoration: none; background: rgba(255,255,255,0.15); padding: 0.4rem 1rem; border-radius: 999px; }
+.media-viewer-download:hover { background: rgba(255,255,255,0.28); }
 .msg-audio { max-width: 240px; }
 .msg-file {
   display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.6rem; border-radius: 8px;

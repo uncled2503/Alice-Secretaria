@@ -663,13 +663,15 @@ function toDataUri(encoded: string, mimeHint?: string): string | null {
   return `data:${mimeHint || "application/octet-stream"};base64,${base64}`;
 }
 
-async function urlToDataUri(url: string): Promise<string | null> {
+async function urlToDataUri(url: string, fallbackMime = "application/octet-stream"): Promise<string | null> {
   try {
     const r = await fetch(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
     if (!r.ok) return null;
     const buf = Buffer.from(await r.arrayBuffer());
     if (buf.length > (MEDIA_MAX_BYTES * 3) / 4) return null;
-    const mime = r.headers.get("content-type")?.split(";")[0]?.trim() || "application/octet-stream";
+    // Sem content-type, um video viraria application/octet-stream e o
+    // navegador nao tocaria - por isso o chamador manda o tipo esperado.
+    const mime = r.headers.get("content-type")?.split(";")[0]?.trim() || fallbackMime;
     return `data:${mime};base64,${buf.toString("base64")}`;
   } catch (error) {
     console.error("[UAZAPI] Falha ao baixar midia pela URL:", error);
@@ -699,12 +701,20 @@ async function resolveIncomingMedia(
     return uri;
   };
 
+  // Tipo esperado pelo tipo de anexo. Sem isto, um anexo que chega sem
+  // mimetype vira "image/jpeg"/"application/octet-stream" e o navegador nao
+  // consegue tocar video nem audio.
+  const fallbackMime =
+    { image: "image/jpeg", video: "video/mp4", audio: "audio/ogg", document: "application/octet-stream" }[
+      media.kind ?? "image"
+    ] ?? "application/octet-stream";
+
   if (media.base64) {
-    const fromB64 = toDataUri(media.base64, media.mime);
+    const fromB64 = toDataUri(media.base64, media.mime || fallbackMime);
     if (fromB64) return done(fromB64);
   }
   if (media.url) {
-    const fromUrl = await urlToDataUri(media.url);
+    const fromUrl = await urlToDataUri(media.url, fallbackMime);
     if (fromUrl) return done(fromUrl);
   }
   try {
@@ -716,7 +726,7 @@ async function resolveIncomingMedia(
     }));
     dbg.downloadKeys = Object.keys(response ?? {}).join(",");
     const encoded = textValue(response?.base64Data, response?.base64, response?.data, response?.fileBase64);
-    const mimeHint = textValue(response?.mimetype, response?.mimeType, media.mime) || "image/jpeg";
+    const mimeHint = textValue(response?.mimetype, response?.mimeType, media.mime) || fallbackMime;
     if (encoded) {
       const uri = toDataUri(encoded, mimeHint);
       if (uri) return done(uri);
@@ -724,7 +734,7 @@ async function resolveIncomingMedia(
     }
     const link = textValue(response?.fileURL, response?.fileUrl, response?.url, response?.link);
     if (link) {
-      const uri = await urlToDataUri(link);
+      const uri = await urlToDataUri(link, mimeHint);
       if (!uri) dbg.downloadStatus = "fileURL nao baixou";
       return done(uri);
     }

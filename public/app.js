@@ -1,5 +1,46 @@
 const state = { activeConversationId: null, pollHandle: null, clinicId: null };
 
+// Anexo antigo salvo com o tipo errado: quando a UAZAPI nao informava o
+// mimetype, tudo era gravado como "image/jpeg" - inclusive video e audio, que
+// o navegador entao se recusava a tocar. A origem ja foi corrigida; isto aqui
+// conserta o que ficou gravado errado, sem precisar mexer no banco.
+function fixMediaMime(dataUrl, mediaType) {
+  if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:")) return dataUrl;
+  const certo = { video: "video/mp4", audio: "audio/ogg", ptt: "audio/ogg" }[mediaType];
+  if (!certo) return dataUrl;
+  const atual = dataUrl.slice(5, dataUrl.indexOf(";"));
+  if (atual.startsWith(mediaType === "video" ? "video/" : "audio/")) return dataUrl;
+  return `data:${certo}${dataUrl.slice(dataUrl.indexOf(";"))}`;
+}
+
+// Visualizador em tela cheia. Antes o clique na imagem fazia window.open() num
+// data: URI - que os navegadores bloqueiam por seguranca, entao nada acontecia.
+function openMediaViewer(src, type, name) {
+  const conteudo =
+    type === "video"
+      ? el("video", { src, class: "media-viewer-item", controls: "", autoplay: "" })
+      : el("img", { src, class: "media-viewer-item", alt: name || "anexo" });
+
+  const baixar = el("a", { href: src, download: name || (type === "video" ? "video.mp4" : "imagem.jpg"), class: "media-viewer-download" }, ["Baixar"]);
+  const fechar = el("button", { type: "button", class: "media-viewer-close", "aria-label": "Fechar" }, ["×"]);
+  const overlay = el("div", { class: "media-viewer" }, [fechar, conteudo, baixar]);
+
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+  const onKey = (e) => {
+    if (e.key === "Escape") close();
+  };
+
+  // Clicar no fundo fecha; clicar na midia (ou nos controles do video) nao.
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay || e.target === fechar) close();
+  });
+  document.addEventListener("keydown", onKey);
+  document.body.appendChild(overlay);
+}
+
 function el(tag, props = {}, children = []) {
   const node = document.createElement(tag);
   Object.entries(props).forEach(([k, v]) => {
@@ -1161,14 +1202,20 @@ async function loadMessages(conversationId, { forceScroll = false } = {}) {
       el("span", { class: "msg-time" }, [formatMsgTime(m.createdAt)]),
     ]);
     if (m.mediaUrl) {
+      const src = fixMediaMime(m.mediaUrl, m.mediaType);
       if (m.mediaType === "image") {
-        const img = el("img", { src: m.mediaUrl, class: "msg-media", alt: "imagem" });
-        img.addEventListener("click", () => window.open(m.mediaUrl, "_blank"));
+        const img = el("img", { src, class: "msg-media", alt: "imagem" });
+        img.addEventListener("click", () => openMediaViewer(src, "image", m.mediaName));
         bubble.prepend(img);
       } else if (m.mediaType === "video") {
-        bubble.prepend(el("video", { src: m.mediaUrl, class: "msg-media", controls: "" }));
+        const video = el("video", { src, class: "msg-media", controls: "", preload: "metadata" });
+        // Expandir tem que ser num botao separado: clicar no proprio video
+        // e como o usuario da play/pause.
+        const expand = el("button", { type: "button", class: "msg-media-expand" }, ["Abrir em tela cheia"]);
+        expand.addEventListener("click", () => openMediaViewer(src, "video", m.mediaName));
+        bubble.prepend(el("div", { class: "msg-media-wrap" }, [video, expand]));
       } else if (m.mediaType === "audio" || m.mediaType === "ptt") {
-        bubble.prepend(el("audio", { src: m.mediaUrl, class: "msg-audio", controls: "" }));
+        bubble.prepend(el("audio", { src, class: "msg-audio", controls: "" }));
       } else {
         const link = el("a", { href: m.mediaUrl, download: m.mediaName || "arquivo", class: "msg-file" }, [
           el("span", { class: "nav-icon", "data-icon": "file" }, []),
