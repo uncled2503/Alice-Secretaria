@@ -141,6 +141,11 @@ export async function patientDossier(clinicId: string, patientId: string) {
       nextActionAt: patient.nextActionAt,
       nextActionNote: patient.nextActionNote,
       conversationId: lastConversation?.id ?? null,
+      // Preenchido sozinho pelo robo de resumo (src/crm/leadSummary.ts).
+      contactReason: patient.contactReason,
+      interestNote: patient.interestNote,
+      conversationSummary: patient.conversationSummary,
+      crmSummaryAt: patient.crmSummaryAt,
     },
     appointments: { upcoming: upcoming.map(mapAppt), past: past.map(mapAppt) },
     automations: { pending, sent, failed },

@@ -423,6 +423,14 @@ model Patient {
   nextActionNote  String?   // o que fazer nessa proxima acao
   crmHidden       Boolean   @default(false) // "Remover do CRM": sai do quadro sem apagar contato/historico
 
+  // Preenchidos sozinhos a partir da conversa (robo de resumo do CRM), pra
+  // equipe saber o que o lead queria sem reler o historico inteiro. So sai do
+  // que o paciente falou - nunca inventado.
+  contactReason      String?   // "Quer saber valores do botox."
+  interestNote       String?   // procedimento(s) de interesse, separados por virgula
+  conversationSummary String?  // resumo curto do que o paciente falou
+  crmSummaryAt       DateTime? // quando o resumo foi gerado (compara com lastMessageAt)
+
   conversations Conversation[]
   appointments  Appointment[]
   broadcastRecipients BroadcastRecipient[]

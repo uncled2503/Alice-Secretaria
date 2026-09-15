@@ -1425,6 +1425,34 @@ function closeContactPanel() {
   document.getElementById("contact-panel-overlay").hidden = true;
 }
 
+// O que o robo de resumo entendeu da conversa (motivo, interesse, resumo).
+// Some quando ainda nao tem nada - card vazio so ocupa espaco.
+function renderLeadSummary(patient) {
+  const box = document.getElementById("cp-lead-summary");
+  const reason = document.getElementById("cp-lead-reason");
+  const interest = document.getElementById("cp-lead-interest");
+  const text = document.getElementById("cp-lead-text");
+  const when = document.getElementById("cp-lead-when");
+
+  const has = patient.contactReason || patient.interestNote || patient.conversationSummary;
+  box.hidden = !has;
+  if (!has) return;
+
+  reason.textContent = patient.contactReason ?? "";
+  reason.hidden = !patient.contactReason;
+
+  interest.textContent = patient.interestNote ? `Interesse: ${patient.interestNote}` : "";
+  interest.hidden = !patient.interestNote;
+
+  text.textContent = patient.conversationSummary ?? "";
+  text.hidden = !patient.conversationSummary;
+
+  when.textContent = patient.crmSummaryAt
+    ? `Resumido pela Alice em ${new Date(patient.crmSummaryAt).toLocaleString("pt-BR")}.`
+    : "";
+  when.hidden = !patient.crmSummaryAt;
+}
+
 async function openContactPanel(patient) {
   cpState.patientId = patient.id;
   document.getElementById("contact-panel-overlay").hidden = false;
@@ -1447,6 +1475,7 @@ async function openContactPanel(patient) {
   document.getElementById("cp-f-temp").value = dossier.patient.leadTemperature ?? "";
   document.getElementById("cp-f-next-at").value = toDatetimeLocalValue(dossier.patient.nextActionAt);
   document.getElementById("cp-f-next-note").value = dossier.patient.nextActionNote ?? "";
+  renderLeadSummary(dossier.patient);
 
   const assigneeSelect = document.getElementById("cp-f-assignee");
   assigneeSelect.innerHTML = "";
