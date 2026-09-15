@@ -15,12 +15,20 @@ export function startReminderJob(): void {
     for (const rule of rules) {
       const now = new Date();
       const target = new Date(now.getTime() + rule.hoursBefore * 60 * 60_000);
+      // Janela estreita (um pouco maior que o intervalo do cron, pra nao
+      // perder por atraso) em vez de "do agora ate o alvo": sem isso, um
+      // agendamento marcado em cima da hora (ex: pra daqui a 2h) cai dentro
+      // da janela de TODAS as regras com hoursBefore maior (24h, 12h...) na
+      // primeira checagem, e a Alice manda "amanha" pra uma consulta que e
+      // hoje mesmo. Com a janela estreita, cada regra so dispara perto do
+      // horario que ela realmente promete.
+      const windowStart = new Date(target.getTime() - 20 * 60_000);
 
       const due = await prisma.appointment.findMany({
         where: {
           clinicId: rule.clinicId,
           status: "confirmed",
-          scheduledAt: { gte: now, lte: target },
+          scheduledAt: { gte: windowStart, lte: target },
           reminders: { none: { ruleId: rule.id } },
         },
         include: { patient: true, procedure: true, professional: true },

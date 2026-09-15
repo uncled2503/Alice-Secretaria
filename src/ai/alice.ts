@@ -8,7 +8,7 @@ import {
   professionalsForProcedure,
 } from "../scheduling/slots.js";
 import { offerFreedSlotToWaitlist } from "../scheduling/waitlist.js";
-import { formatInZone, formatDateTimeInZone } from "../scheduling/time.js";
+import { formatInZone, formatDateTimeInZone, upcomingWeekdayTable } from "../scheduling/time.js";
 import { getActiveRulesPrompt } from "./rules.js";
 import { getFunnelStages } from "../crm/stages.js";
 import { movePatientToKind, movePatientToStage, movePatientToRecovery } from "../crm/stageAutomation.js";
@@ -738,6 +738,7 @@ Tudo isso SEM quebrar as regras cadastradas: nunca invente preco, estoque ou pra
 
   const scheduleBlock = `\n\nAGENDA E HORARIOS (regras rigidas):
 - Data e hora agora: ${formatInZone(new Date(), tz)} (fuso ${tz}). Use isto pra resolver "hoje", "amanha", "semana que vem".
+- Proximos dias da semana, pra resolver qualquer dia que o paciente citar pelo nome (ex: "quarta", "sexta que vem", "sabado"): ${upcomingWeekdayTable(tz)}. NUNCA calcule a data de um dia da semana de cabeca - use SEMPRE esta tabela. Se o paciente escolher um dos horarios que voce mesma ja tinha oferecido (de check_availability ou check_specific_time), use a mesma data/hora que voce ja tinha calculado, nao recalcule do zero.
 - Expediente da clinica: ${workDayLabels || "(nao definido)"}, das ${clinic.workStartHour}h as ${clinic.workEndHour}h. Cada profissional pode ter um expediente proprio - as ferramentas ja consideram isso.
 - Se o paciente citar um dia/hora, chame check_specific_time ANTES de responder. Se estiver livre, confirme com ele e so entao chame book_appointment com o "iso" (e o profissional_id, quando houver) retornado.
 - Se o horario pedido NAO estiver livre, diga com naturalidade que aquele horario nao esta disponivel (ex: "esse horario ja esta ocupado") e ofereca as alternativas retornadas. Se o paciente nao gostar das alternativas e quiser esperar uma vaga, use join_waitlist.
