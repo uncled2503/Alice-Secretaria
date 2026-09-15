@@ -103,6 +103,7 @@ model Clinic {
   metaConfig    MetaConfig?
   metaEvents    MetaEvent[]
   learningInsights LearningInsight[]
+  googleCalendar GoogleCalendarAccount?
   learningRunAt  DateTime?
 
   // Limite de atendimentos/mes (conversas que a Alice atende). null no override
@@ -689,6 +690,7 @@ model Appointment {
   scheduledAt    DateTime
   status         String        @default("confirmed") // confirmed | completed | cancelled | no_show
   source         String?       // whatsapp | instagram | presencial | telefone (null = nao informado)
+  googleEventId  String?       // id do evento espelhado no Google Agenda (null = nao sincronizado)
   patientConfirmed Boolean     @default(false) // paciente confirmou presenca (resposta ao lembrete)
   confirmedAt    DateTime?
   createdAt      DateTime      @default(now())
@@ -696,6 +698,30 @@ model Appointment {
   reminders      ReminderSent[]
   postProcedureSent PostProcedureSent[]
   renewalSent    RenewalSent[]
+}
+
+// Conexao da clinica com o Google Agenda (OAuth). Uma por clinica.
+//
+// Serve pros dois lados: o que a Alice agenda vira evento no Google
+// (syncOut) e o que ja esta no Google ocupa a agenda da Alice (blockBusy),
+// pra o compromisso pessoal do profissional nao virar horario livre.
+//
+// Os tokens ficam criptografados (mesmo AES-256-GCM do token da Meta) e
+// nunca voltam pro navegador.
+model GoogleCalendarAccount {
+  id              String    @id @default(cuid())
+  clinicId        String    @unique
+  clinic          Clinic    @relation(fields: [clinicId], references: [id])
+  googleEmail     String?   // conta conectada, so pra exibir no painel
+  calendarId      String    @default("primary")
+  refreshToken    String    // criptografado
+  accessToken     String?   // criptografado; cache ate expirar
+  accessExpiresAt DateTime?
+  syncOut         Boolean   @default(true)
+  blockBusy       Boolean   @default(true)
+  lastSyncAt      DateTime?
+  lastError       String?
+  createdAt       DateTime  @default(now())
 }
 
 // Bloqueio de agenda: feriado, almoco, folga, manutencao de equipamento.

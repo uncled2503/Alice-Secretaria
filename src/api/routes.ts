@@ -41,6 +41,18 @@ import { answerSiteQuestion, type SiteMessage } from "../ai/siteAssistant.js";
 import { seedLaleblu } from "../maintenance/seedLaleblu.js";
 import { seedHarmonizze } from "../maintenance/seedHarmonizze.js";
 import { seedDrSaulo } from "../maintenance/seedDrSaulo.js";
+import {
+  googleConfigured,
+  googleConfigHint,
+  buildAuthUrl as buildGoogleAuthUrl,
+  readState as readGoogleState,
+  connectFromCode as connectGoogleFromCode,
+  disconnect as disconnectGoogle,
+  statusFor as googleStatusFor,
+  invalidateBusyCache as invalidateGoogleBusyCache,
+  pushAppointmentInBackground,
+  removeAppointmentInBackground,
+} from "../google/calendar.js";
 import { notifyStaff } from "../crm/notify.js";
 import { hashPassword, verifyPassword } from "./passwords.js";
 import { createSessionCookie, clearSessionCookie } from "./staffSession.js";
@@ -2225,6 +2237,11 @@ apiRouter.put(
       include: { procedure: true },
     });
 
+    // Reflete no Google Agenda: cancelado sai da agenda, qualquer outra
+    // mudanca (horario, procedimento, profissional) atualiza o evento.
+    if (appointment.status === "cancelled") removeAppointmentInBackground(appointment.id);
+    else pushAppointmentInBackground(appointment.id);
+
     const patientLabel = existing.patient.name ?? existing.patient.phone;
     const actorName = req.staff?.name ?? null;
     // Horario que ficou livre (cancelamento ou remarcacao) -> oferece pra lista de espera.
@@ -3142,6 +3159,107 @@ async function metaConfigForClinic(clinicId: string) {
 }
 
 // GET: config atual, com token mascarado e nunca o valor real.
+// ======================= GOOGLE AGENDA =====================================
+// Conecta a agenda da clinica ao Google Agenda nos dois sentidos: o que a
+// Alice marca vira evento la, e o que ja esta la ocupa a agenda dela.
+
+apiRouter.get(
+  "/google/status",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    res.json(await googleStatusFor(clinic.id));
+  })
+);
+
+// Devolve a URL de consentimento do Google (o painel abre numa nova aba).
+apiRouter.post(
+  "/google/connect",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    if (!googleConfigured()) {
+      res.status(400).json({ error: googleConfigHint() ?? "Integracao com o Google nao configurada." });
+      return;
+    }
+    res.json({ url: buildGoogleAuthUrl(clinic.id) });
+  })
+);
+
+// Retorno do Google apos o consentimento. E uma navegacao do navegador, entao
+// responde com redirect pro painel (nao JSON).
+apiRouter.get(
+  "/google/callback",
+  asyncRoute(async (req, res) => {
+    const back = (status: string) => res.redirect(`/?google=${status}`);
+
+    const clinicId = readGoogleState(String(req.query.state ?? ""));
+    if (!clinicId) return back("estado_invalido");
+    if (req.query.error) return back("acesso_negado");
+
+    const code = String(req.query.code ?? "");
+    if (!code) return back("sem_codigo");
+
+    const result = await connectGoogleFromCode(clinicId, code);
+    if (!result.ok) {
+      console.error("[google] falha ao conectar:", result.error);
+      return back("falhou");
+    }
+    await logActivity({
+      clinicId,
+      type: "google_connected",
+      area: "clinica",
+      title: "Google Agenda conectado",
+      description: result.email ? `Conta ${result.email}.` : "Conta do Google conectada.",
+      actorName: req.staff?.name ?? null,
+    });
+    return back("ok");
+  })
+);
+
+apiRouter.post(
+  "/google/disconnect",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    await disconnectGoogle(clinic.id);
+    await logActivity({
+      clinicId: clinic.id,
+      type: "google_disconnected",
+      area: "clinica",
+      title: "Google Agenda desconectado",
+      description: "A agenda da Alice voltou a considerar apenas os agendamentos do painel.",
+      actorName: req.staff?.name ?? null,
+    });
+    res.json({ ok: true });
+  })
+);
+
+// Liga/desliga cada sentido da sincronizacao (e permite trocar a agenda).
+apiRouter.patch(
+  "/google/settings",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const { syncOut, blockBusy, calendarId } = req.body as {
+      syncOut?: boolean;
+      blockBusy?: boolean;
+      calendarId?: string;
+    };
+    const account = await prisma.googleCalendarAccount.findUnique({ where: { clinicId: clinic.id } });
+    if (!account) {
+      res.status(404).json({ error: "Google Agenda nao esta conectado nesta clinica." });
+      return;
+    }
+    await prisma.googleCalendarAccount.update({
+      where: { clinicId: clinic.id },
+      data: {
+        ...(typeof syncOut === "boolean" ? { syncOut } : {}),
+        ...(typeof blockBusy === "boolean" ? { blockBusy } : {}),
+        ...(calendarId?.trim() ? { calendarId: calendarId.trim() } : {}),
+      },
+    });
+    invalidateGoogleBusyCache(clinic.id);
+    res.json(await googleStatusFor(clinic.id));
+  })
+);
+
 apiRouter.get(
   "/meta/config",
   asyncRoute(async (req, res) => {

@@ -315,6 +315,26 @@ function applyRoleUI() {
   if (label && state.staff) label.textContent = state.staff.name;
 }
 
+// Volta do consentimento do Google (/?google=ok). Abre a aba da integracao
+// ja com o resultado, e limpa o parametro pra nao repetir o aviso num F5.
+const GOOGLE_RETURN_MESSAGE = {
+  ok: null, // sucesso nao precisa de popup: a propria tela ja mostra "Conectado"
+  acesso_negado: "Você cancelou a autorização no Google. A agenda não foi conectada.",
+  estado_invalido: "O retorno do Google expirou ou veio de outra sessão. Tente conectar de novo.",
+  sem_codigo: "O Google não devolveu o código de autorização. Tente conectar de novo.",
+  falhou: "Não foi possível concluir a conexão com o Google Agenda. Confira a mensagem de erro na tela da integração.",
+};
+
+function handleGoogleReturn() {
+  const status = new URLSearchParams(location.search).get("google");
+  if (!status) return;
+  history.replaceState(null, "", location.pathname);
+  const message = GOOGLE_RETURN_MESSAGE[status];
+  if (message) showError(message);
+  goToTab("settings");
+  openSettingsSub("google");
+}
+
 async function bootApp() {
   applyRoleUI();
   try {
@@ -323,6 +343,7 @@ async function bootApp() {
     console.error("Falha ao carregar clinicas:", err);
   }
   hideAuthGate();
+  handleGoogleReturn();
   await refreshAll();
   loadArchivedConversations().catch(() => {}); // popula o contador "Arquivadas"
   if (!state.pollHandle) state.pollHandle = setInterval(refreshAll, 5000);
@@ -6247,6 +6268,69 @@ document.getElementById("btn-learning-run").addEventListener("click", async (e) 
   } finally { btn.disabled = false; }
 });
 
+// --- Google Agenda ---
+async function loadGoogleCalendar() {
+  const stateEl = document.getElementById("google-state");
+  const errorEl = document.getElementById("google-error");
+  const options = document.getElementById("google-options");
+  const connectBtn = document.getElementById("btn-google-connect");
+  const disconnectBtn = document.getElementById("btn-google-disconnect");
+
+  const s = await api("/google/status");
+
+  errorEl.hidden = !s.lastError;
+  errorEl.textContent = s.lastError || "";
+  options.hidden = !s.connected;
+  disconnectBtn.hidden = !s.connected;
+
+  if (!s.configured) {
+    stateEl.textContent = `Integração ainda não habilitada no servidor. ${s.hint || ""}`.trim();
+    connectBtn.disabled = true;
+    return;
+  }
+
+  connectBtn.disabled = false;
+  if (s.connected) {
+    const quando = s.lastSyncAt ? ` · última sincronização em ${new Date(s.lastSyncAt).toLocaleString("pt-BR")}` : "";
+    stateEl.textContent = `Conectado${s.email ? ` como ${s.email}` : ""}${quando}.`;
+    connectBtn.textContent = "Reconectar";
+    document.getElementById("google-sync-out").checked = !!s.syncOut;
+    document.getElementById("google-block-busy").checked = !!s.blockBusy;
+    document.getElementById("google-calendar-id").textContent = s.calendarId || "primary";
+  } else {
+    stateEl.textContent = "Ainda não conectado. Ao conectar, você escolhe a conta Google da clínica e autoriza o acesso à agenda.";
+    connectBtn.textContent = "Conectar Google Agenda";
+  }
+}
+
+document.getElementById("btn-google-connect").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  try {
+    const { url } = await api("/google/connect", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    window.location.href = url;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("btn-google-disconnect").addEventListener("click", async () => {
+  if (!await showConfirm("Desconectar o Google Agenda? Os agendamentos já criados continuam no painel, mas deixam de ser espelhados lá — e os compromissos do Google voltam a não bloquear a agenda da Alice.")) return;
+  await api("/google/disconnect", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  await loadGoogleCalendar();
+});
+
+for (const [id, field] of [["google-sync-out", "syncOut"], ["google-block-busy", "blockBusy"]]) {
+  document.getElementById(id).addEventListener("change", async (e) => {
+    await api("/google/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [field]: e.currentTarget.checked }),
+    });
+    await loadGoogleCalendar();
+  });
+}
+
 const SETTINGS_SUB_LOADERS = {
   "clinic-data": () => {
     loadClinicDataForm();
@@ -6266,6 +6350,7 @@ const SETTINGS_SUB_LOADERS = {
   birthday: loadBirthdayRules,
   followup: loadFollowUpRules,
   blocks: loadScheduleBlocks,
+  google: loadGoogleCalendar,
   waitlist: loadWaitlist,
   history: () => loadActivityLog(true),
   funnel: loadStagesConfig,

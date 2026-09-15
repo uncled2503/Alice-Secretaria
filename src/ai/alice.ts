@@ -10,6 +10,7 @@ import {
 } from "../scheduling/slots.js";
 import { offerFreedSlotToWaitlist } from "../scheduling/waitlist.js";
 import { formatInZone, formatDateTimeInZone, upcomingWeekdayTable, isoDateInZone } from "../scheduling/time.js";
+import { pushAppointmentInBackground, removeAppointmentInBackground } from "../google/calendar.js";
 import { getActiveRulesPrompt } from "./rules.js";
 import { getFunnelStages } from "../crm/stages.js";
 import { movePatientToKind, movePatientToStage, movePatientToRecovery } from "../crm/stageAutomation.js";
@@ -433,6 +434,7 @@ async function runTool(
 
     if (action === "cancel") {
       await prisma.appointment.update({ where: { id: appt.id }, data: { status: "cancelled" } });
+      removeAppointmentInBackground(appt.id);
       await notifyStaff(clinicId, "cancel", `Agendamento cancelado pelo paciente: ${who} - ${appt.procedure.name} em ${label}.`);
       await logActivity({
         clinicId, type: "appointment_cancelled", area: "agenda",
@@ -468,6 +470,7 @@ async function runTool(
         where: { id: appt.id },
         data: { scheduledAt: new Date(check.requestedIso), patientConfirmed: false, confirmedAt: null },
       });
+      pushAppointmentInBackground(appt.id); // move o evento no Google pro horario novo
       await notifyStaff(clinicId, "reschedule", `Agendamento remarcado pelo paciente: ${who} - ${appt.procedure.name} agora em ${check.requestedLabel}.`);
       await logActivity({
         clinicId, type: "appointment_rescheduled", area: "agenda",

@@ -590,6 +590,7 @@
           <button data-sub="followup" data-plan-lock="recontato">Recontato</button>
           <button data-sub="funnel">Funil</button>
           <button data-sub="blocks" class="biz-clinica-only">Bloqueios de agenda</button>
+          <button data-sub="google" class="biz-clinica-only">Google Agenda</button>
           <button data-sub="waitlist" class="biz-clinica-only" data-plan-lock="lista-espera">Lista de espera</button>
           <button data-sub="history">Histórico</button>
           <button data-sub="learning" data-plan-lock="aprendizado">Aprendizado da Alice</button>
@@ -1013,6 +1014,31 @@
               <tbody id="blocks-body"></tbody>
             </table>
             <div id="blocks-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Nenhum bloqueio cadastrado.</div>
+          </div>
+        </div>
+
+        <div id="sub-google" class="settings-subpanel biz-clinica-only">
+          <p class="hint" style="margin-top:0">Liga a agenda da Alice ao Google Agenda da clínica, nos dois sentidos: o que ela marca aparece lá, e o que já está lá (compromisso pessoal, cirurgia, viagem) deixa de ser oferecido como horário livre.</p>
+          <div class="card">
+            <div class="section-header">Conexão</div>
+            <p id="google-state" class="hint" style="margin:0 0 0.8rem">Carregando…</p>
+            <div id="google-actions" style="display:flex;gap:0.5rem;flex-wrap:wrap">
+              <button type="button" id="btn-google-connect" class="btn-brand">Conectar Google Agenda</button>
+              <button type="button" id="btn-google-disconnect" class="btn-brand btn-brand--secondary" hidden>Desconectar</button>
+            </div>
+            <p id="google-error" class="hint" style="margin:0.8rem 0 0;color:#b91c1c" hidden></p>
+          </div>
+          <div class="card" id="google-options" hidden>
+            <div class="section-header">O que sincronizar</div>
+            <label style="display:flex;gap:0.5rem;align-items:flex-start;margin-bottom:0.7rem">
+              <input type="checkbox" id="google-sync-out" style="margin-top:0.25rem" />
+              <span>Mandar os agendamentos da Alice para o Google Agenda<br /><span class="hint">Cada consulta marcada vira um evento com nome, telefone e procedimento do paciente.</span></span>
+            </label>
+            <label style="display:flex;gap:0.5rem;align-items:flex-start">
+              <input type="checkbox" id="google-block-busy" style="margin-top:0.25rem" />
+              <span>Respeitar os compromissos que já estão no Google Agenda<br /><span class="hint">A Alice não oferece nem aceita horário que esteja ocupado lá.</span></span>
+            </label>
+            <p class="hint" style="margin:0.9rem 0 0">Agenda usada: <code id="google-calendar-id">primary</code> (a agenda principal da conta conectada).</p>
           </div>
         </div>
 

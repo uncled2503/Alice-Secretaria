@@ -1,5 +1,6 @@
 import { prisma } from "../db/client.js";
 import { wallClockInZone, zonedWallClockToUtc, formatInZone } from "./time.js";
+import { googleBusyIntervals, pushAppointmentInBackground } from "../google/calendar.js";
 
 export interface Slot {
   start: Date;
@@ -178,12 +179,18 @@ async function loadBusyContext(
     select: { startsAt: true, endsAt: true },
   });
 
+  // Compromissos que ja estao no Google Agenda da clinica valem como bloqueio:
+  // sem isso a Alice ofereceria um horario em que o profissional, na vida
+  // real, ja tem outra coisa marcada. Vem vazio quando a integracao esta
+  // desligada ou fora do ar.
+  const googleBusy = await googleBusyIntervals(clinicId);
+
   return {
     busy: appts.map((a) => ({
       start: a.scheduledAt.getTime(),
       end: a.scheduledAt.getTime() + a.procedure.durationMin * 60_000,
     })),
-    blocks: scheduleBlocks.map((b) => ({ start: b.startsAt.getTime(), end: b.endsAt.getTime() })),
+    blocks: [...scheduleBlocks.map((b) => ({ start: b.startsAt.getTime(), end: b.endsAt.getTime() })), ...googleBusy],
   };
 }
 
@@ -436,7 +443,11 @@ export async function createBooking(params: {
   const hours = resolveHours(clinic, professional);
   const tz = clinic.timezone || "America/Sao_Paulo";
 
-  return prisma.$transaction(async (tx) => {
+  // Fora da transacao de proposito: e uma chamada de rede (nao pode segurar a
+  // transacao aberta) e ja vem de cache curto.
+  const googleBusy = await googleBusyIntervals(clinicId);
+
+  const result = await prisma.$transaction(async (tx) => {
     const appts = await tx.appointment.findMany({
       where: {
         clinicId,
@@ -457,7 +468,10 @@ export async function createBooking(params: {
       start: a.scheduledAt.getTime(),
       end: a.scheduledAt.getTime() + a.procedure.durationMin * 60_000,
     }));
-    const blocks: BusyInterval[] = blockRows.map((b) => ({ start: b.startsAt.getTime(), end: b.endsAt.getTime() }));
+    const blocks: BusyInterval[] = [
+      ...blockRows.map((b) => ({ start: b.startsAt.getTime(), end: b.endsAt.getTime() })),
+      ...googleBusy,
+    ];
 
     const verdict = evaluateSlot({ startUtc, durationMin: procedure.durationMin, hours, busy, blocks });
     if (!verdict.ok) return { ok: false as const, error: verdict.reason };
@@ -484,4 +498,9 @@ export async function createBooking(params: {
       label: formatInZone(startUtc, tz),
     };
   });
+
+  // Espelha no Google Agenda depois do commit, sem segurar a resposta: o
+  // paciente nao pode esperar o Google pra receber a confirmacao.
+  if (result.ok) pushAppointmentInBackground(result.appointmentId);
+  return result;
 }
