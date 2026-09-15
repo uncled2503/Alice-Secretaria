@@ -1,5 +1,5 @@
 import { prisma } from "../db/client.js";
-import { wallClockInZone, zonedWallClockToUtc, formatInZone } from "./time.js";
+import { wallClockInZone, zonedWallClockToUtc, formatInZone, formatDayInZone, isoDateInZone } from "./time.js";
 import { googleBusyIntervals, pushAppointmentInBackground } from "../google/calendar.js";
 
 export interface Slot {
@@ -257,6 +257,50 @@ export async function findAvailableSlots(
     .flat()
     .sort((a, b) => a.start.getTime() - b.start.getTime())
     .slice(0, limit);
+}
+
+export interface AvailableDay {
+  date: string; // AAAA-MM-DD no fuso da clinica (pra voltar na busca do dia)
+  label: string; // "quarta-feira, 16/09"
+  freeCount: number;
+}
+
+// Quais DIAS tem pelo menos um horario livre. E o primeiro passo do
+// agendamento: oferecer o dia primeiro, e so depois os horarios daquele dia -
+// senao a lista de horarios do mes inteiro vira um paredao de texto no
+// WhatsApp.
+export async function findAvailableDays(
+  clinicId: string,
+  procedureId: string,
+  opts: { professionalIds?: string[]; daysAhead?: number; maxDays?: number } = {},
+): Promise<AvailableDay[]> {
+  const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId } });
+  const procedure = await prisma.procedure.findFirst({ where: { id: procedureId, clinicId } });
+  if (!procedure) return [];
+
+  const tz = clinic.timezone || "America/Sao_Paulo";
+  const daysAhead = opts.daysAhead ?? 14;
+  const maxDays = opts.maxDays ?? 5;
+
+  // Limite alto de proposito: aqui a gente quer varrer os dias todos pra saber
+  // quais tem vaga, nao parar nos primeiros horarios.
+  const slots = await findAvailableSlotsFrom(
+    clinicId,
+    procedure.durationMin,
+    opts.professionalIds ?? [],
+    new Date(),
+    daysAhead,
+    500,
+  );
+
+  const byDay = new Map<string, AvailableDay>();
+  for (const slot of slots) {
+    const date = isoDateInZone(slot.start, tz);
+    const current = byDay.get(date);
+    if (current) current.freeCount += 1;
+    else byDay.set(date, { date, label: formatDayInZone(slot.start, tz), freeCount: 1 });
+  }
+  return [...byDay.values()].slice(0, maxDays);
 }
 
 // Todos os horarios livres de UM dia especifico (no fuso da clinica). Usado

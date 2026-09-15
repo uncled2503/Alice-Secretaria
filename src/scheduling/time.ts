@@ -108,6 +108,14 @@ export function formatInZone(instant: Date, timeZone: string): string {
   return `${DOW_LABEL[wc.weekday]}, ${dd}/${mm} às ${hh}:${mi}`;
 }
 
+// "quinta-feira, 12/09" - o dia sem a hora, no fuso da clinica.
+export function formatDayInZone(instant: Date, timeZone: string): string {
+  const wc = wallClockInZone(instant, timeZone);
+  const dd = String(wc.day).padStart(2, "0");
+  const mm = String(wc.month).padStart(2, "0");
+  return `${DOW_LABEL[wc.weekday]}, ${dd}/${mm}`;
+}
+
 // "12/09/2026 10:00"
 export function formatDateTimeInZone(instant: Date, timeZone: string): string {
   const wc = wallClockInZone(instant, timeZone);
