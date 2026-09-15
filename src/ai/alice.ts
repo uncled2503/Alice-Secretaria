@@ -183,11 +183,11 @@ const tools: ChatCompletionTool[] = [
     function: {
       name: "update_crm_stage",
       description:
-        "Atualiza a etapa do paciente no funil de vendas conforme a conversa evolui (ex: demonstrou interesse real -> 'interesse confirmado'; recebeu orcamento -> 'proposta enviada'). NAO use para agendamento, venda fechada, pos-procedimento ou perdido - essas etapas sao automaticas.",
+        "Atualiza a etapa do paciente no funil de vendas conforme a conversa evolui (ex: demonstrou interesse real -> 'interesse confirmado'; recebeu orcamento -> 'proposta enviada'; fechou -> a etapa de venda ganha). Pode usar QUALQUER etapa listada no contexto. Se a etapa normalmente pede um dado que voce nao tem (ex: o valor da venda), mova assim mesmo - o card fica sinalizado pra equipe completar.",
       parameters: {
         type: "object",
         properties: {
-          stage_id: { type: "string", description: "O id (slug) de uma das etapas 'abertas' listadas no contexto." },
+          stage_id: { type: "string", description: "O id (slug) de uma das etapas listadas no contexto." },
           reason: { type: "string", description: "Frase curta do porque da mudanca (aparece no historico da clinica)." },
         },
         required: ["stage_id"],
@@ -542,9 +542,12 @@ async function runTool(
   }
 
   if (name === "update_crm_stage") {
+    // Sem restrictToKinds: a Alice move o lead pra qualquer etapa. Quando a
+    // etapa costuma pedir um dado que ela nao tem (o valor da venda), o card
+    // fica marcado no quadro pra equipe completar - melhor do que travar a
+    // movimentacao e o funil ficar desatualizado.
     const result = await movePatientToStage(clinicId, patientId, String(input.stage_id ?? ""), {
       note: input.reason ? String(input.reason).slice(0, 200) : "atualizado pela Alice no atendimento",
-      restrictToKinds: ["aberta"],
     });
     if (!result.ok) return JSON.stringify({ atualizado: false, motivo: result.error });
     return JSON.stringify({ atualizado: true, etapa: result.label });
@@ -819,11 +822,13 @@ Tudo isso SEM quebrar as regras cadastradas: nunca invente preco, estoque ou pra
 - NUNCA escreva que a consulta esta "confirmada", "agendada" ou "reservada" sem ter chamado book_appointment e recebido "agendado: true" nesta mesma resposta. Escrever a mensagem de confirmacao NAO agenda nada - sem a ferramenta, o horario nao existe na agenda e a equipe nao fica sabendo.
 - Se o paciente confirmar presenca numa consulta ja marcada, cancelar ou pedir pra remarcar, use manage_my_appointment.${professionalsBlock}`;
 
-  const openStages = (await getFunnelStages(clinicId)).filter((s) => s.kind === "aberta");
-  const stagesBlock = openStages.length
-    ? `\n\nFUNIL DE VENDAS - atualize a etapa do ${isGeneric ? "contato" : "paciente"} com update_crm_stage conforme a conversa avanca. Etapas disponiveis (use o id):\n${openStages
+  const allStages = await getFunnelStages(clinicId);
+  const stagesBlock = allStages.length
+    ? `\n\nFUNIL DE VENDAS - mantenha a etapa do ${isGeneric ? "contato" : "paciente"} atualizada com update_crm_stage conforme a conversa avanca. Etapas disponiveis (use o id):\n${allStages
         .map((s) => `- ${s.stageId} — ${s.label}`)
-        .join("\n")}\n${isGeneric ? 'Venda fechada e "perdido" sao automaticos quando aplicavel: foque nas etapas acima.' : 'Agendamento, venda fechada, pos-procedimento e "perdido" sao automaticos: nao tente defini-los.'}`
+        .join(
+          "\n",
+        )}\nVoce pode mover pra QUALQUER uma delas. Se a etapa normalmente pede um dado que voce nao tem (ex: o valor da venda), mova assim mesmo - o card fica sinalizado pra equipe completar depois. Agendamento e pos-procedimento tambem mudam sozinhos quando a agenda registra, entao nao precisa forcar essas.`
     : "";
 
   // --- Negocio generico (loja, servico): vocabulario de "cliente/catalogo",

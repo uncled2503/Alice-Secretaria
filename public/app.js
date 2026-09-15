@@ -611,6 +611,11 @@ function renderCrmBoard(columns, query) {
         ]),
         el("div", { class: "phone" }, [p.phone]),
         ...(p.tags && p.tags.length ? [tagChips(p.tags)] : []),
+        // A Alice move o lead pra "venda ganha" sem saber o valor - o card
+        // avisa pra alguem da equipe completar. Some sozinho ao preencher.
+        ...(p.needsSaleValue
+          ? [el("div", { class: "crm-card-alert", title: "Clique no card para informar o valor" }, ["⚠️ Falta o valor da venda"])]
+          : []),
         select,
       ]);
 

@@ -1798,6 +1798,11 @@ apiRouter.get(
           name: p.name,
           phone: p.phone,
           tags: p.tags.map((pt) => pt.tag),
+          // Lead em etapa de venda ganha sem valor preenchido: a Alice pode
+          // mover livremente sem saber o valor, entao o card avisa que falta
+          // alguem da equipe informar. Derivado (nao e campo salvo) - some
+          // sozinho assim que o valor for preenchido.
+          needsSaleValue: stage.kind === "ganho" && p.estimatedValue === null,
         })),
       }))
     );

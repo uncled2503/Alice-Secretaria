@@ -616,7 +616,6 @@ export async function seedDrSaulo(): Promise<SeedDrSauloResult> {
     pending: [
       "número de WhatsApp real da clínica (está com um placeholder; assim que tiver, defina DR_SAULO_WHATSAPP e rode o seed de novo, ou edite direto no painel)",
       "valor da Aplicação e da Reavaliação (cadastradas com duração certa - 15min e 30min - mas sem preço; a Alice vai dizer que confirma com a equipe até chegar o valor)",
-      "CONFIRMAR horário de funcionamento: o manual original disse 8h30-17h30 seg-sex sem sábado, mas o print da IA antiga que o cliente mandou responde 8h-20h seg-sex + sábado 8h-13h - ficou o horário do manual até o cliente confirmar qual é o real",
       "política de cancelamento/reembolso do sinal em caso de desistência (o manual não especifica se o valor é devolvido)",
       "estacionamento ou manobrista no endereço novo",
       "texto da confirmação para consulta ONLINE (a mensagem de confirmação atual é a presencial: fala de endereço e bioimpedância)",

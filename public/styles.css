@@ -578,6 +578,8 @@ tbody tr:hover { background: var(--accent-50); }
 .crm-card .name { font-weight: 600; }
 .crm-card .phone { color: var(--text-muted); font-size: 0.78rem; margin-bottom: 0.5rem; }
 .crm-card select { width: 100%; font-size: 0.78rem; padding: 0.3rem; border-radius: 6px; border: 1px solid var(--border); background: var(--card-bg); color: var(--text); }
+/* Aviso de dado faltando no card (ex: a Alice moveu pra "venda ganha" sem o valor). */
+.crm-card-alert { font-size: 0.74rem; font-weight: 600; color: #92400e; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 6px; padding: 0.25rem 0.4rem; margin-bottom: 0.45rem; }
 
 .funnel-config { margin-top: 1rem; }
 .funnel-config summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; }
