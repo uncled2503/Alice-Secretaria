@@ -10,7 +10,7 @@ import {
   professionalsForProcedure,
 } from "../scheduling/slots.js";
 import { offerFreedSlotToWaitlist } from "../scheduling/waitlist.js";
-import { formatInZone, formatDayInZone, formatDateTimeInZone, upcomingWeekdayTable, isoDateInZone } from "../scheduling/time.js";
+import { formatInZone, formatDayInZone, formatDateTimeInZone, upcomingWeekdayTable, isoDateInZone, zonedWallClockToUtc } from "../scheduling/time.js";
 import { pushAppointmentInBackground, removeAppointmentInBackground } from "../google/calendar.js";
 import { getActiveRulesPrompt } from "./rules.js";
 import { getFunnelStages } from "../crm/stages.js";
@@ -95,15 +95,17 @@ const tools: ChatCompletionTool[] = [
     function: {
       name: "book_appointment",
       description:
-        "Confirma o agendamento. So chame depois que o paciente confirmar explicitamente o horario, e SO com um start_iso que veio do campo 'iso' de check_availability ou check_specific_time. Nunca invente o start_iso.",
+        "Confirma o agendamento de verdade na agenda. SEMPRE chame antes de dizer ao paciente que a consulta esta confirmada/marcada - sem isso nada foi agendado. Informe o horario de uma destas duas formas: start_iso (o campo 'iso' que a ferramenta de disponibilidade devolveu, quando voce ainda tiver ele) OU date + time do horario combinado. O sistema revalida a disponibilidade de qualquer forma e recusa se o horario nao estiver livre.",
       parameters: {
         type: "object",
         properties: {
           procedure_name: { type: "string" },
-          start_iso: { type: "string", description: "O valor exato do campo 'iso' retornado pelas ferramentas de disponibilidade." },
+          start_iso: { type: "string", description: "O valor exato do campo 'iso' retornado pelas ferramentas de disponibilidade, quando voce ainda tiver ele." },
+          date: { type: "string", description: "Alternativa ao start_iso: AAAA-MM-DD do horario combinado, no ano corrente do contexto." },
+          time: { type: "string", description: "Alternativa ao start_iso: HH:MM em 24h do horario combinado." },
           professional_id: { type: "string", description: "Opcional: o 'profissional_id' retornado junto com o horario escolhido." },
         },
-        required: ["procedure_name", "start_iso"],
+        required: ["procedure_name"],
       },
     },
   },
@@ -377,12 +379,30 @@ async function runTool(
       if (pros.length === 1) professionalId = pros[0].id;
     }
 
+    // O "iso" da consulta de disponibilidade nao sobrevive entre turnos (so o
+    // texto das mensagens e guardado), entao aceitar date+time e o que permite
+    // agendar depois de uma conversa longa. Seguro: o createBooking revalida
+    // passado/expediente/conflito dentro da transacao.
+    const requested = parseRequestedDateTime(input.date, input.time);
+    const startUtc = input.start_iso
+      ? new Date(String(input.start_iso))
+      : requested
+        ? zonedWallClockToUtc(tz, requested.year, requested.month, requested.day, requested.hour, requested.minute)
+        : new Date(NaN);
+
+    if (isNaN(startUtc.getTime())) {
+      return JSON.stringify({
+        agendado: false,
+        motivo: "nao entendi o horario; informe start_iso, ou date (AAAA-MM-DD) e time (HH:MM) do horario combinado",
+      });
+    }
+
     const booking = await createBooking({
       clinicId,
       patientId,
       procedureId: procedure.id,
       professionalId,
-      startUtc: new Date(String(input.start_iso ?? "")),
+      startUtc,
     });
 
     if (!booking.ok) {
@@ -796,6 +816,7 @@ Tudo isso SEM quebrar as regras cadastradas: nunca invente preco, estoque ou pra
 - Se o paciente ja disser o dia que quer ("pode ser quinta?"), pule direto pro passo 2. Se ele ja disser dia E hora, use check_specific_time.
 - Nunca invente nem omita horario que a ferramenta devolveu.
 - Nunca confirme, prometa ou invente um horario sem passar pelas ferramentas.
+- NUNCA escreva que a consulta esta "confirmada", "agendada" ou "reservada" sem ter chamado book_appointment e recebido "agendado: true" nesta mesma resposta. Escrever a mensagem de confirmacao NAO agenda nada - sem a ferramenta, o horario nao existe na agenda e a equipe nao fica sabendo.
 - Se o paciente confirmar presenca numa consulta ja marcada, cancelar ou pedir pra remarcar, use manage_my_appointment.${professionalsBlock}`;
 
   const openStages = (await getFunnelStages(clinicId)).filter((s) => s.kind === "aberta");
@@ -1159,11 +1180,16 @@ export async function generateReply(
     }
   }
 
-  const history = await prisma.message.findMany({
-    where: { conversationId },
-    orderBy: { createdAt: "asc" },
-    take: 30,
-  });
+  // As 30 mensagens MAIS RECENTES (desc + reverse). Com "asc" o take pegava as
+  // 30 mais antigas: numa conversa longa a Alice respondia sem enxergar o fim
+  // da conversa - inclusive sem ver o horario que acabou de ser combinado.
+  const history = (
+    await prisma.message.findMany({
+      where: { conversationId },
+      orderBy: { createdAt: "desc" },
+      take: 30,
+    })
+  ).reverse();
 
   const system = await buildSystemPrompt(clinicId, { patientId: patient.id });
 

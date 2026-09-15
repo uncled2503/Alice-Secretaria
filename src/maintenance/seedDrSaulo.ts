@@ -112,13 +112,13 @@ const FAQS = [
     question: "Quais são as formas de pagamento?",
     alternates: "pagamento\npix\ncartão\ndinheiro\ndébito\nparcela\nparcelamento",
     answer:
-      "Aceitamos dinheiro, Pix, cartão de débito e cartão de crédito. No crédito, até 3x sem juros ou até 12x com o acréscimo cobrado pela operadora da máquina.",
+      "O sinal de R$ 225,00, que reserva o horário, é somente por Pix (chave CNPJ 52.716.955/0001-43). O saldo de R$ 525,00, pago no dia da consulta, aceita dinheiro, Pix, cartão de débito e cartão de crédito - no crédito, até 3x sem juros ou até 12x com o acréscimo cobrado pela operadora da máquina.",
   },
   {
     question: "É necessário pagar sinal para confirmar o horário?",
-    alternates: "sinal\nentrada\ntaxa de agendamento\nconfirmar horário\ncomprovante",
+    alternates: "sinal\nentrada\ntaxa de agendamento\nconfirmar horário\ncomprovante\nchave pix\ncnpj",
     answer:
-      "Sim. Para reservar o horário, pedimos um sinal de 30% do valor da consulta (R$ 225,00). O saldo restante (R$ 525,00) é pago no dia da consulta.",
+      "Sim. Para reservar o horário, pedimos um sinal de 30% do valor da consulta (R$ 225,00), somente por Pix na chave CNPJ 52.716.955/0001-43. Depois é só enviar o comprovante por aqui. O saldo restante (R$ 525,00) é pago no dia da consulta, na forma que o paciente preferir.",
   },
   {
     question: "Posso cancelar ou remarcar minha consulta?",
@@ -175,32 +175,35 @@ const TEMPLATES = [
     mode: "exact",
   },
   {
-    name: "Apresentação da consulta - presencial",
+    name: "Apresentação da consulta",
     body:
-      "Excelente escolha. 😊\n\nA consulta presencial proporciona uma avaliação ainda mais completa da sua composição corporal e do seu momento atual.\n\nO atendimento inclui:\n✔️ Consulta médica com duração aproximada de 1h30;\n✔️ Avaliação clínica detalhada;\n✔️ Exame físico;\n✔️ Bioimpedância;\n✔️ Análise completa da composição corporal;\n✔️ Planejamento individualizado;\n✔️ Direcionamento nutricional e de atividade física;\n✔️ Acompanhamento por 30 dias após a consulta.\n\nO investimento é de R$ 750,00.\n\nPosso verificar os horários disponíveis para você?",
-    whenToUse: "Paciente já demonstrou interesse em entender a consulta e escolheu (ou está inclinado a) atendimento presencial.",
+      "Na consulta com o Dr. Saulo Silva, você terá um acompanhamento completo para alcançar seu emagrecimento com saúde e segurança 😊\n\nO atendimento pode ser realizado on-line ou presencial, com toda a praticidade e o mesmo cuidado em ambas as modalidades.\n\nO atendimento inclui:\n\n✔️ Consulta com duração aproximada de 1h30;\n✔️ No mínimo 2 avaliações de bioimpedância;\n✔️ Análise corporal detalhada;\n✔️ Exame físico;\n✔️ Orientações nutricionais e de exercícios;\n✔️ Acompanhamento por 30 dias;\n✔️ Plano individualizado, totalmente personalizado para suas necessidades.\n\nO valor do investimento é R$ 750,00.\n\n✨ Vai ser um prazer te acompanhar nesse processo!\nVocê prefere atendimento on-line ou presencial? Já posso verificar os melhores horários pra você e garantir sua vaga 😊",
+    whenToUse:
+      "Depois de entender a dor do paciente, para apresentar o que a consulta inclui e o investimento. É esta mensagem que pergunta se ele prefere on-line ou presencial.",
     mode: "exact",
   },
   {
-    name: "Apresentação da consulta - online",
+    name: "Ajuste do que inclui - online",
     body:
-      "Excelente. 😊\n\nO atendimento online oferece toda a praticidade de ser realizado de onde você estiver, mantendo o mesmo cuidado, atenção e personalização do Dr. Saulo Silva.\n\nO atendimento inclui:\n✔️ Consulta médica com duração aproximada de 1h30;\n✔️ Avaliação clínica detalhada;\n✔️ Planejamento individualizado;\n✔️ Direcionamento nutricional e de atividade física;\n✔️ Acompanhamento por 30 dias após a consulta.\n\nO investimento é de R$ 750,00.\n\nPosso verificar os horários disponíveis para você?",
-    whenToUse: "Paciente já demonstrou interesse em entender a consulta e escolheu (ou está inclinado a) atendimento online.",
+      "Perfeito, então fica on-line 😊\n\nÉ a mesma consulta de 1h30 com o Dr. Saulo Silva, com avaliação clínica detalhada, plano individualizado, orientações nutricionais e de exercícios e acompanhamento por 30 dias.\n\nA bioimpedância e o exame físico são os únicos itens que só acontecem no presencial, por precisarem do equipamento aqui na clínica.",
+    whenToUse:
+      "Somente quando o paciente escolher on-line, logo depois da apresentação da consulta - para ele não ficar esperando bioimpedância e exame físico, que só existem no presencial.",
     mode: "exact",
   },
   {
     name: "Solicitação do sinal",
     body:
-      "Perfeito. 😊\n\nSeu pré-cadastro foi realizado com sucesso.\n\nPara garantirmos o horário reservado, trabalhamos com uma confirmação antecipada de 30% do valor da consulta: R$ 225,00.\n\nO saldo restante (R$ 525,00) é pago somente no dia da consulta.\n\nQual a forma de pagamento que você prefere: Pix, cartão de crédito ou débito?",
+      "Perfeito. 😊\n\nSeu pré-cadastro foi realizado com sucesso.\n\nPara garantirmos o horário reservado, trabalhamos com uma confirmação antecipada de 30% do valor da consulta: R$ 225,00.\n\nA reserva é feita somente por Pix, na chave CNPJ *52.716.955/0001-43*.\n\nAssim que fizer, me envie o comprovante por aqui que eu confirmo seu horário. O saldo restante (R$ 525,00) é pago no dia da consulta, aí sim na forma que você preferir.",
     whenToUse: "Depois que o paciente escolheu o horário e preencheu o cadastro, antes de confirmar o agendamento.",
     mode: "exact",
   },
   {
     name: "Confirmação de horário",
     body:
-      "Olá, {primeiro_nome}. 😊\n\nSeja muito bem-vindo(a) à Clínica Dr. Saulo Silva.\n\n✅ Sua consulta está confirmada.\n📅 Data: {data_hora}\n\n📍 Endereço:\nRua Itatuba, 201 - Edifício Cosmopolitan Mix, sala 1701\nParque Bela Vista, Salvador/BA\n\n⚠️ Pedimos que chegue com cerca de 10 minutos de antecedência para o cadastro e, se for presencial, a avaliação de bioimpedância (sugerimos roupas leves ou de treino).\n\n✅ O sinal de R$ 225,00 já foi recebido.\n\nQualquer dúvida antes do atendimento, estamos à disposição. Até breve! 💛",
-    whenToUse: "Somente depois que o comprovante do sinal foi recebido e o horário foi confirmado na agenda.",
-    mode: "adapt",
+      "Olá, {primeiro_nome}, tudo bem? 😊\n\nSeja muito bem-vindo(a) ao consultório do Dr. Saulo Silva!\n\nEstamos felizes em ter você conosco e ansiosos para ajudar você a alcançar seus objetivos de emagrecimento e performance.\n\n🗒️ Confirmamos sua consulta para {data_hora}.\n\n📍 Nosso endereço:\n\nRua Itatuba, nº 201\nEd. Cosmopolitan Mix – Sala 1701\nParque Bela Vista – Salvador/BA\n(Em frente ao Shopping da Bahia)\n\n⚠️ Por favor, chegue com 10 minutos de antecedência para conclusão do cadastro e realização da bioimpedância (sugerimos trajar ou trazer roupa leve de treino).\n\nEstamos à disposição para qualquer necessidade.\nAté breve! 👋👋👋",
+    whenToUse:
+      "Consulta PRESENCIAL, somente depois que o comprovante do sinal foi recebido e o book_appointment confirmou o horário na agenda. Escreva a data no formato \"Quarta-feira, 16/09/26, às 14:00hrs\".",
+    mode: "exact",
   },
   {
     name: "Não entendi a mensagem",
@@ -224,6 +227,15 @@ const TEMPLATES = [
   },
 ] as const;
 
+// Mensagens que este seed ja criou no passado e que foram substituidas. O seed
+// so cria/atualiza por nome, entao sem desativar aqui elas continuariam no
+// prompt da Alice junto com as novas - duas versoes da mesma coisa se
+// contradizendo. Desativa em vez de apagar, pra nao sumir do historico.
+const RETIRED_TEMPLATES = [
+  "Apresentação da consulta - presencial", // virou "Apresentação da consulta" (formato da Andreza)
+  "Apresentação da consulta - online", // virou "Ajuste do que inclui - online"
+] as const;
+
 const RULES = [
   { category: "tom_de_voz", instruction: "Fale de forma formal, cerimoniosa e elegante. Trate o paciente por \"Senhor\" ou \"Senhora\", a menos que ele peça informalidade. Evite gírias, diminutivos ou intimidades excessivas." },
   { category: "tom_de_voz", instruction: "Use vocabulário premium: \"Experiência Clínica\" ou \"Avaliação Integral\" em vez de \"consulta\"; \"investimento na saúde\" em vez de \"preço/valor\"; \"protocolo de performance\" em vez de \"tratamento\"; \"reservar um horário exclusivo\" em vez de \"marcar/agendar\"." },
@@ -238,7 +250,8 @@ const RULES = [
   { category: "agendamento", instruction: "Cancelamento ou remarcação exigem aviso com pelo menos 24 horas de antecedência." },
   { category: "agendamento", instruction: "A consulta (Experiência Clínica) dura aproximadamente 1h30, presencial ou online." },
   { category: "pagamento", instruction: "ANCORAGEM DE VALOR (regra dura, nunca pule): antes de falar qualquer investimento (preço), faça NO MÍNIMO 3 perguntas de verdade para entender a dor do paciente (ex: o que mais incomoda hoje, há quanto tempo tenta resolver isso, o que já tentou antes, qual seria o objetivo ideal, o que mais dificulta o resultado) e só depois explique brevemente como o Dr. Saulo Silva costuma ajudar casos parecidos, gerando desejo pela transformação. Nunca responda uma pergunta de preço só com o valor - isso soa seco e não converte." },
-  { category: "pagamento", instruction: "O investimento na Experiência Clínica, presencial ou online, é de R$ 750,00. Formas de pagamento aceitas: dinheiro, Pix, cartão de débito e cartão de crédito, em até 3x sem juros ou até 12x com acréscimo da operadora da máquina." },
+  { category: "pagamento", instruction: "O investimento na Experiência Clínica, presencial ou online, é de R$ 750,00. No SALDO (os R$ 525,00 pagos no dia da consulta) valem todas as formas: dinheiro, Pix, cartão de débito e cartão de crédito, em até 3x sem juros ou até 12x com acréscimo da operadora da máquina." },
+  { category: "pagamento", instruction: "O SINAL de R$ 225,00 é aceito SOMENTE por Pix, na chave CNPJ 52.716.955/0001-43. Nunca ofereça cartão, dinheiro ou link de pagamento para o sinal - só o Pix nessa chave. Cartão e dinheiro valem apenas para o saldo, no dia da consulta." },
   { category: "pagamento", instruction: "Não ofereça desconto à vista nem negocie valores: os investimentos são tabelados para manter a equidade entre os pacientes. Se pedirem desconto ou negociação, transfira para a equipe." },
   { category: "pagamento", instruction: "Para confirmar o horário é necessário o sinal de 30% do valor da consulta (R$ 225,00 sobre R$ 750,00); o saldo (R$ 525,00) é pago no dia. Só use book_appointment depois do comprovante do sinal na conversa." },
   { category: "procedimentos", instruction: "Nunca diagnostique, prescreva medicamento, oriente ajuste de dose ou garanta resultado. Fale sempre em possibilidades e protocolos individualizados, condicionados à avaliação com o Dr. Saulo Silva." },
@@ -264,9 +277,9 @@ const PLAYBOOKS = [
       "A cada resposta do paciente, valide a emoção genuinamente antes de seguir (ex: reconhecer que é comum sentir frustração depois de tantas tentativas) - nunca pule direto pra próxima pergunta ou informação sem comentar o que ele disse.",
       "Cite pelo nome o protocolo Silva correspondente ao objetivo do paciente (ver FAQ dos protocolos) e pergunte se pode explicar melhor como ele funciona - peça essa pequena permissão antes de detalhar, não empurre a explicação.",
       "Se o paciente topar, explique o protocolo com uma lista curta do que ele inclui (ex: avaliação completa, direcionamento nutricional, acompanhamento contínuo), gerando desejo pela transformação, sem citar valores ainda.",
-      "Pergunte se o paciente prefere atendimento presencial ou online.",
-      "Apresente os detalhes da consulta (o que inclui) e só então o investimento de R$ 750,00.",
-      "Convide para verificar horários disponíveis e conduza para o agendamento.",
+      "Envie a mensagem pronta \"Apresentação da consulta\": ela já traz o que o atendimento inclui, o investimento de R$ 750,00 e termina perguntando se ele prefere on-line ou presencial.",
+      "Se ele escolher on-line, envie o \"Ajuste do que inclui - online\", pra ele não ficar esperando bioimpedância e exame físico.",
+      "Conduza para o agendamento: ofereça primeiro os dias com vaga e, depois que ele escolher o dia, os horários daquele dia.",
     ],
   },
   {
@@ -279,9 +292,9 @@ const PLAYBOOKS = [
       "Faça NO MÍNIMO mais 2 perguntas de aprofundamento (totalizando pelo menos 3 com a do objetivo) antes de falar em consulta ou valor: há quanto tempo tenta resolver isso, o que já tentou antes, o que mais incomoda, qual seria o resultado ideal. Valide a emoção a cada resposta antes de seguir.",
       "Cite pelo nome o protocolo Silva que combina com o objetivo do paciente (ver FAQ dos protocolos) - gera autoridade e curiosidade em vez de falar genericamente em \"tratamento\".",
       "Pergunte se pode explicar melhor como funciona esse protocolo e a consulta - peça essa permissão antes de detalhar.",
-      "Pergunte se o paciente prefere presencial ou online antes de detalhar o conteúdo e o valor.",
-      "Use as mensagens prontas de apresentação da consulta (presencial ou online) para informar o que está incluso e o investimento de R$ 750,00.",
-      "Se houver interesse real, ofereça verificar os horários disponíveis.",
+      "Envie a mensagem pronta \"Apresentação da consulta\", que traz o que está incluso, o investimento de R$ 750,00 e já pergunta se ele prefere on-line ou presencial.",
+      "Se ele escolher on-line, envie o \"Ajuste do que inclui - online\".",
+      "Se houver interesse real, ofereça os dias com vaga e siga para o agendamento.",
     ],
   },
   {
@@ -293,7 +306,7 @@ const PLAYBOOKS = [
       "Ofereça no máximo duas opções reais de horário.",
       "Após a escolha, informe que é a primeira consulta e colete o cadastro: nome completo, data de nascimento, CPF, altura, telefone com DDD, e-mail, profissão, estado civil, filhos (se sim, quantos), endereço completo com CEP e como conheceu o Dr. Saulo Silva.",
       "Depois do cadastro, explique o sinal de 30% (R$ 225,00) para reservar o horário e o saldo de R$ 525,00 no dia da consulta.",
-      "Pergunte a forma de pagamento (Pix, débito ou crédito) e envie a chave Pix ou gere o link de pagamento conforme a escolha.",
+      "Informe que o sinal é somente por Pix e passe a chave CNPJ 52.716.955/0001-43 - não pergunte a forma de pagamento do sinal, ela é única. Só o saldo, no dia, aceita cartão ou dinheiro.",
       "Ao receber o comprovante, confirme o recebimento e avise que a reserva está sendo confirmada no sistema.",
       "Envie a mensagem de confirmação final com data, horário, endereço novo e orientação de chegar com 10 minutos de antecedência.",
     ],
@@ -478,6 +491,11 @@ export async function seedDrSaulo(): Promise<SeedDrSauloResult> {
     else await prisma.messageTemplate.create({ data: { clinicId: clinic.id, name: template.name, ...data } });
   }
 
+  await prisma.messageTemplate.updateMany({
+    where: { clinicId: clinic.id, name: { in: [...RETIRED_TEMPLATES] } },
+    data: { active: false },
+  });
+
   await seedDefaultRules(clinic.id);
   await prisma.customRule.deleteMany({ where: { clinicId: clinic.id, rawInput: SEED_MARKER } });
   await prisma.customRule.createMany({
@@ -601,6 +619,7 @@ export async function seedDrSaulo(): Promise<SeedDrSauloResult> {
       "CONFIRMAR horário de funcionamento: o manual original disse 8h30-17h30 seg-sex sem sábado, mas o print da IA antiga que o cliente mandou responde 8h-20h seg-sex + sábado 8h-13h - ficou o horário do manual até o cliente confirmar qual é o real",
       "política de cancelamento/reembolso do sinal em caso de desistência (o manual não especifica se o valor é devolvido)",
       "estacionamento ou manobrista no endereço novo",
+      "texto da confirmação para consulta ONLINE (a mensagem de confirmação atual é a presencial: fala de endereço e bioimpedância)",
       "preparo para exames (jejum etc.)",
       "bio completa do Dr. Saulo Silva (formação, CRM, especialidades) e Instagram",
       "suporte a início de expediente às 08:30 e fim às 17:30 (o campo atual aceita apenas hora cheia; foi usado 9h–17h)",
