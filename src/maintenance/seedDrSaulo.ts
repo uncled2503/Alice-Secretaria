@@ -39,6 +39,7 @@ const PROCEDURES = [
   {
     name: "Experiência Clínica Presencial com Dr. Saulo Silva",
     durationMin: 90,
+    price: CONSULTA_VALOR as number | null,
     description:
       "Avaliação integral e individualizada com o Dr. Saulo Silva, incluindo pelo menos duas avaliações de bioimpedância, análise corporal detalhada, exame físico e orientações nutricionais e de exercícios. Ao final, um plano de protocolo totalmente personalizado para o objetivo do paciente.",
     goals: CONSULTA_GOALS,
@@ -50,12 +51,35 @@ const PROCEDURES = [
   {
     name: "Experiência Clínica Online com Dr. Saulo Silva",
     durationMin: 90,
+    price: CONSULTA_VALOR as number | null,
     description:
       "Avaliação integral e individualizada com o Dr. Saulo Silva por telemedicina, com a mesma profundidade da consulta presencial, incluindo orientações nutricionais e de exercícios. Ao final, um plano de protocolo totalmente personalizado para o objetivo do paciente.",
     goals: CONSULTA_GOALS,
     benefits:
       "mesma profundidade da consulta presencial\nplano individualizado conduzido pelo Dr. Saulo Silva\norientação nutricional e de exercícios\nacompanhamento por 30 dias após a consulta\natendimento de qualquer lugar, inclusive fora do Brasil",
     aliases: "consulta online,telemedicina,consulta por vídeo,avaliação online,experiência clínica online",
+    resultTimeline: null,
+  },
+  {
+    name: "Aplicação",
+    durationMin: 15,
+    price: null as number | null,
+    description:
+      "Aplicação do protocolo definido pelo Dr. Saulo Silva após a Experiência Clínica. Valor ainda não informado pela clínica.",
+    goals: null,
+    benefits: null,
+    aliases: "aplicação do protocolo,aplicação de medicação",
+    resultTimeline: null,
+  },
+  {
+    name: "Reavaliação",
+    durationMin: 30,
+    price: null as number | null,
+    description:
+      "Consulta de retorno com o Dr. Saulo Silva para avaliar a evolução do protocolo e fazer ajustes. Valor ainda não informado pela clínica.",
+    goals: null,
+    benefits: null,
+    aliases: "retorno,consulta de retorno,revisão do protocolo",
     resultTimeline: null,
   },
 ] as const;
@@ -199,11 +223,12 @@ const RULES = [
   { category: "tom_de_voz", instruction: "Use vocabulário premium: \"Experiência Clínica\" ou \"Avaliação Integral\" em vez de \"consulta\"; \"investimento na saúde\" em vez de \"preço/valor\"; \"protocolo de performance\" em vez de \"tratamento\"; \"reservar um horário exclusivo\" em vez de \"marcar/agendar\"." },
   { category: "tom_de_voz", instruction: "Nunca envie parágrafos longos: no máximo 3 a 4 linhas por mensagem. Faça apenas uma pergunta por vez para não sobrecarregar o paciente." },
   { category: "tom_de_voz", instruction: "Equilibre autoridade científica (precisão, clareza, evidências sobre o trabalho do Dr. Saulo Silva) com postura de concierge: antecipe necessidades, seja extremamente educada e discreta, e foque no bem-estar do paciente." },
+  { category: "tom_de_voz", instruction: "Nunca seja seca, direta demais ou robótica. Cada resposta deve demonstrar interesse genuíno pela história do paciente antes de avançar para a próxima etapa - respostas curtas que só entregam informação, sem nenhuma pergunta de aprofundamento, quebram a conversão e soam frias para o padrão premium da clínica." },
   { category: "agendamento", instruction: "O horário oficial da clínica é de segunda a sexta-feira, das 8h30 às 17h30, sem atendimento aos sábados. O campo de expediente do sistema só aceita hora cheia, então está configurado como 9h às 17h; considere isso como uma aproximação seca ao oferecer horários." },
   { category: "agendamento", instruction: "Antes de detalhar a consulta, pergunte se o paciente prefere atendimento presencial ou online - o conteúdo e os itens incluídos mudam entre as duas modalidades." },
   { category: "agendamento", instruction: "Cancelamento ou remarcação exigem aviso com pelo menos 24 horas de antecedência." },
   { category: "agendamento", instruction: "A consulta (Experiência Clínica) dura aproximadamente 1h30, presencial ou online." },
-  { category: "pagamento", instruction: "ANCORAGEM DE VALOR: nunca informe o investimento (preço) da consulta antes de entender o objetivo do paciente e explicar brevemente como o Dr. Saulo Silva costuma ajudar em casos parecidos." },
+  { category: "pagamento", instruction: "ANCORAGEM DE VALOR (regra dura, nunca pule): antes de falar qualquer investimento (preço), faça NO MÍNIMO 3 perguntas de verdade para entender a dor do paciente (ex: o que mais incomoda hoje, há quanto tempo tenta resolver isso, o que já tentou antes, qual seria o objetivo ideal, o que mais dificulta o resultado) e só depois explique brevemente como o Dr. Saulo Silva costuma ajudar casos parecidos, gerando desejo pela transformação. Nunca responda uma pergunta de preço só com o valor - isso soa seco e não converte." },
   { category: "pagamento", instruction: "O investimento na Experiência Clínica, presencial ou online, é de R$ 750,00. Formas de pagamento aceitas: dinheiro, Pix, cartão de débito e cartão de crédito, em até 3x sem juros ou até 12x com acréscimo da operadora da máquina." },
   { category: "pagamento", instruction: "Não ofereça desconto à vista nem negocie valores: os investimentos são tabelados para manter a equidade entre os pacientes. Se pedirem desconto ou negociação, transfira para a equipe." },
   { category: "pagamento", instruction: "Para confirmar o horário é necessário o sinal de 30% do valor da consulta (R$ 225,00 sobre R$ 750,00); o saldo (R$ 525,00) é pago no dia. Só use book_appointment depois do comprovante do sinal na conversa." },
@@ -225,8 +250,8 @@ const PLAYBOOKS = [
     steps: [
       "Cumprimente o paciente de forma breve, elegante e acolhedora.",
       "Pergunte qual é o principal objetivo dele hoje (emagrecimento, performance, reposição hormonal, saúde metabólica, longevidade, etc.).",
-      "Faça pelo menos duas perguntas para aprofundar a dor: há quanto tempo tenta resolver isso, o que já tentou antes, o que mais incomoda, ou qual seria o objetivo ideal.",
-      "Demonstre entendimento genuíno da situação antes de seguir adiante.",
+      "Faça NO MÍNIMO 3 perguntas para aprofundar a dor, uma de cada vez, antes de falar em consulta ou valor. Exemplos: o que mais incomoda você hoje, há quanto tempo tenta resolver isso, qual seria o objetivo ideal, o que já tentou anteriormente, o que sente que mais dificulta seus resultados.",
+      "Demonstre entendimento genuíno da situação antes de seguir adiante - nunca pule direto pra informação sem antes comentar algo sobre o que o paciente contou.",
       "Explique brevemente como o Dr. Saulo Silva costuma ajudar pacientes com essa mesma queixa, gerando desejo pela transformação, sem citar valores ainda.",
       "Pergunte se o paciente prefere atendimento presencial ou online.",
       "Apresente os detalhes da consulta (o que inclui) e só então o investimento de R$ 750,00.",
@@ -240,7 +265,8 @@ const PLAYBOOKS = [
     goal: "Nunca ancorar em preço antes de demonstrar valor; qualificar e conduzir para a apresentação da consulta.",
     steps: [
       "Não informe valor. Responda com acolhimento e pergunte qual é o principal objetivo do paciente.",
-      "Conforme a resposta (emagrecimento, menopausa/transição hormonal, performance, etc.), explique brevemente como o Dr. Saulo Silva trabalha esse tipo de caso, com uma avaliação completa e individualizada.",
+      "Faça NO MÍNIMO mais 2 perguntas de aprofundamento (totalizando pelo menos 3 com a do objetivo) antes de falar em consulta ou valor: há quanto tempo tenta resolver isso, o que já tentou antes, o que mais incomoda, qual seria o resultado ideal.",
+      "Conforme as respostas (emagrecimento, menopausa/transição hormonal, performance, etc.), explique brevemente como o Dr. Saulo Silva trabalha esse tipo de caso, com uma avaliação completa e individualizada - gere desejo pela transformação antes de qualquer número.",
       "Pergunte se pode explicar como funciona a consulta.",
       "Pergunte se o paciente prefere presencial ou online antes de detalhar o conteúdo e o valor.",
       "Use as mensagens prontas de apresentação da consulta (presencial ou online) para informar o que está incluso e o investimento de R$ 750,00.",
@@ -389,8 +415,8 @@ export async function seedDrSaulo(): Promise<SeedDrSauloResult> {
     const data = {
       durationMin: item.durationMin,
       description: item.description,
-      price: CONSULTA_VALOR,
-      priceVariable: false,
+      price: item.price,
+      priceVariable: item.price === null,
       offerInstallments: true,
       maxInstallments: 12,
       paymentMethods: "dinheiro,pix,credito,debito",
@@ -560,6 +586,8 @@ export async function seedDrSaulo(): Promise<SeedDrSauloResult> {
     },
     pending: [
       "número de WhatsApp real da clínica (está com um placeholder; assim que tiver, defina DR_SAULO_WHATSAPP e rode o seed de novo, ou edite direto no painel)",
+      "valor da Aplicação e da Reavaliação (cadastradas com duração certa - 15min e 30min - mas sem preço; a Alice vai dizer que confirma com a equipe até chegar o valor)",
+      "script antigo de atendimento que o Dr. Saulo disse que ia mandar (respostas que convertiam melhor) - quando chegar, revisar playbooks/regras de qualificação com esse material",
       "política de cancelamento/reembolso do sinal em caso de desistência (o manual não especifica se o valor é devolvido)",
       "estacionamento ou manobrista no endereço novo",
       "preparo para exames (jejum etc.)",
