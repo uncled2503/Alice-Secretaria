@@ -252,6 +252,25 @@ export async function findAvailableSlots(
     .slice(0, limit);
 }
 
+// Todos os horarios livres de UM dia especifico (no fuso da clinica). Usado
+// quando o paciente pergunta "quais horarios voces tem na quarta?".
+export async function findAvailableSlotsOnDay(
+  clinicId: string,
+  procedureId: string,
+  day: { year: number; month: number; day: number },
+  opts: { professionalIds?: string[]; limit?: number } = {},
+): Promise<Slot[]> {
+  const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId } });
+  const procedure = await prisma.procedure.findFirst({ where: { id: procedureId, clinicId } });
+  if (!procedure) return [];
+
+  const tz = clinic.timezone || "America/Sao_Paulo";
+  // Meio-dia do dia pedido como ancora: generateSlots varre a partir do dia
+  // desse instante, entao daysAhead=1 cobre exatamente esse dia.
+  const anchor = zonedWallClockToUtc(tz, day.year, day.month, day.day, 12, 0);
+  return findAvailableSlotsFrom(clinicId, procedure.durationMin, opts.professionalIds ?? [], anchor, 1, opts.limit ?? 24);
+}
+
 export interface SpecificTimeCheck {
   available: boolean;
   reason?: SlotReason;

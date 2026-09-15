@@ -3,12 +3,13 @@ import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/reso
 import { prisma } from "../db/client.js";
 import {
   findAvailableSlots,
+  findAvailableSlotsOnDay,
   checkSpecificTime,
   createBooking,
   professionalsForProcedure,
 } from "../scheduling/slots.js";
 import { offerFreedSlotToWaitlist } from "../scheduling/waitlist.js";
-import { formatInZone, formatDateTimeInZone, upcomingWeekdayTable } from "../scheduling/time.js";
+import { formatInZone, formatDateTimeInZone, upcomingWeekdayTable, isoDateInZone } from "../scheduling/time.js";
 import { getActiveRulesPrompt } from "./rules.js";
 import { getFunnelStages } from "../crm/stages.js";
 import { movePatientToKind, movePatientToStage, movePatientToRecovery } from "../crm/stageAutomation.js";
@@ -57,11 +58,12 @@ const tools: ChatCompletionTool[] = [
     function: {
       name: "check_availability",
       description:
-        "Lista os proximos horarios livres para um procedimento. Use quando o paciente quer agendar mas nao citou um dia/hora especifico. Se a clinica tem mais de um profissional pra esse procedimento, cada horario vem com o profissional.",
+        "Lista os horarios livres para um procedimento. Sem 'date', traz os proximos horarios livres dos proximos dias. Com 'date', traz TODOS os horarios livres daquele dia - use assim quando o paciente perguntar os horarios de um dia especifico (ex: 'quais horarios voces tem na quarta?'). Se a clinica tem mais de um profissional pra esse procedimento, cada horario vem com o profissional.",
       parameters: {
         type: "object",
         properties: {
           procedure_name: { type: "string", description: "Nome do procedimento, deve bater com um dos cadastrados na clinica." },
+          date: { type: "string", description: "Opcional: AAAA-MM-DD pra listar todos os horarios livres de um dia so. Use o ano corrente do contexto e o calendario dos proximos dias - nunca assuma um ano de memoria." },
           professional_name: { type: "string", description: "Opcional: nome do profissional, se o paciente escolheu um." },
         },
         required: ["procedure_name"],
@@ -78,7 +80,7 @@ const tools: ChatCompletionTool[] = [
         type: "object",
         properties: {
           procedure_name: { type: "string" },
-          date: { type: "string", description: "Data no formato AAAA-MM-DD, no fuso da clinica. Resolva 'hoje'/'amanha' a partir da data atual informada no contexto." },
+          date: { type: "string", description: "Data no formato AAAA-MM-DD, no fuso da clinica. Use SEMPRE o ano corrente informado no contexto (linha 'HOJE E ...') e o calendario dos proximos dias que esta no contexto - nunca assuma um ano de memoria, senao a data cai no passado." },
           time: { type: "string", description: "Hora no formato HH:MM em 24h, no fuso da clinica." },
           professional_name: { type: "string", description: "Opcional: nome do profissional, se o paciente escolheu um." },
         },
@@ -216,6 +218,15 @@ async function resolveProfessionalIds(
   return pros.map((p) => p.id);
 }
 
+// So a data (AAAA-MM-DD), pra listar o dia inteiro. null = nao veio/invalida.
+function parseRequestedDate(date: unknown) {
+  const d = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(String(date ?? "").trim());
+  if (!d) return null;
+  const parsed = { year: +d[1], month: +d[2], day: +d[3] };
+  if (parsed.month < 1 || parsed.month > 12 || parsed.day < 1 || parsed.day > 31) return null;
+  return parsed;
+}
+
 function parseRequestedDateTime(date: unknown, time: unknown) {
   const d = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(String(date ?? "").trim());
   const t = /^(\d{1,2}):(\d{2})$/.exec(String(time ?? "").trim());
@@ -286,17 +297,31 @@ async function runTool(
     if (!procedure) return `Procedimento "${input.procedure_name}" nao encontrado na clinica.`;
 
     const professionalIds = await resolveProfessionalIds(clinicId, procedure.id, input.professional_name);
-    const slots = await findAvailableSlots(clinicId, procedure.id, { professionalIds, limit: 6 });
+
+    // Com "date", lista o dia inteiro; sem, os proximos livres.
+    const day = parseRequestedDate(input.date);
+    const slots = day
+      ? await findAvailableSlotsOnDay(clinicId, procedure.id, day, { professionalIds })
+      : await findAvailableSlots(clinicId, procedure.id, { professionalIds, limit: 8 });
+
     if (slots.length === 0) {
-      return JSON.stringify({ procedimento: procedure.name, horarios: [], observacao: "Nenhum horario livre nos proximos dias." });
+      return JSON.stringify({
+        procedimento: procedure.name,
+        horarios: [],
+        observacao: day
+          ? "Nenhum horario livre nesse dia. Ofereca outro dia (chame de novo sem 'date' pra ver os proximos livres)."
+          : "Nenhum horario livre nos proximos dias.",
+      });
     }
     return JSON.stringify({
       procedimento: procedure.name,
+      ...(day ? { dia: formatInZone(slots[0].start, tz).split(" às")[0] } : {}),
       horarios: slots.map((s) => ({
         iso: s.start.toISOString(),
         quando: formatInZone(s.start, tz),
         ...(s.professionalName ? { profissional: s.professionalName, profissional_id: s.professionalId } : {}),
       })),
+      instrucao: "Pra agendar, use o 'iso' exato do horario escolhido no book_appointment - nao recalcule a data.",
     });
   }
 
@@ -737,12 +762,15 @@ Tudo isso SEM quebrar as regras cadastradas: nunca invente preco, estoque ou pra
     : "";
 
   const scheduleBlock = `\n\nAGENDA E HORARIOS (regras rigidas):
-- Data e hora agora: ${formatInZone(new Date(), tz)} (fuso ${tz}). Use isto pra resolver "hoje", "amanha", "semana que vem".
-- Proximos dias da semana, pra resolver qualquer dia que o paciente citar pelo nome (ex: "quarta", "sexta que vem", "sabado"): ${upcomingWeekdayTable(tz)}. NUNCA calcule a data de um dia da semana de cabeca - use SEMPRE esta tabela. Se o paciente escolher um dos horarios que voce mesma ja tinha oferecido (de check_availability ou check_specific_time), use a mesma data/hora que voce ja tinha calculado, nao recalcule do zero.
+- Data e hora agora: ${formatInZone(new Date(), tz)} (fuso ${tz}). HOJE E ${isoDateInZone(new Date(), tz)} - este e o ano corrente, use SEMPRE ele. Nunca assuma outro ano por conta propria: uma data com o ano errado cai no passado e a agenda recusa com "esse horario ja passou".
+- Calendario dos proximos dias (ja no formato AAAA-MM-DD que as ferramentas esperam - COPIE daqui, nunca calcule de cabeca): ${upcomingWeekdayTable(tz)}.
+- Se o paciente escolher um horario que VOCE ja ofereceu (veio de check_availability ou das "alternativas" de check_specific_time), NAO chame check_specific_time de novo nem recalcule a data: use direto o "iso" daquele horario no book_appointment.
+- Ao falar de um horario com o paciente, use o rotulo "quando" que a ferramenta devolveu, sem reescrever o dia da semana por conta propria.
 - Expediente da clinica: ${workDayLabels || "(nao definido)"}, das ${clinic.workStartHour}h as ${clinic.workEndHour}h. Cada profissional pode ter um expediente proprio - as ferramentas ja consideram isso.
 - Se o paciente citar um dia/hora, chame check_specific_time ANTES de responder. Se estiver livre, confirme com ele e so entao chame book_appointment com o "iso" (e o profissional_id, quando houver) retornado.
 - Se o horario pedido NAO estiver livre, diga com naturalidade que aquele horario nao esta disponivel (ex: "esse horario ja esta ocupado") e ofereca as alternativas retornadas. Se o paciente nao gostar das alternativas e quiser esperar uma vaga, use join_waitlist.
-- Se o paciente nao citou horario, use check_availability e ofereca no maximo 2 ou 3 opcoes.
+- Se o paciente nao citou horario, use check_availability e ofereca 2 ou 3 opcoes (nao despeje a agenda toda).
+- Se ele perguntar quais horarios existem num dia ("que horas tem na quarta?", "tem algo de manha?"), chame check_availability COM o "date" daquele dia e liste os horarios livres que voltarem, agrupados por periodo quando forem muitos. Nunca invente nem omita horario que a ferramenta devolveu.
 - Nunca confirme, prometa ou invente um horario sem passar pelas ferramentas.
 - Se o paciente confirmar presenca numa consulta ja marcada, cancelar ou pedir pra remarcar, use manage_my_appointment.${professionalsBlock}`;
 

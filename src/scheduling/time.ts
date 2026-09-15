@@ -118,20 +118,28 @@ export function formatDateTimeInZone(instant: Date, timeZone: string): string {
   return `${dd}/${mm}/${wc.year} ${hh}:${mi}`;
 }
 
-// Tabela dos proximos dias com nome do dia da semana e data, pro modelo
-// resolver "quarta-feira", "sabado que vem" etc por consulta em vez de conta
-// de cabeca - fonte comum de erro (ex: resolver pra uma quarta-feira ja
-// passada em vez da proxima), que fazia o check_specific_time devolver
-// "esse horario ja passou" pra uma data que na verdade ainda nao chegou.
+// "2026-09-15" no fuso da clinica - mesmo formato que as ferramentas de
+// agenda esperam no campo "date".
+export function isoDateInZone(instant: Date, timeZone: string): string {
+  const wc = wallClockInZone(instant, timeZone);
+  return `${wc.year}-${String(wc.month).padStart(2, "0")}-${String(wc.day).padStart(2, "0")}`;
+}
+
+// Tabela dos proximos dias com nome do dia da semana e a data COMPLETA (com
+// ano, no formato que as ferramentas esperam), pro modelo resolver
+// "quarta-feira", "sabado que vem" etc copiando daqui em vez de calcular.
+//
+// O ano e obrigatorio: sem ele o modelo chuta o ano que conhece do proprio
+// treinamento (tipicamente um ano no passado), monta uma data que ja passou e
+// a agenda responde "esse horario ja passou" pra um dia que ainda nem chegou.
 export function upcomingWeekdayTable(timeZone: string, days = 9): string {
   const now = new Date();
   const parts: string[] = [];
   for (let i = 0; i < days; i++) {
-    const wc = wallClockInZone(new Date(now.getTime() + i * 86_400_000), timeZone);
-    const dd = String(wc.day).padStart(2, "0");
-    const mm = String(wc.month).padStart(2, "0");
+    const day = new Date(now.getTime() + i * 86_400_000);
+    const wc = wallClockInZone(day, timeZone);
     const suffix = i === 0 ? " (hoje)" : i === 1 ? " (amanha)" : "";
-    parts.push(`${DOW_LABEL[wc.weekday]}${suffix} ${dd}/${mm}`);
+    parts.push(`${DOW_LABEL[wc.weekday]}${suffix} = ${isoDateInZone(day, timeZone)}`);
   }
   return parts.join(", ");
 }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { wallClockInZone, zonedWallClockToUtc } from "../dist/scheduling/time.js";
+import { wallClockInZone, zonedWallClockToUtc, isoDateInZone, upcomingWeekdayTable } from "../dist/scheduling/time.js";
 import { clinicHoursOf, resolveHours, evaluateSlot, generateSlots } from "../dist/scheduling/slots.js";
 
 const SP = "America/Sao_Paulo";
@@ -97,4 +97,30 @@ test("generateSlots respeita expediente, dias e conflitos", () => {
   }
   assert.ok(!slots.some((s) => s.start.getTime() === busyStart), "pula o horario ocupado");
   assert.ok(slots.some((s) => s.start.getTime() === busyStart + 60 * 60_000), "oferece o horario seguinte livre");
+});
+
+// O contexto que a Alice recebe PRECISA trazer o ano. Sem ele o modelo chuta o
+// ano do proprio treinamento, monta uma data no passado e a agenda responde
+// "esse horario ja passou" pra um dia que ainda nem chegou (bug real em prod).
+test("contexto de data da Alice sempre traz o ano", () => {
+  const hoje = new Date("2026-09-15T17:44:00Z"); // terca 14:44 SP
+  assert.equal(isoDateInZone(hoje, SP), "2026-09-15");
+
+  const tabela = upcomingWeekdayTable(SP, 3);
+  for (const parte of tabela.split(", ")) {
+    assert.match(parte, /= \d{4}-\d{2}-\d{2}$/, `"${parte}" precisa terminar com a data completa (com ano)`);
+  }
+  assert.match(tabela, /\(hoje\)/);
+  assert.match(tabela, /\(amanha\)/);
+});
+
+test("tabela de dias da semana casa o nome do dia com a data certa", () => {
+  const tabela = upcomingWeekdayTable(SP, 7);
+  for (const parte of tabela.split(", ")) {
+    const [nome, iso] = parte.split(" = ");
+    const [y, m, d] = iso.split("-").map(Number);
+    const wc = wallClockInZone(zonedWallClockToUtc(SP, y, m, d, 12, 0), SP);
+    const esperado = ["domingo", "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado"][wc.weekday];
+    assert.equal(nome.replace(/ \((hoje|amanha)\)$/, ""), esperado, `${iso} deveria ser ${esperado}`);
+  }
 });
