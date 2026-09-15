@@ -38,8 +38,12 @@
   <meta name="twitter:image" content="%%BASE_URL%%/assets/logo-personagem.webp" />
   <meta name="twitter:image:alt" content="Alice IA — secretária virtual humanizada" />
 
-  <link rel="icon" href="/assets/logo-personagem.webp" />
-  <link rel="apple-touch-icon" href="/assets/logo-personagem.webp" />
+  <!-- PNG, nao .webp: o iOS ignora webp no apple-touch-icon e cai na letra
+       inicial. O PNG tem fundo branco porque transparencia vira preto la. -->
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png" />
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="apple-mobile-web-app-title" content="Alice" />
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
