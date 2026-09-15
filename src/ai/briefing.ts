@@ -17,16 +17,25 @@ const MODEL = process.env.OPENAI_BRIEFING_MODEL ?? "gpt-4o";
 export const BRIEFING_TEMPLATE = `BRIEFING DE CONFIGURACAO — ALICE (secretaria virtual da clinica)
 
 Responda o que souber. Pode deixar em branco o que nao se aplica e escrever em
-texto corrido nas secoes de lista. Quanto mais completo, melhor a Alice atende.
+texto corrido nas secoes de lista. QUANTO MAIS COMPLETO, MELHOR: o objetivo
+deste briefing e treinar a Alice por completo numa unica rodada, sem precisar
+ficar voltando pra perguntar mais depois.
+
+IMPORTANTE: se voces ja tem qualquer material pronto (manual de atendimento,
+script de vendas, mensagens que ja usam no WhatsApp hoje, print de conversas
+reais, lista de perguntas e respostas frequentes, tabela de precos, etc.),
+NAO reescreva do zero — cole esse material inteiro junto com as respostas,
+mesmo que fora do formato abaixo. E o material mais valioso que existe pra
+treinar a Alice, e a IA sabe aproveitar texto solto.
 
 == 1. DADOS DA CLINICA ==
 - Nome da clinica:
-- WhatsApp de atendimento (com DDD):
+- WhatsApp de atendimento (com DDD) — se tiver mais de um numero, diga QUAL e o oficial que fica conectado a Alice:
 - Cidade e estado:
 - Fuso horario (se nao for de Brasilia):
 - Horario de funcionamento (que horas abre / que horas fecha):
-- Dias de atendimento (ex: segunda a sexta, sabado ate 13h):
-- Numero para receber avisos de agendamento/cancelamento (se quiser):
+- Dias de atendimento (ex: segunda a sexta, sabado ate 13h; se so alguns sabados especificos do mes, explique a regra):
+- Numero para receber avisos de agendamento/cancelamento (se quiser, pode ser o mesmo numero de atendimento):
 
 == 2. ENDERECO(S) ==
 Para cada unidade:
@@ -46,22 +55,36 @@ Para cada unidade:
 - A Alice pode usar emojis? (sim/nao)
 - Tem link de auto-agendamento (o paciente marca sozinho num site)? Qual?
 
-== 4. TOM DE VOZ E REGRAS ==
-- Como voces gostam de falar com o paciente (formal, proximo, leve...):
-- A Alice PODE informar preco pelo WhatsApp, ou so na avaliacao?
-- Voces exigem sinal/entrada pra confirmar o agendamento? Como funciona (valor, precisa mandar comprovante)?
+== 4. TOM DE VOZ, VOCABULARIO E REGRAS ==
+- Como voces gostam de falar com o paciente (formal/cerimonioso, proximo, leve, descontraido...):
+- Tratam o paciente por "voce" e nome, ou por "Senhor(a)"?
+- Tem alguma palavra que a clinica prefere usar no lugar de outra (ex: "avaliacao" em vez de "consulta", "investimento" em vez de "preco/valor")? Liste os pares se tiver:
+- Tem alguma preferencia de formato de mensagem (ex: mensagens curtas, no maximo uma pergunta por vez)?
+- A Alice PODE informar preco pelo WhatsApp, ou so depois de entender o objetivo do paciente / na avaliacao?
+- Voces exigem sinal/entrada pra confirmar o agendamento? Como funciona (valor ou %, precisa mandar comprovante, o saldo e pago quando)?
+- Se for cobrado sinal, ele e devolvido em caso de desistencia ou falta?
+- Politica de cancelamento/remarcacao: com quanto tempo de antecedencia o paciente precisa avisar?
 - O que a Alice NUNCA deve fazer ou dizer:
-- Quando a Alice deve chamar uma pessoa da equipe? (ex: pedido de desconto, negociacao, reclamacao, duvida clinica que so o profissional responde, risco medico, paciente pede pra falar com alguem, exames prontos com interesse cirurgico, problema de pagamento):
+- Quando a Alice deve chamar uma pessoa da equipe? (ex: pedido de desconto, negociacao, reclamacao, duvida clinica que so o profissional responde, risco medico, paciente pede pra falar com alguem, envio de exame/laudo/receita/foto pra avaliacao, pedido de diagnostico ou prescricao, problema de pagamento):
+- Tem palavras especificas que devem SEMPRE acionar a transferencia pra equipe (ex: nomes de exames, "dose", "efeito colateral", "emergencia", "dor forte")? Liste:
 - Frase que a Alice usa antes de passar pra uma pessoa (ex: "So um instante que ja verifico isso pra voce"):
 - Quem assume quando a Alice transfere (nome da pessoa):
 
-== 5. PROCEDIMENTOS / SERVICOS ==
+== 5. PERGUNTAS E OBJECOES MAIS COMUNS ==
+Liste as perguntas ou objecoes que os pacientes de voces mais fazem e como
+preferem que a Alice responda (quanto mais exemplos reais, melhor). Ex:
+- "Achei caro" / "tem desconto?" -> como responder
+- "Vou pensar e te aviso" -> como responder
+- "Moro longe" / "nao tenho tempo" -> como responder
+- Duvidas especificas do publico de voces (medo de algum procedimento, duvida sobre resultado, sobre convenio, etc.)
+
+== 6. PROCEDIMENTOS / SERVICOS ==
 Para CADA procedimento:
 - Nome:
 - Duracao aproximada:
 - Valor (ou "depende de avaliacao"):
 - Formas de pagamento (dinheiro, pix, credito, debito):
-- Parcela no cartao? Em ate quantas vezes?
+- Parcela no cartao? Em ate quantas vezes, e a partir de quantas vezes cobra juros?
 - Link de pagamento (se tiver):
 - Descricao curta (o que e, pra quem, cuidados que podem ser ditos):
 - Queixas/objetivos que atende (ex: "rosto cansado", "flacidez"):
@@ -69,43 +92,57 @@ Para CADA procedimento:
 - Outros nomes que o paciente usa (ex: "botox"):
 - Quando o resultado costuma aparecer:
 
-== 6. PRODUTOS VENDIDOS (se houver) ==
+== 7. PRODUTOS VENDIDOS (se houver) ==
 - Nome / valor / descricao:
 
-== 7. PROFISSIONAIS ==
+== 8. PROFISSIONAIS ==
 Para cada profissional:
 - Nome:
-- Mini biografia / especialidade:
+- Mini biografia / especialidade / registro profissional (CRM, CRO etc.):
 - Instagram:
 - Quais procedimentos realiza:
 - Tem horario proprio diferente do da clinica? Qual?
 
-== 8. PERGUNTAS FREQUENTES (operacionais) ==
+== 9. PERGUNTAS FREQUENTES (operacionais) ==
 Responda as que fizerem sentido:
 - Tem estacionamento? Como funciona?
-- Como e a primeira consulta / avaliacao?
-- Aceita convenio/plano de saude?
-- Politica de atraso e cancelamento:
+- Como e a primeira consulta / avaliacao (o que inclui, quanto tempo dura)?
+- Aceita convenio/plano de saude? Emite nota fiscal/recibo pra reembolso?
 - Precisa levar algo (exames, documentos)?
 - Atende criancas / gestantes?
 - Outras duvidas comuns dos pacientes de voces:
 
-== 9. MENSAGENS ==
-- Mensagem de boas-vindas que voces usam (se tiver):
-- Mensagem de confirmacao de horario (se tiver):
+== 10. MENSAGENS PRONTAS ==
+Cole o texto exato de qualquer mensagem que voces ja usam hoje (mesmo que
+informalmente), por exemplo:
+- Mensagem de boas-vindas / primeiro contato:
+- Mensagem de apresentacao de um procedimento ou consulta:
+- Mensagem pedindo o sinal/pagamento:
+- Mensagem de confirmacao de horario:
+- Mensagem pra quando nao entende o que o paciente escreveu:
+- Mensagem de encerramento/despedida:
 
-== 10. AUTOMACOES (a Alice envia sozinha) ==
+== 11. AUTOMACOES (a Alice envia sozinha) ==
 - Lembrete de consulta: quer? Quantas horas antes (ex: 24h)?
 - Recontato de quem sumiu na conversa: quer? Depois de quanto tempo sem responder (ex: 2 dias)?
 - Pos-procedimento (cuidados/acompanhamento): quer? Pra quais procedimentos e quantos dias depois?
 - Renovacao (retomar contato meses depois pra refazer): quais procedimentos e de quanto em quanto tempo (ex: toxina a cada 6 meses)?
+- Recuperacao de paciente inativo ha muito tempo (ex: 6 meses sem contato): quer? Qual mensagem?
 - Mensagem de aniversario: quer? Em que horario?
 
-== 11. ROTEIROS ESPECIFICOS (opcional) ==
-- Voces tem um passo a passo especifico pra algum atendimento (primeiro contato, objecao de preco, remarcacao)? Descreva.
+== 12. ROTEIROS ESPECIFICOS ==
+Descreva o passo a passo que a Alice deve seguir (quando ja existir um jeito
+certo de conduzir a conversa) pra cada situacao que fizer sentido pra voces:
+- Primeiro atendimento / qualificacao do paciente:
+- Pedido de preco antes de entender o que o paciente quer:
+- Agendamento (do interesse ate a confirmacao, incluindo sinal se houver):
+- Remarcacao ou cancelamento:
+- Contorno de objecoes:
+- Intercorrencia, urgencia ou duvida clinica fora do que a Alice pode responder:
 
-== 12. OBSERVACOES LIVRES ==
+== 13. OBSERVACOES LIVRES E MATERIAIS EXTRAS ==
 - Qualquer coisa importante que nao coube acima:
+- Cole aqui qualquer manual, script, tabela de precos ou historico de conversas que ajude a treinar a Alice:
 `;
 
 // ---------------------------------------------------------------------------
@@ -351,6 +388,7 @@ const SYSTEM_PROMPT = `Voce configura a Alice, secretaria virtual de WhatsApp de
 Extraia TUDO que der do briefing e chame a ferramenta save_briefing com o plano estruturado.
 
 Regras:
+- whatsappPhone/notifyPhone: se o cliente citar mais de um numero, use o que ele indicar como oficial/conectado a Alice (procure por palavras como "oficial", "conectado", "confirmado"); nao invente nem combine numeros.
 - workDays: string com os dias 0=domingo..6=sabado separados por virgula. "segunda a sexta" = "1,2,3,4,5". "segunda a sabado" = "1,2,3,4,5,6".
 - workStartHour/workEndHour: hora inteira (ex: "das 9h as 19h" -> 9 e 19).
 - assistantPersona: "team" (parte da equipe), "clinic_secretary" (secretaria da clinica) ou "professional_secretary" (secretaria de um profissional; preencha assistantPersonaName).
@@ -364,7 +402,12 @@ Regras:
 - rules: transforme cada instrucao de tom de voz / politica de preco / "nunca fazer" / "quando chamar a equipe" em uma regra objetiva. Instrucoes claras e acionaveis, na 3a pessoa.
 - rules.category: use EXATAMENTE uma destas cinco: agendamento, pagamento, tom_de_voz, chamar_equipe, procedimentos. Se a instrucao nao se encaixa perfeitamente, escolha a mais proxima (ex: "nao prometer resultado" -> procedimentos; "ser sempre educada, sem girias" -> tom_de_voz; "nao dar desconto, chamar o responsavel" -> chamar_equipe; "confirmar horario manualmente" -> agendamento; "nao passar valor de cirurgia" -> pagamento). Nunca invente outra categoria.
 - Use apenas os valores exatos de enum pedidos em cada campo. Quando nao souber um campo, omita-o (nao mande null nem texto livre).
-- automations: so inclua o que o cliente pediu. Se ele nao especificou a mensagem, deixe message vazio (o sistema usa um padrao). Para pos-procedimento/renovacao, mapeie procedureNames pelos nomes exatos dos procedimentos do briefing (vazio = todos).
+- automations: so inclua o que o cliente pediu. Se ele nao especificou a mensagem, deixe message vazio (o sistema usa um padrao). Para pos-procedimento/renovacao, mapeie procedureNames pelos nomes exatos dos procedimentos do briefing (vazio = todos). "Recuperacao de paciente inativo" tambem e uma renewal (intervalUnit months/years, procedureNames vazio pra valer de qualquer procedimento).
+- Secao "perguntas e objecoes mais comuns": cada objecao com resposta vira uma regra (rules, category "procedimentos" ou "pagamento" conforme o assunto) OU um playbook com scriptType "objecoes" contendo os pares pergunta/resposta como passos — escolha o que ficar mais claro pro caso. Nunca ignore essa secao.
+- Secao "mensagens prontas": cada mensagem colada pelo cliente vira um template com mode "exact" (o cliente deu o texto literal) e o whenToUse explicando quando usar. Mensagens de boas-vindas, sinal, confirmacao, "nao entendi" e despedida sao itens tipicos.
+- Secao "roteiros especificos": cada resposta vira um playbook, com scriptType o mais proximo da lista (primeiro_atendimento, preco, agendamento, remarcacao, objecoes, transferir). Transforme a descricao em passos curtos e acionaveis.
+- Politica de cancelamento, devolucao do sinal e palavras-gatilho de transferencia viram rules de categoria "agendamento" (cancelamento/sinal) ou "chamar_equipe" (palavras-gatilho e criterios de transferencia).
+- Se o cliente colar um manual, script ou historico de conversa fora do formato do questionario (secao de observacoes/materiais extras ou em qualquer lugar do texto), extraia dele TUDO que der pras categorias acima (procedimentos, precos, tom de voz, mensagens exatas, objecoes, roteiros) em vez de jogar so em "warnings". So use warnings pro que realmente nao deu pra aproveitar.
 - warnings: liste o que ficou ambiguo, incompleto ou que voce nao conseguiu mapear, pra pessoa revisar depois.
 - Nao invente valor, prazo, beneficio ou politica que nao esteja no briefing.`;
 
@@ -642,6 +685,17 @@ export interface ApplyResult {
 
 const norm = (s: string) => s.trim().toLowerCase();
 
+// A IA extrai o telefone como o cliente escreveu no briefing, que quase
+// sempre omite o DDI (ex: "81 99110-1868"). O numero conectado no resto do
+// sistema e sempre 55DDDNUMERO - sem o "55" a Alice fica com um numero que
+// nao bate com nada (pareamento, avisos). So DDD+numero (10 ou 11 digitos)
+// ganha o prefixo; qualquer outro tamanho (ja tem 55, ou e algo fora do
+// padrao) passa direto pro cliente revisar.
+function normalizeBrPhone(raw: string): string {
+  const digits = raw.replace(/\D/g, "");
+  return digits.length === 10 || digits.length === 11 ? `55${digits}` : digits;
+}
+
 // Aplica o plano na clinica. Aditivo e idempotente: cria o que ainda nao existe
 // (casa por nome), atualiza so os campos escalares que o plano trouxe, e nunca
 // apaga nada. Seguro re-rodar.
@@ -657,7 +711,7 @@ export async function applyBriefing(clinicId: string, plan: BriefingPlan, actorN
     if (val !== undefined && val !== "" && val !== null) clinicData[key] = val;
   };
   setIf("name", c.name);
-  setIf("whatsappPhone", c.whatsappPhone?.replace(/\D/g, ""));
+  setIf("whatsappPhone", c.whatsappPhone && normalizeBrPhone(c.whatsappPhone));
   setIf("timezone", c.timezone);
   setIf("workStartHour", c.workStartHour);
   setIf("workEndHour", c.workEndHour);
@@ -668,7 +722,7 @@ export async function applyBriefing(clinicId: string, plan: BriefingPlan, actorN
   setIf("activityArea", c.activityArea);
   setIf("handoffPhrase", c.handoffPhrase);
   if (c.requireDepositProof !== undefined) clinicData.requireDepositProof = c.requireDepositProof;
-  setIf("notifyPhone", c.notifyPhone?.replace(/\D/g, ""));
+  setIf("notifyPhone", c.notifyPhone && normalizeBrPhone(c.notifyPhone));
   setIf("notifyEvents", c.notifyEvents);
   setIf("servicePosture", c.servicePosture);
   setIf("clinicKind", c.clinicKind);
