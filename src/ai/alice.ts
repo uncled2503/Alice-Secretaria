@@ -838,7 +838,10 @@ Tudo isso SEM quebrar as regras cadastradas: nunca invente preco, estoque ou pra
     const label = clinic.businessLabel?.trim() || clinic.activityArea?.trim();
     const labelPart = label ? ` (${label})` : "";
     const gtz = clinic.timezone || "America/Sao_Paulo";
-    const nowLine = `\nData e hora agora: ${formatInZone(new Date(), gtz)} (fuso ${gtz}). Use isto pra saber se e dia util / horario de atendimento.`;
+    // O ano precisa estar aqui tambem: sem ele o modelo completa com o ano que
+    // conhece do treinamento (no passado) e erra qualquer conta de data - prazo
+    // de entrega, "semana que vem", etc.
+    const nowLine = `\nData e hora agora: ${formatInZone(new Date(), gtz)} (fuso ${gtz}). HOJE E ${isoDateInZone(new Date(), gtz)} - use sempre este ano, nunca assuma outro. Use isto pra saber se e dia util / horario de atendimento e pra resolver "hoje", "amanha", "semana que vem".`;
 
     const catalogBlock = clinic.procedures.length
       ? `\n\nItens/servicos cadastrados (fale so o que esta aqui; nunca invente preco, prazo ou detalhe que nao esteja):\n${procedureList}`
