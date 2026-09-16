@@ -1,0 +1,119 @@
+{
+  "_meta": {
+    "description": "Tokens de marca da Alice para o pacote de motion e para a v1 do design system. Transcrito de 03-design-system.md (seções 4.1, 4.2, 4.3 e 6.1) — esse arquivo .md é a fonte de verdade; este JSON é uma cópia estruturada para consumo por ferramentas (Remotion, Claude Artifacts, ChatGPT).",
+    "version": "1.0",
+    "date": "2026-09-15",
+    "status": "PROPOSTA — ainda não implementado no painel/site reais, ver 03-design-system.md §2"
+  },
+  "color": {
+    "light": {
+      "canvas": "#FFFAF2",
+      "surface": "#FFFFFF",
+      "surfaceSecondary": "#FFF7ED",
+      "textPrimary": "#231A12",
+      "textSecondary": "#6B5D4F",
+      "textFaint": "#796A5C",
+      "borderDecorative": "#E8DDD0",
+      "borderField": "#8F7A66",
+      "actionPrimaryBg": "#C2410C",
+      "actionPrimaryText": "#FFFFFF",
+      "actionPrimaryHoverBg": "#9A3412",
+      "link": "#C2410C",
+      "focus": "#C2410C",
+      "accent": "#F59E0B",
+      "accentText": "#231A12",
+      "selectedBg": "#FFEDD5",
+      "selectedText": "#7C2D12",
+      "successBg": "#DCFCE7",
+      "successText": "#166534",
+      "warningBg": "#FEF3C7",
+      "warningText": "#92400E",
+      "errorBg": "#FEE2E2",
+      "errorText": "#991B1B",
+      "infoBg": "#DBEAFE",
+      "infoText": "#1E40AF",
+      "messageIncomingBg": "#FFFFFF",
+      "messageAliceBg": "#FFF7ED",
+      "messageHumanBg": "#DCFCE7"
+    },
+    "dark": {
+      "canvas": "#141210",
+      "surface": "#211C18",
+      "surfaceSecondary": "#2D251E",
+      "textPrimary": "#FFF7ED",
+      "textSecondary": "#C6B8AA",
+      "textFaint": "#A6988A",
+      "borderDecorative": "#493C31",
+      "borderField": "#8F7A66",
+      "actionPrimaryBg": "#C2410C",
+      "actionPrimaryText": "#FFFFFF",
+      "actionPrimaryHoverBg": "#9A3412",
+      "link": "#FDBA74",
+      "focus": "#FDBA74",
+      "accent": "#F59E0B",
+      "accentText": "#231A12",
+      "selectedBg": "#40290F",
+      "selectedText": "#FDBA74",
+      "successBg": "#163322",
+      "successText": "#86EFAC",
+      "warningBg": "#3F2A0C",
+      "warningText": "#FCD34D",
+      "errorBg": "#411B1B",
+      "errorText": "#FCA5A5",
+      "infoBg": "#172B46",
+      "infoText": "#93C5FD"
+    },
+    "contrastNotes": "Ver 03-design-system.md §5.1 para as razões calculadas de cada par. Nunca usar branco sobre #EA580C, #D97706 ou #F59E0B para texto comum (falham AA) — use os pares 'V1' desta tabela, todos >=4.5:1."
+  },
+  "typography": {
+    "fontDisplay": "Poppins, system-ui, -apple-system, \"Segoe UI\", Roboto, sans-serif",
+    "fontUi": "system-ui, -apple-system, \"Segoe UI\", Roboto, sans-serif",
+    "scale": {
+      "caption": { "sizePx": 12, "lineHeightPx": 16, "weight": "400-500" },
+      "label": { "sizePx": 14, "lineHeightPx": 20, "weight": "500-600" },
+      "body": { "sizePx": 16, "lineHeightPx": 24, "weight": "400" },
+      "bodyLarge": { "sizePx": 18, "lineHeightPx": 28, "weight": "400" },
+      "titleSmall": { "sizePx": 20, "lineHeightPx": 28, "weight": "600" },
+      "title": { "sizePx": 24, "lineHeightPx": 32, "weight": "600" },
+      "heading": { "sizePx": 32, "lineHeightPx": 40, "weight": "600" },
+      "displaySmall": { "sizePx": 40, "lineHeightPx": 48, "weight": "600" },
+      "display": { "sizePx": 56, "lineHeightPx": 64, "weight": "700" }
+    },
+    "numericVariant": "tabular-nums para valores numéricos e horários"
+  },
+  "space": {
+    "scalePx": [0, 4, 8, 12, 16, 20, 24, 32, 40, 48, 64, 80, 96],
+    "controlHeightPx": { "compact": 36, "default": 44, "hero": 52 },
+    "cardPaddingPx": { "desktop": 24, "compactMobile": 16 },
+    "cardGapPx": "16-24",
+    "radiusPx": { "detail": 4, "field": 8, "message": 12, "card": 16, "mockup": 24, "pill": 999 },
+    "layoutApp": { "sidebarPx": 240, "contentMaxPx": 1600, "gutterDesktopPx": 32, "gutterMobilePx": 16, "inboxPx": 300 },
+    "layoutSite": { "containerPx": 1120, "gutterDesktopPx": 24, "gutterMobilePx": 16, "sectionSpaceDesktopPx": 80, "sectionSpaceMobilePx": 48 },
+    "breakpointsPx": [480, 768, 960, 1280],
+    "zIndex": { "base": 0, "sticky": 100, "dropdown": 200, "drawer": 300, "modal": 400, "toast": 500, "tour": 600 }
+  },
+  "motion": {
+    "durationMs": { "instant": 0, "fast": 120, "base": 180, "panel": 240, "emphasis": 360, "brand": 600 },
+    "staggerMs": 60,
+    "staggerMaxItems": 4,
+    "easing": {
+      "entrance": "cubic-bezier(0.2, 0, 0, 1)",
+      "exit": "cubic-bezier(0.4, 0, 1, 1)",
+      "move": "cubic-bezier(0.4, 0, 0.2, 1)",
+      "brand": "cubic-bezier(0.22, 1, 0.36, 1)"
+    },
+    "entryOffsetPx": "8-16 (UI), 16-24 (motion/vídeo)",
+    "modalScaleIn": "0.98 -> 1",
+    "reducedMotion": "prefers-reduced-motion: reduce -> remover deslocamento/escala/loop; mudar estado direto ou fade <=80ms"
+  },
+  "assets": {
+    "logo": "public/assets/logo.webp",
+    "logoWhite": "public/assets/logotipo-branca.webp",
+    "character": "public/assets/logo-personagem.webp",
+    "appleTouchIcon": "public/assets/apple-touch-icon.png",
+    "icon192": "public/assets/icon-192.png",
+    "icon512": "public/assets/icon-512.png",
+    "favicon32": "public/assets/favicon-32.png",
+    "note": "Usar sempre os arquivos originais. Não redesenhar nem gerar o logo/personagem por IA (04-roteiro-motion.md §2, 05-producao-chatgpt-claude.md §4)."
+  }
+}
