@@ -18,6 +18,7 @@ model Clinic {
   workStartHour Int       @default(9)
   workEndHour   Int       @default(19)
   workDays      String    @default("1,2,3,4,5,6") // dias da semana com expediente (0=domingo..6=sabado), separados por virgula
+  closedOnHolidays Boolean @default(false) // fecha automaticamente nos feriados nacionais (data fixa + Sexta-feira Santa) - Carnaval/Corpus Christi ficam de fora (ponto facultativo, nao feriado por lei); ver src/scheduling/holidays.ts
   active        Boolean   @default(true) // false = bloqueada temporariamente (ex: inadimplencia) - contas client dessa clinica nao conseguem logar nem usar a API
   notifyPhone   String?   // numero (com DDI/DDD) que recebe avisos de agendamento/cancelamento/handoff via WhatsApp
   notifyEvents  String    @default("") // quais avisos mandar pro notifyPhone, separados por virgula: new_appointment,reschedule,cancel,human_handoff

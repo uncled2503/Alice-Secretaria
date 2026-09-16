@@ -8,6 +8,7 @@ import {
   checkSpecificTime,
   createBooking,
   professionalsForProcedure,
+  SLOT_REASON_PT,
 } from "../scheduling/slots.js";
 import { offerFreedSlotToWaitlist } from "../scheduling/waitlist.js";
 import { formatInZone, formatDayInZone, formatDateTimeInZone, upcomingWeekdayTable, isoDateInZone, zonedWallClockToUtc } from "../scheduling/time.js";
@@ -241,15 +242,6 @@ function parseRequestedDateTime(date: unknown, time: unknown) {
   return parsed;
 }
 
-const SLOT_REASON_PT: Record<string, string> = {
-  past: "esse horario ja passou",
-  closed_day: "a clinica nao atende nesse dia da semana",
-  outside_hours: "esse horario esta fora do expediente da clinica",
-  conflict: "ja tem outro paciente marcado nesse horario",
-  blocked: "a agenda esta bloqueada nesse horario (folga/feriado)",
-  procedure_not_found: "procedimento nao encontrado",
-  invalid_datetime: "o horario informado e invalido; use um valor 'iso' retornado pelas ferramentas de disponibilidade",
-};
 
 async function runTool(
   clinicId: string,
@@ -487,7 +479,10 @@ async function runTool(
       if (!requested) return JSON.stringify({ ok: false, motivo: "preciso da nova data e hora (new_date e new_time)" });
 
       const professionalIds = appt.professionalId ? [appt.professionalId] : [];
-      const check = await checkSpecificTime(clinicId, appt.procedureId, requested, { professionalIds });
+      // ignoreAppointmentId exclui o proprio agendamento do "ocupado" - sem
+      // isso, remarcar pra um horario que toca no horario ATUAL dele mesmo
+      // seria recusado por "conflito com ele mesmo".
+      const check = await checkSpecificTime(clinicId, appt.procedureId, requested, { professionalIds, ignoreAppointmentId: appt.id });
       if (!check.available) {
         return JSON.stringify({
           ok: false,

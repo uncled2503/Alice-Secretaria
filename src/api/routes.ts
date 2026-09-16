@@ -21,6 +21,9 @@ import {
 import { getFunnelStages, generateStageId } from "../crm/stages.js";
 import { movePatientToKind, movePatientToRecovery, movePatientToStage } from "../crm/stageAutomation.js";
 import { offerFreedSlotToWaitlist } from "../scheduling/waitlist.js";
+import { createBooking, checkSpecificTime, SLOT_REASON_PT } from "../scheduling/slots.js";
+import { wallClockInZone } from "../scheduling/time.js";
+import { upcomingNationalHolidays } from "../scheduling/holidays.js";
 import { patientDossier } from "../crm/dossier.js";
 import { buildReport } from "../crm/reports.js";
 import { logActivity, ACTIVITY_AREAS, ACTIVITY_TYPES } from "../crm/activity.js";
@@ -168,6 +171,7 @@ apiRouter.get(
         workStartHour: true,
         workEndHour: true,
         workDays: true,
+        closedOnHolidays: true,
         active: true,
         notifyPhone: true,
         notifyEvents: true,
@@ -239,6 +243,7 @@ apiRouter.put(
       workStartHour?: number;
       workEndHour?: number;
       workDays?: string;
+      closedOnHolidays?: boolean;
       active?: boolean;
       notifyPhone?: string | null;
       notifyEvents?: string;
@@ -310,6 +315,7 @@ apiRouter.put(
           ...(workStartHour !== undefined ? { workStartHour } : {}),
           ...(workEndHour !== undefined ? { workEndHour } : {}),
           ...(workDays !== undefined ? { workDays } : {}),
+          ...(b.closedOnHolidays !== undefined ? { closedOnHolidays: b.closedOnHolidays } : {}),
           ...(active !== undefined ? { active } : {}),
           ...(notifyPhone !== undefined ? { notifyPhone: notifyPhone || null } : {}),
           ...(notifyEvents !== undefined ? { notifyEvents } : {}),
@@ -2028,6 +2034,17 @@ apiRouter.post(
   })
 );
 
+// Proximos feriados nacionais, pro painel mostrar exatamente o que o toggle
+// "fechar nos feriados" vai bloquear - em vez de pedir confianca cega.
+apiRouter.get(
+  "/schedule/holidays",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const wc = wallClockInZone(new Date(), clinic.timezone || "America/Sao_Paulo");
+    res.json(upcomingNationalHolidays(wc.year, wc.month, wc.day, 6));
+  })
+);
+
 apiRouter.get(
   "/funnel-stages",
   asyncRoute(async (req, res) => {
@@ -2173,21 +2190,27 @@ apiRouter.post(
     });
 
     const VALID_SOURCE = ["whatsapp", "instagram", "presencial", "telefone"];
-    const appointment = await prisma.appointment.create({
-      data: {
-        clinicId: clinic.id,
-        patientId: patient.id,
-        procedureId,
-        professionalId: professionalId || null,
-        scheduledAt: new Date(scheduledAt),
-        source: source && VALID_SOURCE.includes(source) ? source : "presencial",
-      },
-      include: { procedure: true },
+    // Passa pela MESMA validacao que a Alice usa (createBooking): sem isso, o
+    // agendamento manual pelo painel podia cair em cima de outro paciente, de
+    // um bloqueio de agenda, de um feriado ou fora do expediente - a tela nao
+    // barrava nada disso antes.
+    const booking = await createBooking({
+      clinicId: clinic.id,
+      patientId: patient.id,
+      procedureId,
+      professionalId: professionalId || null,
+      startUtc: new Date(scheduledAt),
+      source: source && VALID_SOURCE.includes(source) ? source : "presencial",
     });
+    if (!booking.ok) {
+      res.status(booking.error === "conflict" ? 409 : 422).json({ error: SLOT_REASON_PT[booking.error] ?? "não foi possível agendar" });
+      return;
+    }
+
     await notifyStaff(
       clinic.id,
       "new_appointment",
-      `Novo agendamento: ${patient.name ?? patient.phone} - ${appointment.procedure.name} em ${appointment.scheduledAt.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}.`
+      `Novo agendamento: ${patient.name ?? patient.phone} - ${booking.procedureName} em ${booking.label}.`
     );
     await movePatientToKind(clinic.id, patient.id, "avaliacao_agendada", {
       actorName: req.staff?.name ?? null,
@@ -2199,10 +2222,12 @@ apiRouter.post(
       type: "appointment_booked",
       area: "agenda",
       title: "Agendamento criado",
-      description: `${patient.name ?? patient.phone} — ${appointment.procedure.name} em ${appointment.scheduledAt.toLocaleString("pt-BR", { timeZone: clinic.timezone || "America/Sao_Paulo" })}.`,
+      description: `${patient.name ?? patient.phone} — ${booking.procedureName} em ${booking.label}.`,
       actorName: req.staff?.name ?? null,
     });
-    void enqueueSchedule(clinic.id, appointment.id).catch((err: unknown) => console.error("[meta] enqueueSchedule:", err));
+    void enqueueSchedule(clinic.id, booking.appointmentId).catch((err: unknown) => console.error("[meta] enqueueSchedule:", err));
+
+    const appointment = await prisma.appointment.findUniqueOrThrow({ where: { id: booking.appointmentId }, include: { procedure: true } });
     res.json(appointment);
   })
 );
@@ -2225,6 +2250,31 @@ apiRouter.put(
     if (status !== undefined && !["confirmed", "completed", "cancelled", "no_show"].includes(status)) {
       res.status(400).json({ error: "status invalido" });
       return;
+    }
+
+    // Remarcar precisa revalidar o horario novo (feriado, bloqueio, conflito,
+    // fora do expediente) - sem isso, editar a data no painel escrevia direto
+    // no banco sem checar nada, e dava pra arrastar dois pacientes pro mesmo
+    // horario. ignoreAppointmentId exclui o proprio agendamento do "ocupado",
+    // senao remarcar pra perto do horario ATUAL dele conflitaria com ele mesmo.
+    if (scheduledAt !== undefined) {
+      const newStart = new Date(scheduledAt);
+      if (newStart.getTime() !== existing.scheduledAt.getTime()) {
+        const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: existing.clinicId } });
+        const resolvedProcedureId = procedureId ?? existing.procedureId;
+        const resolvedProfessionalId = professionalId !== undefined ? professionalId : existing.professionalId;
+        const wc = wallClockInZone(newStart, clinic.timezone || "America/Sao_Paulo");
+        const check = await checkSpecificTime(
+          clinic.id,
+          resolvedProcedureId,
+          { year: wc.year, month: wc.month, day: wc.day, hour: wc.hour, minute: wc.minute },
+          { professionalIds: resolvedProfessionalId ? [resolvedProfessionalId] : [], ignoreAppointmentId: existing.id },
+        );
+        if (!check.available) {
+          res.status(409).json({ error: SLOT_REASON_PT[check.reason ?? "conflict"] });
+          return;
+        }
+      }
     }
 
     const appointment = await prisma.appointment.update({
@@ -2258,6 +2308,12 @@ apiRouter.put(
         freedAt: existing.scheduledAt,
       });
 
+    // Status, confirmacao de presenca e remarcacao sao eixos INDEPENDENTES: o
+    // formulario de edicao do painel manda todos os campos juntos numa unica
+    // chamada, entao um "else if" unico deixava de avisar a remarcacao sempre
+    // que ela vinha junto de uma mudanca de status/confirmacao na mesma
+    // gravacao. So o trio cancelado/concluido/nao-compareceu e mutuamente
+    // exclusivo de verdade (o status so pode ter um valor por vez).
     if (status === "cancelled" && existing.status !== "cancelled") {
       await notifyStaff(existing.clinicId, "cancel", `Agendamento cancelado: ${patientLabel} - ${appointment.procedure.name}.`);
       await logActivity({
@@ -2274,13 +2330,6 @@ apiRouter.put(
         await movePatientToRecovery(existing.clinicId, existing.patientId, { actorName, note: "agendamento cancelado" });
       }
       await freeUpSlot();
-    } else if (patientConfirmed === true && !existing.patientConfirmed) {
-      await notifyStaff(existing.clinicId, "confirmed", `Presenca confirmada: ${patientLabel} - ${appointment.procedure.name}.`);
-      await logActivity({
-        clinicId: existing.clinicId, patientId: existing.patientId, type: "appointment_confirmed", area: "agenda",
-        title: "Presença confirmada pelo paciente",
-        description: `${patientLabel} — ${appointment.procedure.name}.`, actorName,
-      });
     } else if (status === "completed" && existing.status !== "completed") {
       await movePatientToKind(existing.clinicId, existing.patientId, "pos_procedimento", {
         actorName,
@@ -2303,7 +2352,21 @@ apiRouter.put(
       if (!upcoming) {
         await movePatientToRecovery(existing.clinicId, existing.patientId, { actorName, note: "não compareceu" });
       }
-    } else if (scheduledAt !== undefined && new Date(scheduledAt).getTime() !== existing.scheduledAt.getTime()) {
+    }
+
+    if (patientConfirmed === true && !existing.patientConfirmed) {
+      await notifyStaff(existing.clinicId, "confirmed", `Presenca confirmada: ${patientLabel} - ${appointment.procedure.name}.`);
+      await logActivity({
+        clinicId: existing.clinicId, patientId: existing.patientId, type: "appointment_confirmed", area: "agenda",
+        title: "Presença confirmada pelo paciente",
+        description: `${patientLabel} — ${appointment.procedure.name}.`, actorName,
+      });
+    }
+
+    // Guarda contra "cancelled": o cancelamento acima ja oferece o horario
+    // antigo pra lista de espera - nao faz sentido avisar "remarcado" pra um
+    // agendamento que acabou de ser cancelado no mesmo request.
+    if (appointment.status !== "cancelled" && scheduledAt !== undefined && new Date(scheduledAt).getTime() !== existing.scheduledAt.getTime()) {
       await notifyStaff(
         existing.clinicId,
         "reschedule",

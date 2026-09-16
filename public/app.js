@@ -5309,6 +5309,24 @@ function loadClinicDataForm() {
   document.getElementById("cd-persona").value = clinic.assistantPersona ?? "team";
   document.getElementById("cd-persona-name").value = clinic.assistantPersonaName ?? "";
   syncPersonaNameVisibility();
+
+  document.getElementById("cd-closed-holidays").checked = !!clinic.closedOnHolidays;
+  loadHolidaysPreview();
+}
+
+// Mostra os proximos feriados que o toggle vai bloquear, em vez de pedir
+// confianca cega no que "feriados nacionais" significa.
+async function loadHolidaysPreview() {
+  const el = document.getElementById("cd-holidays-preview");
+  if (!el) return;
+  try {
+    const holidays = await api("/schedule/holidays");
+    if (!holidays.length) { el.textContent = ""; return; }
+    const fmt = (iso) => new Date(iso + "T12:00:00").toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
+    el.textContent = `Próximos feriados cobertos: ${holidays.map((h) => `${fmt(h.date)} (${h.name})`).join(", ")}.`;
+  } catch {
+    el.textContent = "";
+  }
 }
 
 function syncPersonaNameVisibility() {
@@ -5334,12 +5352,13 @@ document.getElementById("clinic-data-form").addEventListener("submit", async (e)
     .join(",");
   const assistantPersona = document.getElementById("cd-persona").value;
   const assistantPersonaName = document.getElementById("cd-persona-name").value.trim();
+  const closedOnHolidays = document.getElementById("cd-closed-holidays").checked;
   if (!id || !name || !whatsappPhone.replace(/\D/g, "")) return;
 
   await api(`/clinics/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, whatsappPhone, timezone, workStartHour, workEndHour, workDays, notifyPhone, notifyEvents, assistantPersona, assistantPersonaName }),
+    body: JSON.stringify({ name, whatsappPhone, timezone, workStartHour, workEndHour, workDays, closedOnHolidays, notifyPhone, notifyEvents, assistantPersona, assistantPersonaName }),
   });
 
   await loadClinics();

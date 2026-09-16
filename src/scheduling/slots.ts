@@ -1,6 +1,7 @@
 import { prisma } from "../db/client.js";
 import { wallClockInZone, zonedWallClockToUtc, formatInZone, formatDayInZone, isoDateInZone } from "./time.js";
 import { googleBusyIntervals, pushAppointmentInBackground } from "../google/calendar.js";
+import { nationalHolidayOn } from "./holidays.js";
 
 export interface Slot {
   start: Date;
@@ -20,16 +21,32 @@ export interface ClinicHours {
   workStartHour: number;
   workEndHour: number;
   workDays: Set<number>; // 0=domingo .. 6=sabado
+  closedOnHolidays: boolean;
 }
 
-export type SlotReason = "past" | "closed_day" | "outside_hours" | "conflict" | "blocked";
+export type SlotReason = "past" | "closed_day" | "outside_hours" | "conflict" | "blocked" | "holiday";
 export type SlotVerdict = { ok: true } | { ok: false; reason: SlotReason };
+
+// Texto em portugues de cada motivo de recusa - fonte unica usada pela Alice,
+// pelo painel e pela API externa, pra nunca ter tres traducoes divergentes do
+// mesmo motivo.
+export const SLOT_REASON_PT: Record<SlotReason | "procedure_not_found" | "invalid_datetime", string> = {
+  past: "esse horário já passou",
+  closed_day: "a clínica não atende nesse dia da semana",
+  outside_hours: "esse horário está fora do expediente da clínica",
+  conflict: "já tem outro paciente marcado nesse horário",
+  blocked: "a agenda está bloqueada nesse horário (folga/feriado)",
+  holiday: "esse dia é feriado nacional",
+  procedure_not_found: "procedimento não encontrado",
+  invalid_datetime: "o horário informado é inválido; use um valor 'iso' retornado pelas ferramentas de disponibilidade",
+};
 
 interface HoursSource {
   timezone: string;
   workStartHour: number;
   workEndHour: number;
   workDays: string;
+  closedOnHolidays?: boolean;
 }
 
 function parseWorkDays(raw: string): Set<number> {
@@ -47,11 +64,13 @@ export function clinicHoursOf(clinic: HoursSource): ClinicHours {
     workStartHour: clinic.workStartHour,
     workEndHour: clinic.workEndHour,
     workDays: parseWorkDays(clinic.workDays),
+    closedOnHolidays: clinic.closedOnHolidays ?? false,
   };
 }
 
 // Expediente efetivo de um profissional: cada campo dele que estiver preenchido
-// sobrescreve o da clinica; o resto herda.
+// sobrescreve o da clinica; o resto herda. Feriado e sempre decisao da
+// clinica (nao existe "feriado so pra um profissional").
 export function resolveHours(
   clinic: HoursSource,
   professional?: { workDays: string | null; workStartHour: number | null; workEndHour: number | null } | null,
@@ -63,6 +82,7 @@ export function resolveHours(
     workStartHour: professional.workStartHour ?? base.workStartHour,
     workEndHour: professional.workEndHour ?? base.workEndHour,
     workDays: professional.workDays ? parseWorkDays(professional.workDays) : base.workDays,
+    closedOnHolidays: base.closedOnHolidays,
   };
 }
 
@@ -86,6 +106,7 @@ export function evaluateSlot(params: {
 
   const wc = wallClockInZone(startUtc, hours.timezone);
   if (!hours.workDays.has(wc.weekday)) return { ok: false, reason: "closed_day" };
+  if (hours.closedOnHolidays && nationalHolidayOn(wc.year, wc.month, wc.day)) return { ok: false, reason: "holiday" };
 
   const startMinutes = wc.hour * 60 + wc.minute;
   if (startMinutes < hours.workStartHour * 60 || startMinutes + durationMin > hours.workEndHour * 60) {
@@ -337,7 +358,7 @@ export async function checkSpecificTime(
   clinicId: string,
   procedureId: string,
   requested: { year: number; month: number; day: number; hour: number; minute?: number },
-  opts: { professionalIds?: string[] } = {},
+  opts: { professionalIds?: string[]; ignoreAppointmentId?: string } = {},
 ): Promise<SpecificTimeCheck> {
   const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId } });
   const procedure = await prisma.procedure.findFirstOrThrow({ where: { id: procedureId, clinicId } });
@@ -366,7 +387,10 @@ export async function checkSpecificTime(
 
   for (const c of candidates) {
     const hours = resolveHours(clinic, c.professional);
-    const ctx = await loadBusyContext(clinicId, { professionalId: c.id });
+    // ignoreAppointmentId exclui o proprio agendamento do que conta como
+    // "ocupado" - sem isso, remarcar um agendamento pra um horario que toca no
+    // horario ATUAL dele mesmo seria recusado por "conflito com ele mesmo".
+    const ctx = await loadBusyContext(clinicId, { professionalId: c.id, ignoreAppointmentId: opts.ignoreAppointmentId });
     const verdict = evaluateSlot({ startUtc, durationMin: procedure.durationMin, hours, busy: ctx.busy, blocks: ctx.blocks });
     if (verdict.ok) {
       free.push({ id: c.id, name: c.professional?.name ?? null });
@@ -470,6 +494,7 @@ export async function createBooking(params: {
   procedureId: string;
   startUtc: Date;
   professionalId?: string | null;
+  source?: string | null;
 }): Promise<BookingSuccess | { ok: false; error: BookingErrorCode }> {
   const { clinicId, patientId, procedureId, startUtc } = params;
 
@@ -527,7 +552,7 @@ export async function createBooking(params: {
         procedureId,
         professionalId: professional?.id ?? null,
         scheduledAt: startUtc,
-        source: "whatsapp",
+        source: params.source ?? "whatsapp",
       },
     });
 

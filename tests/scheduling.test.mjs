@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { wallClockInZone, zonedWallClockToUtc, isoDateInZone, upcomingWeekdayTable } from "../dist/scheduling/time.js";
 import { clinicHoursOf, resolveHours, evaluateSlot, generateSlots } from "../dist/scheduling/slots.js";
+import { nationalHolidays, nationalHolidayOn, upcomingNationalHolidays } from "../dist/scheduling/holidays.js";
 
 const SP = "America/Sao_Paulo";
 const hours = clinicHoursOf({ timezone: SP, workStartHour: 9, workEndHour: 18, workDays: "1,2,3,4,5" });
@@ -123,4 +124,50 @@ test("tabela de dias da semana casa o nome do dia com a data certa", () => {
     const esperado = ["domingo", "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado"][wc.weekday];
     assert.equal(nome.replace(/ \((hoje|amanha)\)$/, ""), esperado, `${iso} deveria ser ${esperado}`);
   }
+});
+
+// --- Feriados nacionais ---
+
+test("feriados nacionais batem com o calendario civil (Sexta-feira Santa e movel)", () => {
+  const knownGoodFriday = { 2024: "03-29", 2025: "04-18", 2026: "04-03", 2027: "03-26" };
+  for (const [year, expected] of Object.entries(knownGoodFriday)) {
+    const gf = nationalHolidays(Number(year)).find((h) => h.name === "Sexta-feira Santa");
+    const got = `${String(gf.month).padStart(2, "0")}-${String(gf.day).padStart(2, "0")}`;
+    assert.equal(got, expected, `Sexta-feira Santa de ${year}`);
+  }
+  assert.equal(nationalHolidayOn(2026, 9, 7), "Independência do Brasil");
+  assert.equal(nationalHolidayOn(2026, 9, 8), null, "dia comum nao e feriado");
+  // Carnaval e Corpus Christi sao ponto facultativo, nao entram na lista automatica.
+  assert.ok(!nationalHolidays(2026).some((h) => h.name.includes("Carnaval")));
+});
+
+test("upcomingNationalHolidays lista em ordem a partir da data dada", () => {
+  const proximos = upcomingNationalHolidays(2026, 9, 15, 3);
+  assert.deepEqual(
+    proximos.map((h) => h.date),
+    ["2026-10-12", "2026-11-02", "2026-11-15"],
+  );
+});
+
+// --- evaluateSlot respeita o toggle de feriado ---
+
+test("evaluateSlot recusa feriado nacional so quando closedOnHolidays esta ligado", () => {
+  const now = new Date("2026-09-01T12:00:00Z");
+  const independencia = zonedWallClockToUtc(SP, 2026, 9, 7, 10, 0); // segunda-feira, feriado
+
+  const semFeriado = clinicHoursOf({ timezone: SP, workStartHour: 9, workEndHour: 18, workDays: "1,2,3,4,5", closedOnHolidays: false });
+  assert.deepEqual(evaluateSlot({ startUtc: independencia, durationMin: 60, hours: semFeriado, busy: [], now }), { ok: true });
+
+  const comFeriado = clinicHoursOf({ timezone: SP, workStartHour: 9, workEndHour: 18, workDays: "1,2,3,4,5", closedOnHolidays: true });
+  assert.deepEqual(evaluateSlot({ startUtc: independencia, durationMin: 60, hours: comFeriado, busy: [], now }), { ok: false, reason: "holiday" });
+
+  // Dia comum da mesma semana continua livre com o toggle ligado.
+  const diaComum = zonedWallClockToUtc(SP, 2026, 9, 8, 10, 0);
+  assert.deepEqual(evaluateSlot({ startUtc: diaComum, durationMin: 60, hours: comFeriado, busy: [], now }), { ok: true });
+});
+
+test("resolveHours propaga closedOnHolidays da clinica pro profissional (nao e algo que se sobrescreve por pessoa)", () => {
+  const clinica = { timezone: SP, workStartHour: 9, workEndHour: 18, workDays: "1,2,3,4,5", closedOnHolidays: true };
+  const comProfissional = resolveHours(clinica, { workDays: "1,2,3,4,5,6", workStartHour: null, workEndHour: null });
+  assert.equal(comProfissional.closedOnHolidays, true);
 });

@@ -3,10 +3,13 @@ import { rateLimit } from "express-rate-limit";
 import { prisma } from "../../db/client.js";
 import { resolveApiKey } from "./keys.js";
 import { getFunnelStages } from "../../crm/stages.js";
-import { movePatientToStage } from "../../crm/stageAutomation.js";
-import { findAvailableSlots, checkSpecificTime, createBooking, professionalsForProcedure } from "../../scheduling/slots.js";
-import { formatInZone } from "../../scheduling/time.js";
+import { movePatientToStage, movePatientToKind, movePatientToRecovery } from "../../crm/stageAutomation.js";
+import { notifyStaff } from "../../crm/notify.js";
+import { logActivity } from "../../crm/activity.js";
+import { findAvailableSlots, checkSpecificTime, createBooking, professionalsForProcedure, SLOT_REASON_PT } from "../../scheduling/slots.js";
+import { formatInZone, wallClockInZone } from "../../scheduling/time.js";
 import { offerFreedSlotToWaitlist } from "../../scheduling/waitlist.js";
+import { pushAppointmentInBackground, removeAppointmentInBackground } from "../../google/calendar.js";
 
 export const externalApiRouter = Router();
 externalApiRouter.use((_req, res, next) => {
@@ -484,12 +487,25 @@ externalApiRouter.post(
         blocked: "A agenda está bloqueada nesse horário.",
         outside_hours: "Fora do horário de atendimento.",
         closed_day: "A clínica não atende nesse dia.",
+        holiday: "A clínica não atende nesse dia (feriado nacional).",
         past: "O horário já passou.",
         procedure_not_found: "Procedimento não encontrado.",
         invalid_datetime: "Data/hora inválida.",
       };
       fail(booking.error === "conflict" ? 409 : 422, booking.error, map[booking.error] ?? "Não foi possível agendar.");
     }
+
+    // Mesma trilha de automacoes que a Alice e o painel disparam ao criar um
+    // agendamento - sem isso, um agendamento feito pela API externa (site
+    // proprio, ERP, n8n) nao avisava a equipe nem movia o lead no funil.
+    await notifyStaff(c.id, "new_appointment", `Novo agendamento (via API): ${patient.name ?? patient.phone} - ${booking.procedureName} em ${booking.label}.`);
+    await movePatientToKind(c.id, patient.id, "avaliacao_agendada", { note: "agendado via API externa" });
+    await logActivity({
+      clinicId: c.id, patientId: patient.id, type: "appointment_booked", area: "agenda",
+      title: "Agendamento criado (API externa)",
+      description: `${patient.name ?? patient.phone} — ${booking.procedureName} em ${booking.label}.`,
+      actorName: `Chave de API${req.apiKey?.name ? `: ${req.apiKey.name}` : ""}`,
+    });
 
     const full = await prisma.appointment.findUniqueOrThrow({
       where: { id: booking.appointmentId },
@@ -504,7 +520,7 @@ externalApiRouter.patch(
   requireScope("agenda.write"),
   wrap(async (req, res) => {
     const c = await getClinicRow(req);
-    const existing = await prisma.appointment.findFirst({ where: { id: req.params.id, clinicId: c.id } });
+    const existing = await prisma.appointment.findFirst({ where: { id: req.params.id, clinicId: c.id }, include: { patient: true } });
     if (!existing) fail(404, "not_found", "Agendamento não encontrado.");
     const b = req.body as { status?: string; start?: string; professional_id?: string | null };
 
@@ -517,19 +533,70 @@ externalApiRouter.patch(
       if (isNaN(start.getTime())) fail(422, "invalid_request", "start inválido.");
     }
 
+    // Remarcar precisa revalidar o horario novo (feriado, bloqueio, conflito,
+    // fora do expediente) - a mesma trava que ja existe pro painel e pra
+    // Alice. ignoreAppointmentId exclui o proprio agendamento do "ocupado".
+    const isReschedule = start !== undefined && start.getTime() !== existing.scheduledAt.getTime();
+    if (isReschedule) {
+      const resolvedProfessionalId = b.professional_id !== undefined ? b.professional_id : existing.professionalId;
+      const wc = wallClockInZone(start!, c.timezone || "America/Sao_Paulo");
+      const check = await checkSpecificTime(
+        c.id,
+        existing.procedureId,
+        { year: wc.year, month: wc.month, day: wc.day, hour: wc.hour, minute: wc.minute },
+        { professionalIds: resolvedProfessionalId ? [resolvedProfessionalId] : [], ignoreAppointmentId: existing.id },
+      );
+      if (!check.available) {
+        fail(409, check.reason ?? "conflict", SLOT_REASON_PT[check.reason ?? "conflict"]);
+      }
+    }
+
     const updated = await prisma.appointment.update({
       where: { id: existing.id },
       data: {
         ...(b.status ? { status: b.status } : {}),
-        ...(start ? { scheduledAt: start } : {}),
+        ...(start ? { scheduledAt: start, patientConfirmed: false, confirmedAt: null } : {}),
         ...(b.professional_id !== undefined ? { professionalId: b.professional_id || null } : {}),
       },
       include: { procedure: { select: { name: true } }, professional: { select: { id: true, name: true } }, patient: { select: { id: true, name: true, phone: true } } },
     });
 
+    // Mesma trilha de avisos/CRM/Google que o painel dispara - a API externa
+    // ficava muda: nao avisava a equipe, nao movia CRM e nao sincronizava com
+    // o Google Agenda em nenhuma dessas mudancas.
+    const patientLabel = existing.patient.name ?? existing.patient.phone;
+    const actorName = `Chave de API${req.apiKey?.name ? `: ${req.apiKey.name}` : ""}`;
+
     if (b.status === "cancelled" && existing.status !== "cancelled") {
+      removeAppointmentInBackground(updated.id);
+      await notifyStaff(c.id, "cancel", `Agendamento cancelado (via API): ${patientLabel} - ${updated.procedure.name}.`);
+      await logActivity({
+        clinicId: c.id, patientId: existing.patientId, type: "appointment_cancelled", area: "agenda",
+        title: "Agendamento cancelado (API externa)", description: `${patientLabel} — ${updated.procedure.name}.`, actorName,
+      });
+      const upcoming = await prisma.appointment.findFirst({ where: { patientId: existing.patientId, status: "confirmed", scheduledAt: { gte: new Date() } } });
+      if (!upcoming) await movePatientToRecovery(c.id, existing.patientId, { note: "agendamento cancelado via API" });
       await offerFreedSlotToWaitlist({ clinicId: c.id, procedureId: existing.procedureId, professionalId: existing.professionalId, freedAt: existing.scheduledAt });
+    } else {
+      pushAppointmentInBackground(updated.id);
+      if (b.status === "completed" && existing.status !== "completed") {
+        await movePatientToKind(c.id, existing.patientId, "pos_procedimento", { note: `${updated.procedure.name} concluído via API` });
+        await logActivity({
+          clinicId: c.id, patientId: existing.patientId, type: "appointment_completed", area: "agenda",
+          title: "Atendimento concluído (API externa)", description: `${patientLabel} — ${updated.procedure.name}.`, actorName,
+        });
+      }
+      if (isReschedule) {
+        const label = formatInZone(updated.scheduledAt, c.timezone);
+        await notifyStaff(c.id, "reschedule", `Agendamento remarcado (via API): ${patientLabel} - ${updated.procedure.name} agora em ${label}.`);
+        await logActivity({
+          clinicId: c.id, patientId: existing.patientId, type: "appointment_rescheduled", area: "agenda",
+          title: "Agendamento remarcado (API externa)", description: `${patientLabel} — ${updated.procedure.name} agora em ${label}.`, actorName,
+        });
+        await offerFreedSlotToWaitlist({ clinicId: c.id, procedureId: existing.procedureId, professionalId: existing.professionalId, freedAt: existing.scheduledAt });
+      }
     }
+
     res.json(apptOut(updated, c.timezone));
   }),
 );
