@@ -20,14 +20,23 @@ const LOGIN = "harmonizze@aliceconversa.com";
 const INITIAL_PASSWORD = process.env.HARMONIZZE_INITIAL_PASSWORD?.trim() || "harmonizze1234";
 const SEED_MARKER = "seed:harmonizze";
 
+// A Dra. Hellen pediu (16/09/2026) pra tirar o nome dela de tudo que o
+// paciente ve: ela teve exposicao publica e as pessoas pesquisam o nome. Os
+// nomes antigos ficam guardados so pra achar o registro ja existente no banco
+// e renomear no lugar, sem duplicar.
+const EVALUATION_NAME = "Avaliação com a equipe Harmonizze";
+const EVALUATION_OLD_NAME = "Avaliação com a Dra. Hellen Matias";
+const PROFESSIONAL_NAME = "Equipe Harmonizze";
+const PROFESSIONAL_OLD_NAME = "Dra. Hellen Matias";
+
 const PROCEDURES = [
   {
-    name: "Avaliação com a Dra. Hellen Matias",
+    name: EVALUATION_NAME,
     durationMin: 60,
     description:
       "Consulta inicial para ouvir a queixa, entender o objetivo do paciente e definir com segurança se existe indicação e qual tratamento faz sentido.",
     goals: "entender qual procedimento pode ser indicado\nesclarecer dúvidas\nplanejar um tratamento individualizado",
-    benefits: "avaliação individualizada\nplanejamento conduzido pela Dra. Hellen Matias",
+    benefits: "avaliação individualizada\nplanejamento conduzido pela equipe médica da Harmonizze",
     aliases: "avaliação,consulta,primeira consulta",
     resultTimeline: null,
   },
@@ -64,13 +73,18 @@ const FAQS = [
     question: "Como funciona a primeira consulta ou avaliação?",
     alternates: "como é a avaliação\nprimeira consulta\nconsulta inicial\ncomo funciona a consulta",
     answer:
-      "Na avaliação, a Dra. Hellen Matias ouve sua queixa, entende o resultado que você busca e avalia o que pode ser indicado com segurança. Você pode chegar com um procedimento em mente ou simplesmente contar o que gostaria de melhorar.",
+      "Na avaliação, a equipe médica ouve sua queixa, entende o resultado que você busca e avalia o que pode ser indicado com segurança. Você pode chegar com um procedimento em mente ou simplesmente contar o que gostaria de melhorar.",
+  },
+  {
+    question: "Quanto custa a consulta de avaliação?",
+    alternates: "quanto custa a consulta\nvalor da consulta\nvalor da avaliação\nquanto custa a avaliação",
+    answer: "A consulta presencial de avaliação custa R$ 200. Os valores dos procedimentos são informados só depois, no planejamento individual.",
   },
   {
     question: "Quanto custam os procedimentos?",
     alternates: "preço\nvalor\nquanto custa\nquanto fica\nme passa os valores",
     answer:
-      "Os valores são informados após a avaliação, porque dependem do caso e do planejamento indicado pela Dra. Hellen Matias. A avaliação é o primeiro passo para receber uma proposta individualizada.",
+      "Os valores são informados após a avaliação, porque dependem do caso e do planejamento indicado pela equipe médica. A avaliação é o primeiro passo para receber uma proposta individualizada.",
   },
   {
     question: "Quais são as formas de pagamento?",
@@ -108,7 +122,7 @@ const FAQS = [
     question: "Onde ficam as unidades?",
     alternates: "endereço\nonde fica\nlocalização\nunidade de São Paulo\nunidade de Brasília",
     answer:
-      "A Harmonizze Clinic atende em São Paulo e em Brasília. Os endereços completos ainda estão sendo definidos; antes de confirmar o agendamento, a equipe informa a localização da unidade escolhida.",
+      "Em Brasília: Plaza Mall & Office - Rua das Carnaúbas, Q. 301, Sala 506, Águas Claras, Brasília - DF, 71904-540. Em São Paulo: a equipe confirma o endereço completo antes do agendamento.",
   },
 ] as const;
 
@@ -116,7 +130,7 @@ const TEMPLATES = [
   {
     name: "Boas-vindas",
     body:
-      "Olá, {primeiro_nome}! Eu sou a Alice, secretária da Harmonizze Clinic 😊\nAtendemos em São Paulo e Brasília. Você já tem algum procedimento em mente ou prefere uma avaliação com a Dra. Hellen Matias?",
+      "Olá, {primeiro_nome}! Eu sou a Alice, secretária da Harmonizze Clinic 😊\nAtendemos em São Paulo e Brasília. Você já tem algum procedimento em mente ou prefere uma avaliação com a nossa equipe?",
     whenToUse: "Primeira mensagem de um novo paciente ou quando a pessoa envia apenas uma saudação.",
   },
   {
@@ -135,14 +149,14 @@ const TEMPLATES = [
 
 const RULES = [
   { category: "tom_de_voz", instruction: "Fale com proximidade, leveza e acolhimento, sem pressão comercial. Use no máximo um emoji por mensagem e evite emoji em mensagens clínicas, de preço, pagamento ou confirmação." },
-  { category: "tom_de_voz", instruction: "Apresente-se como Alice, secretária da Harmonizze Clinic, e informe naturalmente que os atendimentos são realizados pela Dra. Hellen Matias." },
+  { category: "tom_de_voz", instruction: "Apresente-se como Alice, secretária da Harmonizze Clinic, e informe naturalmente que os atendimentos são realizados pela equipe médica da clínica." },
   { category: "agendamento", instruction: "O horário oficial da clínica é de segunda a sexta-feira, das 8h30 às 18h, sem atendimento aos sábados. A agenda automática deve oferecer horários a partir das 9h enquanto o sistema não suportar início em meia hora." },
-  { category: "pagamento", instruction: "Nunca informe preço de procedimento pelo WhatsApp, mesmo que o paciente insista. Explique que o valor depende da avaliação e do planejamento individual e ofereça a avaliação." },
+  { category: "pagamento", instruction: "A consulta presencial de avaliação tem valor fixo de R$ 200 e pode ser informada diretamente. Já o preço dos procedimentos nunca deve ser informado pelo WhatsApp, mesmo que o paciente insista: explique que depende da avaliação e do planejamento individual." },
   { category: "pagamento", instruction: "As formas aceitas são dinheiro, Pix, débito e crédito. O cartão de crédito pode ser parcelado em até 12 vezes com acréscimo da máquina. Não calcule juros nem parcela sem a informação oficial da equipe." },
-  { category: "agendamento", instruction: "Antes de oferecer horários, confirme se o paciente prefere a unidade de São Paulo ou a de Brasília. As duas unidades usam a mesma agenda da Dra. Hellen Matias, para evitar conflito de horários." },
+  { category: "agendamento", instruction: "Antes de oferecer horários, confirme se o paciente prefere a unidade de São Paulo ou a de Brasília. As duas unidades usam a mesma agenda da equipe médica, para evitar conflito de horários." },
   { category: "agendamento", instruction: "O agendamento só fica confirmado depois do recebimento do comprovante do sinal. O sinal é abatido do tratamento e não é devolvido em caso de desistência. Como o valor e os dados de pagamento ainda não estão cadastrados, transfira essa etapa para a equipe." },
   { category: "procedimentos", instruction: "Nunca diga ou insinue 'vai ficar perfeito', 'temos a solução', 'isso resolve' ou qualquer garantia de resultado. Fale em possibilidades e benefícios esperados, sempre condicionados à avaliação individual." },
-  { category: "procedimentos", instruction: "Para lipo de papada, platismoplastia, lifting facial, Deep Plane, otoplastia ou blefaroplastia, não confirme a cirurgia diretamente. Agende primeiro uma avaliação com a Dra. Hellen Matias." },
+  { category: "procedimentos", instruction: "Para lipo de papada, platismoplastia, lifting facial, Deep Plane, otoplastia ou blefaroplastia, não confirme a cirurgia diretamente. Agende primeiro uma avaliação com a equipe médica." },
   { category: "procedimentos", instruction: "Cuidados pós-operatórios só podem ser reforçados conforme a orientação já dada pela equipe. Para lipo de papada, podem ser lembrados faixa, curativos, drenagens e uso correto da medicação prescrita, sem inventar frequência, dose ou técnica." },
   { category: "chamar_equipe", instruction: "Transfira imediatamente em caso de dor, intercorrência, complicação, piora, reclamação, dúvida clínica sem resposta cadastrada, pedido para falar com uma pessoa, problema de pagamento ou exceção de agendamento." },
   { category: "chamar_equipe", instruction: "Antes da transferência, escreva: 'Estou transferindo para o responsável por essa parte.'" },
@@ -158,7 +172,7 @@ const PLAYBOOKS = [
     steps: [
       "Cumprimente de forma breve e apresente-se como Alice, secretária da Harmonizze Clinic.",
       "Pergunte se a pessoa já tem um procedimento em mente ou se prefere contar o que gostaria de melhorar.",
-      "Se ela não souber o procedimento, não escolha por ela e ofereça avaliação com a Dra. Hellen Matias.",
+      "Se ela não souber o procedimento, não escolha por ela e ofereça avaliação com a equipe médica.",
       "Quando houver intenção de agendar, confirme primeiro a cidade: São Paulo ou Brasília.",
       "Ofereça no máximo duas opções reais de horário e siga o fluxo de sinal antes de confirmar.",
     ],
@@ -222,7 +236,7 @@ const REMINDERS = [
 ] as const;
 
 const FOLLOWUPS = [
-  { order: 1, name: "Recontato Harmonizze - 2 dias", afterDays: 2, message: "Oi, {primeiro_nome}! Nossa conversa ficou em aberto. Se ainda quiser entender qual cuidado faz sentido para você, posso retomar daqui e organizar uma avaliação com a Dra. Hellen Matias." },
+  { order: 1, name: "Recontato Harmonizze - 2 dias", afterDays: 2, message: "Oi, {primeiro_nome}! Nossa conversa ficou em aberto. Se ainda quiser entender qual cuidado faz sentido para você, posso retomar daqui e organizar uma avaliação com a equipe médica." },
   { order: 2, name: "Recontato Harmonizze - 5 dias", afterDays: 5, message: "Oi, {primeiro_nome}! Passando só para deixar o canal aberto. Quando fizer sentido retomar sua avaliação na Harmonizze Clinic, estamos por aqui." },
 ] as const;
 
@@ -230,7 +244,7 @@ const POST_PROCEDURE_MESSAGES = [
   { name: "Pós-procedimento - mesmo dia", intervalValue: 4, intervalUnit: "hours", message: "Oi, {primeiro_nome}! Como você está se sentindo depois do seu {procedimento}? Se tiver dor, piora ou qualquer preocupação, me avise agora para eu chamar a equipe." },
   { name: "Pós-procedimento - dia 1", intervalValue: 1, intervalUnit: "days", message: "Oi, {primeiro_nome}! Como foi sua primeira noite depois do {procedimento}? Siga as orientações recebidas e me conte se apareceu qualquer desconforto ou dúvida para eu acionar a equipe." },
   { name: "Pós-cirúrgico - dia 2", intervalValue: 2, intervalUnit: "days", message: "Oi, {primeiro_nome}! Passando para acompanhar seu segundo dia de recuperação. Está tudo correndo bem? Se houver dor, piora ou preocupação, chamo a equipe para você." },
-  { name: "Pós-cirúrgico - dia 3", intervalValue: 3, intervalUnit: "days", message: "Oi, {primeiro_nome}! Como você está hoje? Continue seguindo exatamente as orientações da Dra. Hellen e avise por aqui se precisar falar com a equipe." },
+  { name: "Pós-cirúrgico - dia 3", intervalValue: 3, intervalUnit: "days", message: "Oi, {primeiro_nome}! Como você está hoje? Continue seguindo exatamente as orientações que a equipe passou e avise por aqui se precisar falar com a gente." },
   { name: "Pós-cirúrgico - dia 4", intervalValue: 4, intervalUnit: "days", message: "Oi, {primeiro_nome}! Seguimos acompanhando sua recuperação. Como você está se sentindo hoje?" },
   { name: "Pós-cirúrgico - dia 5", intervalValue: 5, intervalUnit: "days", message: "Oi, {primeiro_nome}! Passando para saber como está sua recuperação hoje. Qualquer dúvida ou mudança, pode contar por aqui para a equipe acompanhar." },
   { name: "Pós-cirúrgico - dia 6", intervalValue: 6, intervalUnit: "days", message: "Oi, {primeiro_nome}! Como você está neste sexto dia de recuperação? Se precisar rever alguma orientação, eu chamo a equipe responsável." },
@@ -317,23 +331,50 @@ export async function seedHarmonizze(): Promise<SeedHarmonizzeResult> {
   }
 
   const locations = [
-    { name: "Unidade São Paulo", city: "São Paulo", state: "SP", order: 0 },
-    { name: "Unidade Brasília", city: "Brasília", state: "DF", order: 1 },
+    { name: "Unidade São Paulo", city: "São Paulo", state: "SP", street: "Rua Antônio Cardoso", order: 0 },
+    {
+      name: "Unidade Brasília",
+      city: "Brasília",
+      state: "DF",
+      street: "Rua das Carnaúbas",
+      number: "Q. 301",
+      complement: "Plaza Mall & Office, Sala 506",
+      neighborhood: "Águas Claras",
+      zipCode: "71904-540",
+      order: 1,
+    },
   ];
   for (const loc of locations) {
     const current = await prisma.clinicLocation.findFirst({ where: { clinicId: clinic.id, name: loc.name } });
-    const data = { city: loc.city, state: loc.state, country: "Brasil", timezone: "America/Sao_Paulo", order: loc.order, active: true };
+    const data = {
+      city: loc.city,
+      state: loc.state,
+      street: loc.street ?? null,
+      number: loc.number ?? null,
+      complement: loc.complement ?? null,
+      neighborhood: loc.neighborhood ?? null,
+      zipCode: loc.zipCode ?? null,
+      country: "Brasil",
+      timezone: "America/Sao_Paulo",
+      order: loc.order,
+      active: true,
+    };
     if (current) await prisma.clinicLocation.update({ where: { id: current.id }, data });
     else await prisma.clinicLocation.create({ data: { clinicId: clinic.id, name: loc.name, ...data } });
   }
 
   const procedureIds = new Map<string, string>();
   for (const item of PROCEDURES) {
-    const current = await prisma.procedure.findFirst({ where: { clinicId: clinic.id, name: item.name } });
+    const current =
+      (await prisma.procedure.findFirst({ where: { clinicId: clinic.id, name: item.name } })) ??
+      (item.name === EVALUATION_NAME
+        ? await prisma.procedure.findFirst({ where: { clinicId: clinic.id, name: EVALUATION_OLD_NAME } })
+        : null);
     const detailed = "description" in item;
     const data = {
+      name: item.name,
       durationMin: "durationMin" in item ? item.durationMin : 60,
-      description: detailed ? item.description : "Procedimento realizado pela Dra. Hellen Matias após avaliação individual.",
+      description: detailed ? item.description : "Procedimento realizado pela equipe médica da Harmonizze após avaliação individual.",
       price: null,
       priceVariable: true,
       offerInstallments: true,
@@ -347,14 +388,17 @@ export async function seedHarmonizze(): Promise<SeedHarmonizzeResult> {
     };
     const procedure = current
       ? await prisma.procedure.update({ where: { id: current.id }, data })
-      : await prisma.procedure.create({ data: { clinicId: clinic.id, name: item.name, ...data } });
+      : await prisma.procedure.create({ data: { clinicId: clinic.id, ...data } });
     procedureIds.set(item.name, procedure.id);
   }
 
-  const professional = await prisma.professional.findFirst({ where: { clinicId: clinic.id, name: "Dra. Hellen Matias" } });
+  const professional =
+    (await prisma.professional.findFirst({ where: { clinicId: clinic.id, name: PROFESSIONAL_NAME } })) ??
+    (await prisma.professional.findFirst({ where: { clinicId: clinic.id, name: PROFESSIONAL_OLD_NAME } }));
   const professionalData = {
-    bio: "Professora e cirurgiã bucomaxilofacial, especialista em harmonização facial.",
-    instagram: "@drahellenmatias",
+    name: PROFESSIONAL_NAME,
+    bio: "Equipe médica especializada em harmonização facial e cirurgia facial.",
+    instagram: null,
     active: true,
     workDays: null,
     workStartHour: null,
@@ -365,7 +409,7 @@ export async function seedHarmonizze(): Promise<SeedHarmonizzeResult> {
   else await prisma.professional.create({
     data: {
       clinic: { connect: { id: clinic.id } },
-      name: "Dra. Hellen Matias",
+      name: professionalData.name,
       bio: professionalData.bio,
       instagram: professionalData.instagram,
       active: true,
@@ -439,7 +483,6 @@ export async function seedHarmonizze(): Promise<SeedHarmonizzeResult> {
   // Pos-procedimento nunca vale pra "Avaliação" (e uma consulta, nao um
   // tratamento): so pros procedimentos de verdade, e a trilha cirurgica so
   // pras cirurgias.
-  const EVALUATION_NAME = "Avaliação com a Dra. Hellen Matias";
   const treatmentIds = [...procedureIds.entries()]
     .filter(([name]) => name !== EVALUATION_NAME)
     .map(([, id]) => id)
@@ -463,7 +506,7 @@ export async function seedHarmonizze(): Promise<SeedHarmonizzeResult> {
   const renewalName = "Renovação de toxina - 6 meses";
   const renewal = await prisma.renewalRule.findFirst({ where: { clinicId: clinic.id, name: renewalName } });
   const renewalData = {
-    message: "Oi, {primeiro_nome}! Já faz um tempo desde o seu {procedimento}. Se quiser reavaliar o resultado com a Dra. Hellen Matias, posso verificar um horário para você.",
+    message: "Oi, {primeiro_nome}! Já faz um tempo desde o seu {procedimento}. Se quiser reavaliar o resultado com a nossa equipe, posso verificar um horário para você.",
     intervalValue: 6,
     intervalUnit: "months",
     onlyIfCompleted: true,
@@ -520,7 +563,7 @@ export async function seedHarmonizze(): Promise<SeedHarmonizzeResult> {
       birthdays: birthdayCount,
     },
     pending: [
-      "endereços completos e informação definitiva de estacionamento das duas unidades",
+      "endereço completo da unidade de São Paulo (só temos 'Rua Antônio Cardoso', sem número/bairro/CEP) e confirmação do estacionamento das duas unidades",
       "quem assume quando a Alice transfere (pessoa/perfil); os avisos estão indo pro próprio número de atendimento, trocar por um celular dedicado da equipe se quiser separar",
       "valor do sinal e dados/link de pagamento",
       "duração real da avaliação e dos procedimentos que não foram detalhados",
