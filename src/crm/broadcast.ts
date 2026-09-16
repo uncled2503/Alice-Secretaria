@@ -46,8 +46,11 @@ async function getBroadcastClinicInfo(clinicId: string): Promise<BroadcastClinic
   return { name: clinic.name, primaryLocation: { name: location.name, fullAddress: parts } };
 }
 
-function isWithinBusinessHours(workStartHour: number, workEndHour: number): boolean {
-  const hour = new Date().getHours();
+// Hora local da CLINICA, nao do servidor. Sem isso, uma clinica configurada
+// pra 8h-18h dispara campanha nos horarios errados sempre que a VPS roda num
+// fuso diferente do dela (ex: servidor em UTC == 21h em Brasilia).
+function isWithinBusinessHours(timeZone: string, workStartHour: number, workEndHour: number): boolean {
+  const hour = Number(new Intl.DateTimeFormat("en-US", { timeZone, hourCycle: "h23", hour: "2-digit" }).format(new Date()));
   return hour >= workStartHour && hour < workEndHour;
 }
 
@@ -129,7 +132,7 @@ async function sendNextBatch(): Promise<void> {
 
   for (const campaign of sendingCampaigns) {
     const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: campaign.clinicId } });
-    if (!isWithinBusinessHours(clinic.workStartHour, clinic.workEndHour)) continue;
+    if (!isWithinBusinessHours(clinic.timezone, clinic.workStartHour, clinic.workEndHour)) continue;
 
     const pending = await prisma.broadcastRecipient.findMany({
       where: { campaignId: campaign.id, status: "pending" },

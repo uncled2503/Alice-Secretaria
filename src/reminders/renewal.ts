@@ -7,7 +7,13 @@ import { PAID_CLINIC_WHERE } from "../crm/plan.js";
 const DAY_MS = 24 * 60 * 60_000;
 const MAX_DAYS = 2 * 365; // limite de 2 anos
 
-function intervalDays(value: number, unit: string): number {
+// So entende months/years (RenewalRule.intervalUnit - PostProcedureRule tem
+// hours/days, e um campo diferente). Unidade fora disso e um dado corrompido
+// (ex: escrito direto no banco por um seed, ignorando a API): melhor pular a
+// regra com um aviso do que tratar "days" como "months" e mandar a mensagem
+// 30x mais tarde do que configurado, em silencio.
+function intervalDays(value: number, unit: string): number | null {
+  if (unit !== "months" && unit !== "years") return null;
   const days = unit === "years" ? value * 365 : value * 30;
   return Math.min(days, MAX_DAYS);
 }
@@ -21,7 +27,12 @@ export function startRenewalJob(): void {
     const clinicInfoCache = new Map<string, Awaited<ReturnType<typeof getClinicTemplateInfo>>>();
 
     for (const rule of rules) {
-      const cutoff = new Date(Date.now() - intervalDays(rule.intervalValue, rule.intervalUnit) * DAY_MS);
+      const days = intervalDays(rule.intervalValue, rule.intervalUnit);
+      if (days === null) {
+        console.error(`[renovacao] regra ${rule.id} com intervalUnit invalido ("${rule.intervalUnit}"; esperado months/years) - pulando`);
+        continue;
+      }
+      const cutoff = new Date(Date.now() - days * DAY_MS);
       const procedureFilter = rule.procedureIds.split(",").filter(Boolean);
 
       const due = await prisma.appointment.findMany({

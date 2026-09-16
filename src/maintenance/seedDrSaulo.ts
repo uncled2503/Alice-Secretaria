@@ -551,8 +551,13 @@ export async function seedDrSaulo(): Promise<SeedDrSauloResult> {
       name: "Renovação trimestral - 90 dias",
       message:
         "Olá, {primeiro_nome}. Estamos nos aproximando da conclusão do seu primeiro ciclo de 90 dias. O Dr. Saulo Silva gostaria de avaliar sua evolução para ajustarmos o protocolo para o próximo nível de performance. Podemos reservar seu horário de retorno?",
-      intervalValue: 90,
-      intervalUnit: "days",
+      // RenewalRule.intervalUnit so entende "months"/"years" (schema.prisma:838;
+      // "days"/"hours" e do PostProcedureRule, campo diferente). Com "days" o
+      // cron de renovacao (src/reminders/renewal.ts) tratava como se fosse
+      // "months" e multiplicava por 30 -> 90*30 = 2700 dias, cortado pelo teto
+      // de 2 anos: a mensagem so sairia daqui a ~2 anos em vez de 3 meses.
+      intervalValue: 3,
+      intervalUnit: "months",
     },
     {
       name: "Recuperação de paciente inativo - 6 meses",
