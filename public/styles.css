@@ -352,8 +352,13 @@ main { flex: 1; padding: 1.6rem 2rem 3rem; max-width: 1600px; min-width: 0; }
   background-image: repeating-linear-gradient(to right, var(--border) 0 4px, transparent 4px 9px);
   background-repeat: no-repeat; background-size: 100% 1px; background-position: 0 50%;
 }
+/* Uma camada por dia coluna, atras da grade de horas, onde os agendamentos
+   sao posicionados em pixel absoluto (nao mais por celula de hora) - e o que
+   permite calcular sobreposicao entre horarios vizinhos (ex: 14:00 e 14:15
+   de profissionais diferentes) e coloca-los lado a lado em vez de "grudados". */
+.agenda-day-overlay { position: relative; }
 .agenda-appt {
-  position: absolute; left: 2px; right: 2px; top: 1px;
+  position: absolute;
   background: var(--accent-100); border-left: 3px solid var(--accent); color: var(--accent-dark);
   border-radius: 4px; padding: 0.2rem 0.4rem; font-size: 0.72rem; overflow: hidden; cursor: pointer;
 }

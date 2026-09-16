@@ -456,6 +456,16 @@ export async function seedDrSaulo(): Promise<SeedDrSauloResult> {
     procedureIds.set(item.name, procedure.id);
   }
 
+  // "Aplicação" e feita pela enfermagem, nao pelo Dr. Saulo - por isso fica
+  // com um profissional PROPRIO em vez de ficar junto com o dele. Pedido do
+  // cliente (16/09/2026): a aplicação acontece no MESMO horario da consulta
+  // (o enfermeiro atende enquanto o Dr. Saulo esta com outro paciente), entao
+  // as duas agendas precisam ser independentes - se ficassem no mesmo
+  // profissional, o sistema recusaria por conflito de horario.
+  const APLICACAO_NAME = "Aplicação";
+  const aplicacaoId = procedureIds.get(APLICACAO_NAME);
+  const doctorProcedureIds = [...procedureIds.entries()].filter(([name]) => name !== APLICACAO_NAME).map(([, id]) => id);
+
   const professional = await prisma.professional.findFirst({ where: { clinicId: clinic.id, name: "Dr. Saulo Silva" } });
   const professionalData = {
     bio: "Médico especialista em medicina de precisão, emagrecimento, performance e longevidade.",
@@ -464,7 +474,7 @@ export async function seedDrSaulo(): Promise<SeedDrSauloResult> {
     workDays: null,
     workStartHour: null,
     workEndHour: null,
-    procedures: { set: [...procedureIds.values()].map((id) => ({ id })) },
+    procedures: { set: doctorProcedureIds.map((id) => ({ id })) },
   };
   if (professional) await prisma.professional.update({ where: { id: professional.id }, data: professionalData });
   else await prisma.professional.create({
@@ -473,9 +483,32 @@ export async function seedDrSaulo(): Promise<SeedDrSauloResult> {
       name: "Dr. Saulo Silva",
       bio: professionalData.bio,
       active: true,
-      procedures: { connect: [...procedureIds.values()].map((id) => ({ id })) },
+      procedures: { connect: doctorProcedureIds.map((id) => ({ id })) },
     },
   });
+
+  if (aplicacaoId) {
+    const nurse = await prisma.professional.findFirst({ where: { clinicId: clinic.id, name: "Enfermagem (Aplicações)" } });
+    const nurseData = {
+      bio: "Responsável pelas aplicações do protocolo, em paralelo ao atendimento do Dr. Saulo Silva.",
+      instagram: null,
+      active: true,
+      workDays: null,
+      workStartHour: null,
+      workEndHour: null,
+      procedures: { set: [{ id: aplicacaoId }] },
+    };
+    if (nurse) await prisma.professional.update({ where: { id: nurse.id }, data: nurseData });
+    else await prisma.professional.create({
+      data: {
+        clinic: { connect: { id: clinic.id } },
+        name: "Enfermagem (Aplicações)",
+        bio: nurseData.bio,
+        active: true,
+        procedures: { connect: [{ id: aplicacaoId }] },
+      },
+    });
+  }
 
   for (const faq of FAQS) {
     const current = await prisma.clinicFaq.findFirst({ where: { clinicId: clinic.id, question: faq.question } });
@@ -621,6 +654,7 @@ export async function seedDrSaulo(): Promise<SeedDrSauloResult> {
     pending: [
       "número de WhatsApp real da clínica (está com um placeholder; assim que tiver, defina DR_SAULO_WHATSAPP e rode o seed de novo, ou edite direto no painel)",
       "valor da Aplicação e da Reavaliação (cadastradas com duração certa - 15min e 30min - mas sem preço; a Alice vai dizer que confirma com a equipe até chegar o valor)",
+      "nome real de quem faz a Aplicação (cadastrado como \"Enfermagem (Aplicações)\" - é só um nome-placeholder no profissional novo criado pra separar a agenda dela da do Dr. Saulo; pode renomear em Configurações → Equipe a qualquer hora)",
       "política de cancelamento/reembolso do sinal em caso de desistência (o manual não especifica se o valor é devolvido)",
       "estacionamento ou manobrista no endereço novo",
       "texto da confirmação para consulta ONLINE (a mensagem de confirmação atual é a presencial: fala de endereço e bioimpedância)",

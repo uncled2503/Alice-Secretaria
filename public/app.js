@@ -164,8 +164,6 @@ function promptSchedule() {
     }
     procedureSelect.innerHTML = "";
     for (const p of procedures) procedureSelect.appendChild(el("option", { value: p.id }, [`${p.name} (${p.durationMin}min)`]));
-    professionalSelect.innerHTML = '<option value="">Não atribuído</option>';
-    for (const p of professionals) if (p.active) professionalSelect.appendChild(el("option", { value: p.id }, [p.name]));
     whenInput.value = "";
 
     if (!procedures.length) {
@@ -174,11 +172,30 @@ function promptSchedule() {
       return;
     }
 
+    // So lista (e pre-seleciona) quem realmente faz o procedimento escolhido -
+    // sem isso o select mostrava TODO profissional da clinica com "Não
+    // atribuído" como padrao, e "nao atribuido" bloqueia a agenda de todo
+    // mundo (nao so de ninguem): duas pessoas que atendem ao mesmo tempo em
+    // procedimentos diferentes (ex: medico + enfermagem na aplicação) ficavam
+    // com conflito de horario por causa disso.
+    const syncProfessionalOptions = () => {
+      const activePros = professionals.filter((p) => p.active);
+      const doThisProcedure = activePros.filter((p) => p.procedures.some((proc) => proc.id === procedureSelect.value));
+      const list = doThisProcedure.length ? doThisProcedure : activePros;
+      professionalSelect.innerHTML = "";
+      if (!doThisProcedure.length) professionalSelect.appendChild(el("option", { value: "" }, ["Não atribuído"]));
+      for (const p of list) professionalSelect.appendChild(el("option", { value: p.id }, [p.name]));
+      if (doThisProcedure.length === 1) professionalSelect.value = doThisProcedure[0].id;
+    };
+    procedureSelect.addEventListener("change", syncProfessionalOptions);
+    syncProfessionalOptions();
+
     const cleanup = (result) => {
       overlay.style.display = "none";
       okBtn.removeEventListener("click", onOk);
       cancelBtn.removeEventListener("click", onCancel);
       overlay.removeEventListener("click", onOverlayClick);
+      procedureSelect.removeEventListener("change", syncProfessionalOptions);
       resolve(result);
     };
     const onOk = () => {
@@ -1952,48 +1969,121 @@ function renderAgendaGrid(appointments, days) {
     grid.appendChild(header);
   });
 
-  const cellByKey = new Map();
   hours.forEach((h, hi) => {
     grid.appendChild(el("div", { class: "agenda-hour-label", style: `grid-column:1;grid-row:${hi + 2}` }, [`${String(h).padStart(2, "0")}:00`]));
     days.forEach((day, di) => {
-      const cell = el("div", { class: "agenda-cell", style: `grid-column:${di + 2};grid-row:${hi + 2}` }, []);
-      grid.appendChild(cell);
-      cellByKey.set(`${di}-${h}`, cell);
+      grid.appendChild(el("div", { class: "agenda-cell", style: `grid-column:${di + 2};grid-row:${hi + 2}` }, []));
     });
   });
 
+  const ROW_PX = 46;
+  // Uma camada por dia, sobre TODAS as horas daquele dia (nao mais uma celula
+  // por hora): assim um agendamento pode ser posicionado pela altura do dia
+  // inteiro em vez de so dentro da hora onde comeca, o que e o que permite
+  // calcular sobreposicao entre horarios vizinhos (ex: 14:00 e 14:15) mesmo
+  // quando cruzam a borda de uma hora cheia.
+  const overlayByDay = days.map((_, di) =>
+    el("div", { class: "agenda-day-overlay", style: `grid-column:${di + 2};grid-row:2 / span ${hours.length}` }, []),
+  );
+  overlayByDay.forEach((overlay) => grid.appendChild(overlay));
+
+  const byDay = days.map(() => []);
   for (const a of appointments) {
     const when = new Date(a.scheduledAt);
     const di = days.findIndex((d) => sameDay(d, when));
-    if (di === -1) continue;
-    const hour = Math.min(Math.max(when.getHours(), AGENDA_HOUR_START), AGENDA_HOUR_END - 1);
-    const cell = cellByKey.get(`${di}-${hour}`);
-    if (!cell) continue;
-
-    const st = APPT_STATUS[a.status] || APPT_STATUS.confirmed;
-    const accent = a.professional?.color || st.color;
-    const topPct = (when.getMinutes() / 60) * 100;
-    const heightPx = Math.max((a.procedure.durationMin / 60) * 46, 20);
-    const src = APPT_SOURCE[a.source];
-    const apptEl = el("div", {
-      class: `agenda-appt st-${a.status}`,
-      style: `top:${topPct}%;height:${heightPx}px;border-left:3px solid ${accent}`,
-    }, [
-      el("div", { class: "ap-icons" }, [
-        el("span", { class: "t" }, [when.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) + (a.patientConfirmed ? " ✓" : "")]),
-        src ? Object.assign(svgEl(src.icon, 12), { title: src.label }) : "",
-      ]),
-      el("div", {}, [a.patient.name ?? a.patient.phone]),
-      el("div", {}, [a.procedure.name]),
-      a.professional ? el("div", { class: "hint", style: "margin:0" }, [a.professional.name]) : "",
-    ]);
-    apptEl.addEventListener("click", () => openApptEditModal(a));
-    cell.appendChild(apptEl);
+    if (di !== -1) byDay[di].push(a);
   }
+
+  byDay.forEach((dayAppts, di) => {
+    for (const { appt, column, columns } of packOverlappingAppointments(dayAppts)) {
+      const when = new Date(appt.scheduledAt);
+      const minutesFromStart = (when.getHours() - AGENDA_HOUR_START) * 60 + when.getMinutes();
+      const topPx = (minutesFromStart / 60) * ROW_PX;
+      const heightPx = Math.max((appt.procedure.durationMin / 60) * ROW_PX, 20);
+
+      const st = APPT_STATUS[appt.status] || APPT_STATUS.confirmed;
+      const accent = appt.professional?.color || st.color;
+      const src = APPT_SOURCE[appt.source];
+      // Sobreposicao vira colunas lado a lado (largura 1/columns cada) em vez
+      // de empilhar tudo por cima - era exatamente isso que ficava "grudado"
+      // quando duas pessoas (ex: medico e enfermagem) atendem no mesmo horario.
+      const widthPct = 100 / columns;
+      const apptEl = el("div", {
+        class: `agenda-appt st-${appt.status}`,
+        style: `top:${topPx}px;height:${heightPx}px;left:calc(${column * widthPct}% + 2px);width:calc(${widthPct}% - 4px);border-left:3px solid ${accent}`,
+      }, [
+        el("div", { class: "ap-icons" }, [
+          el("span", { class: "t" }, [when.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) + (appt.patientConfirmed ? " ✓" : "")]),
+          src ? Object.assign(svgEl(src.icon, 12), { title: src.label }) : "",
+        ]),
+        el("div", {}, [appt.patient.name ?? appt.patient.phone]),
+        el("div", {}, [appt.procedure.name]),
+        appt.professional ? el("div", { class: "hint", style: "margin:0" }, [appt.professional.name]) : "",
+      ]);
+      apptEl.addEventListener("click", () => openApptEditModal(appt));
+      overlayByDay[di].appendChild(apptEl);
+    }
+  });
 
   if (appointments.length === 0) {
     grid.appendChild(el("div", { class: "agenda-empty-msg", style: `grid-column:1 / span ${days.length + 1};grid-row:2` }, ["Nenhum agendamento neste período."]));
   }
+}
+
+// Empacota agendamentos que se sobrepoem no tempo em colunas lado a lado
+// (estilo agenda do Google): agrupa os que colidem em "clusters" e, dentro de
+// cada cluster, encaixa cada um na primeira coluna que ja estiver livre
+// naquele instante. Devolve a lista original com {column, columns} anexado -
+// column = indice da coluna (0-based), columns = quantas colunas o cluster
+// dele tem no total (define a largura: 100/columns).
+function packOverlappingAppointments(dayAppts) {
+  const withRange = dayAppts
+    .filter((a) => a.status !== "cancelled")
+    .map((a) => {
+      const start = new Date(a.scheduledAt).getTime();
+      return { appt: a, start, end: start + a.procedure.durationMin * 60_000 };
+    })
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+
+  const out = [];
+  let cluster = []; // colunas do cluster atual: cada coluna e um array de itens
+  let clusterEnd = -Infinity;
+
+  const flushCluster = () => {
+    const columns = cluster.length;
+    for (const col of cluster) for (const item of col) out.push({ appt: item.appt, column: col.__index, columns });
+    cluster = [];
+  };
+
+  for (const item of withRange) {
+    if (item.start >= clusterEnd && cluster.length) {
+      flushCluster();
+      clusterEnd = -Infinity;
+    }
+    let placed = false;
+    for (let i = 0; i < cluster.length; i++) {
+      const col = cluster[i];
+      if (col[col.length - 1].end <= item.start) {
+        col.push(item);
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) {
+      const col = [item];
+      col.__index = cluster.length;
+      cluster.push(col);
+    }
+    clusterEnd = Math.max(clusterEnd, item.end);
+  }
+  if (cluster.length) flushCluster();
+
+  // Cancelados nao entram no calculo de colunas (nao "ocupam" visualmente),
+  // mas ainda aparecem, sozinhos, na largura cheia.
+  for (const a of dayAppts) {
+    if (a.status === "cancelled") out.push({ appt: a, column: 0, columns: 1 });
+  }
+  return out;
 }
 
 function renderAgendaList(appointments) {
@@ -2144,23 +2234,37 @@ function openApptEditModal(appt) {
   document.getElementById("appt-edit-confirmed").checked = !!appt.patientConfirmed;
 
   const select = document.getElementById("appt-edit-procedure");
+  const profSelect = document.getElementById("appt-edit-professional");
   select.innerHTML = "";
-  api("/procedures").then((procedures) => {
+  profSelect.innerHTML = "";
+
+  Promise.all([api("/procedures"), api("/professionals")]).then(([procedures, professionals]) => {
     for (const p of procedures) {
       const opt = el("option", { value: p.id }, [`${p.name} (${p.durationMin}min)`]);
       if (p.id === appt.procedure.id) opt.selected = true;
       select.appendChild(opt);
     }
-  });
 
-  const profSelect = document.getElementById("appt-edit-professional");
-  profSelect.innerHTML = '<option value="">Não atribuído</option>';
-  api("/professionals").then((professionals) => {
-    for (const p of professionals) {
-      const opt = el("option", { value: p.id }, [p.name]);
-      if (p.id === appt.professional?.id) opt.selected = true;
-      profSelect.appendChild(opt);
-    }
+    // So lista (e pre-seleciona) quem realmente faz o procedimento escolhido -
+    // "Nao atribuido" bloqueia a agenda de TODO mundo, entao deixar isso como
+    // padrao quando so tem uma pessoa certa pro procedimento e o que fazia
+    // duas pessoas atendendo ao mesmo tempo (ex: medico + enfermagem na
+    // aplicação) esbarrarem num conflito de horario que na vida real nao existe.
+    const activePros = professionals.filter((p) => p.active || p.id === appt.professional?.id);
+    const syncProfessionalOptions = (preferId) => {
+      const doThisProcedure = activePros.filter((p) => p.procedures.some((proc) => proc.id === select.value));
+      const list = doThisProcedure.length ? doThisProcedure : activePros;
+      profSelect.innerHTML = "";
+      if (!doThisProcedure.length) profSelect.appendChild(el("option", { value: "" }, ["Não atribuído"]));
+      for (const p of list) profSelect.appendChild(el("option", { value: p.id }, [p.name]));
+      const keep = preferId && list.some((p) => p.id === preferId);
+      profSelect.value = keep ? preferId : doThisProcedure.length === 1 ? doThisProcedure[0].id : "";
+    };
+    // .onchange (nao addEventListener): esta modal reabre pra cada agendamento
+    // clicado no mesmo <select> persistente - addEventListener acumularia um
+    // handler novo por edicao. Atribuicao substitui o anterior, sem vazar.
+    select.onchange = () => syncProfessionalOptions(null);
+    syncProfessionalOptions(appt.professional?.id ?? null);
   });
 
   document.getElementById("appt-edit-overlay").style.display = "flex";
