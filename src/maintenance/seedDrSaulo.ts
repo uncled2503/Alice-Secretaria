@@ -387,7 +387,7 @@ export async function seedDrSaulo(): Promise<SeedDrSauloResult> {
   const config = {
     name: CLINIC_NAME,
     timezone: "America/Sao_Paulo",
-    workStartHour: 9,
+    workStartHour: 8,
     workEndHour: 17,
     workDays: "1,2,3,4,5",
     notifyPhone: WA,
@@ -660,7 +660,7 @@ export async function seedDrSaulo(): Promise<SeedDrSauloResult> {
       "texto da confirmação para consulta ONLINE (a mensagem de confirmação atual é a presencial: fala de endereço e bioimpedância)",
       "preparo para exames (jejum etc.)",
       "bio completa do Dr. Saulo Silva (formação, CRM, especialidades) e Instagram",
-      "suporte a início de expediente às 08:30 e fim às 17:30 (o campo atual aceita apenas hora cheia; foi usado 9h–17h)",
+      "suporte a fim de expediente às 17:30 (o campo atual aceita apenas hora cheia; expediente hoje é 8h–17h, confirmado com o cliente em 17/09)",
       "confirmação do login/senha de acesso do cliente (usado drsaulo@aliceconversa.com por padrão)",
     ],
   };

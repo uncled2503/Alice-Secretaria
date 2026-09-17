@@ -94,23 +94,33 @@ export function evaluateSlot(params: {
   busy: BusyInterval[];
   blocks?: BusyInterval[];
   now?: Date;
+  // Um agendamento manual (feito pela propria clinica no painel) pode ignorar
+  // o padrao de horarios (expediente/dia da semana/feriado) - so a Alice, que
+  // atende sozinha sem alguem pra decidir na hora, precisa respeitar esse
+  // padrao a risca. Conflito com outro paciente e bloqueio manual continuam
+  // valendo pros dois: isso nao e "horario de funcionamento", e um horario ja
+  // comprometido de verdade.
+  enforceHours?: boolean;
 }): SlotVerdict {
   const { startUtc, durationMin, hours, busy } = params;
   const blocks = params.blocks ?? [];
   const now = params.now ?? new Date();
+  const enforceHours = params.enforceHours ?? true;
   const endUtc = new Date(startUtc.getTime() + durationMin * 60_000);
   const s = startUtc.getTime();
   const e = endUtc.getTime();
 
   if (s <= now.getTime()) return { ok: false, reason: "past" };
 
-  const wc = wallClockInZone(startUtc, hours.timezone);
-  if (!hours.workDays.has(wc.weekday)) return { ok: false, reason: "closed_day" };
-  if (hours.closedOnHolidays && nationalHolidayOn(wc.year, wc.month, wc.day)) return { ok: false, reason: "holiday" };
+  if (enforceHours) {
+    const wc = wallClockInZone(startUtc, hours.timezone);
+    if (!hours.workDays.has(wc.weekday)) return { ok: false, reason: "closed_day" };
+    if (hours.closedOnHolidays && nationalHolidayOn(wc.year, wc.month, wc.day)) return { ok: false, reason: "holiday" };
 
-  const startMinutes = wc.hour * 60 + wc.minute;
-  if (startMinutes < hours.workStartHour * 60 || startMinutes + durationMin > hours.workEndHour * 60) {
-    return { ok: false, reason: "outside_hours" };
+    const startMinutes = wc.hour * 60 + wc.minute;
+    if (startMinutes < hours.workStartHour * 60 || startMinutes + durationMin > hours.workEndHour * 60) {
+      return { ok: false, reason: "outside_hours" };
+    }
   }
 
   for (const b of blocks) {
@@ -358,7 +368,7 @@ export async function checkSpecificTime(
   clinicId: string,
   procedureId: string,
   requested: { year: number; month: number; day: number; hour: number; minute?: number },
-  opts: { professionalIds?: string[]; ignoreAppointmentId?: string } = {},
+  opts: { professionalIds?: string[]; ignoreAppointmentId?: string; enforceHours?: boolean } = {},
 ): Promise<SpecificTimeCheck> {
   const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId } });
   const procedure = await prisma.procedure.findFirstOrThrow({ where: { id: procedureId, clinicId } });
@@ -391,7 +401,14 @@ export async function checkSpecificTime(
     // "ocupado" - sem isso, remarcar um agendamento pra um horario que toca no
     // horario ATUAL dele mesmo seria recusado por "conflito com ele mesmo".
     const ctx = await loadBusyContext(clinicId, { professionalId: c.id, ignoreAppointmentId: opts.ignoreAppointmentId });
-    const verdict = evaluateSlot({ startUtc, durationMin: procedure.durationMin, hours, busy: ctx.busy, blocks: ctx.blocks });
+    const verdict = evaluateSlot({
+      startUtc,
+      durationMin: procedure.durationMin,
+      hours,
+      busy: ctx.busy,
+      blocks: ctx.blocks,
+      enforceHours: opts.enforceHours,
+    });
     if (verdict.ok) {
       free.push({ id: c.id, name: c.professional?.name ?? null });
     } else {
@@ -495,6 +512,7 @@ export async function createBooking(params: {
   startUtc: Date;
   professionalId?: string | null;
   source?: string | null;
+  enforceHours?: boolean;
 }): Promise<BookingSuccess | { ok: false; error: BookingErrorCode }> {
   const { clinicId, patientId, procedureId, startUtc } = params;
 
@@ -542,7 +560,7 @@ export async function createBooking(params: {
       ...googleBusy,
     ];
 
-    const verdict = evaluateSlot({ startUtc, durationMin: procedure.durationMin, hours, busy, blocks });
+    const verdict = evaluateSlot({ startUtc, durationMin: procedure.durationMin, hours, busy, blocks, enforceHours: params.enforceHours });
     if (!verdict.ok) return { ok: false as const, error: verdict.reason };
 
     const appointment = await tx.appointment.create({

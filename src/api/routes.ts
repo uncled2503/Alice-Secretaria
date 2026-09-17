@@ -2191,9 +2191,12 @@ apiRouter.post(
 
     const VALID_SOURCE = ["whatsapp", "instagram", "presencial", "telefone"];
     // Passa pela MESMA validacao que a Alice usa (createBooking): sem isso, o
-    // agendamento manual pelo painel podia cair em cima de outro paciente, de
-    // um bloqueio de agenda, de um feriado ou fora do expediente - a tela nao
-    // barrava nada disso antes.
+    // agendamento manual pelo painel podia cair em cima de outro paciente ou
+    // de um bloqueio de agenda - a tela nao barrava nada disso antes.
+    // enforceHours:false porque quem agenda manualmente pelo painel e a
+    // propria clinica (ex.: o medico encaixando um paciente fora do
+    // expediente padrao por decisao propria) - so a Alice, que decide sozinha
+    // sem ninguem pra confirmar na hora, precisa seguir o expediente a risca.
     const booking = await createBooking({
       clinicId: clinic.id,
       patientId: patient.id,
@@ -2201,6 +2204,7 @@ apiRouter.post(
       professionalId: professionalId || null,
       startUtc: new Date(scheduledAt),
       source: source && VALID_SOURCE.includes(source) ? source : "presencial",
+      enforceHours: false,
     });
     if (!booking.ok) {
       res.status(booking.error === "conflict" ? 409 : 422).json({ error: SLOT_REASON_PT[booking.error] ?? "não foi possível agendar" });
@@ -2268,7 +2272,11 @@ apiRouter.put(
           clinic.id,
           resolvedProcedureId,
           { year: wc.year, month: wc.month, day: wc.day, hour: wc.hour, minute: wc.minute },
-          { professionalIds: resolvedProfessionalId ? [resolvedProfessionalId] : [], ignoreAppointmentId: existing.id },
+          {
+            professionalIds: resolvedProfessionalId ? [resolvedProfessionalId] : [],
+            ignoreAppointmentId: existing.id,
+            enforceHours: false,
+          },
         );
         if (!check.available) {
           res.status(409).json({ error: SLOT_REASON_PT[check.reason ?? "conflict"] });
