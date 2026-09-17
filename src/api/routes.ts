@@ -57,6 +57,7 @@ import {
   removeAppointmentInBackground,
 } from "../google/calendar.js";
 import { notifyStaff } from "../crm/notify.js";
+import { sendAppointmentConfirmationToPatient } from "../crm/appointmentMessages.js";
 import { hashPassword, verifyPassword } from "./passwords.js";
 import { createSessionCookie, clearSessionCookie } from "./staffSession.js";
 
@@ -2218,6 +2219,10 @@ apiRouter.post(
       "new_appointment",
       `Novo agendamento: ${patient.name ?? patient.phone} - ${booking.procedureName} em ${booking.label}.`
     );
+    // Agendamento manual (recepcao/medico direto na Agenda) nao passa por
+    // nenhuma conversa - sem isso, so a equipe ficava sabendo e o paciente
+    // nunca recebia confirmacao nenhuma.
+    void sendAppointmentConfirmationToPatient(booking.appointmentId);
     await movePatientToKind(clinic.id, patient.id, "avaliacao_agendada", {
       actorName: req.staff?.name ?? null,
       note: "agendamento criado no painel",
@@ -2389,6 +2394,7 @@ apiRouter.put(
         actorName,
       });
       await freeUpSlot();
+      void sendAppointmentConfirmationToPatient(appointment.id);
     }
 
     res.json(appointment);

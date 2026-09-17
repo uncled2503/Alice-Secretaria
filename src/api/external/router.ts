@@ -6,6 +6,7 @@ import { getFunnelStages } from "../../crm/stages.js";
 import { movePatientToStage, movePatientToKind, movePatientToRecovery } from "../../crm/stageAutomation.js";
 import { notifyStaff } from "../../crm/notify.js";
 import { logActivity } from "../../crm/activity.js";
+import { sendAppointmentConfirmationToPatient } from "../../crm/appointmentMessages.js";
 import { findAvailableSlots, checkSpecificTime, createBooking, professionalsForProcedure, SLOT_REASON_PT } from "../../scheduling/slots.js";
 import { formatInZone, wallClockInZone } from "../../scheduling/time.js";
 import { offerFreedSlotToWaitlist } from "../../scheduling/waitlist.js";
@@ -499,6 +500,7 @@ externalApiRouter.post(
     // agendamento - sem isso, um agendamento feito pela API externa (site
     // proprio, ERP, n8n) nao avisava a equipe nem movia o lead no funil.
     await notifyStaff(c.id, "new_appointment", `Novo agendamento (via API): ${patient.name ?? patient.phone} - ${booking.procedureName} em ${booking.label}.`);
+    void sendAppointmentConfirmationToPatient(booking.appointmentId);
     await movePatientToKind(c.id, patient.id, "avaliacao_agendada", { note: "agendado via API externa" });
     await logActivity({
       clinicId: c.id, patientId: patient.id, type: "appointment_booked", area: "agenda",
@@ -594,6 +596,7 @@ externalApiRouter.patch(
           title: "Agendamento remarcado (API externa)", description: `${patientLabel} — ${updated.procedure.name} agora em ${label}.`, actorName,
         });
         await offerFreedSlotToWaitlist({ clinicId: c.id, procedureId: existing.procedureId, professionalId: existing.professionalId, freedAt: existing.scheduledAt });
+        void sendAppointmentConfirmationToPatient(updated.id);
       }
     }
 
