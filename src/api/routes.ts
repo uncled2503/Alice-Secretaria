@@ -44,6 +44,7 @@ import { answerSiteQuestion, type SiteMessage } from "../ai/siteAssistant.js";
 import { seedLaleblu } from "../maintenance/seedLaleblu.js";
 import { seedHarmonizze } from "../maintenance/seedHarmonizze.js";
 import { seedDrSaulo } from "../maintenance/seedDrSaulo.js";
+import { seedTeste } from "../maintenance/seedTeste.js";
 import {
   googleConfigured,
   googleConfigHint,
@@ -783,6 +784,28 @@ apiRouter.post(
       area: "clinica",
       title: result.created ? "Conta Dr. Saulo criada" : "Configuração da Dr. Saulo reaplicada",
       description: `${c.procedures} procedimentos, ${c.faqs} FAQ, ${c.activeRules} regras, ${c.playbooks} roteiros, ${c.reminders} lembretes.`,
+      actorName: req.staff?.name ?? null,
+    });
+    res.json(result);
+  })
+);
+
+// Cria/reseta a "Clínica Teste (Alice)" - clinica interna, sem cliente real
+// por tras, usada pra testar mudancas de agenda (agendamento simultaneo,
+// ordem de chegada, feriado, bloqueio) direto no painel antes de aplicar em
+// clinica de verdade. Idempotente, pode rodar de novo a qualquer hora pra
+// resetar o cenario. So admin.
+apiRouter.post(
+  "/clinics/seed-teste",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const result = await seedTeste();
+    await logActivity({
+      clinicId: result.clinicId,
+      type: "briefing_applied",
+      area: "clinica",
+      title: result.created ? "Clínica Teste criada" : "Clínica Teste reaplicada",
+      description: "Ambiente interno de testes de agenda/Alice.",
       actorName: req.staff?.name ?? null,
     });
     res.json(result);

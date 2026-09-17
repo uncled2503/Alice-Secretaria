@@ -11,6 +11,7 @@ import { startRenewalJob } from "./reminders/renewal.js";
 import { startBirthdayJob } from "./reminders/birthday.js";
 import { startNpsJob } from "./reminders/nps.js";
 import { startPlanExpiryJob } from "./reminders/planExpiry.js";
+import { startProfessionalBackfillJob } from "./scheduling/professionalBackfillJob.js";
 import { startMetaEventWorker } from "./meta/worker.js";
 import { startLearningJob } from "./ai/learning.js";
 import { startFollowUpJob } from "./crm/followup.js";
@@ -290,6 +291,7 @@ app.listen(port, () => {
   startBroadcastJob();
   startNpsJob();
   startPlanExpiryJob();
+  startProfessionalBackfillJob();
   startMetaEventWorker();
   startLearningJob();
   startLeadSummaryJob();

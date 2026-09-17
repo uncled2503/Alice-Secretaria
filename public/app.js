@@ -5312,6 +5312,26 @@ document.getElementById("btn-seed-harmonizze").addEventListener("click", async (
   }
 });
 
+document.getElementById("btn-seed-teste").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const out = document.getElementById("seed-teste-result");
+  if (!await showConfirm("Criar/resetar a Clínica Teste? É um ambiente interno, sem cliente real - pode rodar de novo a qualquer hora pra resetar o cenário de teste.")) return;
+  btn.disabled = true;
+  out.hidden = true;
+  try {
+    const r = await api("/clinics/seed-teste", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const senha = r.password ? ` · senha: ${r.password}` : "";
+    let txt = `${r.created ? "Clínica Teste criada" : "Clínica Teste resetada"}. Login: ${r.login}${senha}.`;
+    if (Array.isArray(r.notes) && r.notes.length) txt += `\n${r.notes.join("\n")}`;
+    out.textContent = txt;
+    out.hidden = false;
+    await loadClinicsList();
+    await loadClinics();
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 document.getElementById("btn-seed-dr-saulo").addEventListener("click", async (e) => {
   const btn = e.currentTarget;
   const out = document.getElementById("seed-dr-saulo-result");

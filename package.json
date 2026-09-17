@@ -13,6 +13,7 @@
     "seed:laleblu": "npm run build && node dist/maintenance/seedLaleblu.js",
     "seed:harmonizze": "npm run build && node dist/maintenance/seedHarmonizze.js",
     "seed:dr-saulo": "npm run build && node dist/maintenance/seedDrSaulo.js",
+    "seed:teste": "npm run build && node dist/maintenance/seedTeste.js",
     "start": "prisma migrate deploy && node dist/server.js",
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
