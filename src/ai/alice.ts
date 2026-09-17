@@ -206,6 +206,32 @@ async function findProcedure(clinicId: string, name: unknown): Promise<Procedure
   );
 }
 
+// Mensagem de erro quando o procedimento nao bate com nada cadastrado. O
+// modelo as vezes joga o nome de um PROFISSIONAL nesse campo (ex.: paciente
+// so citou "Dra. Fulana", sem dizer qual tratamento) — nesses casos "nao
+// encontramos esse procedimento" confunde o paciente, que nao perguntou por
+// um procedimento. Detecta esse caso e orienta a perguntar o procedimento
+// certo em vez de repetir que "nao existe" algo que o paciente nunca pediu.
+async function procedureNotFoundMessage(clinicId: string, rawName: unknown): Promise<string> {
+  const raw = String(rawName ?? "").trim();
+  const totalProcedures = await prisma.procedure.count({ where: { clinicId } });
+  if (totalProcedures === 0) {
+    return "Esta clinica ainda nao tem procedimentos cadastrados no sistema, entao nao da pra checar disponibilidade automaticamente. Nao invente horario nem diga que nao ha vaga: explique que vai confirmar com a equipe e chame transfer_to_human.";
+  }
+  const rawLower = raw.toLowerCase();
+  const professionals = rawLower
+    ? await prisma.professional.findMany({ where: { clinicId, active: true }, select: { name: true } })
+    : [];
+  const looksLikeProfessional = professionals.some((p) => {
+    const nameLower = p.name.toLowerCase();
+    return nameLower.includes(rawLower) || rawLower.includes(nameLower);
+  });
+  if (looksLikeProfessional) {
+    return `"${raw}" e o nome de um PROFISSIONAL, nao de um procedimento. Nao diga ao paciente que esse "procedimento" nao existe. Em vez disso, pergunte qual procedimento/tratamento ele quer agendar com essa pessoa e so entao chame check_availability de novo com o procedure_name correto.`;
+  }
+  return `Procedimento "${raw}" nao encontrado na clinica. Pergunte ao paciente qual procedimento ele deseja, usando os nomes cadastrados.`;
+}
+
 // Resolve quais profissionais considerar para um procedimento. Se o paciente
 // citou um nome, tenta so ele; senao, todos os que atendem o procedimento
 // (lista vazia = usa a agenda da clinica toda).
@@ -290,7 +316,7 @@ async function runTool(
 
   if (name === "check_availability") {
     const procedure = await findProcedure(clinicId, input.procedure_name);
-    if (!procedure) return `Procedimento "${input.procedure_name}" nao encontrado na clinica.`;
+    if (!procedure) return await procedureNotFoundMessage(clinicId, input.procedure_name);
 
     const professionalIds = await resolveProfessionalIds(clinicId, procedure.id, input.professional_name);
 
@@ -333,7 +359,7 @@ async function runTool(
 
   if (name === "check_specific_time") {
     const procedure = await findProcedure(clinicId, input.procedure_name);
-    if (!procedure) return `Procedimento "${input.procedure_name}" nao encontrado.`;
+    if (!procedure) return await procedureNotFoundMessage(clinicId, input.procedure_name);
 
     const requested = parseRequestedDateTime(input.date, input.time);
     if (!requested) return "Nao entendi a data/hora. Peca ao paciente pra confirmar o dia e o horario.";
@@ -363,7 +389,7 @@ async function runTool(
 
   if (name === "book_appointment") {
     const procedure = await findProcedure(clinicId, input.procedure_name);
-    if (!procedure) return `Procedimento "${input.procedure_name}" nao encontrado.`;
+    if (!procedure) return await procedureNotFoundMessage(clinicId, input.procedure_name);
 
     let professionalId: string | null = input.professional_id ? String(input.professional_id) : null;
     if (!professionalId) {
@@ -808,6 +834,7 @@ Tudo isso SEM quebrar as regras cadastradas: nunca invente preco, estoque ou pra
 - Expediente da clinica: ${workDayLabels || "(nao definido)"}, das ${clinic.workStartHour}h as ${clinic.workEndHour}h. Cada profissional pode ter um expediente proprio - as ferramentas ja consideram isso.
 - Se o paciente citar um dia/hora, chame check_specific_time ANTES de responder. Se estiver livre, confirme com ele e so entao chame book_appointment com o "iso" (e o profissional_id, quando houver) retornado.
 - Se o horario pedido NAO estiver livre, diga com naturalidade que aquele horario nao esta disponivel (ex: "esse horario ja esta ocupado") e ofereca as alternativas retornadas. Se o paciente nao gostar das alternativas e quiser esperar uma vaga, use join_waitlist.
+- "procedure_name" e sempre um TRATAMENTO/PROCEDIMENTO, nunca o nome de um profissional. Se o paciente perguntar por vaga citando so o nome de um profissional ("tem vaga com a Dra. Fulana?"), sem dizer qual procedimento, NAO chame a ferramenta ainda: pergunte primeiro qual procedimento ele quer agendar com essa pessoa.
 - AGENDAR E EM DOIS PASSOS - nunca despeje a agenda inteira de uma vez, vira um paredao de texto:
   1) DIA primeiro: chame check_availability SEM "date" e ofereca os dias que tem vaga ("consigo quarta, quinta ou sexta - qual fica melhor pra voce?"). Nao cite horario ainda.
   2) HORARIO depois: quando ele escolher o dia, chame check_availability COM o "date" daquele dia e ai sim ofereca os horarios livres (se forem muitos, agrupe por periodo: "de manha tenho 9h e 10h, de tarde 14h e 15h").
