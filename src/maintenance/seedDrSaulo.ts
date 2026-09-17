@@ -4,6 +4,7 @@ import { prisma } from "../db/client.js";
 import { hashPassword } from "../api/passwords.js";
 import { seedDefaultRules } from "../ai/rules.js";
 import { getFunnelStages } from "../crm/stages.js";
+import { backfillMissingProfessionalIds } from "./backfillProfessionals.js";
 
 // Configuracao inicial da Clinica Dr. Saulo Silva (medicina de precisao,
 // emagrecimento, performance e longevidade) a partir do manual de experiencia
@@ -372,6 +373,7 @@ export interface SeedDrSauloResult {
   created: boolean;
   password: string | null; // senha inicial - so quando a conta de acesso foi criada agora
   counts: Record<string, number>;
+  backfilledProfessionals: number;
   pending: string[];
 }
 
@@ -621,6 +623,14 @@ export async function seedDrSaulo(): Promise<SeedDrSauloResult> {
 
   await getFunnelStages(clinic.id);
 
+  // Agendamentos antigos sem profissional atribuido bloqueiam a agenda
+  // inteira (regra conservadora, ver backfillProfessionals.ts) - isso
+  // incluia consultas marcadas antes da Aplicação ganhar um profissional
+  // proprio, que continuavam bloqueando a enfermagem mesmo sem nenhuma
+  // relacao real com ela. Corrige a cada seed, sem custo se nao houver nada
+  // pra corrigir.
+  const { updated: backfilledProfessionals } = await backfillMissingProfessionalIds(clinic.id);
+
   const [procedureCount, professionalCount, faqCount, templateCount, ruleCount, playbookCount, reminderCount, followupCount, renewalCount, birthdayCount] = await Promise.all([
     prisma.procedure.count({ where: { clinicId: clinic.id } }),
     prisma.professional.count({ where: { clinicId: clinic.id } }),
@@ -651,6 +661,7 @@ export async function seedDrSaulo(): Promise<SeedDrSauloResult> {
       renewals: renewalCount,
       birthdays: birthdayCount,
     },
+    backfilledProfessionals,
     pending: [
       "número de WhatsApp real da clínica (está com um placeholder; assim que tiver, defina DR_SAULO_WHATSAPP e rode o seed de novo, ou edite direto no painel)",
       "valor da Aplicação e da Reavaliação (cadastradas com duração certa - 15min e 30min - mas sem preço; a Alice vai dizer que confirma com a equipe até chegar o valor)",
