@@ -340,6 +340,14 @@ model Procedure {
   aliases            String?   // outros nomes/formas de pedir, separados por virgula
   resultTimeline     String?   // quando o resultado costuma aparecer
 
+  // true = varios pacientes podem ocupar o MESMO horario com o mesmo
+  // profissional pra esse procedimento (ex.: aplicacao/injetavel atendido
+  // por ordem de chegada, sem hora marcada individual - a clinica so quer
+  // um registro de controle por paciente). Nao conta como conflito de
+  // agenda contra outro agendamento do MESMO procedimento; continua
+  // conflitando normalmente com procedimentos que nao tem essa flag.
+  allowConcurrentBooking Boolean @default(false)
+
   appointments  Appointment[]
   professionals Professional[] @relation("ProfessionalProcedures")
   waitlist      WaitlistEntry[]

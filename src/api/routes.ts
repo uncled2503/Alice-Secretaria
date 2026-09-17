@@ -1139,6 +1139,7 @@ type ProcedureBody = {
   name?: string;
   durationMin?: number;
   description?: string;
+  allowConcurrentBooking?: boolean;
   price?: number | null;
   priceVariable?: boolean;
   offerInstallments?: boolean;
@@ -1156,6 +1157,7 @@ function procedureWriteData(body: ProcedureBody) {
     ...(body.name !== undefined ? { name: body.name } : {}),
     ...(body.durationMin !== undefined ? { durationMin: body.durationMin && body.durationMin > 0 ? body.durationMin : 60 } : {}),
     ...(body.description !== undefined ? { description: body.description || null } : {}),
+    ...(body.allowConcurrentBooking !== undefined ? { allowConcurrentBooking: !!body.allowConcurrentBooking } : {}),
     ...(body.price !== undefined ? { price: body.price === null ? null : Number(body.price) } : {}),
     ...(body.priceVariable !== undefined ? { priceVariable: !!body.priceVariable } : {}),
     ...(body.offerInstallments !== undefined ? { offerInstallments: !!body.offerInstallments } : {}),

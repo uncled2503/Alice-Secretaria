@@ -188,7 +188,7 @@ interface BusyContext {
 // Agendamentos sem profissional atribuido bloqueiam todo mundo (conservador).
 async function loadBusyContext(
   clinicId: string,
-  opts: { professionalId?: string | null; ignoreAppointmentId?: string } = {},
+  opts: { professionalId?: string | null; ignoreAppointmentId?: string; excludeProcedureId?: string } = {},
 ): Promise<BusyContext> {
   const { professionalId } = opts;
 
@@ -198,6 +198,11 @@ async function loadBusyContext(
       status: "confirmed",
       ...(opts.ignoreAppointmentId ? { id: { not: opts.ignoreAppointmentId } } : {}),
       ...(professionalId ? { OR: [{ professionalId }, { professionalId: null }] } : {}),
+      // excludeProcedureId: procedimento "por ordem de chegada" (ex.:
+      // aplicação) - varios pacientes desse MESMO procedimento podem
+      // ocupar o mesmo horario, entao esses agendamentos nao contam como
+      // ocupado. Continuam contando pra qualquer outro procedimento.
+      ...(opts.excludeProcedureId ? { procedureId: { not: opts.excludeProcedureId } } : {}),
     },
     select: { scheduledAt: true, procedure: { select: { durationMin: true } } },
   });
@@ -253,8 +258,10 @@ export async function findAvailableSlots(
   const daysAhead = opts.daysAhead ?? 10;
   const ids = opts.professionalIds ?? [];
 
+  const excludeProcedureId = procedure.allowConcurrentBooking ? procedure.id : undefined;
+
   if (ids.length === 0) {
-    const ctx = await loadBusyContext(clinicId, { professionalId: null });
+    const ctx = await loadBusyContext(clinicId, { professionalId: null, excludeProcedureId });
     return generateSlots({
       hours: clinicHoursOf(clinic),
       durationMin: procedure.durationMin,
@@ -269,7 +276,7 @@ export async function findAvailableSlots(
     ids.map(async (id) => {
       const professional = await prisma.professional.findFirst({ where: { id, clinicId } });
       if (!professional) return [];
-      const ctx = await loadBusyContext(clinicId, { professionalId: id });
+      const ctx = await loadBusyContext(clinicId, { professionalId: id, excludeProcedureId });
       return generateSlots({
         hours: resolveHours(clinic, professional),
         durationMin: procedure.durationMin,
@@ -322,6 +329,7 @@ export async function findAvailableDays(
     new Date(),
     daysAhead,
     500,
+    procedure.allowConcurrentBooking ? procedure.id : undefined,
   );
 
   const byDay = new Map<string, AvailableDay>();
@@ -350,7 +358,15 @@ export async function findAvailableSlotsOnDay(
   // Meio-dia do dia pedido como ancora: generateSlots varre a partir do dia
   // desse instante, entao daysAhead=1 cobre exatamente esse dia.
   const anchor = zonedWallClockToUtc(tz, day.year, day.month, day.day, 12, 0);
-  return findAvailableSlotsFrom(clinicId, procedure.durationMin, opts.professionalIds ?? [], anchor, 1, opts.limit ?? 24);
+  return findAvailableSlotsFrom(
+    clinicId,
+    procedure.durationMin,
+    opts.professionalIds ?? [],
+    anchor,
+    1,
+    opts.limit ?? 24,
+    procedure.allowConcurrentBooking ? procedure.id : undefined,
+  );
 }
 
 export interface SpecificTimeCheck {
@@ -400,7 +416,11 @@ export async function checkSpecificTime(
     // ignoreAppointmentId exclui o proprio agendamento do que conta como
     // "ocupado" - sem isso, remarcar um agendamento pra um horario que toca no
     // horario ATUAL dele mesmo seria recusado por "conflito com ele mesmo".
-    const ctx = await loadBusyContext(clinicId, { professionalId: c.id, ignoreAppointmentId: opts.ignoreAppointmentId });
+    const ctx = await loadBusyContext(clinicId, {
+      professionalId: c.id,
+      ignoreAppointmentId: opts.ignoreAppointmentId,
+      excludeProcedureId: procedure.allowConcurrentBooking ? procedure.id : undefined,
+    });
     const verdict = evaluateSlot({
       startUtc,
       durationMin: procedure.durationMin,
@@ -427,7 +447,8 @@ export async function checkSpecificTime(
   }
 
   const altPro = ids.length ? ids : [];
-  const sameDay = await findAvailableSlotsFrom(clinicId, procedure.durationMin, altPro, startUtc, 1, 3);
+  const excludeProcedureId = procedure.allowConcurrentBooking ? procedure.id : undefined;
+  const sameDay = await findAvailableSlotsFrom(clinicId, procedure.durationMin, altPro, startUtc, 1, 3, excludeProcedureId);
   const laterDays = await findAvailableSlotsFrom(
     clinicId,
     procedure.durationMin,
@@ -435,6 +456,7 @@ export async function checkSpecificTime(
     new Date(startUtc.getTime() + 24 * 3_600_000),
     6,
     3,
+    excludeProcedureId,
   );
   const seen = new Set<string>();
   const alternatives = [...sameDay, ...laterDays]
@@ -467,13 +489,14 @@ async function findAvailableSlotsFrom(
   fromUtc: Date,
   daysAhead: number,
   limit: number,
+  excludeProcedureId?: string,
 ): Promise<Slot[]> {
   const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId } });
   const ids = professionalIds.length ? professionalIds : [null];
   const out: Slot[] = [];
   for (const id of ids) {
     const professional = id ? await prisma.professional.findFirst({ where: { id, clinicId } }) : null;
-    const ctx = await loadBusyContext(clinicId, { professionalId: id });
+    const ctx = await loadBusyContext(clinicId, { professionalId: id, excludeProcedureId });
     out.push(
       ...generateSlots({
         hours: resolveHours(clinic, professional),
@@ -540,6 +563,10 @@ export async function createBooking(params: {
         clinicId,
         status: "confirmed",
         ...(professional ? { OR: [{ professionalId: professional.id }, { professionalId: null }] } : {}),
+        // Procedimento "por ordem de chegada" (allowConcurrentBooking): outros
+        // agendamentos do MESMO procedimento nao contam como ocupado - varios
+        // pacientes podem dividir o mesmo horario de proposito.
+        ...(procedure.allowConcurrentBooking ? { procedureId: { not: procedure.id } } : {}),
       },
       select: { scheduledAt: true, procedure: { select: { durationMin: true } } },
     });

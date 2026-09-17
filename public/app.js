@@ -4427,6 +4427,7 @@ function openProcedureModal(proc) {
   document.getElementById("pr2-name").value = proc?.name || "";
   document.getElementById("pr2-duration").value = proc?.durationMin || 60;
   document.getElementById("pr2-price").value = proc?.price != null ? proc.price.toFixed(2).replace(".", ",") : "";
+  document.getElementById("pr2-allow-concurrent").checked = !!proc?.allowConcurrentBooking;
   document.getElementById("pr2-price-variable").checked = !!proc?.priceVariable;
   document.getElementById("pr2-installments").checked = !!proc?.offerInstallments;
   document.getElementById("pr2-installments-count").value = proc?.maxInstallments || 10;
@@ -4484,6 +4485,7 @@ document.getElementById("procedure-edit-form").addEventListener("submit", async 
   const payload = {
     name: document.getElementById("pr2-name").value.trim(),
     durationMin: Number(document.getElementById("pr2-duration").value),
+    allowConcurrentBooking: document.getElementById("pr2-allow-concurrent").checked,
     price: parseBRLInput(document.getElementById("pr2-price").value),
     priceVariable: document.getElementById("pr2-price-variable").checked,
     offerInstallments,

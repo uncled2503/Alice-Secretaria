@@ -441,6 +441,10 @@ export async function seedDrSaulo(): Promise<SeedDrSauloResult> {
     const data = {
       durationMin: item.durationMin,
       description: item.description,
+      // Aplicação e feita por ordem de chegada (o enfermeiro atende varios
+      // pacientes no mesmo horario) - pedido explicito da recepcionista em
+      // 17/09/2026. Ver allowConcurrentBooking em scheduling/slots.ts.
+      allowConcurrentBooking: item.name === "Aplicação",
       price: item.price,
       priceVariable: item.price === null,
       offerInstallments: true,
