@@ -2345,9 +2345,27 @@ async function fillApptFormSelects() {
   const ps = document.getElementById("ap-procedure");
   ps.innerHTML = "";
   for (const p of procedures) ps.appendChild(el("option", { value: p.id }, [`${p.name} (${p.durationMin}min)`]));
+
   const pf = document.getElementById("ap-professional");
-  pf.innerHTML = '<option value="">Não atribuído</option>';
-  for (const p of professionals) if (p.active) pf.appendChild(el("option", { value: p.id }, [p.name]));
+  const activePros = professionals.filter((p) => p.active);
+  // Mesmo filtro do promptSchedule/openApptEditModal: sem isso, esse form
+  // (o "+ Novo agendamento" da propria aba Agenda) deixava "Nao atribuido"
+  // ou o profissional errado selecionado, e agendar "Aplicação" com o
+  // profissional do medico batia de frente com a agenda dele mesmo quando
+  // a enfermagem estava livre no mesmo horario.
+  const syncProfessionalOptions = () => {
+    const doThisProcedure = activePros.filter((p) => p.procedures.some((proc) => proc.id === ps.value));
+    const list = doThisProcedure.length ? doThisProcedure : activePros;
+    pf.innerHTML = "";
+    if (!doThisProcedure.length) pf.appendChild(el("option", { value: "" }, ["Não atribuído"]));
+    for (const p of list) pf.appendChild(el("option", { value: p.id }, [p.name]));
+    if (doThisProcedure.length === 1) pf.value = doThisProcedure[0].id;
+  };
+  // .onchange (nao addEventListener): esse form e reaberto varias vezes sem
+  // recriar o <select>, entao addEventListener acumularia um handler novo
+  // por abertura.
+  ps.onchange = syncProfessionalOptions;
+  syncProfessionalOptions();
 }
 
 document.getElementById("btn-toggle-appt-form").addEventListener("click", async () => {
