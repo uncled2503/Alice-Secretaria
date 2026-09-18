@@ -454,8 +454,19 @@ export async function seedDiamondClinic(): Promise<SeedDiamondClinicResult> {
   else await prisma.clinicLocation.create({ data: { clinicId: clinic.id, name: "Unidade principal", ...locationData } });
 
   const procedureIds = new Map<string, string>();
+  // So CRIA o que ainda nao existe - nunca sobrescreve um procedimento ja
+  // cadastrado. A clinica edita duracao, descricao, preco, fotos, chave Pix
+  // etc. direto no painel depois do cadastro inicial, e "Aplicar
+  // configuração" pode ser clicado de novo no futuro (ex.: pra aplicar uma
+  // correcao neste seed) - re-rodar NUNCA pode apagar uma edicao manual que
+  // a clinica ja fez. Mesmo principio ja usado pra senha inicial (so aplica
+  // na criacao da conta).
   for (const item of PROCEDURES) {
     const current = await prisma.procedure.findFirst({ where: { clinicId: clinic.id, name: item.name } });
+    if (current) {
+      procedureIds.set(item.name, current.id);
+      continue;
+    }
     const data = {
       name: item.name,
       durationMin: 60, // duracao real nao informada na origem - ver pending
@@ -471,9 +482,7 @@ export async function seedDiamondClinic(): Promise<SeedDiamondClinicResult> {
       aliases: null,
       resultTimeline: null,
     };
-    const procedure = current
-      ? await prisma.procedure.update({ where: { id: current.id }, data })
-      : await prisma.procedure.create({ data: { clinicId: clinic.id, ...data } });
+    const procedure = await prisma.procedure.create({ data: { clinicId: clinic.id, ...data } });
     procedureIds.set(item.name, procedure.id);
   }
 
