@@ -14,6 +14,7 @@
     "seed:harmonizze": "npm run build && node dist/maintenance/seedHarmonizze.js",
     "seed:dr-saulo": "npm run build && node dist/maintenance/seedDrSaulo.js",
     "seed:teste": "npm run build && node dist/maintenance/seedTeste.js",
+    "seed:diamond-clinic": "npm run build && node dist/maintenance/seedDiamondClinic.js",
     "start": "prisma migrate deploy && node dist/server.js",
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",

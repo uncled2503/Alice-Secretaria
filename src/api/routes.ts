@@ -45,6 +45,7 @@ import { seedLaleblu } from "../maintenance/seedLaleblu.js";
 import { seedHarmonizze } from "../maintenance/seedHarmonizze.js";
 import { seedDrSaulo } from "../maintenance/seedDrSaulo.js";
 import { seedTeste } from "../maintenance/seedTeste.js";
+import { seedDiamondClinic } from "../maintenance/seedDiamondClinic.js";
 import {
   googleConfigured,
   googleConfigHint,
@@ -812,6 +813,27 @@ apiRouter.post(
       area: "clinica",
       title: result.created ? "Clínica Teste criada" : "Clínica Teste reaplicada",
       description: "Ambiente interno de testes de agenda/Alice.",
+      actorName: req.staff?.name ?? null,
+    });
+    res.json(result);
+  })
+);
+
+// Cria/atualiza a conta da Diamond Clinic Saude & Beleza (Campinas/SP - Dr.
+// Vitor Rodrigues e Dra. Natieli Rodrigues), migrada de outro sistema de
+// assistente em 18/09/2026. Idempotente. So admin.
+apiRouter.post(
+  "/clinics/seed-diamond-clinic",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const result = await seedDiamondClinic();
+    const c = result.counts;
+    await logActivity({
+      clinicId: result.clinicId,
+      type: "briefing_applied",
+      area: "clinica",
+      title: result.created ? "Conta Diamond Clinic criada" : "Configuração da Diamond Clinic reaplicada",
+      description: `${c.procedures} procedimentos, ${c.professionals} profissionais, ${c.activeRules} regras, ${c.followups} recontatos.`,
       actorName: req.staff?.name ?? null,
     });
     res.json(result);

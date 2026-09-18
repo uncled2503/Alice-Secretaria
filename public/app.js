@@ -5318,6 +5318,27 @@ document.getElementById("btn-seed-harmonizze").addEventListener("click", async (
   }
 });
 
+document.getElementById("btn-seed-diamond-clinic").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const out = document.getElementById("seed-diamond-clinic-result");
+  if (!await showConfirm("Aplicar a configuração da Diamond Clinic? Recria procedimentos, profissionais, mensagens, regras e automações dela pelo que está no código; não mexe em contatos, conversas nem no número de avisos.")) return;
+  btn.disabled = true;
+  out.hidden = true;
+  try {
+    const r = await api("/clinics/seed-diamond-clinic", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const c = r.counts || {};
+    const senha = r.password ? ` · senha: ${r.password}` : "";
+    let txt = `${r.created ? "Conta criada" : "Configuração reaplicada"}. Login: ${r.login}${senha}. ${c.procedures || 0} procedimentos, ${c.professionals || 0} profissionais, ${c.activeRules || 0} regras, ${c.followups || 0} recontatos.`;
+    if (Array.isArray(r.pending) && r.pending.length) txt += `\nPendências pra completar depois: ${r.pending.join("; ")}.`;
+    out.textContent = txt;
+    out.hidden = false;
+    await loadClinicsList();
+    await loadClinics();
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 document.getElementById("btn-seed-teste").addEventListener("click", async (e) => {
   const btn = e.currentTarget;
   const out = document.getElementById("seed-teste-result");
