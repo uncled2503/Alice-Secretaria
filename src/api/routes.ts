@@ -1182,6 +1182,7 @@ apiRouter.get(
     const procedures = await prisma.procedure.findMany({
       where: { clinicId: clinic.id },
       orderBy: { name: "asc" },
+      include: { photos: { orderBy: { order: "asc" } } },
     });
     res.json(procedures);
   })
@@ -1198,10 +1199,14 @@ type ProcedureBody = {
   maxInstallments?: number | null;
   paymentMethods?: string[];
   paymentLink?: string | null;
+  pixKey?: string | null;
   goals?: string;
   benefits?: string;
   aliases?: string;
   resultTimeline?: string;
+  // Substitui TODAS as fotos do procedimento quando enviado (nao acumula) -
+  // mesmo padrao de "set" ja usado pra relacoes many-to-many nesse arquivo.
+  photos?: { dataUrl: string; caption?: string | null }[];
 };
 
 function procedureWriteData(body: ProcedureBody) {
@@ -1216,11 +1221,31 @@ function procedureWriteData(body: ProcedureBody) {
     ...(body.maxInstallments !== undefined ? { maxInstallments: body.maxInstallments === null ? null : Number(body.maxInstallments) } : {}),
     ...(body.paymentMethods !== undefined ? { paymentMethods: body.paymentMethods.join(",") } : {}),
     ...(body.paymentLink !== undefined ? { paymentLink: body.paymentLink || null } : {}),
+    ...(body.pixKey !== undefined ? { pixKey: body.pixKey || null } : {}),
     ...(body.goals !== undefined ? { goals: body.goals || null } : {}),
     ...(body.benefits !== undefined ? { benefits: body.benefits || null } : {}),
     ...(body.aliases !== undefined ? { aliases: body.aliases || null } : {}),
     ...(body.resultTimeline !== undefined ? { resultTimeline: body.resultTimeline || null } : {}),
   };
+}
+
+// Sem isso, um bug no cliente (ou um upload gigante) pode inflar a tabela
+// indefinidamente - cada foto e uma data URI base64 guardada direto no banco,
+// mesmo padrao do photoUrl de Product/Professional.
+const MAX_PROCEDURE_PHOTOS = 12;
+const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
+
+async function replaceProcedurePhotos(procedureId: string, photos: ProcedureBody["photos"]) {
+  if (photos === undefined) return;
+  const valid = photos
+    .filter((p) => typeof p.dataUrl === "string" && p.dataUrl.startsWith("data:image/") && p.dataUrl.length <= MAX_PHOTO_BYTES)
+    .slice(0, MAX_PROCEDURE_PHOTOS);
+  await prisma.procedurePhoto.deleteMany({ where: { procedureId } });
+  if (valid.length) {
+    await prisma.procedurePhoto.createMany({
+      data: valid.map((p, i) => ({ procedureId, dataUrl: p.dataUrl, caption: p.caption || null, order: i })),
+    });
+  }
 }
 
 apiRouter.post(
@@ -1236,8 +1261,10 @@ apiRouter.post(
     const procedure = await prisma.procedure.create({
       data: { clinicId: clinic.id, name: body.name, ...procedureWriteData(body) },
     });
+    await replaceProcedurePhotos(procedure.id, body.photos);
     await logActivity({ clinicId: clinic.id, type: "catalog_added", area: "catalogo", title: "Serviço adicionado", description: procedure.name, actorName: req.staff?.name ?? null });
-    res.json(procedure);
+    const full = await prisma.procedure.findUniqueOrThrow({ where: { id: procedure.id }, include: { photos: { orderBy: { order: "asc" } } } });
+    res.json(full);
   })
 );
 
@@ -1247,10 +1274,13 @@ apiRouter.put(
     const existing = await prisma.procedure.findUniqueOrThrow({ where: { id: req.params.id } });
     if (!assertClinicAccess(req, res, existing.clinicId)) return;
 
-    const procedure = await prisma.procedure.update({
+    const body = req.body as ProcedureBody;
+    await prisma.procedure.update({
       where: { id: req.params.id },
-      data: procedureWriteData(req.body as ProcedureBody),
+      data: procedureWriteData(body),
     });
+    await replaceProcedurePhotos(req.params.id, body.photos);
+    const procedure = await prisma.procedure.findUniqueOrThrow({ where: { id: req.params.id }, include: { photos: { orderBy: { order: "asc" } } } });
     res.json(procedure);
   })
 );

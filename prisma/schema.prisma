@@ -334,6 +334,7 @@ model Procedure {
   maxInstallments    Int?      // ex: 10 -> "10x de R$ X" (calculado a partir de price)
   paymentMethods     String    @default("") // dinheiro,pix,credito,debito separados por virgula
   paymentLink        String?
+  pixKey             String?   // chave pix pro pagamento (sinal/procedimento) - separado do link generico acima
 
   // Contexto pra Alice entender e apresentar o procedimento sem inventar
   // indicacao/beneficio/prazo que a clinica nao cadastrou.
@@ -353,6 +354,20 @@ model Procedure {
   appointments  Appointment[]
   professionals Professional[] @relation("ProfessionalProcedures")
   waitlist      WaitlistEntry[]
+  photos        ProcedurePhoto[]
+}
+
+// Fotos de exemplo (ex.: antes/depois) que a Alice pode enviar quando o
+// paciente aceitar ver resultado ou pedir foto - ver tool send_procedure_photos
+// em ai/alice.ts. Sem fotos cadastradas, a Alice nao promete nem inventa imagem.
+model ProcedurePhoto {
+  id          String    @id @default(cuid())
+  procedureId String
+  procedure   Procedure @relation(fields: [procedureId], references: [id], onDelete: Cascade)
+  dataUrl     String    // data URI (base64) da foto, mesmo padrao do photoUrl de Product/Professional
+  caption     String?   // ex: "Antes", "Depois", "6 meses apos"
+  order       Int       @default(0)
+  createdAt   DateTime  @default(now())
 }
 
 // Diretorio simples de profissionais da clinica (nome, foto, bio, quais

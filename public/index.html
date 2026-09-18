@@ -1630,6 +1630,17 @@
             <label>Link de pagamento
               <input id="pr2-payment-link" type="text" placeholder="https://pag.suaclinica.com/servico" />
             </label>
+            <label>Chave Pix
+              <input id="pr2-pix-key" type="text" placeholder="E-mail, telefone, CPF/CNPJ ou chave aleatória" />
+            </label>
+          </div>
+
+          <div class="modal-section">
+            <div class="section-header-sm">Fotos de exemplo (antes/depois)</div>
+            <p class="hint" style="margin-top:0">A Alice envia essas fotos pro paciente quando ele pede pra ver resultado. Sem foto cadastrada, ela não promete nem inventa imagem.</p>
+            <div id="pr2-photos-grid" class="procedure-photos-grid"></div>
+            <button type="button" id="pr2-photos-add-btn" class="btn-brand btn-brand--secondary">+ Adicionar foto</button>
+            <input type="file" id="pr2-photos-input" accept="image/*" multiple hidden />
           </div>
 
           <div class="modal-actions">

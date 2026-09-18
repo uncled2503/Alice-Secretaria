@@ -13,6 +13,7 @@ import {
 import { offerFreedSlotToWaitlist } from "../scheduling/waitlist.js";
 import { formatInZone, formatDayInZone, formatDateTimeInZone, upcomingWeekdayTable, isoDateInZone, zonedWallClockToUtc } from "../scheduling/time.js";
 import { pushAppointmentInBackground, removeAppointmentInBackground } from "../google/calendar.js";
+import { sendMedia } from "../uazapi/client.js";
 import { getActiveRulesPrompt } from "./rules.js";
 import { getFunnelStages } from "../crm/stages.js";
 import { movePatientToKind, movePatientToStage, movePatientToRecovery } from "../crm/stageAutomation.js";
@@ -124,6 +125,21 @@ const tools: ChatCompletionTool[] = [
           new_time: { type: "string", description: "So para reschedule: HH:MM em 24h." },
         },
         required: ["action"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "send_procedure_photos",
+      description:
+        "Envia pro paciente as fotos de exemplo (ex.: antes/depois) cadastradas pra um procedimento. Chame ANTES de responder quando o paciente aceitar ver resultado ou pedir foto - depois so pergunte se e esse tipo de resultado que ele busca, sem descrever a foto (ele ja esta vendo). Se a ferramenta disser que nao ha fotos cadastradas, nao invente nem prometa: descreva os beneficios reais do procedimento.",
+      parameters: {
+        type: "object",
+        properties: {
+          procedure_name: { type: "string", description: "Nome do procedimento, deve bater com um dos cadastrados na clinica." },
+        },
+        required: ["procedure_name"],
       },
     },
   },
@@ -534,6 +550,32 @@ async function runTool(
     }
 
     return JSON.stringify({ ok: false, motivo: "acao invalida" });
+  }
+
+  if (name === "send_procedure_photos") {
+    const procedure = await findProcedure(clinicId, input.procedure_name);
+    if (!procedure) return await procedureNotFoundMessage(clinicId, input.procedure_name);
+
+    const photos = await prisma.procedurePhoto.findMany({ where: { procedureId: procedure.id }, orderBy: { order: "asc" } });
+    if (photos.length === 0) {
+      return JSON.stringify({
+        enviado: false,
+        motivo: "nenhuma foto cadastrada pra esse procedimento",
+        instrucao: "Nao prometa nem invente foto. Descreva os beneficios reais do procedimento (goals/benefits cadastrados) em vez de enviar imagem.",
+      });
+    }
+
+    const patient = await prisma.patient.findUnique({ where: { id: patientId } });
+    if (!patient) return JSON.stringify({ enviado: false, motivo: "paciente nao encontrado" });
+
+    for (const photo of photos) {
+      await sendMedia(clinicId, patient.phone, { dataUrl: photo.dataUrl, kind: "image", caption: photo.caption ?? undefined });
+    }
+    return JSON.stringify({
+      enviado: true,
+      quantidade: photos.length,
+      instrucao: "As fotos ja foram enviadas nesta mesma resposta. Nao descreva as fotos (o paciente ja esta vendo) - so pergunte se e esse tipo de resultado que ele busca.",
+    });
   }
 
   if (name === "join_waitlist") {

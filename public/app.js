@@ -4421,6 +4421,26 @@ function renderProcedures() {
 document.getElementById("procedures-search").addEventListener("input", renderProcedures);
 document.getElementById("btn-add-procedure").addEventListener("click", () => openProcedureModal(null));
 
+let pendingProcedurePhotos = [];
+
+function renderProcedurePhotosGrid() {
+  const grid = document.getElementById("pr2-photos-grid");
+  grid.innerHTML = "";
+  pendingProcedurePhotos.forEach((photo, i) => {
+    const item = el("div", { class: "procedure-photo-item" }, [
+      el("img", { src: photo.dataUrl }, []),
+      el("button", { type: "button", class: "procedure-photo-remove" }, ["×"]),
+      el("input", { type: "text", placeholder: "Legenda (opcional)", value: photo.caption || "" }, []),
+    ]);
+    item.querySelector(".procedure-photo-remove").addEventListener("click", () => {
+      pendingProcedurePhotos.splice(i, 1);
+      renderProcedurePhotosGrid();
+    });
+    item.querySelector("input").addEventListener("input", (e) => { photo.caption = e.target.value; });
+    grid.appendChild(item);
+  });
+}
+
 function openProcedureModal(proc) {
   document.getElementById("procedure-modal-title").textContent = proc ? "Editar Serviço" : "Adicionar Serviço";
   document.getElementById("pr2-id").value = proc?.id || "";
@@ -4439,6 +4459,10 @@ function openProcedureModal(proc) {
   document.getElementById("pr2-aliases").value = proc?.aliases || "";
   document.getElementById("pr2-timeline").value = proc?.resultTimeline || "";
   document.getElementById("pr2-payment-link").value = proc?.paymentLink || "";
+  document.getElementById("pr2-pix-key").value = proc?.pixKey || "";
+
+  pendingProcedurePhotos = (proc?.photos || []).map((p) => ({ dataUrl: p.dataUrl, caption: p.caption || "" }));
+  renderProcedurePhotosGrid();
 
   const activeMethods = new Set((proc?.paymentMethods || "").split(",").filter(Boolean));
   document.querySelectorAll(".payment-method-btn").forEach((btn) => {
@@ -4470,6 +4494,29 @@ document.querySelectorAll(".payment-method-btn").forEach((btn) => {
   btn.addEventListener("click", () => btn.classList.toggle("active"));
 });
 
+document.getElementById("pr2-photos-add-btn").addEventListener("click", () => document.getElementById("pr2-photos-input").click());
+document.getElementById("pr2-photos-input").addEventListener("change", (e) => {
+  const files = Array.from(e.target.files || []);
+  e.target.value = "";
+  const MAX_PHOTOS = 12;
+  for (const file of files) {
+    if (pendingProcedurePhotos.length >= MAX_PHOTOS) {
+      showError(`Máximo de ${MAX_PHOTOS} fotos por procedimento.`);
+      break;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      showError(`"${file.name}" é maior que 5MB - escolha um arquivo menor.`);
+      continue;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      pendingProcedurePhotos.push({ dataUrl: reader.result, caption: "" });
+      renderProcedurePhotosGrid();
+    };
+    reader.readAsDataURL(file);
+  }
+});
+
 document.getElementById("procedure-delete-btn").addEventListener("click", async () => {
   const id = document.getElementById("pr2-id").value;
   if (!id || !await showConfirm("Remover esse procedimento?")) return;
@@ -4497,6 +4544,8 @@ document.getElementById("procedure-edit-form").addEventListener("submit", async 
     resultTimeline: document.getElementById("pr2-timeline").value.trim(),
     paymentMethods: Array.from(document.querySelectorAll(".payment-method-btn.active")).map((b) => b.dataset.method),
     paymentLink: document.getElementById("pr2-payment-link").value.trim(),
+    pixKey: document.getElementById("pr2-pix-key").value.trim(),
+    photos: pendingProcedurePhotos.map((p) => ({ dataUrl: p.dataUrl, caption: p.caption?.trim() || null })),
   };
   if (!payload.name) return;
 

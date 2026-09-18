@@ -1289,6 +1289,12 @@ td.actions { display: flex; gap: 0.4rem; }
 .procedures-checklist label { flex-direction: row !important; align-items: center; gap: 0.3rem !important; font-size: 0.8rem; }
 .procedures-checklist input { width: auto; }
 
+.procedure-photos-grid { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 0.6rem; }
+.procedure-photo-item { position: relative; width: 96px; }
+.procedure-photo-item img { width: 96px; height: 96px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); display: block; }
+.procedure-photo-item input { width: 96px; margin-top: 0.3rem; font-size: 0.7rem; padding: 0.2rem 0.35rem; }
+.procedure-photo-remove { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; border-radius: 50%; border: none; background: #dc2626; color: #fff; font-size: 0.75rem; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+
 /* --- Auth gate (tela de login que bloqueia o painel inteiro) --- */
 .auth-gate { position: fixed; inset: 0; z-index: 2000; background: var(--bg); display: flex; align-items: center; justify-content: center; padding: 1rem; }
 .auth-gate-card { width: 100%; max-width: 360px; text-align: center; }
