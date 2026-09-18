@@ -4,6 +4,7 @@ import { prisma } from "../db/client.js";
 import { hashPassword } from "../api/passwords.js";
 import { seedDefaultRules } from "../ai/rules.js";
 import { DEFAULT_FUNNEL_STAGES } from "../crm/stages.js";
+import { seedRulesOnce } from "./seedGuard.js";
 
 // ---------------------------------------------------------------------------
 // Configura a conta da Laleblu (loja de roupas e enxoval para bebes e criancas)
@@ -487,75 +488,55 @@ const RULES: { category: string; instruction: string }[] = [
 export interface SeedLalebluResult {
   clinicId: string;
   login: string;
-  password: string;
+  password: string | null; // so tem valor quando a conta foi criada agora
   created: boolean;
-  faqs: number;
-  templates: number;
-  playbooks: number;
-  rules: number;
+  faqsCreated: number;
+  templatesCreated: number;
+  playbooksCreated: number;
+  rulesCreated: number;
 }
 
 // Idempotente. Chamado pelo CLI (npm run seed:laleblu) e pela rota admin
 // POST /clinics/seed-laleblu. NAO fecha a conexao do Prisma (quem chama decide).
 export async function seedLaleblu(): Promise<SeedLalebluResult> {
-  // 1. Conta/tenant Laleblu (chaveada pelo WhatsApp de atendimento)
-  const clinic = await prisma.clinic.upsert({
-    where: { whatsappPhone: WA },
-    update: {
-      name: "Laleblu",
-      businessType: "geral",
-      businessLabel: "loja de roupas e enxoval para bebês e crianças",
-      activityArea: "moda infantil, enxoval de bebê, chá de bebê e presentes",
-      assistantPersona: "team",
-      assistantName: "Alice",
-      allowEmojis: true,
-      timezone: "America/Sao_Paulo",
-      workDays: "1,2,3,4,5",
-      workStartHour: 9,
-      workEndHour: 17,
-      replyDelaySeconds: 10,
-      // notifyPhone NAO entra aqui de proposito: fica como a Laleblu configurou
-      // no painel (pode ser ate o proprio numero conectado - cai na conversa
-      // "Mensagem pra mim" e o eco e ignorado no webhook).
-      notifyEvents: "human_handoff",
-      handoffPhrase: HANDOFF_PHRASE,
-      npsEnabled: false,
-    },
-    create: {
-      name: "Laleblu",
-      whatsappPhone: WA,
-      businessType: "geral",
-      businessLabel: "loja de roupas e enxoval para bebês e crianças",
-      activityArea: "moda infantil, enxoval de bebê, chá de bebê e presentes",
-      assistantPersona: "team",
-      assistantName: "Alice",
-      allowEmojis: true,
-      timezone: "America/Sao_Paulo",
-      workDays: "1,2,3,4,5",
-      workStartHour: 9,
-      workEndHour: 17,
-      replyDelaySeconds: 10,
-      notifyPhone: "",
-      notifyEvents: "human_handoff",
-      handoffPhrase: HANDOFF_PHRASE,
-      plan: "prime",
-    },
-  });
+  // 1. Conta/tenant Laleblu (chaveada pelo WhatsApp de atendimento). So CRIA
+  // quando ainda nao existe - depois disso os dados ficam editaveis em
+  // "Dados da clínica" no painel, e reaplicar o seed nunca pode reverter uma
+  // mudanca feita la (pedido explicito do cliente, 18/09/2026: nenhum
+  // treinamento pode sobrescrever o que ja existe).
+  const clinic =
+    (await prisma.clinic.findUnique({ where: { whatsappPhone: WA } })) ??
+    (await prisma.clinic.create({
+      data: {
+        name: "Laleblu",
+        whatsappPhone: WA,
+        businessType: "geral",
+        businessLabel: "loja de roupas e enxoval para bebês e crianças",
+        activityArea: "moda infantil, enxoval de bebê, chá de bebê e presentes",
+        assistantPersona: "team",
+        assistantName: "Alice",
+        allowEmojis: true,
+        timezone: "America/Sao_Paulo",
+        workDays: "1,2,3,4,5",
+        workStartHour: 9,
+        workEndHour: 17,
+        replyDelaySeconds: 10,
+        notifyPhone: "",
+        notifyEvents: "human_handoff",
+        handoffPhrase: HANDOFF_PHRASE,
+        plan: "prime",
+      },
+    }));
   console.log(`Clinica: ${clinic.name} (${clinic.id}) — businessType=${clinic.businessType}`);
 
-  // 2. Conta de acesso ao painel
-  const passwordHash = hashPassword(PASSWORD);
+  // 2. Conta de acesso ao painel. So define a senha na CRIACAO - re-rodar o
+  // seed nunca pode resetar uma senha que o cliente ja trocou (mesmo
+  // principio das outras clinicas).
   const existingUser = await prisma.staffUser.findUnique({ where: { username: LOGIN } });
   const created = !existingUser;
-  if (existingUser) {
-    await prisma.staffUser.update({
-      where: { username: LOGIN },
-      data: { name: "Laleblu", passwordHash, role: "client", clinicId: clinic.id },
-    });
-    console.log(`Conta atualizada: ${LOGIN}`);
-  } else {
+  if (!existingUser) {
     await prisma.staffUser.create({
-      data: { name: "Laleblu", username: LOGIN, passwordHash, role: "client", clinicId: clinic.id },
+      data: { name: "Laleblu", username: LOGIN, passwordHash: hashPassword(PASSWORD), role: "client", clinicId: clinic.id },
     });
     console.log(`Conta criada: ${LOGIN} / senha ${PASSWORD}`);
   }
@@ -576,41 +557,51 @@ export async function seedLaleblu(): Promise<SeedLalebluResult> {
     console.log("Funil: mantido (já foi editado no painel)");
   }
 
-  // 4. FAQ / mensagens prontas / roteiros — reaplicados do zero
-  await prisma.$transaction([
-    prisma.clinicFaq.deleteMany({ where: { clinicId: clinic.id } }),
-    prisma.messageTemplate.deleteMany({ where: { clinicId: clinic.id } }),
-    prisma.playbook.deleteMany({ where: { clinicId: clinic.id } }),
-    prisma.clinicFaq.createMany({
-      data: FAQS.map((f) => ({ clinicId: clinic.id, question: f.question, answer: f.answer, alternates: f.alternates, exactAnswer: false, active: true })),
-    }),
-    prisma.messageTemplate.createMany({
-      data: TEMPLATES.map((t) => ({ clinicId: clinic.id, name: t.name, body: t.body, mode: t.mode, whenToUse: t.whenToUse, active: true })),
-    }),
-    prisma.playbook.createMany({
-      data: PLAYBOOKS.map((p) => ({ clinicId: clinic.id, name: p.name, scriptType: p.scriptType, triggerText: p.triggerText, goal: p.goal, steps: p.steps.join("\n"), active: true })),
-    }),
-  ]);
-  console.log(`FAQ: ${FAQS.length} · Mensagens prontas: ${TEMPLATES.length} · Roteiros: ${PLAYBOOKS.length}`);
+  // 4. FAQ / mensagens prontas / roteiros — so CRIA o que ainda nao existe.
+  // Antes isso apagava e recriava tudo a cada reaplicacao (era assim que eu
+  // empurrava atualizacao de conteudo); agora, se algo ja foi cadastrado
+  // (por este seed ou editado depois no painel), reaplicar nunca mais apaga
+  // ou reescreve - so preenche o que estiver faltando.
+  let faqsCreated = 0;
+  for (const f of FAQS) {
+    const exists = await prisma.clinicFaq.findFirst({ where: { clinicId: clinic.id, question: f.question } });
+    if (exists) continue;
+    await prisma.clinicFaq.create({ data: { clinicId: clinic.id, question: f.question, answer: f.answer, alternates: f.alternates, exactAnswer: false, active: true } });
+    faqsCreated++;
+  }
+  let templatesCreated = 0;
+  for (const t of TEMPLATES) {
+    const exists = await prisma.messageTemplate.findFirst({ where: { clinicId: clinic.id, name: t.name } });
+    if (exists) continue;
+    await prisma.messageTemplate.create({ data: { clinicId: clinic.id, name: t.name, body: t.body, mode: t.mode, whenToUse: t.whenToUse, active: true } });
+    templatesCreated++;
+  }
+  let playbooksCreated = 0;
+  for (const p of PLAYBOOKS) {
+    const exists = await prisma.playbook.findFirst({ where: { clinicId: clinic.id, name: p.name } });
+    if (exists) continue;
+    await prisma.playbook.create({ data: { clinicId: clinic.id, name: p.name, scriptType: p.scriptType, triggerText: p.triggerText, goal: p.goal, steps: p.steps.join("\n"), active: true } });
+    playbooksCreated++;
+  }
+  console.log(`FAQ: +${faqsCreated} novas (de ${FAQS.length}) · Mensagens prontas: +${templatesCreated} novas (de ${TEMPLATES.length}) · Roteiros: +${playbooksCreated} novos (de ${PLAYBOOKS.length})`);
 
-  // 5. Regras — defaults do balde "varejo" + as específicas da Laleblu
+  // 5. Regras — defaults do balde "varejo" + as específicas da Laleblu. So
+  // roda na primeira vez (nenhuma regra com esse marker ainda existe pra
+  // essa clinica); depois disso o bloco de regras fica intocado.
   const seeded = await seedDefaultRules(clinic.id);
-  await prisma.customRule.deleteMany({ where: { clinicId: clinic.id, rawInput: "seed:laleblu" } });
-  await prisma.customRule.createMany({
-    data: RULES.map((r) => ({ clinicId: clinic.id, category: r.category, rawInput: "seed:laleblu", instruction: r.instruction, clarifyingQuestion: null, status: "active" })),
-  });
-  console.log(`Regras: ${seeded} padrão (varejo) + ${RULES.length} da Laleblu`);
+  const { created: rulesCreated } = await seedRulesOnce(clinic.id, "seed:laleblu", RULES);
+  console.log(`Regras: ${seeded} padrão (varejo) + ${rulesCreated ? RULES.length : 0} da Laleblu${rulesCreated ? "" : " (já existiam, mantidas)"}`);
   console.log("\nPronto. Login: " + LOGIN + " · Senha: " + PASSWORD);
 
   return {
     clinicId: clinic.id,
     login: LOGIN,
-    password: PASSWORD,
+    password: created ? PASSWORD : null,
     created,
-    faqs: FAQS.length,
-    templates: TEMPLATES.length,
-    playbooks: PLAYBOOKS.length,
-    rules: seeded + RULES.length,
+    faqsCreated,
+    templatesCreated,
+    playbooksCreated,
+    rulesCreated: rulesCreated ? RULES.length : 0,
   };
 }
 

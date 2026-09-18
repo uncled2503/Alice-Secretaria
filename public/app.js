@@ -5332,12 +5332,13 @@ document.getElementById("clinic-owner-form").addEventListener("submit", async (e
 document.getElementById("btn-seed-laleblu").addEventListener("click", async (e) => {
   const btn = e.currentTarget;
   const out = document.getElementById("seed-laleblu-result");
-  if (!await showConfirm("Reaplicar o treino da conta Laleblu? Substitui FAQ, mensagens, roteiros e regras dela pelo que está no código; não mexe em contatos, conversas nem no número de avisos.")) return;
+  if (!await showConfirm("Aplicar o treino da conta Laleblu? Preenche FAQ, mensagens, roteiros e regras que ainda não existem; nunca sobrescreve o que já foi cadastrado ou editado no painel, nem mexe em contatos, conversas ou no número de avisos.")) return;
   btn.disabled = true;
   out.hidden = true;
   try {
     const r = await api("/clinics/seed-laleblu", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-    out.textContent = `${r.created ? "Conta criada" : "Treino reaplicado"}. Login: ${r.login} · senha: ${r.password}. ${r.faqs} FAQ, ${r.templates} mensagens, ${r.playbooks} roteiros, ${r.rules} regras.`;
+    const senha = r.password ? ` · senha: ${r.password}` : "";
+    out.textContent = `${r.created ? "Conta criada" : "Treino aplicado"}. Login: ${r.login}${senha}. +${r.faqsCreated} FAQ, +${r.templatesCreated} mensagens, +${r.playbooksCreated} roteiros, +${r.rulesCreated} regras novas.`;
     out.hidden = false;
     await loadClinicsList();
     await loadClinics();

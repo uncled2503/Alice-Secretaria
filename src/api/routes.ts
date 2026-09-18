@@ -744,8 +744,8 @@ apiRouter.post(
       clinicId: result.clinicId,
       type: "briefing_applied",
       area: "clinica",
-      title: result.created ? "Conta Laleblu criada" : "Treino da Laleblu reaplicado",
-      description: `${result.faqs} FAQ, ${result.templates} mensagens prontas, ${result.playbooks} roteiros, ${result.rules} regras.`,
+      title: result.created ? "Conta Laleblu criada" : "Treino da Laleblu aplicado",
+      description: `+${result.faqsCreated} FAQ, +${result.templatesCreated} mensagens prontas, +${result.playbooksCreated} roteiros, +${result.rulesCreated} regras novas.`,
       actorName: req.staff?.name ?? null,
     });
     res.json(result);

@@ -4,6 +4,7 @@ import { prisma } from "../db/client.js";
 import { hashPassword } from "../api/passwords.js";
 import { seedDefaultRules } from "../ai/rules.js";
 import { getFunnelStages } from "../crm/stages.js";
+import { seedRulesOnce } from "./seedGuard.js";
 
 // Configuracao inicial da Harmonizze Clinic a partir do briefing recebido em
 // 03/09/2026. O seed e idempotente: atualiza apenas os registros que ele
@@ -304,21 +305,16 @@ export async function seedHarmonizze(): Promise<SeedHarmonizzeResult> {
     replyDelaySeconds: 10,
   };
 
-  const clinic = existingClinic
-    ? await prisma.clinic.update({ where: { id: existingClinic.id }, data: { ...config, whatsappPhone: WA } })
-    : await prisma.clinic.create({ data: { ...config, whatsappPhone: WA, active: true, plan: "prime" } });
+  // So CRIA a clinica quando ainda nao existe - depois disso, os dados dela
+  // (horario, timezone, persona etc.) sao editaveis em "Dados da clínica" no
+  // painel, e reaplicar o seed nunca pode reverter uma mudanca feita la.
+  const clinic = existingClinic ?? (await prisma.clinic.create({ data: { ...config, whatsappPhone: WA, active: true, plan: "prime" } }));
 
   const existingStaff = await prisma.staffUser.findUnique({ where: { username: LOGIN } });
   if (INITIAL_PASSWORD.length < 10) {
     throw new Error("A senha inicial da Harmonizze precisa ter pelo menos 10 caracteres.");
   }
-  if (existingStaff) {
-    // Nao mexe na senha: pode ter sido trocada pelo cliente.
-    await prisma.staffUser.update({
-      where: { username: LOGIN },
-      data: { name: "Harmonizze Clinic", role: "client", clinicId: clinic.id },
-    });
-  } else {
+  if (!existingStaff) {
     await prisma.staffUser.create({
       data: {
         name: "Harmonizze Clinic",
@@ -346,23 +342,19 @@ export async function seedHarmonizze(): Promise<SeedHarmonizzeResult> {
   ];
   for (const loc of locations) {
     const current = await prisma.clinicLocation.findFirst({ where: { clinicId: clinic.id, name: loc.name } });
-    const data = {
-      city: loc.city,
-      state: loc.state,
-      street: loc.street ?? null,
-      number: loc.number ?? null,
-      complement: loc.complement ?? null,
-      neighborhood: loc.neighborhood ?? null,
-      zipCode: loc.zipCode ?? null,
-      country: "Brasil",
-      timezone: "America/Sao_Paulo",
-      order: loc.order,
-      active: true,
-    };
-    if (current) await prisma.clinicLocation.update({ where: { id: current.id }, data });
-    else await prisma.clinicLocation.create({ data: { clinicId: clinic.id, name: loc.name, ...data } });
+    if (current) continue;
+    await prisma.clinicLocation.create({
+      data: {
+        clinicId: clinic.id, name: loc.name, city: loc.city, state: loc.state,
+        street: loc.street ?? null, number: loc.number ?? null, complement: loc.complement ?? null,
+        neighborhood: loc.neighborhood ?? null, zipCode: loc.zipCode ?? null,
+        country: "Brasil", timezone: "America/Sao_Paulo", order: loc.order, active: true,
+      },
+    });
   }
 
+  // So CRIA procedimento que ainda nao existe - a clinica edita duracao,
+  // preco, descricao etc. direto no painel e isso fica intocado pra sempre.
   const procedureIds = new Map<string, string>();
   for (const item of PROCEDURES) {
     const current =
@@ -370,6 +362,10 @@ export async function seedHarmonizze(): Promise<SeedHarmonizzeResult> {
       (item.name === EVALUATION_NAME
         ? await prisma.procedure.findFirst({ where: { clinicId: clinic.id, name: EVALUATION_OLD_NAME } })
         : null);
+    if (current) {
+      procedureIds.set(item.name, current.id);
+      continue;
+    }
     const detailed = "description" in item;
     const data = {
       name: item.name,
@@ -386,75 +382,62 @@ export async function seedHarmonizze(): Promise<SeedHarmonizzeResult> {
       aliases: item.aliases,
       resultTimeline: detailed ? item.resultTimeline : null,
     };
-    const procedure = current
-      ? await prisma.procedure.update({ where: { id: current.id }, data })
-      : await prisma.procedure.create({ data: { clinicId: clinic.id, ...data } });
+    const procedure = await prisma.procedure.create({ data: { clinicId: clinic.id, ...data } });
     procedureIds.set(item.name, procedure.id);
   }
 
+  // Idem profissional: so cria quem ainda nao existe (achando pelo nome novo
+  // OU antigo, pra nao duplicar depois de uma renomeacao ja feita antes).
   const professional =
     (await prisma.professional.findFirst({ where: { clinicId: clinic.id, name: PROFESSIONAL_NAME } })) ??
     (await prisma.professional.findFirst({ where: { clinicId: clinic.id, name: PROFESSIONAL_OLD_NAME } }));
-  const professionalData = {
-    name: PROFESSIONAL_NAME,
-    bio: "Equipe médica especializada em harmonização facial e cirurgia facial.",
-    instagram: null,
-    active: true,
-    workDays: null,
-    workStartHour: null,
-    workEndHour: null,
-    procedures: { set: [...procedureIds.values()].map((id) => ({ id })) },
-  };
-  if (professional) await prisma.professional.update({ where: { id: professional.id }, data: professionalData });
-  else await prisma.professional.create({
-    data: {
-      clinic: { connect: { id: clinic.id } },
-      name: professionalData.name,
-      bio: professionalData.bio,
-      instagram: professionalData.instagram,
-      active: true,
-      procedures: { connect: [...procedureIds.values()].map((id) => ({ id })) },
-    },
-  });
+  if (!professional) {
+    await prisma.professional.create({
+      data: {
+        clinic: { connect: { id: clinic.id } },
+        name: PROFESSIONAL_NAME,
+        bio: "Equipe médica especializada em harmonização facial e cirurgia facial.",
+        instagram: null,
+        active: true,
+        procedures: { connect: [...procedureIds.values()].map((id) => ({ id })) },
+      },
+    });
+  }
 
   for (const faq of FAQS) {
     const current = await prisma.clinicFaq.findFirst({ where: { clinicId: clinic.id, question: faq.question } });
-    const data = { answer: faq.answer, alternates: faq.alternates, exactAnswer: false, active: true };
-    if (current) await prisma.clinicFaq.update({ where: { id: current.id }, data });
-    else await prisma.clinicFaq.create({ data: { clinicId: clinic.id, question: faq.question, ...data } });
+    if (current) continue;
+    await prisma.clinicFaq.create({
+      data: { clinicId: clinic.id, question: faq.question, answer: faq.answer, alternates: faq.alternates, exactAnswer: false, active: true },
+    });
   }
 
   for (const template of TEMPLATES) {
     const current = await prisma.messageTemplate.findFirst({ where: { clinicId: clinic.id, name: template.name } });
-    const data = { body: template.body, mode: "adapt", whenToUse: template.whenToUse, active: true };
-    if (current) await prisma.messageTemplate.update({ where: { id: current.id }, data });
-    else await prisma.messageTemplate.create({ data: { clinicId: clinic.id, name: template.name, ...data } });
+    if (current) continue;
+    await prisma.messageTemplate.create({
+      data: { clinicId: clinic.id, name: template.name, body: template.body, mode: "adapt", whenToUse: template.whenToUse, active: true },
+    });
   }
 
   await seedDefaultRules(clinic.id);
-  await prisma.customRule.deleteMany({ where: { clinicId: clinic.id, rawInput: SEED_MARKER } });
-  await prisma.customRule.createMany({
-    data: RULES.map((rule) => ({ clinicId: clinic.id, category: rule.category, rawInput: SEED_MARKER, instruction: rule.instruction, status: "active" })),
-  });
+  await seedRulesOnce(clinic.id, SEED_MARKER, RULES);
 
   for (const playbook of PLAYBOOKS) {
     const current = await prisma.playbook.findFirst({ where: { clinicId: clinic.id, name: playbook.name } });
-    const data = {
-      scriptType: playbook.scriptType,
-      triggerText: playbook.triggerText,
-      goal: playbook.goal,
-      steps: playbook.steps.join("\n"),
-      active: true,
-    };
-    if (current) await prisma.playbook.update({ where: { id: current.id }, data });
-    else await prisma.playbook.create({ data: { clinicId: clinic.id, name: playbook.name, ...data } });
+    if (current) continue;
+    await prisma.playbook.create({
+      data: {
+        clinicId: clinic.id, name: playbook.name, scriptType: playbook.scriptType, triggerText: playbook.triggerText,
+        goal: playbook.goal, steps: playbook.steps.join("\n"), active: true,
+      },
+    });
   }
 
   for (const reminder of REMINDERS) {
     const current = await prisma.reminderRule.findFirst({ where: { clinicId: clinic.id, hoursBefore: reminder.hoursBefore } });
-    const data = { message: reminder.message, active: true };
-    if (current) await prisma.reminderRule.update({ where: { id: current.id }, data });
-    else await prisma.reminderRule.create({ data: { clinicId: clinic.id, hoursBefore: reminder.hoursBefore, ...data } });
+    if (current) continue;
+    await prisma.reminderRule.create({ data: { clinicId: clinic.id, hoursBefore: reminder.hoursBefore, message: reminder.message, active: true } });
   }
 
   for (const followup of FOLLOWUPS) {
@@ -463,21 +446,14 @@ export async function seedHarmonizze(): Promise<SeedHarmonizzeResult> {
     const current =
       (await prisma.followUpRule.findFirst({ where: { clinicId: clinic.id, name: followup.name } })) ??
       (await prisma.followUpRule.findFirst({ where: { clinicId: clinic.id, order: followup.order } }));
-    const data = {
-      name: followup.name,
-      order: followup.order,
-      afterDays: followup.afterDays,
-      afterMinutes: 0,
-      message: followup.message,
-      repeatMode: "once",
-      skipIfHumanTakeover: true,
-      skipIfUpcomingAppt: true,
-      sendWindowStart: 9,
-      sendWindowEnd: 18,
-      active: true,
-    };
-    if (current) await prisma.followUpRule.update({ where: { id: current.id }, data });
-    else await prisma.followUpRule.create({ data: { clinicId: clinic.id, ...data } });
+    if (current) continue;
+    await prisma.followUpRule.create({
+      data: {
+        clinicId: clinic.id, name: followup.name, order: followup.order, afterDays: followup.afterDays, afterMinutes: 0,
+        message: followup.message, repeatMode: "once", skipIfHumanTakeover: true, skipIfUpcomingAppt: true,
+        sendWindowStart: 9, sendWindowEnd: 18, active: true,
+      },
+    });
   }
 
   // Pos-procedimento nunca vale pra "Avaliação" (e uma consulta, nao um
@@ -490,41 +466,39 @@ export async function seedHarmonizze(): Promise<SeedHarmonizzeResult> {
   const surgicalIds = SURGICAL_PROCEDURES.map((name) => procedureIds.get(name)).filter((id): id is string => !!id).join(",");
   for (const post of POST_PROCEDURE_MESSAGES) {
     const current = await prisma.postProcedureRule.findFirst({ where: { clinicId: clinic.id, name: post.name } });
-    const data = {
-      message: post.message,
-      intervalValue: post.intervalValue,
-      intervalUnit: post.intervalUnit,
-      onlyIfCompleted: true,
-      procedureIds: post.name.startsWith("Pós-cirúrgico") ? surgicalIds : treatmentIds,
-      active: true,
-    };
-    if (current) await prisma.postProcedureRule.update({ where: { id: current.id }, data });
-    else await prisma.postProcedureRule.create({ data: { clinicId: clinic.id, name: post.name, ...data } });
+    if (current) continue;
+    await prisma.postProcedureRule.create({
+      data: {
+        clinicId: clinic.id, name: post.name, message: post.message, intervalValue: post.intervalValue, intervalUnit: post.intervalUnit,
+        onlyIfCompleted: true, procedureIds: post.name.startsWith("Pós-cirúrgico") ? surgicalIds : treatmentIds, active: true,
+      },
+    });
   }
 
   const botoxId = procedureIds.get("Botox")!;
   const renewalName = "Renovação de toxina - 6 meses";
   const renewal = await prisma.renewalRule.findFirst({ where: { clinicId: clinic.id, name: renewalName } });
-  const renewalData = {
-    message: "Oi, {primeiro_nome}! Já faz um tempo desde o seu {procedimento}. Se quiser reavaliar o resultado com a nossa equipe, posso verificar um horário para você.",
-    intervalValue: 6,
-    intervalUnit: "months",
-    onlyIfCompleted: true,
-    procedureIds: botoxId,
-    active: true,
-  };
-  if (renewal) await prisma.renewalRule.update({ where: { id: renewal.id }, data: renewalData });
-  else await prisma.renewalRule.create({ data: { clinicId: clinic.id, name: renewalName, ...renewalData } });
+  if (!renewal) {
+    await prisma.renewalRule.create({
+      data: {
+        clinicId: clinic.id, name: renewalName,
+        message: "Oi, {primeiro_nome}! Já faz um tempo desde o seu {procedimento}. Se quiser reavaliar o resultado com a nossa equipe, posso verificar um horário para você.",
+        intervalValue: 6, intervalUnit: "months", onlyIfCompleted: true, procedureIds: botoxId, active: true,
+      },
+    });
+  }
 
   const birthdayName = "Aniversário do paciente";
   const birthday = await prisma.birthdayRule.findFirst({ where: { clinicId: clinic.id, name: birthdayName } });
-  const birthdayData = {
-    message: "Feliz aniversário, {primeiro_nome}! A equipe da Harmonizze Clinic deseja um dia muito especial, com saúde e bons momentos 😊",
-    sendHour: 9,
-    active: true,
-  };
-  if (birthday) await prisma.birthdayRule.update({ where: { id: birthday.id }, data: birthdayData });
-  else await prisma.birthdayRule.create({ data: { clinicId: clinic.id, name: birthdayName, ...birthdayData } });
+  if (!birthday) {
+    await prisma.birthdayRule.create({
+      data: {
+        clinicId: clinic.id, name: birthdayName,
+        message: "Feliz aniversário, {primeiro_nome}! A equipe da Harmonizze Clinic deseja um dia muito especial, com saúde e bons momentos 😊",
+        sendHour: 9, active: true,
+      },
+    });
+  }
 
   await getFunnelStages(clinic.id);
 

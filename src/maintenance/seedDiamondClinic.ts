@@ -4,6 +4,7 @@ import { prisma } from "../db/client.js";
 import { hashPassword } from "../api/passwords.js";
 import { seedDefaultRules } from "../ai/rules.js";
 import { getFunnelStages } from "../crm/stages.js";
+import { seedRulesOnce } from "./seedGuard.js";
 
 // Configuracao da Diamond Clinic Saude & Beleza (Campinas/SP - Dr. Vitor
 // Rodrigues e Dra. Natieli Rodrigues), migrada em 18/09/2026 a partir da
@@ -428,30 +429,32 @@ export async function seedDiamondClinic(): Promise<SeedDiamondClinicResult> {
     replyDelaySeconds: 8,
   };
 
-  const clinic = existingClinic
-    ? await prisma.clinic.update({ where: { id: existingClinic.id }, data: { ...config, whatsappPhone: WA } })
-    : await prisma.clinic.create({ data: { ...config, whatsappPhone: WA, active: true, plan: "prime" } });
+  // So CRIA a clinica quando ainda nao existe - depois disso os dados dela
+  // sao editaveis em "Dados da clínica" no painel, e reaplicar o seed nunca
+  // pode reverter uma mudanca feita la.
+  const clinic = existingClinic ?? (await prisma.clinic.create({ data: { ...config, whatsappPhone: WA, active: true, plan: "prime" } }));
 
   const existingStaff = await prisma.staffUser.findUnique({ where: { username: LOGIN } });
   if (INITIAL_PASSWORD.length < 10) {
     throw new Error("A senha inicial da Diamond Clinic precisa ter pelo menos 10 caracteres.");
   }
-  if (existingStaff) {
-    await prisma.staffUser.update({ where: { username: LOGIN }, data: { name: CLINIC_NAME, role: "client", clinicId: clinic.id } });
-  } else {
+  if (!existingStaff) {
     await prisma.staffUser.create({
       data: { name: CLINIC_NAME, username: LOGIN, passwordHash: hashPassword(INITIAL_PASSWORD), role: "client", clinicId: clinic.id },
     });
   }
 
   const currentLocation = await prisma.clinicLocation.findFirst({ where: { clinicId: clinic.id, name: "Unidade principal" } });
-  const locationData = {
-    city: "Campinas", state: "SP", country: "Brasil", timezone: "America/Sao_Paulo",
-    street: "Rua José Vilagelim Neto", number: "29", neighborhood: "Taquaral", zipCode: "13076-280",
-    website: "www.diamondclinicinstitute.com.br", active: true, order: 0,
-  };
-  if (currentLocation) await prisma.clinicLocation.update({ where: { id: currentLocation.id }, data: locationData });
-  else await prisma.clinicLocation.create({ data: { clinicId: clinic.id, name: "Unidade principal", ...locationData } });
+  if (!currentLocation) {
+    await prisma.clinicLocation.create({
+      data: {
+        clinicId: clinic.id, name: "Unidade principal",
+        city: "Campinas", state: "SP", country: "Brasil", timezone: "America/Sao_Paulo",
+        street: "Rua José Vilagelim Neto", number: "29", neighborhood: "Taquaral", zipCode: "13076-280",
+        website: "www.diamondclinicinstitute.com.br", active: true, order: 0,
+      },
+    });
+  }
 
   const procedureIds = new Map<string, string>();
   // So CRIA o que ainda nao existe - nunca sobrescreve um procedimento ja
@@ -486,77 +489,60 @@ export async function seedDiamondClinic(): Promise<SeedDiamondClinicResult> {
     procedureIds.set(item.name, procedure.id);
   }
 
+  // So CRIA profissional que ainda nao existe - bio, Instagram, dias de
+  // trabalho e o vinculo com procedimentos ficam editaveis no painel depois.
   for (const item of PROFESSIONALS) {
     const current = await prisma.professional.findFirst({ where: { clinicId: clinic.id, name: item.name } });
+    if (current) continue;
     const linkedIds = item.procedures.map((name) => {
       const id = procedureIds.get(name);
       if (!id) throw new Error(`Procedimento "${name}" (professional ${item.name}) nao encontrado no PROCEDURES.`);
       return id;
     });
-    const data = {
-      bio: item.bio,
-      instagram: item.instagram,
-      active: true,
-      workDays: item.workDays,
-      workStartHour: null, // herda o intervalo/expediente da clinica (10h-18h, almoco 13h-14h)
-      workEndHour: null,
-      lunchStartHour: null,
-      lunchEndHour: null,
-    };
-    if (current) {
-      await prisma.professional.update({ where: { id: current.id }, data: { ...data, procedures: { set: linkedIds.map((id) => ({ id })) } } });
-    } else {
-      await prisma.professional.create({
-        data: { clinic: { connect: { id: clinic.id } }, name: item.name, ...data, procedures: { connect: linkedIds.map((id) => ({ id })) } },
-      });
-    }
+    await prisma.professional.create({
+      data: {
+        clinic: { connect: { id: clinic.id } }, name: item.name, bio: item.bio, instagram: item.instagram,
+        active: true, workDays: item.workDays, workStartHour: null, workEndHour: null, lunchStartHour: null, lunchEndHour: null,
+        procedures: { connect: linkedIds.map((id) => ({ id })) },
+      },
+    });
   }
 
   await seedDefaultRules(clinic.id);
-  await prisma.customRule.deleteMany({ where: { clinicId: clinic.id, rawInput: SEED_MARKER } });
-  await prisma.customRule.createMany({
-    data: RULES.map((rule) => ({ clinicId: clinic.id, category: rule.category, rawInput: SEED_MARKER, instruction: rule.instruction, status: "active" })),
-  });
+  await seedRulesOnce(clinic.id, SEED_MARKER, RULES);
 
   for (const item of TEMPLATES) {
     const current = await prisma.messageTemplate.findFirst({ where: { clinicId: clinic.id, name: item.name } });
-    const data = { body: item.body, whenToUse: item.whenToUse, mode: "adapt", active: true };
-    if (current) await prisma.messageTemplate.update({ where: { id: current.id }, data });
-    else await prisma.messageTemplate.create({ data: { clinicId: clinic.id, name: item.name, ...data } });
+    if (current) continue;
+    await prisma.messageTemplate.create({
+      data: { clinicId: clinic.id, name: item.name, body: item.body, whenToUse: item.whenToUse, mode: "adapt", active: true },
+    });
   }
 
   for (const followup of FOLLOWUPS) {
     const current =
       (await prisma.followUpRule.findFirst({ where: { clinicId: clinic.id, name: followup.name } })) ??
       (await prisma.followUpRule.findFirst({ where: { clinicId: clinic.id, order: followup.order } }));
-    const data = {
-      name: followup.name,
-      order: followup.order,
-      afterDays: followup.afterDays,
-      afterMinutes: 0,
-      message: followup.message,
-      repeatMode: "once",
-      skipIfHumanTakeover: true,
-      skipIfUpcomingAppt: true,
-      sendWindowStart: 9,
-      sendWindowEnd: 18,
-      active: true,
-    };
-    if (current) await prisma.followUpRule.update({ where: { id: current.id }, data });
-    else await prisma.followUpRule.create({ data: { clinicId: clinic.id, ...data } });
+    if (current) continue;
+    await prisma.followUpRule.create({
+      data: {
+        clinicId: clinic.id, name: followup.name, order: followup.order, afterDays: followup.afterDays, afterMinutes: 0,
+        message: followup.message, repeatMode: "once", skipIfHumanTakeover: true, skipIfUpcomingAppt: true,
+        sendWindowStart: 9, sendWindowEnd: 18, active: true,
+      },
+    });
   }
 
   const postProcedure = await prisma.postProcedureRule.findFirst({ where: { clinicId: clinic.id, name: POST_PROCEDURE.name } });
-  const postProcedureData = {
-    message: POST_PROCEDURE.message,
-    intervalValue: POST_PROCEDURE.intervalValue,
-    intervalUnit: POST_PROCEDURE.intervalUnit,
-    onlyIfCompleted: true,
-    procedureIds: "", // vazio = todos os procedimentos
-    active: true,
-  };
-  if (postProcedure) await prisma.postProcedureRule.update({ where: { id: postProcedure.id }, data: postProcedureData });
-  else await prisma.postProcedureRule.create({ data: { clinicId: clinic.id, name: POST_PROCEDURE.name, ...postProcedureData } });
+  if (!postProcedure) {
+    await prisma.postProcedureRule.create({
+      data: {
+        clinicId: clinic.id, name: POST_PROCEDURE.name, message: POST_PROCEDURE.message,
+        intervalValue: POST_PROCEDURE.intervalValue, intervalUnit: POST_PROCEDURE.intervalUnit,
+        onlyIfCompleted: true, procedureIds: "", active: true,
+      },
+    });
+  }
 
   await getFunnelStages(clinic.id); // funil da Diamond bate 1:1 com o padrao da Alice (label/ordem/cor) - nada a customizar
 
