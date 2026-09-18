@@ -172,6 +172,8 @@ apiRouter.get(
         timezone: true,
         workStartHour: true,
         workEndHour: true,
+        lunchStartHour: true,
+        lunchEndHour: true,
         workDays: true,
         closedOnHolidays: true,
         active: true,
@@ -244,6 +246,8 @@ apiRouter.put(
       timezone?: string;
       workStartHour?: number;
       workEndHour?: number;
+      lunchStartHour?: number | null;
+      lunchEndHour?: number | null;
       workDays?: string;
       closedOnHolidays?: boolean;
       active?: boolean;
@@ -272,7 +276,7 @@ apiRouter.put(
       npsMessage?: string | null;
       googleReviewUrl?: string | null;
     };
-    const { name, whatsappPhone, timezone, workStartHour, workEndHour, workDays, active, notifyPhone, notifyEvents, assistantPersona, assistantPersonaName } = b;
+    const { name, whatsappPhone, timezone, workStartHour, workEndHour, lunchStartHour, lunchEndHour, workDays, active, notifyPhone, notifyEvents, assistantPersona, assistantPersonaName } = b;
 
     // So admin bloqueia/desbloqueia - um cliente nao pode se desbloquear sozinho.
     if (active !== undefined && !requireAdmin(req, res)) return;
@@ -316,6 +320,8 @@ apiRouter.put(
           ...(timezone !== undefined ? { timezone } : {}),
           ...(workStartHour !== undefined ? { workStartHour } : {}),
           ...(workEndHour !== undefined ? { workEndHour } : {}),
+          ...(lunchStartHour !== undefined ? { lunchStartHour } : {}),
+          ...(lunchEndHour !== undefined ? { lunchEndHour } : {}),
           ...(workDays !== undefined ? { workDays } : {}),
           ...(b.closedOnHolidays !== undefined ? { closedOnHolidays: b.closedOnHolidays } : {}),
           ...(active !== undefined ? { active } : {}),
@@ -1335,7 +1341,7 @@ apiRouter.get(
 apiRouter.post(
   "/professionals",
   asyncRoute(async (req, res) => {
-    const { name, instagram, bio, color, photoUrl, procedureIds, workDays, workStartHour, workEndHour } = req.body as {
+    const { name, instagram, bio, color, photoUrl, procedureIds, workDays, workStartHour, workEndHour, lunchStartHour, lunchEndHour } = req.body as {
       name?: string;
       instagram?: string;
       bio?: string;
@@ -1345,6 +1351,8 @@ apiRouter.post(
       workDays?: string | null;
       workStartHour?: number | null;
       workEndHour?: number | null;
+      lunchStartHour?: number | null;
+      lunchEndHour?: number | null;
     };
     if (!name) {
       res.status(400).json({ error: "name obrigatorio" });
@@ -1363,6 +1371,8 @@ apiRouter.post(
         workDays: workDays || null,
         workStartHour: workStartHour ?? null,
         workEndHour: workEndHour ?? null,
+        lunchStartHour: lunchStartHour ?? null,
+        lunchEndHour: lunchEndHour ?? null,
         ...(procedureIds ? { procedures: { connect: procedureIds.map((id) => ({ id })) } } : {}),
       },
       include: { procedures: { select: { id: true, name: true } } },
@@ -1377,7 +1387,7 @@ apiRouter.put(
     const existing = await prisma.professional.findUniqueOrThrow({ where: { id: req.params.id } });
     if (!assertClinicAccess(req, res, existing.clinicId)) return;
 
-    const { name, instagram, bio, color, photoUrl, active, procedureIds, workDays, workStartHour, workEndHour } = req.body as {
+    const { name, instagram, bio, color, photoUrl, active, procedureIds, workDays, workStartHour, workEndHour, lunchStartHour, lunchEndHour } = req.body as {
       name?: string;
       instagram?: string;
       bio?: string;
@@ -1388,6 +1398,8 @@ apiRouter.put(
       workDays?: string | null;
       workStartHour?: number | null;
       workEndHour?: number | null;
+      lunchStartHour?: number | null;
+      lunchEndHour?: number | null;
     };
 
     const professional = await prisma.professional.update({
@@ -1402,6 +1414,8 @@ apiRouter.put(
         ...(workDays !== undefined ? { workDays: workDays || null } : {}),
         ...(workStartHour !== undefined ? { workStartHour: workStartHour ?? null } : {}),
         ...(workEndHour !== undefined ? { workEndHour: workEndHour ?? null } : {}),
+        ...(lunchStartHour !== undefined ? { lunchStartHour: lunchStartHour ?? null } : {}),
+        ...(lunchEndHour !== undefined ? { lunchEndHour: lunchEndHour ?? null } : {}),
         ...(procedureIds !== undefined ? { procedures: { set: procedureIds.map((id) => ({ id })) } } : {}),
       },
       include: { procedures: { select: { id: true, name: true } } },

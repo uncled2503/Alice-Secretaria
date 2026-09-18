@@ -4708,6 +4708,8 @@ async function openProfessionalModal(prof) {
   document.getElementById("pf-active").checked = prof ? !!prof.active : true;
   document.getElementById("pf-start-hour").value = prof?.workStartHour ?? "";
   document.getElementById("pf-end-hour").value = prof?.workEndHour ?? "";
+  document.getElementById("pf-lunch-start-hour").value = prof?.lunchStartHour ?? "";
+  document.getElementById("pf-lunch-end-hour").value = prof?.lunchEndHour ?? "";
   const profDays = new Set((prof?.workDays || "").split(",").filter(Boolean));
   document.querySelectorAll("#pf-workdays input").forEach((c) => { c.checked = profDays.has(c.value); });
   pendingProfessionalPhoto = prof?.photoUrl || null;
@@ -4778,6 +4780,8 @@ document.getElementById("professional-form").addEventListener("submit", async (e
   const activeColor = document.querySelector("#pf-color-grid .color-swatch.active");
   const startHour = document.getElementById("pf-start-hour").value;
   const endHour = document.getElementById("pf-end-hour").value;
+  const lunchStartHour = document.getElementById("pf-lunch-start-hour").value;
+  const lunchEndHour = document.getElementById("pf-lunch-end-hour").value;
   const workDays = Array.from(document.querySelectorAll("#pf-workdays input:checked")).map((c) => c.value).join(",");
   const payload = {
     name: document.getElementById("pf-name").value.trim(),
@@ -4789,6 +4793,8 @@ document.getElementById("professional-form").addEventListener("submit", async (e
     workDays: workDays || null,
     workStartHour: startHour === "" ? null : Number(startHour),
     workEndHour: endHour === "" ? null : Number(endHour),
+    lunchStartHour: lunchStartHour === "" ? null : Number(lunchStartHour),
+    lunchEndHour: lunchEndHour === "" ? null : Number(lunchEndHour),
     procedureIds: Array.from(document.querySelectorAll("#pf-procedures-list input:checked")).map((c) => c.value),
   };
   if (!payload.name) return;
@@ -5438,6 +5444,8 @@ function loadClinicDataForm() {
   document.getElementById("cd-timezone").value = clinic.timezone ?? "America/Sao_Paulo";
   document.getElementById("cd-start-hour").value = clinic.workStartHour ?? 9;
   document.getElementById("cd-end-hour").value = clinic.workEndHour ?? 19;
+  document.getElementById("cd-lunch-start-hour").value = clinic.lunchStartHour ?? "";
+  document.getElementById("cd-lunch-end-hour").value = clinic.lunchEndHour ?? "";
 
   const workDays = (clinic.workDays ?? "1,2,3,4,5,6").split(",");
   document.querySelectorAll("#cd-workdays input[type=checkbox]").forEach((box) => {
@@ -5487,6 +5495,10 @@ document.getElementById("clinic-data-form").addEventListener("submit", async (e)
   const timezone = document.getElementById("cd-timezone").value.trim();
   const workStartHour = Number(document.getElementById("cd-start-hour").value);
   const workEndHour = Number(document.getElementById("cd-end-hour").value);
+  const lunchStartRaw = document.getElementById("cd-lunch-start-hour").value;
+  const lunchEndRaw = document.getElementById("cd-lunch-end-hour").value;
+  const lunchStartHour = lunchStartRaw === "" ? null : Number(lunchStartRaw);
+  const lunchEndHour = lunchEndRaw === "" ? null : Number(lunchEndRaw);
   const workDays = Array.from(document.querySelectorAll("#cd-workdays input[type=checkbox]:checked"))
     .map((box) => box.value)
     .join(",");
@@ -5502,7 +5514,7 @@ document.getElementById("clinic-data-form").addEventListener("submit", async (e)
   await api(`/clinics/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, whatsappPhone, timezone, workStartHour, workEndHour, workDays, closedOnHolidays, notifyPhone, notifyEvents, assistantPersona, assistantPersonaName }),
+    body: JSON.stringify({ name, whatsappPhone, timezone, workStartHour, workEndHour, lunchStartHour, lunchEndHour, workDays, closedOnHolidays, notifyPhone, notifyEvents, assistantPersona, assistantPersonaName }),
   });
 
   await loadClinics();

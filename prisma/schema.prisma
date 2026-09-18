@@ -17,6 +17,8 @@ model Clinic {
   timezone      String    @default("America/Sao_Paulo")
   workStartHour Int       @default(9)
   workEndHour   Int       @default(19)
+  lunchStartHour Int?     // intervalo (ex.: almoço) dentro do expediente - null = sem pausa, atende direto
+  lunchEndHour   Int?
   workDays      String    @default("1,2,3,4,5,6") // dias da semana com expediente (0=domingo..6=sabado), separados por virgula
   closedOnHolidays Boolean @default(false) // fecha automaticamente nos feriados nacionais (data fixa + Sexta-feira Santa) - Carnaval/Corpus Christi ficam de fora (ponto facultativo, nao feriado por lei); ver src/scheduling/holidays.ts
   active        Boolean   @default(true) // false = bloqueada temporariamente (ex: inadimplencia) - contas client dessa clinica nao conseguem logar nem usar a API
@@ -370,6 +372,8 @@ model Professional {
   workDays      String? // dias de atendimento (0=domingo..6=sabado), separados por virgula
   workStartHour Int?
   workEndHour   Int?
+  lunchStartHour Int? // sobrescreve o intervalo da clinica pra esse profissional; null = herda
+  lunchEndHour   Int?
   createdAt DateTime @default(now())
 
   procedures     Procedure[]   @relation("ProfessionalProcedures")

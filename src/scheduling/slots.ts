@@ -20,11 +20,13 @@ export interface ClinicHours {
   timezone: string;
   workStartHour: number;
   workEndHour: number;
+  lunchStartHour: number | null;
+  lunchEndHour: number | null;
   workDays: Set<number>; // 0=domingo .. 6=sabado
   closedOnHolidays: boolean;
 }
 
-export type SlotReason = "past" | "closed_day" | "outside_hours" | "conflict" | "blocked" | "holiday";
+export type SlotReason = "past" | "closed_day" | "outside_hours" | "lunch_break" | "conflict" | "blocked" | "holiday";
 export type SlotVerdict = { ok: true } | { ok: false; reason: SlotReason };
 
 // Texto em portugues de cada motivo de recusa - fonte unica usada pela Alice,
@@ -34,6 +36,7 @@ export const SLOT_REASON_PT: Record<SlotReason | "procedure_not_found" | "invali
   past: "esse horário já passou",
   closed_day: "a clínica não atende nesse dia da semana",
   outside_hours: "esse horário está fora do expediente da clínica",
+  lunch_break: "esse horário cai no intervalo (ex.: almoço) da clínica",
   conflict: "já tem outro paciente marcado nesse horário",
   blocked: "a agenda está bloqueada nesse horário (folga/feriado)",
   holiday: "esse dia é feriado nacional",
@@ -45,6 +48,8 @@ interface HoursSource {
   timezone: string;
   workStartHour: number;
   workEndHour: number;
+  lunchStartHour?: number | null;
+  lunchEndHour?: number | null;
   workDays: string;
   closedOnHolidays?: boolean;
 }
@@ -63,6 +68,8 @@ export function clinicHoursOf(clinic: HoursSource): ClinicHours {
     timezone: clinic.timezone || "America/Sao_Paulo",
     workStartHour: clinic.workStartHour,
     workEndHour: clinic.workEndHour,
+    lunchStartHour: clinic.lunchStartHour ?? null,
+    lunchEndHour: clinic.lunchEndHour ?? null,
     workDays: parseWorkDays(clinic.workDays),
     closedOnHolidays: clinic.closedOnHolidays ?? false,
   };
@@ -73,7 +80,13 @@ export function clinicHoursOf(clinic: HoursSource): ClinicHours {
 // clinica (nao existe "feriado so pra um profissional").
 export function resolveHours(
   clinic: HoursSource,
-  professional?: { workDays: string | null; workStartHour: number | null; workEndHour: number | null } | null,
+  professional?: {
+    workDays: string | null;
+    workStartHour: number | null;
+    workEndHour: number | null;
+    lunchStartHour?: number | null;
+    lunchEndHour?: number | null;
+  } | null,
 ): ClinicHours {
   const base = clinicHoursOf(clinic);
   if (!professional) return base;
@@ -81,6 +94,8 @@ export function resolveHours(
     timezone: base.timezone,
     workStartHour: professional.workStartHour ?? base.workStartHour,
     workEndHour: professional.workEndHour ?? base.workEndHour,
+    lunchStartHour: professional.lunchStartHour ?? base.lunchStartHour,
+    lunchEndHour: professional.lunchEndHour ?? base.lunchEndHour,
     workDays: professional.workDays ? parseWorkDays(professional.workDays) : base.workDays,
     closedOnHolidays: base.closedOnHolidays,
   };
@@ -118,8 +133,16 @@ export function evaluateSlot(params: {
     if (hours.closedOnHolidays && nationalHolidayOn(wc.year, wc.month, wc.day)) return { ok: false, reason: "holiday" };
 
     const startMinutes = wc.hour * 60 + wc.minute;
-    if (startMinutes < hours.workStartHour * 60 || startMinutes + durationMin > hours.workEndHour * 60) {
+    const endMinutes = startMinutes + durationMin;
+    if (startMinutes < hours.workStartHour * 60 || endMinutes > hours.workEndHour * 60) {
       return { ok: false, reason: "outside_hours" };
+    }
+    if (hours.lunchStartHour != null && hours.lunchEndHour != null) {
+      const lunchStart = hours.lunchStartHour * 60;
+      const lunchEnd = hours.lunchEndHour * 60;
+      if (startMinutes < lunchEnd && endMinutes > lunchStart) {
+        return { ok: false, reason: "lunch_break" };
+      }
     }
   }
 
