@@ -32,7 +32,8 @@ import { encryptSecret, decryptSecret, maskToken, encryptionAvailable } from "..
 import { testCapiConnection } from "../meta/capi.js";
 import { enqueueTestLead, enqueueSchedule, META_MAX_ATTEMPTS } from "../meta/events.js";
 import { retryMetaEvent } from "../meta/worker.js";
-import { createRuleDraft, RULE_CATEGORIES, seedDefaultRules, reseedRulesForProfile } from "../ai/rules.js";
+import { RULE_CATEGORIES, seedDefaultRules, reseedRulesForProfile } from "../ai/rules.js";
+import { createTeachingSuggestion, approveTeachingSuggestion } from "../ai/teach.js";
 import { BRIEFING_TEMPLATE, parseBriefing, applyBriefing, BriefingPlanSchema } from "../ai/briefing.js";
 import { runLearningJob, approveInsight, rejectInsight } from "../ai/learning.js";
 import { ensureManualTakeover } from "../ai/alice.js";
@@ -3778,24 +3779,6 @@ apiRouter.post(
   })
 );
 
-// Recebe o texto livre do admin, chama a IA (fora do caminho de conversa com
-// paciente, entao um pouco de latencia aqui nao afeta ninguem) e devolve o
-// rascunho: ou uma regra pronta pra aprovar, ou uma pergunta de esclarecimento.
-apiRouter.post(
-  "/rules",
-  asyncRoute(async (req, res) => {
-    const { text } = req.body as { text?: string };
-    if (!text?.trim()) {
-      res.status(400).json({ error: "text obrigatorio" });
-      return;
-    }
-
-    const clinic = await getClinic(req);
-    const rule = await createRuleDraft(clinic.id, text.trim());
-    res.json(rule);
-  })
-);
-
 apiRouter.post(
   "/rules/:id/approve",
   asyncRoute(async (req, res) => {
@@ -3853,6 +3836,62 @@ apiRouter.delete(
     if (!assertClinicAccess(req, res, rule.clinicId)) return;
 
     await prisma.customRule.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  })
+);
+
+// Caixa unica "O que voce quer ensinar pra Alice hoje?": recebe o texto
+// livre, chama a IA (fora do caminho de conversa com paciente, entao a
+// latencia aqui nao afeta ninguem) pra decidir o destino (regra/roteiro/
+// mensagem/FAQ) e devolve a sugestao pendente ou uma pergunta de esclarecimento.
+apiRouter.post(
+  "/teach-alice",
+  asyncRoute(async (req, res) => {
+    const { text } = req.body as { text?: string };
+    if (!text?.trim()) {
+      res.status(400).json({ error: "text obrigatorio" });
+      return;
+    }
+    const clinic = await getClinic(req);
+    const suggestion = await createTeachingSuggestion(clinic.id, text.trim());
+    res.json(suggestion);
+  })
+);
+
+apiRouter.get(
+  "/teach-alice",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const suggestions = await prisma.teachingSuggestion.findMany({
+      where: { clinicId: clinic.id, status: { in: ["draft", "needs_clarification"] } },
+      orderBy: { createdAt: "desc" },
+    });
+    res.json(
+      suggestions.map((s) => ({ ...s, payload: s.payloadJson ? JSON.parse(s.payloadJson) : null }))
+    );
+  })
+);
+
+apiRouter.post(
+  "/teach-alice/:id/approve",
+  asyncRoute(async (req, res) => {
+    const suggestion = await prisma.teachingSuggestion.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, suggestion.clinicId)) return;
+    if (suggestion.status !== "draft") {
+      res.status(400).json({ error: "so da pra aprovar sugestoes em rascunho" });
+      return;
+    }
+    const updated = await approveTeachingSuggestion(req.params.id);
+    res.json(updated);
+  })
+);
+
+apiRouter.delete(
+  "/teach-alice/:id",
+  asyncRoute(async (req, res) => {
+    const suggestion = await prisma.teachingSuggestion.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, suggestion.clinicId)) return;
+    await prisma.teachingSuggestion.delete({ where: { id: req.params.id } });
     res.json({ ok: true });
   })
 );

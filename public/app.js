@@ -3142,7 +3142,9 @@ document.getElementById("activity-more").addEventListener("click", () => loadAct
 let RULE_CATEGORY_LABELS = {};
 let RULE_CATEGORY_LIST = [];
 let allCustomRules = [];
+let allTeachingSuggestions = [];
 let ruleCatFilter = "";
+const TEACH_TARGET_LABELS = { rule: "Regra", playbook: "Roteiro", template: "Mensagem pronta", faq: "FAQ" };
 
 // --- Sub-abas ---
 document.getElementById("rules-tabs").addEventListener("click", (e) => {
@@ -3164,8 +3166,20 @@ async function ensureRuleCategories() {
 // --- Regras globais ---
 async function loadRules() {
   await ensureRuleCategories();
-  allCustomRules = await api("/rules");
+  [allCustomRules, allTeachingSuggestions] = await Promise.all([api("/rules"), api("/teach-alice")]);
   renderRules();
+}
+
+function teachSuggestionPreview(s) {
+  const p = s.payload || {};
+  if (s.targetType === "rule") return `${RULE_CATEGORY_LABELS[p.category] ?? p.category}: ${p.instruction ?? ""}`;
+  if (s.targetType === "playbook") {
+    const steps = Array.isArray(p.steps) ? p.steps : [];
+    return `"${p.name ?? ""}" — ${steps.map((st, i) => `${i + 1}. ${st}`).join(" ")}`;
+  }
+  if (s.targetType === "template") return `"${p.name ?? ""}": ${p.body ?? ""}`;
+  if (s.targetType === "faq") return `P: ${p.question ?? ""} — R: ${p.answer ?? ""}`;
+  return JSON.stringify(p);
 }
 
 function renderRules() {
@@ -3176,7 +3190,6 @@ function renderRules() {
 
   const search = document.getElementById("rules-search").value.trim().toLowerCase();
   const active = allCustomRules.filter((r) => r.status === "active");
-  const pending = allCustomRules.filter((r) => r.status !== "active");
 
   document.getElementById("rules-active-count").textContent = `(${active.length})`;
 
@@ -3194,23 +3207,28 @@ function renderRules() {
     if (n) catBox.appendChild(mkCatBtn(c.id, `${c.label} (${n})`));
   }
 
-  // pendentes (aparecem em Início)
-  for (const rule of pending) {
-    const isQuestion = rule.status === "needs_clarification";
+  // pendentes (aparecem em Início) - a IA ja decidiu o destino (regra,
+  // roteiro, mensagem pronta ou FAQ); aqui so mostra a previa certa pra
+  // cada tipo e aprova/descarta.
+  for (const s of allTeachingSuggestions) {
+    const isQuestion = s.status === "needs_clarification";
     const discardBtn = el("button", { class: "btn-brand btn-brand--secondary btn-brand--sm" }, ["Descartar"]);
-    discardBtn.addEventListener("click", async () => { await api(`/rules/${rule.id}`, { method: "DELETE" }); await loadRules(); });
+    discardBtn.addEventListener("click", async () => { await api(`/teach-alice/${s.id}`, { method: "DELETE" }); await loadRules(); });
     const children = [
-      el("div", { class: "category" }, [isQuestion ? "Precisa da sua atenção" : "Sugestão pendente"]),
-      el("div", { class: "raw" }, [`Você disse: "${rule.rawInput}"`]),
+      el("div", { class: "category" }, [isQuestion ? "Precisa da sua atenção" : `Sugestão pendente · ${TEACH_TARGET_LABELS[s.targetType] ?? s.targetType}`]),
+      el("div", { class: "raw" }, [`Você disse: "${s.rawInput}"`]),
     ];
     if (isQuestion) {
-      children.push(el("div", { class: "question" }, [rule.clarifyingQuestion]));
+      children.push(el("div", { class: "question" }, [s.clarifyingQuestion]));
       children.push(el("div", { class: "hint" }, ["Descreva de novo lá em cima, já respondendo essa pergunta."]));
       children.push(el("div", { class: "actions" }, [discardBtn]));
     } else {
       const approveBtn = el("button", { class: "btn-brand btn-brand--primary btn-brand--sm" }, ["Aprovar"]);
-      approveBtn.addEventListener("click", async () => { await api(`/rules/${rule.id}/approve`, { method: "POST" }); await loadRules(); });
-      children.push(el("div", { class: "instruction" }, [`${RULE_CATEGORY_LABELS[rule.category] ?? rule.category}: ${rule.instruction}`]));
+      approveBtn.addEventListener("click", async () => {
+        await api(`/teach-alice/${s.id}/approve`, { method: "POST" });
+        await Promise.all([loadRules(), loadTemplates(), loadPlaybooks(), loadFaqs()]);
+      });
+      children.push(el("div", { class: "instruction" }, [teachSuggestionPreview(s)]));
       children.push(el("div", { class: "actions" }, [approveBtn, discardBtn]));
     }
     pendingBox.appendChild(el("div", { class: "rule-card pending" }, children));
@@ -3261,7 +3279,7 @@ document.getElementById("rule-form").addEventListener("submit", async (e) => {
   submitBtn.textContent = "Pensando...";
   submitBtn.disabled = true;
   try {
-    await api("/rules", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+    await api("/teach-alice", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
     textArea.value = "";
     await loadRules();
   } finally {
@@ -6800,7 +6818,7 @@ const TOUR_STEPS = [
   { section: "Agenda", tab: "settings", sub: "blocks", target: "#sub-blocks", title: "Bloqueios de agenda", desc: "Feriado, folga de um profissional, almoço, congresso, manutenção de equipamento. A Alice não oferece nem aceita agendamento nos períodos bloqueados. Pode bloquear a clínica inteira ou só um profissional." },
   { section: "Agenda", tab: "settings", sub: "waitlist", target: "#sub-waitlist", title: "Lista de espera", desc: "Quando o paciente pede um horário lotado e topa esperar, a Alice o coloca aqui. Se abrir vaga por cancelamento, ela avisa automaticamente o primeiro da fila compatível (mesmo procedimento e, quando faz sentido, mesmo profissional)." },
 
-  { section: "Inteligência da Alice", tab: "settings", sub: "rules", rt: "home", target: "#rule-form", title: "Ensinar a Alice em uma frase", desc: "A forma mais rápida de ajustar o comportamento: escreva o que você quer (\"nunca passe preço de preenchimento antes da avaliação\"), a Alice entende, classifica e monta a regra, e você só revisa e aprova. As sugestões pendentes aparecem logo abaixo do campo." },
+  { section: "Inteligência da Alice", tab: "settings", sub: "rules", rt: "home", target: "#rule-form", title: "Ensinar a Alice em uma frase", desc: "A forma mais rápida de ajustar o comportamento: escreva o que você quer (\"nunca passe preço de preenchimento antes da avaliação\"), a Alice entende, decide se isso é uma regra, um roteiro, uma mensagem pronta ou uma FAQ, e monta tudo — você só revisa e aprova. As sugestões pendentes aparecem logo abaixo do campo." },
   { section: "Inteligência da Alice", tab: "settings", sub: "rules", rt: "global", target: "#rt-global", title: "Regras globais", desc: "O que a Alice deve respeitar em toda conversa: tom de voz, política de preço, quando chamar a equipe, o que nunca fazer. Já vêm algumas recomendadas prontas — o botão \"Restaurar recomendadas\" traz elas de volta caso você apague sem querer." },
   { section: "Inteligência da Alice", tab: "settings", sub: "rules", rt: "templates", target: "#rt-templates", title: "Mensagens prontas", desc: "Textos que a Alice reaproveita no atendimento (boas-vindas, confirmação, orientações). Você escolhe se ela pode adaptar o texto ao contexto ou se deve enviar exatamente como está. Aceita variáveis como {primeiro_nome}." },
   { section: "Inteligência da Alice", tab: "settings", sub: "rules", rt: "faq", target: "#rt-faq", title: "FAQ da clínica", desc: "Perguntas operacionais e suas respostas oficiais: estacionamento, acesso, documentos, políticas. Preço, agenda e catálogo continuam vindo das fontes oficiais — a FAQ cobre o resto." },

@@ -97,6 +97,7 @@ model Clinic {
   messageTemplates MessageTemplate[]
   faqs          ClinicFaq[]
   playbooks     Playbook[]
+  teachingSuggestions TeachingSuggestion[]
   scheduleBlocks ScheduleBlock[]
   waitlist       WaitlistEntry[]
   tags           Tag[]
@@ -233,6 +234,22 @@ model Playbook {
   steps       String   @default("") // um passo por linha
   active      Boolean  @default(true)
   createdAt   DateTime @default(now())
+}
+
+// Caixa de entrada unica do "O que voce quer ensinar pra Alice hoje?": o
+// admin digita em texto livre, uma IA decide o DESTINO certo (regra, roteiro,
+// mensagem pronta ou FAQ) e monta o conteudo; fica pendente ate o admin
+// revisar e aprovar (ou a IA pedir esclarecimento). Ver src/ai/teach.ts.
+model TeachingSuggestion {
+  id                 String   @id @default(cuid())
+  clinicId           String
+  clinic             Clinic   @relation(fields: [clinicId], references: [id])
+  rawInput           String
+  targetType         String   // rule | playbook | template | faq
+  status             String   @default("draft") // needs_clarification | draft | approved | discarded
+  clarifyingQuestion String?
+  payloadJson        String?  // JSON com os campos do targetType (null quando needs_clarification)
+  createdAt          DateTime @default(now())
 }
 
 // Historico de atividades da clinica: registro simples de mudancas

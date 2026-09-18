@@ -1,9 +1,10 @@
-import OpenAI from "openai";
-import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { prisma } from "../db/client.js";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
+// A criacao de regra a partir de texto livre foi generalizada em
+// src/ai/teach.ts (createTeachingSuggestion) - a IA la decide entre regra,
+// roteiro, mensagem pronta ou FAQ, em vez de sempre virar regra. As rotas
+// /rules/:id/approve e DELETE /rules/:id continuam existindo pra qualquer
+// regra que ainda esteja como "draft" de antes dessa mudanca.
 
 export const RULE_CATEGORIES = [
   { id: "agendamento", label: "Agendamento" },
@@ -12,102 +13,6 @@ export const RULE_CATEGORIES = [
   { id: "chamar_equipe", label: "Chamar a equipe" },
   { id: "procedimentos", label: "Procedimentos" },
 ] as const;
-
-const RULE_CATEGORY_IDS = RULE_CATEGORIES.map((c) => c.id);
-
-const tools: ChatCompletionTool[] = [
-  {
-    type: "function",
-    function: {
-      name: "save_rule",
-      description: "Salva uma regra de atendimento clara e acionavel, pronta pra guiar a assistente de WhatsApp.",
-      parameters: {
-        type: "object",
-        properties: {
-          category: { type: "string", enum: RULE_CATEGORY_IDS as unknown as string[] },
-          instruction: {
-            type: "string",
-            description: "Instrucao objetiva, na 2a ou 3a pessoa, dizendo exatamente o que a assistente deve fazer.",
-          },
-        },
-        required: ["category", "instruction"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "ask_clarification",
-      description: "Usa quando falta uma informacao concreta (valor, prazo, nome) pra transformar o pedido numa regra util.",
-      parameters: {
-        type: "object",
-        properties: {
-          question: { type: "string" },
-        },
-        required: ["question"],
-      },
-    },
-  },
-];
-
-const SYSTEM_PROMPT = `Voce ajuda a configurar a Alice, assistente de atendimento no WhatsApp de um negocio (clinica, loja ou servico).
-O admin descreve, em linguagem natural, uma mudanca de comportamento que quer para a Alice.
-Sua tarefa: transformar isso numa regra objetiva (ferramenta save_rule), classificada numa destas categorias:
-${RULE_CATEGORIES.map((c) => `- ${c.id}: ${c.label}`).join("\n")}
-
-Se o pedido ja tem informacao suficiente pra virar uma regra clara, use save_rule direto.
-Se faltar algo essencial e concreto (ex: valor do sinal, prazo, nome de procedimento especifico), use ask_clarification
-com UMA pergunta objetiva. Nao pergunte por excesso de cautela — prefira save_rule sempre que der pra escrever uma
-regra sensata mesmo com pequenas lacunas.`;
-
-export interface DraftRuleResult {
-  status: "active" | "draft" | "needs_clarification";
-  category: string | null;
-  instruction: string | null;
-  clarifyingQuestion: string | null;
-}
-
-async function draftFromText(rawInput: string): Promise<DraftRuleResult> {
-  const response = await openai.chat.completions.create({
-    model: MODEL,
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: rawInput },
-    ],
-    tools,
-    tool_choice: "required",
-  });
-
-  const toolCall = response.choices[0].message.tool_calls?.[0];
-  if (!toolCall || toolCall.type !== "function") {
-    return { status: "needs_clarification", category: null, instruction: null, clarifyingQuestion: "Pode detalhar melhor o que você gostaria de mudar?" };
-  }
-
-  const input = JSON.parse(toolCall.function.arguments || "{}");
-
-  if (toolCall.function.name === "ask_clarification") {
-    return { status: "needs_clarification", category: null, instruction: null, clarifyingQuestion: input.question };
-  }
-
-  return { status: "draft", category: input.category, instruction: input.instruction, clarifyingQuestion: null };
-}
-
-// Cria um rascunho de regra a partir do texto livre do admin. Fica como
-// "draft" (precisa aprovar) ou "needs_clarification" (a IA fez uma pergunta).
-export async function createRuleDraft(clinicId: string, rawInput: string) {
-  const result = await draftFromText(rawInput);
-
-  return prisma.customRule.create({
-    data: {
-      clinicId,
-      rawInput,
-      category: result.category ?? "procedimentos",
-      instruction: result.instruction,
-      clarifyingQuestion: result.clarifyingQuestion,
-      status: result.status,
-    },
-  });
-}
 
 // Regras recomendadas. Cada uma pertence a um ou mais "baldes":
 //   common          -> toda clinica
