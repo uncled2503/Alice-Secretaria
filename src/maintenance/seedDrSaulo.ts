@@ -602,6 +602,36 @@ export async function seedDrSaulo(): Promise<SeedDrSauloResult> {
     });
   }
 
+  if (aplicacaoId) {
+    // Pedido do Dr. Saulo (22/09/2026): mensagem de acompanhamento no dia
+    // seguinte, so pra quem foi agendado como "Aplicação". onlyIfCompleted
+    // fica false de proposito - agendamento nunca vira "completed" sozinho
+    // (so via PATCH manual no painel), entao exigir isso faria a mensagem
+    // nunca sair pra a maioria dos pacientes.
+    const POST_APPLICATION_NAME = "Acompanhamento pós-aplicação";
+    const postApplication = await prisma.postProcedureRule.findFirst({ where: { clinicId: clinic.id, name: POST_APPLICATION_NAME } });
+    if (!postApplication) {
+      await prisma.postProcedureRule.create({
+        data: {
+          clinicId: clinic.id,
+          name: POST_APPLICATION_NAME,
+          message:
+            "Olá, *{primeiro_nome}*, bom dia! Tudo bem? 😊\n" +
+            "Sou Alice do time do Dr. Saulo Silva \n\n" +
+            "Passando para saber como você está hoje após a aplicação realizada ontem. \n" +
+            "Nosso cuidado com você continua mesmo após o atendimento, por isso gostamos de acompanhar para garantir que esteja tudo bem.\n\n" +
+            "Queria saber como você está se sentindo? Uma leve sensibilidade pode acontecer e costuma ser normal, mas é sempre importante acompanharmos.\n" +
+            "Se estiver tudo tranquilo, ficamos muito felizes! E se notar qualquer coisa diferente ou tiver alguma dúvida, pode me chamar por aqui. Estamos sempre à disposição para cuidar de você. 🤍",
+          intervalValue: 1,
+          intervalUnit: "days",
+          onlyIfCompleted: false,
+          procedureIds: aplicacaoId,
+          active: true,
+        },
+      });
+    }
+  }
+
   const birthday = await prisma.birthdayRule.findFirst({ where: { clinicId: clinic.id, name: BIRTHDAY.name } });
   if (!birthday) {
     await prisma.birthdayRule.create({ data: { clinicId: clinic.id, name: BIRTHDAY.name, message: BIRTHDAY.message, sendHour: BIRTHDAY.sendHour, active: true } });

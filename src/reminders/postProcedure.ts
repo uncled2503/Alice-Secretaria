@@ -25,7 +25,7 @@ export function startPostProcedureJob(): void {
       const due = await prisma.appointment.findMany({
         where: {
           clinicId: rule.clinicId,
-          ...(rule.onlyIfCompleted ? { status: "completed" } : { status: { not: "cancelled" } }),
+          ...(rule.onlyIfCompleted ? { status: "completed" } : { status: { notIn: ["cancelled", "no_show"] } }),
           scheduledAt: { lte: cutoff },
           ...(procedureFilter.length ? { procedureId: { in: procedureFilter } } : {}),
           postProcedureSent: { none: { ruleId: rule.id } },
