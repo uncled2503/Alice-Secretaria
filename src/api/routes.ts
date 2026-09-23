@@ -47,6 +47,7 @@ import { seedHarmonizze } from "../maintenance/seedHarmonizze.js";
 import { seedDrSaulo } from "../maintenance/seedDrSaulo.js";
 import { seedTeste } from "../maintenance/seedTeste.js";
 import { seedDiamondClinic } from "../maintenance/seedDiamondClinic.js";
+import { setupIsacFollowup } from "../maintenance/setupIsacFollowup.js";
 import {
   googleConfigured,
   googleConfigHint,
@@ -835,6 +836,29 @@ apiRouter.post(
       area: "clinica",
       title: result.created ? "Conta Diamond Clinic criada" : "Configuração da Diamond Clinic reaplicada",
       description: `${c.procedures} procedimentos, ${c.professionals} profissionais, ${c.activeRules} regras, ${c.followups} recontatos.`,
+      actorName: req.staff?.name ?? null,
+    });
+    res.json(result);
+  })
+);
+
+// Cria (se ainda nao existir) o recontato automatico pedido pelo Dr. Isac
+// Roldao em 22-23/09/2026: 3 dias de silencio -> Alice pergunta um horario
+// possivel e avisa que confirma em seguida. A clinica dele nao tem seed
+// proprio (foi montada pelo pipeline de briefing), entao aqui so aplica essa
+// automacao extra, localizando a clinica pelo login de acesso. Idempotente.
+// So admin.
+apiRouter.post(
+  "/clinics/setup-isac-followup",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const result = await setupIsacFollowup();
+    await logActivity({
+      clinicId: result.clinicId,
+      type: "briefing_applied",
+      area: "clinica",
+      title: result.created ? "Automação de resgate criada (Dr. Isac Roldão)" : "Automação de resgate já existia (Dr. Isac Roldão)",
+      description: "Recontato 3 dias após silêncio, pedindo um horário e avisando que a Alice confirma em seguida.",
       actorName: req.staff?.name ?? null,
     });
     res.json(result);

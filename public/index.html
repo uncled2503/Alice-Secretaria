@@ -1359,6 +1359,12 @@
             <p id="seed-diamond-clinic-result" class="hint" style="margin:0.6rem 0 0" hidden></p>
           </div>
           <div class="card">
+            <div class="section-header">Automação extra: Dr. Isac Roldão</div>
+            <p class="hint" style="margin-top:0">Cria (se ainda não existir) o recontato automático pedido pelo Dr. Isac: quando o paciente para de responder por 3 dias, a Alice pergunta um horário possível e avisa que confirma em seguida. Só dentro do expediente, não dispara se já tem consulta marcada ou se um humano assumiu a conversa. Idempotente - clicar de novo não duplica.</p>
+            <button type="button" id="btn-setup-isac-followup" class="btn-brand btn-brand--secondary">Aplicar recontato do Dr. Isac</button>
+            <p id="setup-isac-followup-result" class="hint" style="margin:0.6rem 0 0" hidden></p>
+          </div>
+          <div class="card">
             <div class="section-header">Clínica Teste (ambiente interno)</div>
             <p class="hint" style="margin-top:0">Cria/reseta uma clínica interna, sem cliente real por trás, com um procedimento normal e um "por ordem de chegada" (ver Aplicação do Dr. Saulo), cada um com seu profissional. Use pra testar agendamento simultâneo, feriado, bloqueio e remarcação no painel antes de aplicar uma mudança em clínica de cliente real. Pode rodar de novo a qualquer hora pra resetar o cenário.</p>
             <button type="button" id="btn-seed-teste" class="btn-brand btn-brand--secondary">Aplicar Clínica Teste</button>

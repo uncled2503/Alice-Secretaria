@@ -5448,6 +5448,21 @@ document.getElementById("btn-seed-dr-saulo").addEventListener("click", async (e)
   }
 });
 
+document.getElementById("btn-setup-isac-followup").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const out = document.getElementById("setup-isac-followup-result");
+  if (!await showConfirm("Aplicar o recontato automático do Dr. Isac Roldão? Cria a regra de resgate de conversa parada (3 dias), se ainda não existir.")) return;
+  btn.disabled = true;
+  out.hidden = true;
+  try {
+    const r = await api("/clinics/setup-isac-followup", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    out.textContent = r.created ? "Regra criada com sucesso." : "Regra já existia - nada mudou.";
+    out.hidden = false;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 document.getElementById("clinic-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const name = document.getElementById("cl-name").value.trim();
