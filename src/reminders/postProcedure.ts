@@ -3,6 +3,7 @@ import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js";
 import { PAID_CLINIC_WHERE } from "../crm/plan.js";
+import { notifyStaff } from "../crm/notify.js";
 
 function intervalMs(value: number, unit: string): number {
   const hourMs = 60 * 60_000;
@@ -57,6 +58,14 @@ export function startPostProcedureJob(): void {
           await prisma.postProcedureSent.create({ data: { appointmentId: appt.id, ruleId: rule.id } });
         } catch (err) {
           console.error(`Falha ao enviar pos-procedimento (regra ${rule.id}) para ${appt.patient.phone}:`, err);
+          // Sem isso a falha so aparecia no log do servidor - a clinica nunca
+          // ficava sabendo que a mensagem automatica nao saiu. O robo tenta de
+          // novo no proximo ciclo (15min); o aviso repete ate resolver ou sair.
+          await notifyStaff(
+            appt.clinicId,
+            "automation_failed",
+            `⚠️ Falha ao enviar mensagem automática de acompanhamento ("${rule.name}") para ${appt.patient.name ?? appt.patient.phone} (${appt.patient.phone}). O sistema vai tentar novamente, mas convém checar a conexão do WhatsApp.`
+          );
         }
       }
     }
