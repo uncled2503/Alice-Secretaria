@@ -1559,6 +1559,9 @@ apiRouter.delete(
     await prisma.$transaction([
       prisma.message.deleteMany({ where: { conversation: { patientId: id } } }),
       prisma.conversation.deleteMany({ where: { patientId: id } }),
+      prisma.reminderSent.deleteMany({ where: { appointment: { patientId: id } } }),
+      prisma.postProcedureSent.deleteMany({ where: { appointment: { patientId: id } } }),
+      prisma.renewalSent.deleteMany({ where: { appointment: { patientId: id } } }),
       prisma.appointment.deleteMany({ where: { patientId: id } }),
       prisma.broadcastRecipient.deleteMany({ where: { patientId: id } }),
       prisma.patient.delete({ where: { id } }),
@@ -2522,7 +2525,15 @@ apiRouter.delete(
     if (!assertClinicAccess(req, res, existing.clinicId)) return;
 
     const wasFutureConfirmed = existing.status === "confirmed" && existing.scheduledAt.getTime() > Date.now();
-    await prisma.appointment.delete({ where: { id: req.params.id } });
+    // Apaga os logs de envio (lembrete, pos-procedimento, renovacao) antes do
+    // agendamento - as chaves estrangeiras sao RESTRICT, entao sem isso o
+    // delete falha com 500 quando ja rolou algum envio automatico pra ele.
+    await prisma.$transaction([
+      prisma.reminderSent.deleteMany({ where: { appointmentId: req.params.id } }),
+      prisma.postProcedureSent.deleteMany({ where: { appointmentId: req.params.id } }),
+      prisma.renewalSent.deleteMany({ where: { appointmentId: req.params.id } }),
+      prisma.appointment.delete({ where: { id: req.params.id } }),
+    ]);
     if (wasFutureConfirmed) {
       await offerFreedSlotToWaitlist({
         clinicId: existing.clinicId,
