@@ -9,7 +9,11 @@ import { ACTIVITY_TYPES } from "./activity.js";
 export async function patientDossier(clinicId: string, patientId: string) {
   const patient = await prisma.patient.findFirstOrThrow({
     where: { id: patientId, clinicId },
-    include: { tags: { include: { tag: true } }, assignedTo: { select: { id: true, name: true } } },
+    include: {
+      tags: { include: { tag: true } },
+      assignedTo: { select: { id: true, name: true } },
+      prescriptionReminders: { orderBy: { date: "asc" } },
+    },
   });
 
   // Conversa mais recente (aberta ou arquivada) - pra o painel abrir o
@@ -108,15 +112,23 @@ export async function patientDossier(clinicId: string, patientId: string) {
     ...renewals.map((r) => ({ kind: "Renovação", label: r.rule.name, when: r.sentAt })),
     ...birthdays.map((r) => ({ kind: "Aniversário", label: r.rule.name, when: r.sentAt })),
     ...followups.map((r) => ({ kind: "Recontato", label: r.rule.name || `Recontato ${r.rule.order}`, when: r.sentAt })),
+    ...patient.prescriptionReminders
+      .filter((r) => r.sentAt)
+      .map((r) => ({ kind: "Renovação de receita", label: r.message, when: r.sentAt! })),
     ...broadcastRecipients
       .filter((r) => r.status === "sent")
       .map((r) => ({ kind: "Campanha", label: r.campaign.title, when: r.sentAt ?? r.campaign.scheduledFor })),
   ].sort((a, b) => b.when.getTime() - a.when.getTime());
 
   // --- Automacoes: vai receber ---
-  const pending: { kind: string; label: string; when: Date | null }[] = broadcastRecipients
-    .filter((r) => r.status === "pending" && r.campaign.status !== "cancelled")
-    .map((r) => ({ kind: "Campanha", label: r.campaign.title, when: r.campaign.scheduledFor }));
+  const pending: { kind: string; label: string; when: Date | null }[] = [
+    ...broadcastRecipients
+      .filter((r) => r.status === "pending" && r.campaign.status !== "cancelled")
+      .map((r) => ({ kind: "Campanha", label: r.campaign.title, when: r.campaign.scheduledFor })),
+    ...patient.prescriptionReminders
+      .filter((r) => !r.sentAt)
+      .map((r) => ({ kind: "Renovação de receita", label: r.message, when: r.date })),
+  ];
 
   const failed = broadcastRecipients
     .filter((r) => r.status === "failed")
@@ -133,6 +145,9 @@ export async function patientDossier(clinicId: string, patientId: string) {
       birthDate: patient.birthDate,
       funnelStage: patient.funnelStage,
       createdAt: patient.createdAt,
+      active: patient.active,
+      hasPrescription: patient.hasPrescription,
+      prescriptionReminders: patient.prescriptionReminders.map((r) => ({ id: r.id, date: r.date, message: r.message, sentAt: r.sentAt })),
       tags: patient.tags.map((pt) => ({ id: pt.tag.id, label: pt.tag.label, color: pt.tag.color })),
       estimatedValue: patient.estimatedValue,
       leadTemperature: patient.leadTemperature,

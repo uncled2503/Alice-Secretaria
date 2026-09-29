@@ -7,6 +7,7 @@ import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
 import { startReminderJob } from "./reminders/cron.js";
 import { startPostProcedureJob } from "./reminders/postProcedure.js";
+import { startPrescriptionReminderJob } from "./reminders/prescription.js";
 import { startRenewalJob } from "./reminders/renewal.js";
 import { startBirthdayJob } from "./reminders/birthday.js";
 import { startNpsJob } from "./reminders/nps.js";
@@ -285,6 +286,7 @@ app.listen(port, () => {
   console.log(`Alice rodando na porta ${port}`);
   startReminderJob();
   startPostProcedureJob();
+  startPrescriptionReminderJob();
   startRenewalJob();
   startBirthdayJob();
   startFollowUpJob();

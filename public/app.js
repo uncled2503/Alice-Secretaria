@@ -507,25 +507,29 @@ function renderContactsTable(contacts) {
     const deleteBtn = el("button", { type: "button", class: "btn-icon-danger", title: "Excluir contato" }, [
       el("span", { class: "nav-icon", "data-icon": "trash" }, []),
     ]);
-    deleteBtn.addEventListener("click", () => deleteContact(c));
+    deleteBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      deleteContact(c);
+    });
 
-    body.appendChild(
-      el("tr", {}, [
-        el("td", {}, [
-          el("div", { class: "contact-name-cell" }, [
-            el("div", { class: "crm-avatar" }, [initials(c.name)]),
-            el("div", {}, [
-              el("div", {}, [c.name ?? "(sem nome)"]),
-              tagChips(c.tags),
-            ]),
+    const row = el("tr", { style: "cursor:pointer" }, [
+      el("td", {}, [
+        el("div", { class: "contact-name-cell" }, [
+          el("div", { class: "crm-avatar" }, [initials(c.name)]),
+          el("div", {}, [
+            el("div", {}, [c.name ?? "(sem nome)"]),
+            tagChips(c.tags),
           ]),
         ]),
-        el("td", {}, [c.phone]),
-        el("td", {}, [el("span", { class: "badge badge-neutral" }, ["WhatsApp"])]),
-        el("td", {}, [new Date(c.createdAt).toLocaleDateString("pt-BR")]),
-        el("td", {}, [deleteBtn]),
-      ])
-    );
+      ]),
+      el("td", {}, [c.phone]),
+      el("td", {}, [el("span", { class: "badge badge-neutral" }, ["WhatsApp"])]),
+      el("td", {}, [el("span", { class: `badge ${c.active === false ? "badge-neutral" : "badge-green"}` }, [c.active === false ? "Inativo" : "Ativo"])]),
+      el("td", {}, [new Date(c.createdAt).toLocaleDateString("pt-BR")]),
+      el("td", {}, [deleteBtn]),
+    ]);
+    row.addEventListener("click", () => openContactPanel(c));
+    body.appendChild(row);
   }
   paintIcons(body);
 }
@@ -1319,7 +1323,7 @@ function updateToggleButton(humanTakeover) {
 }
 
 // --- Painel "Contato no chat" (tambem serve de card do CRM) ---
-const cpState = { patientId: null, allTags: [], selected: [], conversationId: null };
+const cpState = { patientId: null, allTags: [], selected: [], conversationId: null, prescriptionReminders: [] };
 
 // yyyy-MM-ddThh:mm em hora local, pro input datetime-local - Date#toISOString
 // e sempre UTC, entao monta na mao.
@@ -1539,7 +1543,12 @@ async function openContactPanel(patient) {
   document.getElementById("cp-f-email").value = dossier.patient.email ?? "";
   document.getElementById("cp-f-cpf").value = dossier.patient.cpf ?? "";
   document.getElementById("cp-f-birth").value = dossier.patient.birthDate ? String(dossier.patient.birthDate).slice(0, 10) : "";
+  document.getElementById("cp-f-active").checked = dossier.patient.active !== false;
   document.getElementById("cp-f-notes").value = dossier.patient.notes ?? "";
+  document.getElementById("cp-f-has-prescription").checked = !!dossier.patient.hasPrescription;
+  document.getElementById("cp-prescription-block").hidden = !dossier.patient.hasPrescription;
+  cpState.prescriptionReminders = (dossier.patient.prescriptionReminders || []).map((r) => ({ ...r, draft: false }));
+  renderCpPrescriptionReminders();
   document.getElementById("cp-f-value").value = dossier.patient.estimatedValue ?? "";
   document.getElementById("cp-f-temp").value = dossier.patient.leadTemperature ?? "";
   document.getElementById("cp-f-next-at").value = toDatetimeLocalValue(dossier.patient.nextActionAt);
@@ -1596,6 +1605,8 @@ document.getElementById("cp-save").addEventListener("click", async () => {
       assignedToId: document.getElementById("cp-f-assignee").value || null,
       nextActionAt: document.getElementById("cp-f-next-at").value || null,
       nextActionNote: document.getElementById("cp-f-next-note").value.trim(),
+      active: document.getElementById("cp-f-active").checked,
+      hasPrescription: document.getElementById("cp-f-has-prescription").checked,
     }),
   });
   status.textContent = "Salvo.";
@@ -1606,6 +1617,77 @@ document.getElementById("cp-save").addEventListener("click", async () => {
     state.crmColumns ? loadCrmBoard().catch(() => {}) : Promise.resolve(),
     api(`/patients/${cpState.patientId}/dossier`).then((d) => renderCpTimeline(d.timeline)).catch(() => {}),
   ]);
+});
+
+document.getElementById("cp-f-has-prescription").addEventListener("change", (e) => {
+  document.getElementById("cp-prescription-block").hidden = !e.target.checked;
+});
+
+// Lembretes de renovacao de receita: cada um e salvo/excluido na hora (rota
+// propria), diferente do resto do card que so grava no "Salvar contato" - sao
+// registros com vida propria (podem ja ter sido enviados) e ate 2 por vez.
+function renderCpPrescriptionReminders() {
+  const box = document.getElementById("cp-prescription-list");
+  box.innerHTML = "";
+  document.getElementById("cp-prescription-add").style.display = cpState.prescriptionReminders.length >= 2 ? "none" : "";
+
+  for (const r of cpState.prescriptionReminders) {
+    const dateInput = el("input", { type: "date", value: r.date ? String(r.date).slice(0, 10) : "" }, []);
+    const msgInput = el("textarea", { rows: "2", placeholder: "Mensagem que sera enviada nessa data" }, [r.message ?? ""]);
+    const saveBtn = el("button", { type: "button", class: "btn-chat-action" }, [r.draft ? "Salvar lembrete" : "Atualizar"]);
+    const delBtn = el("button", { type: "button", class: "btn-icon-danger", title: "Excluir lembrete" }, [
+      el("span", { class: "nav-icon", "data-icon": "trash" }, []),
+    ]);
+    const statusEl = el("span", { class: "hint" }, [
+      r.sentAt ? `Enviado em ${new Date(r.sentAt).toLocaleDateString("pt-BR")}` : "",
+    ]);
+
+    saveBtn.addEventListener("click", async () => {
+      const date = dateInput.value;
+      const message = msgInput.value.trim();
+      if (!date || !message) return;
+      if (r.draft) {
+        const created = await api(`/patients/${cpState.patientId}/prescription-reminders`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ date, message }),
+        });
+        Object.assign(r, created, { draft: false });
+      } else {
+        const updated = await api(`/prescription-reminders/${r.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ date, message }),
+        });
+        Object.assign(r, updated);
+      }
+      renderCpPrescriptionReminders();
+    });
+
+    delBtn.addEventListener("click", async () => {
+      if (!r.draft) {
+        if (!(await showConfirm("Excluir esse lembrete de receita?"))) return;
+        await api(`/prescription-reminders/${r.id}`, { method: "DELETE" });
+      }
+      cpState.prescriptionReminders = cpState.prescriptionReminders.filter((x) => x !== r);
+      renderCpPrescriptionReminders();
+    });
+
+    box.appendChild(
+      el("div", { class: "card", style: "padding:0.6rem;margin-bottom:0.5rem;display:flex;flex-direction:column;gap:0.4rem" }, [
+        dateInput,
+        msgInput,
+        el("div", { style: "display:flex;align-items:center;gap:0.5rem" }, [saveBtn, delBtn, statusEl]),
+      ])
+    );
+  }
+  paintIcons(box);
+}
+
+document.getElementById("cp-prescription-add").addEventListener("click", () => {
+  if (cpState.prescriptionReminders.length >= 2) return;
+  cpState.prescriptionReminders.push({ id: null, date: "", message: "", sentAt: null, draft: true });
+  renderCpPrescriptionReminders();
 });
 
 document.getElementById("cp-schedule").addEventListener("click", () => {

@@ -1942,7 +1942,7 @@ apiRouter.put(
     const patient = await prisma.patient.findUniqueOrThrow({ where: { id: req.params.id } });
     if (!assertClinicAccess(req, res, patient.clinicId)) return;
 
-    const { name, birthDate, email, cpf, notes, tagIds, estimatedValue, leadTemperature, assignedToId, nextActionAt, nextActionNote } = req.body as {
+    const { name, birthDate, email, cpf, notes, tagIds, estimatedValue, leadTemperature, assignedToId, nextActionAt, nextActionNote, active, hasPrescription } = req.body as {
       name?: string;
       birthDate?: string | null;
       email?: string | null;
@@ -1954,6 +1954,8 @@ apiRouter.put(
       assignedToId?: string | null;
       nextActionAt?: string | null;
       nextActionNote?: string | null;
+      active?: boolean;
+      hasPrescription?: boolean;
     };
 
     const LEAD_TEMPERATURES = new Set(["frio", "morno", "quente"]);
@@ -2022,6 +2024,8 @@ apiRouter.put(
         ...(assignedToId !== undefined ? { assignedToId: assignedToId || null } : {}),
         ...(parsedNextActionAt !== undefined ? { nextActionAt: parsedNextActionAt } : {}),
         ...(nextActionNote !== undefined ? { nextActionNote: nextActionNote?.trim() || null } : {}),
+        ...(active !== undefined ? { active } : {}),
+        ...(hasPrescription !== undefined ? { hasPrescription } : {}),
       },
     });
 
@@ -2052,7 +2056,78 @@ apiRouter.put(
       });
     }
 
-    res.json({ id: updated.id, name: updated.name, birthDate: updated.birthDate });
+    res.json({ id: updated.id, name: updated.name, birthDate: updated.birthDate, active: updated.active, hasPrescription: updated.hasPrescription });
+  })
+);
+
+function parsePrescriptionDate(value: unknown): Date | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  // "YYYY-MM-DD" -> meia-noite UTC, mesmo padrao do birthDate (so a data importa).
+  const d = new Date(`${value}T00:00:00Z`);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+// Ate 2 lembretes de renovacao de receita por paciente (a UI limita e mostra
+// so quando hasPrescription esta marcado) - sem trava no banco de proposito,
+// ver comentario no schema.
+apiRouter.post(
+  "/patients/:id/prescription-reminders",
+  asyncRoute(async (req, res) => {
+    const patient = await prisma.patient.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, patient.clinicId)) return;
+
+    const { date, message } = req.body as { date?: string; message?: string };
+    const parsedDate = parsePrescriptionDate(date);
+    if (!parsedDate || !message?.trim()) {
+      res.status(400).json({ error: "date (YYYY-MM-DD) e message sao obrigatorios" });
+      return;
+    }
+
+    const pendingCount = await prisma.prescriptionReminder.count({ where: { patientId: patient.id, sentAt: null } });
+    if (pendingCount >= 2) {
+      res.status(400).json({ error: "esse paciente ja tem 2 lembretes de receita pendentes" });
+      return;
+    }
+
+    const reminder = await prisma.prescriptionReminder.create({
+      data: { patientId: patient.id, date: parsedDate, message: message.trim() },
+    });
+    res.json(reminder);
+  })
+);
+
+apiRouter.put(
+  "/prescription-reminders/:id",
+  asyncRoute(async (req, res) => {
+    const existing = await prisma.prescriptionReminder.findUniqueOrThrow({ where: { id: req.params.id }, include: { patient: true } });
+    if (!assertClinicAccess(req, res, existing.patient.clinicId)) return;
+
+    const { date, message } = req.body as { date?: string; message?: string };
+    const parsedDate = date !== undefined ? parsePrescriptionDate(date) : undefined;
+    if (date !== undefined && !parsedDate) {
+      res.status(400).json({ error: "date invalida (use YYYY-MM-DD)" });
+      return;
+    }
+
+    const reminder = await prisma.prescriptionReminder.update({
+      where: { id: req.params.id },
+      data: {
+        ...(parsedDate ? { date: parsedDate } : {}),
+        ...(message !== undefined ? { message: message.trim() } : {}),
+      },
+    });
+    res.json(reminder);
+  })
+);
+
+apiRouter.delete(
+  "/prescription-reminders/:id",
+  asyncRoute(async (req, res) => {
+    const existing = await prisma.prescriptionReminder.findUniqueOrThrow({ where: { id: req.params.id }, include: { patient: true } });
+    if (!assertClinicAccess(req, res, existing.patient.clinicId)) return;
+
+    await prisma.prescriptionReminder.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
   })
 );
 

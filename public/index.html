@@ -263,7 +263,7 @@
 
         <div class="card">
           <table>
-            <thead><tr><th data-biz-label="Contato|Cliente">Contato</th><th>Telefone</th><th>Origem</th><th>Desde</th><th></th></tr></thead>
+            <thead><tr><th data-biz-label="Contato|Cliente">Contato</th><th>Telefone</th><th>Origem</th><th>Status</th><th>Desde</th><th></th></tr></thead>
             <tbody id="contacts-body"></tbody>
           </table>
         </div>
@@ -369,7 +369,15 @@
               <label>E-mail<input id="cp-f-email" type="email" placeholder="email@exemplo.com" /></label>
               <label>CPF<input id="cp-f-cpf" type="text" inputmode="numeric" placeholder="Só números" /></label>
               <label>Nascimento<input id="cp-f-birth" type="date" /></label>
+              <label style="display:flex;align-items:center;gap:0.4rem;flex-direction:row"><input id="cp-f-active" type="checkbox" /> Paciente ativo</label>
               <label>Observações<textarea id="cp-f-notes" rows="3" placeholder="Anotações úteis para a equipe"></textarea></label>
+              <div class="cp-section-title" style="margin-top:1rem">Receita</div>
+              <label style="display:flex;align-items:center;gap:0.4rem;flex-direction:row"><input id="cp-f-has-prescription" type="checkbox" /> Paciente tem receita</label>
+              <div id="cp-prescription-block" hidden>
+                <div id="cp-prescription-list"></div>
+                <button type="button" id="cp-prescription-add" class="btn-chat-action" style="margin-top:0.4rem">+ Lembrete de renovação</button>
+                <p class="hint" style="margin:0.3rem 0 0">Escolha a data e escreva a mensagem - o sistema manda automaticamente nesse dia. Até 2 por paciente.</p>
+              </div>
               <div class="cp-tags-block">
                 <span class="cp-tags-title">Etiquetas</span>
                 <div id="cp-tags" class="cp-tags"></div>

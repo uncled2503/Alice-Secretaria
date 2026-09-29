@@ -243,13 +243,15 @@ model Playbook {
 model TeachingSuggestion {
   id                 String   @id @default(cuid())
   clinicId           String
-  clinic             Clinic   @relation(fields: [clinicId], references: [id])
+  clinic             Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade)
   rawInput           String
   targetType         String   // rule | playbook | template | faq
   status             String   @default("draft") // needs_clarification | draft | approved | discarded
   clarifyingQuestion String?
   payloadJson        String?  // JSON com os campos do targetType (null quando needs_clarification)
   createdAt          DateTime @default(now())
+
+  @@index([clinicId, status])
 }
 
 // Historico de atividades da clinica: registro simples de mudancas
@@ -385,6 +387,8 @@ model ProcedurePhoto {
   caption     String?   // ex: "Antes", "Depois", "6 meses apos"
   order       Int       @default(0)
   createdAt   DateTime  @default(now())
+
+  @@index([procedureId])
 }
 
 // Diretorio simples de profissionais da clinica (nome, foto, bio, quais
@@ -440,6 +444,8 @@ model Patient {
   funnelStage   String    @default("novo_lead") // ver src/crm/stages.ts para a lista de etapas
   optedOut      Boolean   @default(false) // paciente pediu pra nao receber mensagens (LGPD) - trava automacoes
   optedOutAt    DateTime?
+  active          Boolean @default(true)  // paciente ainda em acompanhamento com a clinica ou nao
+  hasPrescription Boolean @default(false) // controla se os lembretes de renovacao de receita aparecem/valem
 
   // Atribuicao de campanha Meta, capturada na criacao do lead (Click-to-WhatsApp).
   // Fica vinculada ao lead pra eventos posteriores do CRM baterem com o anuncio.
@@ -484,8 +490,25 @@ model Patient {
   tags          PatientTag[]
   satisfactionSurveys SatisfactionSurvey[]
   activityLogs  ActivityLog[]
+  prescriptionReminders PrescriptionReminder[]
 
   @@unique([clinicId, phone])
+}
+
+// Lembrete de renovacao de receita: a equipe escolhe uma data e escreve a
+// mensagem (so aparece se o paciente tiver hasPrescription); o robo manda
+// automaticamente nesse dia, uma unica vez. Ate 2 por paciente - a UI que
+// limita, sem trava no banco porque isso nao muda a logica de envio.
+model PrescriptionReminder {
+  id        String    @id @default(cuid())
+  patientId String
+  patient   Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  date      DateTime  // dia (meia-noite UTC - so a data importa, mesmo padrao do birthDate)
+  message   String
+  sentAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([date, sentAt])
 }
 
 // Etiqueta colorida atribuivel a contatos (ex: "VIP", "Indicacao", "Botox").
