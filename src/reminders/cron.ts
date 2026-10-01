@@ -3,6 +3,7 @@ import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js";
 import { PAID_CLINIC_WHERE } from "../crm/plan.js";
+import { recordAutomatedMessage } from "../crm/conversationLog.js";
 
 // Roda a cada 15min. Cada regra ativa dispara uma vez por agendamento (marca
 // em ReminderSent) - assim da pra ter mais de uma regra (ex: 24h antes e 2h
@@ -56,6 +57,7 @@ export function startReminderJob(): void {
         try {
           await sendText(appt.clinicId, appt.patient.phone, text);
           await prisma.reminderSent.create({ data: { appointmentId: appt.id, ruleId: rule.id } });
+          await recordAutomatedMessage(appt.patientId, text, "Lembrete de consulta");
         } catch (err) {
           console.error(`Falha ao enviar lembrete (regra ${rule.id}) para ${appt.patient.phone}:`, err);
         }

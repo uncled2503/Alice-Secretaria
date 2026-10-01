@@ -3,9 +3,16 @@ import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js";
 import { PAID_CLINIC_WHERE } from "../crm/plan.js";
+import { recordAutomatedMessage } from "../crm/conversationLog.js";
 
 const DAY_MS = 24 * 60 * 60_000;
 const MAX_DAYS = 2 * 365; // limite de 2 anos
+
+// Mesma protecao do postProcedure.ts: nunca manda pra algo que ficou "due" ha
+// mais tempo que isso, senao criar/recriar uma regra reenvia pra anos de
+// historico de uma vez (ver incidente de 30/09/2026 descrito la).
+const MAX_OVERDUE_MS = 30 * DAY_MS; // 30 dias de folga - escala de meses/anos
+const MAX_PER_TICK = 30;
 
 // So entende months/years (RenewalRule.intervalUnit - PostProcedureRule tem
 // hours/days, e um campo diferente). Unidade fora disso e um dado corrompido
@@ -33,17 +40,19 @@ export function startRenewalJob(): void {
         continue;
       }
       const cutoff = new Date(Date.now() - days * DAY_MS);
+      const floor = new Date(cutoff.getTime() - MAX_OVERDUE_MS);
       const procedureFilter = rule.procedureIds.split(",").filter(Boolean);
 
       const due = await prisma.appointment.findMany({
         where: {
           clinicId: rule.clinicId,
           ...(rule.onlyIfCompleted ? { status: "completed" } : { status: { not: "cancelled" } }),
-          scheduledAt: { lte: cutoff },
+          scheduledAt: { lte: cutoff, gte: floor },
           ...(procedureFilter.length ? { procedureId: { in: procedureFilter } } : {}),
           renewalSent: { none: { ruleId: rule.id } },
         },
         include: { patient: true, procedure: true, professional: true },
+        take: MAX_PER_TICK,
       });
 
       if (due.length === 0) continue;
@@ -69,6 +78,7 @@ export function startRenewalJob(): void {
         try {
           await sendText(appt.clinicId, appt.patient.phone, text);
           await prisma.renewalSent.create({ data: { appointmentId: appt.id, ruleId: rule.id } });
+          await recordAutomatedMessage(appt.patientId, text, rule.name || "Renovação automática");
         } catch (err) {
           console.error(`Falha ao enviar renovacao (regra ${rule.id}) para ${appt.patient.phone}:`, err);
         }

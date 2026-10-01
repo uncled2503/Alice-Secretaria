@@ -4,6 +4,9 @@ import { sendText } from "../uazapi/client.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js";
 import { PAID_CLINIC_WHERE } from "../crm/plan.js";
 import { notifyStaff } from "../crm/notify.js";
+import { recordAutomatedMessage } from "../crm/conversationLog.js";
+
+const MAX_PER_TICK = 30; // teto de seguranca por clinica a cada execucao (15min)
 
 // "Hoje" (meia-noite UTC) na timezone da clinica - mesmo padrao usado pra
 // gravar a data do lembrete (so o dia importa, ver schema.prisma).
@@ -26,6 +29,7 @@ export function startPrescriptionReminderJob(): void {
       const due = await prisma.prescriptionReminder.findMany({
         where: { sentAt: null, date: { lte: cutoff }, patient: { clinicId: clinic.id, optedOut: false } },
         include: { patient: true },
+        take: MAX_PER_TICK,
       });
       if (due.length === 0) continue;
 
@@ -43,6 +47,7 @@ export function startPrescriptionReminderJob(): void {
         try {
           await sendText(clinic.id, reminder.patient.phone, text);
           await prisma.prescriptionReminder.update({ where: { id: reminder.id }, data: { sentAt: new Date() } });
+          await recordAutomatedMessage(reminder.patientId, text, "Renovação de receita");
         } catch (err) {
           console.error(`Falha ao enviar lembrete de receita (${reminder.id}) para ${reminder.patient.phone}:`, err);
           await notifyStaff(

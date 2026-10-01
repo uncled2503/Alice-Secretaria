@@ -3,6 +3,7 @@ import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js";
 import { PAID_CLINIC_WHERE } from "../crm/plan.js";
+import { recordAutomatedMessage } from "../crm/conversationLog.js";
 
 // { hour, month (1-12), day } na timezone informada, no instante `at`.
 function localParts(at: Date, timeZone: string): { hour: number; month: number; day: number } {
@@ -65,6 +66,7 @@ export function startBirthdayJob(): void {
         try {
           await sendText(rule.clinicId, patient.phone, text);
           await prisma.birthdaySent.create({ data: { patientId: patient.id, ruleId: rule.id, year } });
+          await recordAutomatedMessage(patient.id, text, rule.name || "Aniversário automático");
         } catch (err) {
           console.error(`Falha ao enviar aniversario (regra ${rule.id}) para ${patient.phone}:`, err);
         }
