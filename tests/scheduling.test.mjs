@@ -59,13 +59,29 @@ test("resolveHours: profissional sobrescreve so o que preencheu", () => {
   const clinicSrc = { timezone: SP, workStartHour: 9, workEndHour: 18, workDays: "1,2,3,4,5" };
 
   const herda = resolveHours(clinicSrc, null);
-  assert.equal(herda.workStartHour, 9);
-  assert.equal(herda.workEndHour, 18);
+  assert.equal(herda.workStartMinutes, 9 * 60);
+  assert.equal(herda.workEndMinutes, 18 * 60);
 
   const proprio = resolveHours(clinicSrc, { workDays: "2,4", workStartHour: 13, workEndHour: null });
-  assert.equal(proprio.workStartHour, 13);
-  assert.equal(proprio.workEndHour, 18); // herdou
+  assert.equal(proprio.workStartMinutes, 13 * 60);
+  assert.equal(proprio.workEndMinutes, 18 * 60); // herdou
   assert.deepEqual([...proprio.workDays].sort(), [2, 4]);
+});
+
+test("clinicHoursOf e resolveHours combinam hora+minuto (ex.: 8h30-11h45 de intervalo)", () => {
+  const clinicSrc = {
+    timezone: SP, workStartHour: 8, workStartMinute: 30, workEndHour: 18, workDays: "1,2,3,4,5",
+    lunchStartHour: 11, lunchStartMinute: 45, lunchEndHour: 14, lunchEndMinute: 0,
+  };
+  const base = clinicHoursOf(clinicSrc);
+  assert.equal(base.workStartMinutes, 8 * 60 + 30);
+  assert.equal(base.lunchStartMinutes, 11 * 60 + 45);
+  assert.equal(base.lunchEndMinutes, 14 * 60);
+
+  // profissional so sobrescreve a hora, sem minuto -> minuto fica 0 (nao herda o da clinica)
+  const proprio = resolveHours(clinicSrc, { workDays: null, workStartHour: 9, workEndHour: null });
+  assert.equal(proprio.workStartMinutes, 9 * 60);
+  assert.equal(proprio.lunchStartMinutes, 11 * 60 + 45); // esse campo nao foi sobrescrito, herdou inteiro
 });
 
 test("evaluateSlot recusa horario dentro de um bloqueio de agenda", () => {
@@ -98,6 +114,26 @@ test("generateSlots respeita expediente, dias e conflitos", () => {
   }
   assert.ok(!slots.some((s) => s.start.getTime() === busyStart), "pula o horario ocupado");
   assert.ok(slots.some((s) => s.start.getTime() === busyStart + 60 * 60_000), "oferece o horario seguinte livre");
+});
+
+// Caso real: Dr. Saulo Silva atende 08:30-11:45 e 14:00-18:00. Antes dos
+// campos de minuto, o sistema so conhecia hora cheia e oferecia 08:00 (fora
+// do expediente), 12:00/13:00 (dentro do intervalo) e nunca 17:xx.
+test("generateSlots com expediente em meia-hora (08:30-11:45 e 14:00-18:00)", () => {
+  const now = new Date("2026-09-07T11:00:00Z"); // segunda 08:00 SP
+  const meiaHora = clinicHoursOf({
+    timezone: SP, workDays: "1,2,3,4,5",
+    workStartHour: 8, workStartMinute: 30, workEndHour: 18, workEndMinute: 0,
+    lunchStartHour: 11, lunchStartMinute: 45, lunchEndHour: 14, lunchEndMinute: 0,
+  });
+
+  const slots = generateSlots({ hours: meiaHora, durationMin: 30, busy: [], now, daysAhead: 1, limit: 50 });
+  const horarios = slots.map((s) => wallClockInZone(s.start, SP)).map((wc) => `${wc.hour}:${String(wc.minute).padStart(2, "0")}`);
+
+  assert.ok(horarios.includes("8:30"), "primeiro horario e 08:30, nao 08:00");
+  assert.ok(!horarios.includes("8:00"), "nunca oferece antes do expediente comecar");
+  assert.ok(!horarios.includes("12:00") && !horarios.includes("13:00"), "nunca oferece dentro do intervalo");
+  assert.ok(horarios.includes("17:30"), "oferece 17:30 (ultimo horario de 30min antes de fechar as 18h)");
 });
 
 // O contexto que a Alice recebe PRECISA trazer o ano. Sem ele o modelo chuta o

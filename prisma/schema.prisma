@@ -19,6 +19,13 @@ model Clinic {
   workEndHour   Int       @default(19)
   lunchStartHour Int?     // intervalo (ex.: almoço) dentro do expediente - null = sem pausa, atende direto
   lunchEndHour   Int?
+  // Minutos (0-59) complementando as horas acima, pra expediente que nao cai
+  // em hora cheia (ex.: 08:30, intervalo ate 11:45). Aditivo: default 0 =
+  // comportamento identico a antes pra quem nunca configurou isso.
+  workStartMinute  Int @default(0)
+  workEndMinute    Int @default(0)
+  lunchStartMinute Int @default(0)
+  lunchEndMinute   Int @default(0)
   workDays      String    @default("1,2,3,4,5,6") // dias da semana com expediente (0=domingo..6=sabado), separados por virgula
   closedOnHolidays Boolean @default(false) // fecha automaticamente nos feriados nacionais (data fixa + Sexta-feira Santa) - Carnaval/Corpus Christi ficam de fora (ponto facultativo, nao feriado por lei); ver src/scheduling/holidays.ts
   active        Boolean   @default(true) // false = bloqueada temporariamente (ex: inadimplencia) - contas client dessa clinica nao conseguem logar nem usar a API
@@ -410,6 +417,13 @@ model Professional {
   workEndHour   Int?
   lunchStartHour Int? // sobrescreve o intervalo da clinica pra esse profissional; null = herda
   lunchEndHour   Int?
+  // Minutos complementando as horas acima - so tem efeito junto de uma hora
+  // propria (acima); se a hora for null (herda da clinica), o minuto tambem
+  // e ignorado e vem da clinica junto. Default 0 = sem mudanca de comportamento.
+  workStartMinute  Int @default(0)
+  workEndMinute    Int @default(0)
+  lunchStartMinute Int @default(0)
+  lunchEndMinute   Int @default(0)
   createdAt DateTime @default(now())
 
   procedures     Procedure[]   @relation("ProfessionalProcedures")

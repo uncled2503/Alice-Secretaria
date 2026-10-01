@@ -174,9 +174,13 @@ apiRouter.get(
         whatsappPhone: true,
         timezone: true,
         workStartHour: true,
+        workStartMinute: true,
         workEndHour: true,
+        workEndMinute: true,
         lunchStartHour: true,
+        lunchStartMinute: true,
         lunchEndHour: true,
+        lunchEndMinute: true,
         workDays: true,
         closedOnHolidays: true,
         active: true,
@@ -248,9 +252,13 @@ apiRouter.put(
       whatsappPhone?: string;
       timezone?: string;
       workStartHour?: number;
+      workStartMinute?: number;
       workEndHour?: number;
+      workEndMinute?: number;
       lunchStartHour?: number | null;
+      lunchStartMinute?: number;
       lunchEndHour?: number | null;
+      lunchEndMinute?: number;
       workDays?: string;
       closedOnHolidays?: boolean;
       active?: boolean;
@@ -279,7 +287,7 @@ apiRouter.put(
       npsMessage?: string | null;
       googleReviewUrl?: string | null;
     };
-    const { name, whatsappPhone, timezone, workStartHour, workEndHour, lunchStartHour, lunchEndHour, workDays, active, notifyPhone, notifyEvents, assistantPersona, assistantPersonaName } = b;
+    const { name, whatsappPhone, timezone, workStartHour, workStartMinute, workEndHour, workEndMinute, lunchStartHour, lunchStartMinute, lunchEndHour, lunchEndMinute, workDays, active, notifyPhone, notifyEvents, assistantPersona, assistantPersonaName } = b;
 
     // So admin bloqueia/desbloqueia - um cliente nao pode se desbloquear sozinho.
     if (active !== undefined && !requireAdmin(req, res)) return;
@@ -311,6 +319,18 @@ apiRouter.put(
       return;
     }
 
+    for (const [label, value] of [
+      ["workStartMinute", workStartMinute],
+      ["workEndMinute", workEndMinute],
+      ["lunchStartMinute", lunchStartMinute],
+      ["lunchEndMinute", lunchEndMinute],
+    ] as const) {
+      if (value !== undefined && (!Number.isInteger(value) || value < 0 || value > 59)) {
+        res.status(400).json({ error: `${label} invalido (use 0-59)` });
+        return;
+      }
+    }
+
     // O numero de avisos pode ser o proprio numero conectado (cai na conversa
     // "Mensagem pra mim"; o eco e ignorado no webhook, sem loop).
 
@@ -322,9 +342,13 @@ apiRouter.put(
           ...(whatsappPhone !== undefined ? { whatsappPhone: whatsappPhone.replace(/\D/g, "") } : {}),
           ...(timezone !== undefined ? { timezone } : {}),
           ...(workStartHour !== undefined ? { workStartHour } : {}),
+          ...(workStartMinute !== undefined ? { workStartMinute } : {}),
           ...(workEndHour !== undefined ? { workEndHour } : {}),
+          ...(workEndMinute !== undefined ? { workEndMinute } : {}),
           ...(lunchStartHour !== undefined ? { lunchStartHour } : {}),
+          ...(lunchStartMinute !== undefined ? { lunchStartMinute } : {}),
           ...(lunchEndHour !== undefined ? { lunchEndHour } : {}),
+          ...(lunchEndMinute !== undefined ? { lunchEndMinute } : {}),
           ...(workDays !== undefined ? { workDays } : {}),
           ...(b.closedOnHolidays !== undefined ? { closedOnHolidays: b.closedOnHolidays } : {}),
           ...(active !== undefined ? { active } : {}),
@@ -1399,6 +1423,10 @@ apiRouter.delete(
   })
 );
 
+function validMinutes(value: number | undefined): boolean {
+  return value === undefined || (Number.isInteger(value) && value >= 0 && value <= 59);
+}
+
 // Diretorio de profissionais (nome, foto, bio, quais procedimentos cada um
 // atende). Sem agenda/turno proprio - a atribuicao a um agendamento e
 // manual, feita direto no modal de editar agendamento.
@@ -1418,7 +1446,7 @@ apiRouter.get(
 apiRouter.post(
   "/professionals",
   asyncRoute(async (req, res) => {
-    const { name, instagram, bio, color, photoUrl, procedureIds, workDays, workStartHour, workEndHour, lunchStartHour, lunchEndHour } = req.body as {
+    const { name, instagram, bio, color, photoUrl, procedureIds, workDays, workStartHour, workStartMinute, workEndHour, workEndMinute, lunchStartHour, lunchStartMinute, lunchEndHour, lunchEndMinute } = req.body as {
       name?: string;
       instagram?: string;
       bio?: string;
@@ -1427,12 +1455,20 @@ apiRouter.post(
       procedureIds?: string[];
       workDays?: string | null;
       workStartHour?: number | null;
+      workStartMinute?: number;
       workEndHour?: number | null;
+      workEndMinute?: number;
       lunchStartHour?: number | null;
+      lunchStartMinute?: number;
       lunchEndHour?: number | null;
+      lunchEndMinute?: number;
     };
     if (!name) {
       res.status(400).json({ error: "name obrigatorio" });
+      return;
+    }
+    if (!validMinutes(workStartMinute) || !validMinutes(workEndMinute) || !validMinutes(lunchStartMinute) || !validMinutes(lunchEndMinute)) {
+      res.status(400).json({ error: "minuto invalido (use 0-59)" });
       return;
     }
 
@@ -1447,9 +1483,13 @@ apiRouter.post(
         photoUrl: photoUrl || null,
         workDays: workDays || null,
         workStartHour: workStartHour ?? null,
+        workStartMinute: workStartMinute ?? 0,
         workEndHour: workEndHour ?? null,
+        workEndMinute: workEndMinute ?? 0,
         lunchStartHour: lunchStartHour ?? null,
+        lunchStartMinute: lunchStartMinute ?? 0,
         lunchEndHour: lunchEndHour ?? null,
+        lunchEndMinute: lunchEndMinute ?? 0,
         ...(procedureIds ? { procedures: { connect: procedureIds.map((id) => ({ id })) } } : {}),
       },
       include: { procedures: { select: { id: true, name: true } } },
@@ -1464,7 +1504,7 @@ apiRouter.put(
     const existing = await prisma.professional.findUniqueOrThrow({ where: { id: req.params.id } });
     if (!assertClinicAccess(req, res, existing.clinicId)) return;
 
-    const { name, instagram, bio, color, photoUrl, active, procedureIds, workDays, workStartHour, workEndHour, lunchStartHour, lunchEndHour } = req.body as {
+    const { name, instagram, bio, color, photoUrl, active, procedureIds, workDays, workStartHour, workStartMinute, workEndHour, workEndMinute, lunchStartHour, lunchStartMinute, lunchEndHour, lunchEndMinute } = req.body as {
       name?: string;
       instagram?: string;
       bio?: string;
@@ -1474,10 +1514,18 @@ apiRouter.put(
       procedureIds?: string[];
       workDays?: string | null;
       workStartHour?: number | null;
+      workStartMinute?: number;
       workEndHour?: number | null;
+      workEndMinute?: number;
       lunchStartHour?: number | null;
+      lunchStartMinute?: number;
       lunchEndHour?: number | null;
+      lunchEndMinute?: number;
     };
+    if (!validMinutes(workStartMinute) || !validMinutes(workEndMinute) || !validMinutes(lunchStartMinute) || !validMinutes(lunchEndMinute)) {
+      res.status(400).json({ error: "minuto invalido (use 0-59)" });
+      return;
+    }
 
     const professional = await prisma.professional.update({
       where: { id: req.params.id },
@@ -1490,9 +1538,13 @@ apiRouter.put(
         ...(active !== undefined ? { active } : {}),
         ...(workDays !== undefined ? { workDays: workDays || null } : {}),
         ...(workStartHour !== undefined ? { workStartHour: workStartHour ?? null } : {}),
+        ...(workStartMinute !== undefined ? { workStartMinute } : {}),
         ...(workEndHour !== undefined ? { workEndHour: workEndHour ?? null } : {}),
+        ...(workEndMinute !== undefined ? { workEndMinute } : {}),
         ...(lunchStartHour !== undefined ? { lunchStartHour: lunchStartHour ?? null } : {}),
+        ...(lunchStartMinute !== undefined ? { lunchStartMinute } : {}),
         ...(lunchEndHour !== undefined ? { lunchEndHour: lunchEndHour ?? null } : {}),
+        ...(lunchEndMinute !== undefined ? { lunchEndMinute } : {}),
         ...(procedureIds !== undefined ? { procedures: { set: procedureIds.map((id) => ({ id })) } } : {}),
       },
       include: { procedures: { select: { id: true, name: true } } },

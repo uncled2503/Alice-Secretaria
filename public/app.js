@@ -1,5 +1,18 @@
 const state = { activeConversationId: null, pollHandle: null, clinicId: null };
 
+// Hora+minuto (campos separados no banco) <-> "HH:MM" (um <input type=time> so).
+function hourMinuteToTimeValue(hour, minute) {
+  if (hour === null || hour === undefined) return "";
+  return `${String(hour).padStart(2, "0")}:${String(minute || 0).padStart(2, "0")}`;
+}
+// Retorna { hour, minute } ou null (campo vazio = sem valor, igual antes).
+function timeValueToHourMinute(value) {
+  if (!value) return null;
+  const [h, m] = value.split(":").map(Number);
+  if (!Number.isInteger(h) || !Number.isInteger(m)) return null;
+  return { hour: h, minute: m };
+}
+
 // Anexo antigo salvo com o tipo errado: quando a UAZAPI nao informava o
 // mimetype, tudo era gravado como "image/jpeg" - inclusive video e audio, que
 // o navegador entao se recusava a tocar. A origem ja foi corrigida; isto aqui
@@ -4855,10 +4868,10 @@ async function openProfessionalModal(prof) {
   document.getElementById("pf-instagram").value = prof?.instagram || "";
   document.getElementById("pf-bio").value = prof?.bio || "";
   document.getElementById("pf-active").checked = prof ? !!prof.active : true;
-  document.getElementById("pf-start-hour").value = prof?.workStartHour ?? "";
-  document.getElementById("pf-end-hour").value = prof?.workEndHour ?? "";
-  document.getElementById("pf-lunch-start-hour").value = prof?.lunchStartHour ?? "";
-  document.getElementById("pf-lunch-end-hour").value = prof?.lunchEndHour ?? "";
+  document.getElementById("pf-start-hour").value = hourMinuteToTimeValue(prof?.workStartHour, prof?.workStartMinute);
+  document.getElementById("pf-end-hour").value = hourMinuteToTimeValue(prof?.workEndHour, prof?.workEndMinute);
+  document.getElementById("pf-lunch-start-hour").value = hourMinuteToTimeValue(prof?.lunchStartHour, prof?.lunchStartMinute);
+  document.getElementById("pf-lunch-end-hour").value = hourMinuteToTimeValue(prof?.lunchEndHour, prof?.lunchEndMinute);
   const profDays = new Set((prof?.workDays || "").split(",").filter(Boolean));
   document.querySelectorAll("#pf-workdays input").forEach((c) => { c.checked = profDays.has(c.value); });
   pendingProfessionalPhoto = prof?.photoUrl || null;
@@ -4927,10 +4940,10 @@ document.getElementById("professional-form").addEventListener("submit", async (e
   e.preventDefault();
   const id = document.getElementById("pf-id").value;
   const activeColor = document.querySelector("#pf-color-grid .color-swatch.active");
-  const startHour = document.getElementById("pf-start-hour").value;
-  const endHour = document.getElementById("pf-end-hour").value;
-  const lunchStartHour = document.getElementById("pf-lunch-start-hour").value;
-  const lunchEndHour = document.getElementById("pf-lunch-end-hour").value;
+  const start = timeValueToHourMinute(document.getElementById("pf-start-hour").value);
+  const end = timeValueToHourMinute(document.getElementById("pf-end-hour").value);
+  const lunchStart = timeValueToHourMinute(document.getElementById("pf-lunch-start-hour").value);
+  const lunchEnd = timeValueToHourMinute(document.getElementById("pf-lunch-end-hour").value);
   const workDays = Array.from(document.querySelectorAll("#pf-workdays input:checked")).map((c) => c.value).join(",");
   const payload = {
     name: document.getElementById("pf-name").value.trim(),
@@ -4940,10 +4953,14 @@ document.getElementById("professional-form").addEventListener("submit", async (e
     photoUrl: pendingProfessionalPhoto,
     active: document.getElementById("pf-active").checked,
     workDays: workDays || null,
-    workStartHour: startHour === "" ? null : Number(startHour),
-    workEndHour: endHour === "" ? null : Number(endHour),
-    lunchStartHour: lunchStartHour === "" ? null : Number(lunchStartHour),
-    lunchEndHour: lunchEndHour === "" ? null : Number(lunchEndHour),
+    workStartHour: start ? start.hour : null,
+    workStartMinute: start ? start.minute : 0,
+    workEndHour: end ? end.hour : null,
+    workEndMinute: end ? end.minute : 0,
+    lunchStartHour: lunchStart ? lunchStart.hour : null,
+    lunchStartMinute: lunchStart ? lunchStart.minute : 0,
+    lunchEndHour: lunchEnd ? lunchEnd.hour : null,
+    lunchEndMinute: lunchEnd ? lunchEnd.minute : 0,
     procedureIds: Array.from(document.querySelectorAll("#pf-procedures-list input:checked")).map((c) => c.value),
   };
   if (!payload.name) return;
@@ -5628,10 +5645,10 @@ function loadClinicDataForm() {
   document.getElementById("cd-name").value = clinic.name;
   document.getElementById("cd-phone").value = clinic.whatsappPhone;
   document.getElementById("cd-timezone").value = clinic.timezone ?? "America/Sao_Paulo";
-  document.getElementById("cd-start-hour").value = clinic.workStartHour ?? 9;
-  document.getElementById("cd-end-hour").value = clinic.workEndHour ?? 19;
-  document.getElementById("cd-lunch-start-hour").value = clinic.lunchStartHour ?? "";
-  document.getElementById("cd-lunch-end-hour").value = clinic.lunchEndHour ?? "";
+  document.getElementById("cd-start-hour").value = hourMinuteToTimeValue(clinic.workStartHour ?? 9, clinic.workStartMinute);
+  document.getElementById("cd-end-hour").value = hourMinuteToTimeValue(clinic.workEndHour ?? 19, clinic.workEndMinute);
+  document.getElementById("cd-lunch-start-hour").value = hourMinuteToTimeValue(clinic.lunchStartHour, clinic.lunchStartMinute);
+  document.getElementById("cd-lunch-end-hour").value = hourMinuteToTimeValue(clinic.lunchEndHour, clinic.lunchEndMinute);
 
   const workDays = (clinic.workDays ?? "1,2,3,4,5,6").split(",");
   document.querySelectorAll("#cd-workdays input[type=checkbox]").forEach((box) => {
@@ -5679,12 +5696,18 @@ document.getElementById("clinic-data-form").addEventListener("submit", async (e)
   const name = document.getElementById("cd-name").value.trim();
   const whatsappPhone = document.getElementById("cd-phone").value.trim();
   const timezone = document.getElementById("cd-timezone").value.trim();
-  const workStartHour = Number(document.getElementById("cd-start-hour").value);
-  const workEndHour = Number(document.getElementById("cd-end-hour").value);
-  const lunchStartRaw = document.getElementById("cd-lunch-start-hour").value;
-  const lunchEndRaw = document.getElementById("cd-lunch-end-hour").value;
-  const lunchStartHour = lunchStartRaw === "" ? null : Number(lunchStartRaw);
-  const lunchEndHour = lunchEndRaw === "" ? null : Number(lunchEndRaw);
+  const start = timeValueToHourMinute(document.getElementById("cd-start-hour").value);
+  const end = timeValueToHourMinute(document.getElementById("cd-end-hour").value);
+  const lunchStart = timeValueToHourMinute(document.getElementById("cd-lunch-start-hour").value);
+  const lunchEnd = timeValueToHourMinute(document.getElementById("cd-lunch-end-hour").value);
+  const workStartHour = start ? start.hour : 9;
+  const workStartMinute = start ? start.minute : 0;
+  const workEndHour = end ? end.hour : 19;
+  const workEndMinute = end ? end.minute : 0;
+  const lunchStartHour = lunchStart ? lunchStart.hour : null;
+  const lunchStartMinute = lunchStart ? lunchStart.minute : 0;
+  const lunchEndHour = lunchEnd ? lunchEnd.hour : null;
+  const lunchEndMinute = lunchEnd ? lunchEnd.minute : 0;
   const workDays = Array.from(document.querySelectorAll("#cd-workdays input[type=checkbox]:checked"))
     .map((box) => box.value)
     .join(",");
@@ -5700,7 +5723,7 @@ document.getElementById("clinic-data-form").addEventListener("submit", async (e)
   await api(`/clinics/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, whatsappPhone, timezone, workStartHour, workEndHour, lunchStartHour, lunchEndHour, workDays, closedOnHolidays, notifyPhone, notifyEvents, assistantPersona, assistantPersonaName }),
+    body: JSON.stringify({ name, whatsappPhone, timezone, workStartHour, workStartMinute, workEndHour, workEndMinute, lunchStartHour, lunchStartMinute, lunchEndHour, lunchEndMinute, workDays, closedOnHolidays, notifyPhone, notifyEvents, assistantPersona, assistantPersonaName }),
   });
 
   await loadClinics();

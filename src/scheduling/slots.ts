@@ -18,10 +18,10 @@ export interface BusyInterval {
 
 export interface ClinicHours {
   timezone: string;
-  workStartHour: number;
-  workEndHour: number;
-  lunchStartHour: number | null;
-  lunchEndHour: number | null;
+  workStartMinutes: number; // minutos desde meia-noite (ex.: 8h30 = 510)
+  workEndMinutes: number;
+  lunchStartMinutes: number | null;
+  lunchEndMinutes: number | null;
   workDays: Set<number>; // 0=domingo .. 6=sabado
   closedOnHolidays: boolean;
 }
@@ -47,9 +47,13 @@ export const SLOT_REASON_PT: Record<SlotReason | "procedure_not_found" | "invali
 interface HoursSource {
   timezone: string;
   workStartHour: number;
+  workStartMinute?: number;
   workEndHour: number;
+  workEndMinute?: number;
   lunchStartHour?: number | null;
+  lunchStartMinute?: number;
   lunchEndHour?: number | null;
+  lunchEndMinute?: number;
   workDays: string;
   closedOnHolidays?: boolean;
 }
@@ -66,36 +70,54 @@ function parseWorkDays(raw: string): Set<number> {
 export function clinicHoursOf(clinic: HoursSource): ClinicHours {
   return {
     timezone: clinic.timezone || "America/Sao_Paulo",
-    workStartHour: clinic.workStartHour,
-    workEndHour: clinic.workEndHour,
-    lunchStartHour: clinic.lunchStartHour ?? null,
-    lunchEndHour: clinic.lunchEndHour ?? null,
+    workStartMinutes: clinic.workStartHour * 60 + (clinic.workStartMinute ?? 0),
+    workEndMinutes: clinic.workEndHour * 60 + (clinic.workEndMinute ?? 0),
+    lunchStartMinutes: clinic.lunchStartHour != null ? clinic.lunchStartHour * 60 + (clinic.lunchStartMinute ?? 0) : null,
+    lunchEndMinutes: clinic.lunchEndHour != null ? clinic.lunchEndHour * 60 + (clinic.lunchEndMinute ?? 0) : null,
     workDays: parseWorkDays(clinic.workDays),
     closedOnHolidays: clinic.closedOnHolidays ?? false,
   };
 }
 
 // Expediente efetivo de um profissional: cada campo dele que estiver preenchido
-// sobrescreve o da clinica; o resto herda. Feriado e sempre decisao da
-// clinica (nao existe "feriado so pra um profissional").
+// sobrescreve o da clinica; o resto herda. O minuto so entra junto da hora
+// correspondente (nunca mistura minuto do profissional com hora da clinica ou
+// vice-versa). Feriado e sempre decisao da clinica (nao existe "feriado so
+// pra um profissional").
 export function resolveHours(
   clinic: HoursSource,
   professional?: {
     workDays: string | null;
     workStartHour: number | null;
+    workStartMinute?: number | null;
     workEndHour: number | null;
+    workEndMinute?: number | null;
     lunchStartHour?: number | null;
+    lunchStartMinute?: number | null;
     lunchEndHour?: number | null;
+    lunchEndMinute?: number | null;
   } | null,
 ): ClinicHours {
   const base = clinicHoursOf(clinic);
   if (!professional) return base;
   return {
     timezone: base.timezone,
-    workStartHour: professional.workStartHour ?? base.workStartHour,
-    workEndHour: professional.workEndHour ?? base.workEndHour,
-    lunchStartHour: professional.lunchStartHour ?? base.lunchStartHour,
-    lunchEndHour: professional.lunchEndHour ?? base.lunchEndHour,
+    workStartMinutes:
+      professional.workStartHour != null
+        ? professional.workStartHour * 60 + (professional.workStartMinute ?? 0)
+        : base.workStartMinutes,
+    workEndMinutes:
+      professional.workEndHour != null
+        ? professional.workEndHour * 60 + (professional.workEndMinute ?? 0)
+        : base.workEndMinutes,
+    lunchStartMinutes:
+      professional.lunchStartHour != null
+        ? professional.lunchStartHour * 60 + (professional.lunchStartMinute ?? 0)
+        : base.lunchStartMinutes,
+    lunchEndMinutes:
+      professional.lunchEndHour != null
+        ? professional.lunchEndHour * 60 + (professional.lunchEndMinute ?? 0)
+        : base.lunchEndMinutes,
     workDays: professional.workDays ? parseWorkDays(professional.workDays) : base.workDays,
     closedOnHolidays: base.closedOnHolidays,
   };
@@ -134,13 +156,11 @@ export function evaluateSlot(params: {
 
     const startMinutes = wc.hour * 60 + wc.minute;
     const endMinutes = startMinutes + durationMin;
-    if (startMinutes < hours.workStartHour * 60 || endMinutes > hours.workEndHour * 60) {
+    if (startMinutes < hours.workStartMinutes || endMinutes > hours.workEndMinutes) {
       return { ok: false, reason: "outside_hours" };
     }
-    if (hours.lunchStartHour != null && hours.lunchEndHour != null) {
-      const lunchStart = hours.lunchStartHour * 60;
-      const lunchEnd = hours.lunchEndHour * 60;
-      if (startMinutes < lunchEnd && endMinutes > lunchStart) {
+    if (hours.lunchStartMinutes != null && hours.lunchEndMinutes != null) {
+      if (startMinutes < hours.lunchEndMinutes && endMinutes > hours.lunchStartMinutes) {
         return { ok: false, reason: "lunch_break" };
       }
     }
@@ -184,8 +204,15 @@ export function generateSlots(params: {
     const wc = wallClockInZone(dayCursor, hours.timezone);
     if (!hours.workDays.has(wc.weekday)) continue;
 
-    for (let hour = hours.workStartHour; hour < hours.workEndHour && slots.length < limit; hour++) {
-      const startUtc = zonedWallClockToUtc(hours.timezone, wc.year, wc.month, wc.day, hour, 0);
+    // Passo de 60min a partir do inicio real do expediente (pode ser 8h30,
+    // 9h... nao precisa ser hora cheia) - preserva o mesmo espacamento de
+    // antes, so desloca a largada quando o expediente nao comeca em hora cheia.
+    for (
+      let cursor = hours.workStartMinutes;
+      cursor < hours.workEndMinutes && slots.length < limit;
+      cursor += 60
+    ) {
+      const startUtc = zonedWallClockToUtc(hours.timezone, wc.year, wc.month, wc.day, Math.floor(cursor / 60), cursor % 60);
       if (evaluateSlot({ startUtc, durationMin, hours, busy, blocks, now }).ok) {
         slots.push({
           start: startUtc,
