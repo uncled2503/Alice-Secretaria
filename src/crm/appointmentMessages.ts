@@ -1,6 +1,8 @@
 import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 import { formatInZone } from "../scheduling/time.js";
+import { notifyStaff } from "./notify.js";
+import { recordAutomatedMessage } from "./conversationLog.js";
 
 // Quando a Alice agenda dentro de uma conversa, a propria resposta dela JA e
 // a confirmacao que o paciente ve. Mas um agendamento criado FORA de uma
@@ -37,7 +39,16 @@ export async function sendAppointmentConfirmationToPatient(appointmentId: string
 
   try {
     await sendText(appt.clinicId, appt.patient.phone, text);
+    await recordAutomatedMessage(appt.patientId, text, "Confirmação de agendamento");
   } catch (err) {
     console.error(`Falha ao enviar confirmação de agendamento para ${appt.patient.phone}:`, err);
+    // So essa chamada unica tenta - sem cron, sem retry, sem varrer historico
+    // (nao reaparece sozinha depois). Por isso precisa avisar a equipe na
+    // hora: se nao avisar, o paciente simplesmente nunca sabe do horario.
+    await notifyStaff(
+      appt.clinicId,
+      "automation_failed",
+      `⚠️ Falha ao enviar a confirmação de agendamento para ${appt.patient.name ?? appt.patient.phone} (${appt.patient.phone}). Confirme com o paciente manualmente.`
+    );
   }
 }
