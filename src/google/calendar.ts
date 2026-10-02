@@ -107,13 +107,22 @@ interface TokenResponse {
   error_description?: string;
 }
 
+// Sem try/catch aqui, uma falha de rede (DNS, timeout, conexao recusada) ao
+// falar com o Google derrubava QUALQUER agendamento criado/remarcado com a
+// integracao ligada - o erro subia sem tratamento ate o 500 da API inteira.
+// Os chamadores (accessTokenFor/connectFromCode) ja sabem lidar com
+// access_token ausente; so precisam nunca receber uma excecao no lugar.
 async function postToken(body: Record<string, string>): Promise<TokenResponse> {
-  const res = await fetch(TOKEN_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams(body).toString(),
-  });
-  return (await res.json()) as TokenResponse;
+  try {
+    const res = await fetch(TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(body).toString(),
+    });
+    return (await res.json()) as TokenResponse;
+  } catch (err) {
+    return { error: "network_error", error_description: (err as Error).message };
+  }
 }
 
 // Troca o "code" do retorno do Google pelos tokens e salva a conexao.
