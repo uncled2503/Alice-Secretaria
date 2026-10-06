@@ -281,6 +281,12 @@ for (const [name, hint] of [
 }
 if (process.env.NODE_ENV !== "production") console.warn("[config] NODE_ENV != production - cookies sem Secure, cache do site desligado");
 
+// Uma promessa rejeitada sem tratamento (ex.: tarefa em segundo plano com
+// "void") derrubava o processo inteiro e o painel todo dava 502 ate o restart.
+// Loga e segue: uma falha isolada nao pode tirar a clinica do ar.
+process.on("unhandledRejection", (reason) => console.error("[process] unhandledRejection:", reason));
+process.on("uncaughtException", (err) => console.error("[process] uncaughtException:", err));
+
 const port = Number(process.env.PORT ?? 3000);
 app.listen(port, () => {
   console.log(`Alice rodando na porta ${port}`);
