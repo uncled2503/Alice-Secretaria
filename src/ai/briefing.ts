@@ -16,133 +16,302 @@ const MODEL = process.env.OPENAI_BRIEFING_MODEL ?? "gpt-4o";
 // ---------------------------------------------------------------------------
 export const BRIEFING_TEMPLATE = `BRIEFING DE CONFIGURACAO — ALICE (secretaria virtual da clinica)
 
-Responda o que souber. Pode deixar em branco o que nao se aplica e escrever em
-texto corrido nas secoes de lista. QUANTO MAIS COMPLETO, MELHOR: o objetivo
-deste briefing e treinar a Alice por completo numa unica rodada, sem precisar
-ficar voltando pra perguntar mais depois.
+Este questionario serve para treinar a Alice por completo numa unica rodada. Ele e longo
+de proposito: quanto mais voce responder, menos a Alice vai errar, improvisar ou chamar
+a equipe a toa. Pode levar de 40 minutos a 1 hora. Se preferir, responda por audio e peca
+para transcreverem.
 
-IMPORTANTE: se voces ja tem qualquer material pronto (manual de atendimento,
-script de vendas, mensagens que ja usam no WhatsApp hoje, print de conversas
-reais, lista de perguntas e respostas frequentes, tabela de precos, etc.),
-NAO reescreva do zero — cole esse material inteiro junto com as respostas,
-mesmo que fora do formato abaixo. E o material mais valioso que existe pra
-treinar a Alice, e a IA sabe aproveitar texto solto.
+Como responder:
+- Responda o que souber e deixe em branco o que nao se aplica. Pode escrever em texto corrido.
+- De EXEMPLOS REAIS sempre que puder (frases que voces falam, conversas que aconteceram). Exemplo vale mais que explicacao.
+- Onde pedir "como responder", escreva do jeito que VOCE responderia ao paciente.
+- Se nao sabe ou ainda nao decidiu algo, escreva "nao decidi" — e melhor que chutar.
+
+IMPORTANTE: se voces ja tem qualquer material pronto (manual de atendimento, script de vendas,
+mensagens que ja usam no WhatsApp, prints de conversas reais, lista de perguntas e respostas,
+tabela de precos, apresentacao da clinica, textos do site/Instagram, termos de consentimento,
+orientacoes pre e pos procedimento), NAO reescreva do zero: cole tudo inteiro junto com as
+respostas, mesmo fora do formato abaixo. E o material mais valioso para treinar a Alice, e a
+IA sabe aproveitar texto solto.
 
 == 1. DADOS DA CLINICA ==
-- Nome da clinica:
+- Nome da clinica (como o paciente conhece):
+- Razao social / CNPJ (se quiser que conste):
 - WhatsApp de atendimento (com DDD) — se tiver mais de um numero, diga QUAL e o oficial que fica conectado a Alice:
+- Instagram da clinica:
+- Site (se tiver):
 - Cidade e estado:
-- Fuso horario (se nao for de Brasilia):
+- Fuso horario (se nao for o de Brasilia):
 - Horario de funcionamento (que horas abre / que horas fecha):
-- Dias de atendimento (ex: segunda a sexta, sabado ate 13h; se so alguns sabados especificos do mes, explique a regra):
-- Numero para receber avisos de agendamento/cancelamento (se quiser, pode ser o mesmo numero de atendimento):
+- Dias de atendimento (ex.: segunda a sexta, sabado ate 13h; se so alguns sabados especificos do mes, explique a regra):
+- Tem intervalo de almoco ou pausa? Em que horario (pode ser meia-hora)?
+- A clinica fecha em feriados nacionais? E em feriados locais ou datas especificas (recesso, ferias coletivas)? Quais:
+- Numero para receber avisos de agendamento/cancelamento (pode ser o mesmo de atendimento):
+- Quais avisos esse numero deve receber: novo agendamento / remarcacao / cancelamento / confirmacao do paciente / pedido de atendimento humano:
 
 == 2. ENDERECO(S) ==
 Para cada unidade:
-- Nome da unidade (ex: Matriz, Unidade Centro):
-- Rua, numero, complemento:
+- Nome da unidade (ex.: Matriz, Unidade Centro):
+- Rua, numero, complemento (sala, andar, bloco):
 - Bairro, cidade, estado, CEP:
-- Como chegar / ponto de referencia / estacionamento:
+- Como chegar / ponto de referencia:
+- Estacionamento (proprio, conveniado, na rua, valor):
+- Acessibilidade (rampa, elevador):
+- Link do Google Maps:
+- Os profissionais atendem em todas as unidades ou cada um em uma? Em quais dias:
 
-== 3. COMO A ALICE SE APRESENTA ==
-- A Alice fala como: ( ) parte da equipe da clinica ( ) secretaria da clinica ( ) secretaria de um profissional
-- Se for de um profissional, qual o nome (ex: Dra. Camila Souza):
-- Nome pelo qual a secretaria se apresenta (padrao: Alice):
-- Area de atuacao da clinica em uma frase (ex: harmonizacao facial, corporal e intima):
+== 3. SOBRE A CLINICA E O PUBLICO ==
+- Resuma a clinica em 2 ou 3 frases, como voce apresentaria a um paciente novo:
+- Area de atuacao em uma frase (ex.: harmonizacao facial, corporal e intima):
 - A clinica e: ( ) so estetica  ( ) so medica  ( ) as duas
-- Estilo de atendimento: ( ) mais direto/comercial (oferece horario, conduz pra agenda)  ( ) mais consultivo (avaliacao primeiro, sem pressao, no ritmo do paciente)
-- O paciente precisa saber qual procedimento quer, ou a clinica prefere que ele passe por avaliacao pra o profissional indicar? (SIM = pode exigir / NAO = sempre oferecer avaliacao)
-- A Alice pode usar emojis? (sim/nao)
-- Tem link de auto-agendamento (o paciente marca sozinho num site)? Qual?
+- Ha quanto tempo atua? Quantos pacientes ja atendeu (se quiser citar)?
+- Quais sao os DIFERENCIAIS da clinica que a Alice pode destacar (tecnologia, tecnica, formacao, estrutura, atendimento, resultado)?
+- Por que o paciente escolhe voces e nao a concorrencia?
+- Quem e o paciente ideal (idade, perfil, o que busca)?
+- Existe um perfil de paciente que voces NAO atendem ou preferem nao atender?
+- De onde vem os pacientes hoje (Instagram, indicacao, Google, anuncios)? E como costumam chegar no WhatsApp (clicaram no anuncio, indicacao, perfil)?
+- Quem sao os principais concorrentes e como a Alice deve (ou nao) falar deles?
+- A clinica tem premios, certificacoes, formacoes ou parcerias que valem ser citados?
+- Pode a Alice citar resultados/casos de pacientes? Em que termos (e o que e proibido por etica/regulamento)?
 
-== 4. TOM DE VOZ, VOCABULARIO E REGRAS ==
-- Como voces gostam de falar com o paciente (formal/cerimonioso, proximo, leve, descontraido...):
-- Tratam o paciente por "voce" e nome, ou por "Senhor(a)"?
-- Tem alguma palavra que a clinica prefere usar no lugar de outra (ex: "avaliacao" em vez de "consulta", "investimento" em vez de "preco/valor")? Liste os pares se tiver:
-- Tem alguma preferencia de formato de mensagem (ex: mensagens curtas, no maximo uma pergunta por vez)?
-- A Alice PODE informar preco pelo WhatsApp, ou so depois de entender o objetivo do paciente / na avaliacao?
-- Voces exigem sinal/entrada pra confirmar o agendamento? Como funciona (valor ou %, precisa mandar comprovante, o saldo e pago quando)?
-- Se for cobrado sinal, ele e devolvido em caso de desistencia ou falta?
-- Politica de cancelamento/remarcacao: com quanto tempo de antecedencia o paciente precisa avisar?
-- O que a Alice NUNCA deve fazer ou dizer:
-- Quando a Alice deve chamar uma pessoa da equipe? (ex: pedido de desconto, negociacao, reclamacao, duvida clinica que so o profissional responde, risco medico, paciente pede pra falar com alguem, envio de exame/laudo/receita/foto pra avaliacao, pedido de diagnostico ou prescricao, problema de pagamento):
-- Tem palavras especificas que devem SEMPRE acionar a transferencia pra equipe (ex: nomes de exames, "dose", "efeito colateral", "emergencia", "dor forte")? Liste:
-- Frase que a Alice usa antes de passar pra uma pessoa (ex: "So um instante que ja verifico isso pra voce"):
-- Quem assume quando a Alice transfere (nome da pessoa):
+== 4. COMO A ALICE SE APRESENTA ==
+- A Alice fala como: ( ) parte da equipe da clinica  ( ) secretaria da clinica  ( ) secretaria de um profissional
+- Se for de um profissional, qual o nome (ex.: Dra. Camila Souza):
+- Nome pelo qual a secretaria se apresenta (padrao: Alice):
+- Ela deve se identificar como assistente virtual/IA, ou atender sem dizer isso? Se o paciente perguntar "e robo?", o que ela responde:
+- Estilo de atendimento: ( ) mais direto/comercial (oferece horario, conduz para a agenda)  ( ) mais consultivo (avaliacao primeiro, sem pressao, no ritmo do paciente)
+- O paciente precisa saber qual procedimento quer, ou a clinica prefere que ele passe por avaliacao para o profissional indicar? (SIM = pode exigir / NAO = sempre oferecer avaliacao)
+- A Alice pode usar emojis? Quais combinam com a clinica e quais nunca usar?
+- Tem link de auto-agendamento (o paciente marca sozinho num site)? Qual? A Alice deve mandar esse link ou agendar ela mesma?
+- A Alice pode responder audios, fotos e documentos que o paciente manda? O que ela deve fazer quando chega um audio (transcrever e responder, pedir que escreva, chamar a equipe):
 
-== 5. PERGUNTAS E OBJECOES MAIS COMUNS ==
-Liste as perguntas ou objecoes que os pacientes de voces mais fazem e como
-preferem que a Alice responda (quanto mais exemplos reais, melhor). Ex:
-- "Achei caro" / "tem desconto?" -> como responder
-- "Vou pensar e te aviso" -> como responder
-- "Moro longe" / "nao tenho tempo" -> como responder
-- Duvidas especificas do publico de voces (medo de algum procedimento, duvida sobre resultado, sobre convenio, etc.)
+== 5. TOM DE VOZ E VOCABULARIO ==
+- Como voces gostam de falar com o paciente (formal/cerimonioso, proximo, leve, descontraido, premium...). Se puder, 3 adjetivos:
+- Tratam o paciente por "voce" e primeiro nome, ou por "Senhor(a)", ou "Dr./Dra."?
+- Palavras que a clinica prefere usar no lugar de outras (ex.: "avaliacao" em vez de "consulta", "investimento" em vez de "preco", "paciente" em vez de "cliente"). Liste os pares:
+- Palavras, girias ou expressoes PROIBIDAS (ex.: "barato", "promocao", "gente", "amiga", "querida"):
+- Formato das mensagens: curtas ou completas? No maximo uma pergunta por vez? Pode usar listas e topicos? Pode usar negrito?
+- Como a Alice cumprimenta (bom dia/boa tarde/boa noite conforme o horario)? Algum bordao de abertura ou de despedida:
+- Cole 3 a 5 mensagens REAIS que voces acham que representam bem o jeito da clinica falar:
+- Cole 1 ou 2 exemplos de como NAO falar (mensagens que voces acham frias, insistentes ou fora do perfil):
 
-== 6. PROCEDIMENTOS / SERVICOS ==
-Para CADA procedimento:
+== 6. REGRAS DE OURO ==
+- O que a Alice NUNCA deve fazer ou dizer (liste todas, mesmo as que parecem obvias):
+- O que a Alice SEMPRE deve fazer em toda conversa:
+- A Alice PODE informar preco pelo WhatsApp, ou so depois de entender o objetivo do paciente / na avaliacao? Se pode, como (valor fechado, "a partir de", faixa):
+- A Alice pode dar desconto, brinde ou condicao especial? Quanto e em que situacao? Ou sempre chama a equipe:
+- A Alice pode prometer resultado, prazo ou "garantia"? Em que termos:
+- A Alice pode dar opiniao clinica, indicar procedimento para a queixa do paciente ou comparar procedimentos? Ate onde:
+- A Alice pode falar de medicamentos, doses, contraindicacoes e efeitos colaterais? Ou so o profissional:
+- Se o paciente perguntar algo que a Alice nao sabe, ela deve: ( ) admitir e chamar a equipe  ( ) dizer que vai verificar e retornar  ( ) outro:
+- O que fazer com pessoas que so querem informacao e somem (insistir? quantas vezes? por quanto tempo?):
+- Existem assuntos sensiveis (politica, religiao, concorrentes, precos de outros lugares, reclamacoes publicas) e como a Alice deve se comportar:
+
+== 7. TRANSFERENCIA PARA A EQUIPE ==
+- Quando a Alice deve chamar uma pessoa? (ex.: pedido de desconto, negociacao, reclamacao, duvida clinica que so o profissional responde, risco medico, paciente pede para falar com alguem, envio de exame/laudo/receita/foto para avaliacao, pedido de diagnostico ou prescricao, problema de pagamento, paciente irritado):
+- Palavras que devem SEMPRE acionar a transferencia (ex.: nomes de exames, "dose", "efeito colateral", "emergencia", "dor forte", "inchaco", "alergia", "processo", "advogado", "Procon"):
+- Frase que a Alice usa antes de passar para uma pessoa (ex.: "So um instante que ja verifico isso pra voce"):
+- Quem assume quando a Alice transfere (nome da pessoa) e em que horarios essa pessoa responde:
+- Se a transferencia acontecer fora do horario da equipe, o que a Alice diz ao paciente (ex.: "retornamos amanha as 9h"):
+- Depois que a equipe assume, a Alice deve ficar quieta naquela conversa? Ate quando (ex.: voltar a atender apos X horas sem resposta da equipe):
+- Urgencias e emergencias (reacao alergica, sangramento, dor intensa, complicacao pos-procedimento): qual o passo a passo e qual o telefone de contato:
+
+== 8. PERGUNTAS E OBJECOES MAIS COMUNS ==
+Liste as perguntas e objecoes que os pacientes mais fazem e COMO a Alice deve responder
+(escreva a resposta do jeito que voces dariam). Quanto mais exemplos reais, melhor:
+- "Achei caro" / "tem desconto?" / "parcela em quantas vezes?":
+- "Vou pensar e te aviso" / "preciso falar com meu marido/esposa":
+- "Moro longe" / "nao tenho tempo" / "nao tenho horario":
+- "Tem como fazer mais barato em outro lugar" / comparacao com concorrente:
+- "Doi?" / "tem risco?" / "fica natural?" / "quanto tempo dura?":
+- "Qual e o melhor para mim?" / "o que voce indica?":
+- "Posso fazer gravida / amamentando / tomando X remedio?":
+- Pedido de foto de antes e depois:
+- Pedido de endereco, estacionamento, como chegar:
+- Outras duvidas ou objecoes especificas do publico de voces (medo de agulha, medo de ficar artificial, duvida sobre resultado, convenio, etc.):
+
+== 9. PROCEDIMENTOS / SERVICOS ==
+Para CADA procedimento (copie o bloco quantas vezes precisar):
 - Nome:
-- Duracao aproximada:
-- Valor (ou "depende de avaliacao"):
-- Formas de pagamento (dinheiro, pix, credito, debito):
+- Categoria (facial, corporal, intima, capilar, cirurgia, estetica, etc.):
+- Quem realiza (profissional):
+- Duracao aproximada da sessao:
+- Valor (ou "depende de avaliacao"). Se varia, de que depende:
+- Formas de pagamento (dinheiro, pix, credito, debito, boleto):
 - Parcela no cartao? Em ate quantas vezes, e a partir de quantas vezes cobra juros?
-- Link de pagamento (se tiver):
-- Descricao curta (o que e, pra quem, cuidados que podem ser ditos):
-- Queixas/objetivos que atende (ex: "rosto cansado", "flacidez"):
-- Beneficios que a Alice pode afirmar:
-- Outros nomes que o paciente usa (ex: "botox"):
-- Quando o resultado costuma aparecer:
+- Desconto a vista?
+- Link de pagamento (se tiver) e chave Pix:
+- Exige sinal/entrada? Valor ou %:
+- Descricao curta (o que e, como funciona, para quem):
+- Queixas/objetivos que atende (ex.: "rosto cansado", "flacidez", "manchas"):
+- Beneficios que a Alice pode afirmar (e os que NAO pode afirmar):
+- Outros nomes que o paciente usa (ex.: "botox", "preenchimento labial", "lipo de papada"):
+- Quando o resultado comeca a aparecer e quanto tempo dura:
+- Quantas sessoes costuma precisar e com qual intervalo:
+- Indicacoes (para quem e) e contraindicacoes (para quem NAO e):
+- Preparo antes (jejum, suspender medicamento, nao tomar sol, vir sem maquiagem, exames):
+- Cuidados depois (o que pode e nao pode, por quantos dias):
+- Efeitos esperados e o que e normal (vermelhidao, inchaco, roxo) — e quando procurar a clinica:
+- Precisa de avaliacao/consulta previa antes de agendar? Ela e paga? Quanto?
+- Pode ser feito no mesmo dia da avaliacao?
+- Tem fotos de antes/depois que a Alice pode enviar? (mande os arquivos separados)
+- Tem video ou material explicativo?
+- E o carro-chefe da clinica? Algum procedimento que voces querem vender mais / que querem priorizar?
 
-== 7. PRODUTOS VENDIDOS (se houver) ==
-- Nome / valor / descricao:
+== 10. PACOTES, COMBOS, PROMOCOES E CONDICOES ==
+- Existem pacotes ou combos (ex.: 3 sessoes com desconto)? Descreva cada um com valor:
+- Existem promocoes ativas ou sazonais? Quais, por quanto tempo e quem pode usar:
+- Programa de indicacao, fidelidade, cashback ou desconto para retorno:
+- Cupons ou condicoes especiais (aniversariante, primeira vez, convenio com empresa):
+- A Alice pode oferecer promocao por conta propria ou so quando o paciente perguntar?
+- Existe prazo de validade de pacote/credito? Pode transferir para outra pessoa?
 
-== 8. PROFISSIONAIS ==
+== 11. PRODUTOS VENDIDOS (se houver) ==
+- Nome / valor / descricao / para que serve / forma de pagamento:
+- A Alice pode vender produto sozinha ou so informa e chama a equipe?
+- Tem entrega/envio? Prazo e valor do frete:
+
+== 12. PROFISSIONAIS E EQUIPE ==
 Para cada profissional:
-- Nome:
-- Mini biografia / especialidade / registro profissional (CRM, CRO etc.):
+- Nome (como a Alice deve chamar: "Dra. Fulana", "Fulana"):
+- Especialidade, formacao e registro profissional (CRM, CRO etc.):
+- Mini biografia que a Alice pode contar (2 ou 3 frases):
 - Instagram:
 - Quais procedimentos realiza:
-- Tem horario proprio diferente do da clinica? Qual?
+- Dias e horarios de atendimento (se diferentes da clinica) e intervalo de almoco:
+- Atende em qual unidade:
+- Atende no mesmo horario de outro profissional (ex.: medico + enfermagem em paralelo)?
+- O paciente pode escolher o profissional ou a clinica decide?
+- Algum profissional atende so retorno, so avaliacao, so um tipo de paciente?
+Equipe de apoio (recepcao, atendimento, financeiro):
+- Nome e funcao de cada pessoa, e o que cada uma resolve (para a Alice saber a quem passar cada assunto):
 
-== 9. PERGUNTAS FREQUENTES (operacionais) ==
-Responda as que fizerem sentido:
+== 13. AGENDAMENTO ==
+- Como funciona o agendamento hoje, do pedido ate a confirmacao:
+- Quanto tempo de antecedencia minima para marcar (ex.: nao marca para o mesmo dia)? E antecedencia maxima:
+- Existe tempo de preparo/limpeza entre pacientes? Quantos minutos:
+- Quais horarios sao mais disputados e quais ficam vagos (a Alice deve priorizar encher os vagos)?
+- A Alice deve oferecer quantas opcoes de horario por vez (ex.: 2 ou 3)?
+- Algum procedimento atende por ordem de chegada (varios pacientes no mesmo horario)?
+- A primeira consulta/avaliacao segue regras diferentes (duracao, valor, profissional)?
+- Precisa de dados do paciente para agendar? Quais (nome completo, CPF, data de nascimento, e-mail, endereco, indicacao):
+- Menores de idade: precisa de responsavel? Como e feito:
+- Usam Google Agenda ou outro sistema de agenda? Qual? Ja existe agenda com pacientes marcados que precisamos considerar:
+- Bloqueios ja conhecidos (ferias, congressos, dias sem atendimento, horarios fixos reservados):
+- Lista de espera: quando nao ha horario, a Alice deve anotar o interesse e avisar se abrir vaga?
+- Encaixes: a recepcao pode encaixar fora do expediente pelo painel? (a Alice sempre segue o horario a risca)
+
+== 14. SINAL, PAGAMENTO E FINANCEIRO ==
+- Exigem sinal/entrada para confirmar o agendamento? Para quais procedimentos? Valor fixo ou %?
+- Como o paciente paga o sinal (Pix, link, transferencia)? Chave Pix e nome do titular:
+- A Alice so confirma o horario depois do comprovante? Quem confere o comprovante:
+- O sinal abate do valor final? O saldo e pago quando e como?
+- O sinal e devolvido em caso de desistencia ou falta? Em que prazo e condicoes:
+- Quanto tempo o paciente tem para pagar o sinal antes de a Alice liberar o horario:
+- Politica de cancelamento e remarcacao: com quanto tempo de antecedencia precisa avisar? Tem multa? Quantas remarcacoes sao permitidas:
+- Politica de atraso (tolerancia de quantos minutos) e de falta (no-show):
+- Aceitam convenio/plano de saude? Emitem nota fiscal e recibo para reembolso:
+- Como lidar com inadimplencia ou pagamento pendente:
+- Reembolso: em que casos e como:
+
+== 15. PERGUNTAS FREQUENTES (operacionais) ==
+Responda as que fizerem sentido e acrescente as suas:
+- Como e a primeira consulta/avaliacao (o que inclui, quanto tempo dura, quanto custa):
+- O paciente precisa levar algo (exames, documentos, acompanhante)?
+- Pode vir acompanhado? Pode levar crianca?
+- Atende criancas, gestantes, idosos?
 - Tem estacionamento? Como funciona?
-- Como e a primeira consulta / avaliacao (o que inclui, quanto tempo dura)?
-- Aceita convenio/plano de saude? Emite nota fiscal/recibo pra reembolso?
-- Precisa levar algo (exames, documentos)?
-- Atende criancas / gestantes?
-- Outras duvidas comuns dos pacientes de voces:
+- Aceita convenio? Emite nota fiscal?
+- Qual a politica de privacidade das fotos e dos dados do paciente?
+- Existe termo de consentimento? O paciente assina antes ou no dia?
+- Da para fazer a distancia/telemedicina/consulta online?
+- Tem Wi-Fi, cafe, espaco de espera? Algo que diferencia a experiencia:
+- Outras duvidas comuns dos pacientes de voces (escreva a pergunta e a resposta):
 
-== 10. MENSAGENS PRONTAS ==
-Cole o texto exato de qualquer mensagem que voces ja usam hoje (mesmo que
-informalmente), por exemplo:
-- Mensagem de boas-vindas / primeiro contato:
-- Mensagem de apresentacao de um procedimento ou consulta:
-- Mensagem pedindo o sinal/pagamento:
-- Mensagem de confirmacao de horario:
-- Mensagem pra quando nao entende o que o paciente escreveu:
-- Mensagem de encerramento/despedida:
+== 16. MENSAGENS PRONTAS ==
+Cole o TEXTO EXATO de qualquer mensagem que voces ja usam hoje (mesmo informalmente). Se a Alice
+deve usa-la palavra por palavra, escreva "usar exatamente". Se for so referencia de tom, escreva "adaptar":
+- Boas-vindas / primeiro contato:
+- Resposta a quem pergunta so "quanto custa?":
+- Apresentacao da clinica:
+- Apresentacao de cada procedimento ou consulta:
+- Convite para avaliacao:
+- Pedido de sinal/pagamento (com Pix):
+- Confirmacao de horario agendado:
+- Orientacoes antes do procedimento:
+- Orientacoes depois do procedimento:
+- Lembrete de consulta:
+- Mensagem quando o paciente falta:
+- Mensagem quando o paciente cancela ou remarca:
+- Mensagem para quem sumiu da conversa (recontato):
+- Mensagem quando nao entende o que o paciente escreveu:
+- Mensagem fora do horario de atendimento:
+- Mensagem de agradecimento/encerramento/despedida:
+- Pedido de avaliacao no Google ou indicacao:
 
-== 11. AUTOMACOES (a Alice envia sozinha) ==
-- Lembrete de consulta: quer? Quantas horas antes (ex: 24h)?
-- Recontato de quem sumiu na conversa: quer? Depois de quanto tempo sem responder (ex: 2 dias)?
-- Pos-procedimento (cuidados/acompanhamento): quer? Pra quais procedimentos e quantos dias depois?
-- Renovacao (retomar contato meses depois pra refazer): quais procedimentos e de quanto em quanto tempo (ex: toxina a cada 6 meses)?
-- Recuperacao de paciente inativo ha muito tempo (ex: 6 meses sem contato): quer? Qual mensagem?
-- Mensagem de aniversario: quer? Em que horario?
+== 17. AUTOMACOES (a Alice envia sozinha) ==
+- Lembrete de consulta: quer? Quantas horas/dias antes (pode ser mais de um, ex.: 48h e 3h)? Pede confirmacao de presenca? O que fazer se o paciente nao confirmar:
+- Recontato de quem sumiu na conversa: quer? Depois de quanto tempo sem responder? Quantas tentativas e com que intervalo? Em que horarios NAO pode mandar (ex.: noite, domingo):
+- Confirmacao do agendamento logo apos marcar: quer mandar mensagem ao paciente? Qual texto:
+- Pos-procedimento (cuidados/acompanhamento): quer? Para quais procedimentos, quantos dias depois, e qual mensagem para cada um:
+- Pesquisa de satisfacao (NPS): quer? Quantas horas depois do atendimento? A partir de que nota pedir avaliacao no Google? Link do Google Meu Negocio:
+- Renovacao (retomar contato meses depois para refazer): quais procedimentos e de quanto em quanto tempo (ex.: toxina a cada 6 meses):
+- Recuperacao de paciente inativo ha muito tempo (ex.: 6 meses sem contato): quer? Qual mensagem:
+- Lembrete de renovacao de receita/retorno:
+- Mensagem de aniversario: quer? Em que horario? Com algum mimo:
+- Datas comemorativas (Dia das Maes, Black Friday etc.): quer disparos? Quais:
+- Disparos em massa (campanhas/promocoes): quer usar? Quem aprova o texto:
+- Em quais horarios e dias NUNCA enviar mensagem automatica:
 
-== 12. ROTEIROS ESPECIFICOS ==
-Descreva o passo a passo que a Alice deve seguir (quando ja existir um jeito
-certo de conduzir a conversa) pra cada situacao que fizer sentido pra voces:
-- Primeiro atendimento / qualificacao do paciente:
+== 18. ROTEIROS ESPECIFICOS ==
+Descreva o passo a passo que a Alice deve seguir (quando ja existe um jeito certo de conduzir)
+em cada situacao. Quanto mais detalhado, melhor — pode escrever como dialogo:
+- Primeiro atendimento / qualificacao do paciente (o que perguntar, em que ordem):
 - Pedido de preco antes de entender o que o paciente quer:
+- Paciente indeciso sobre qual procedimento fazer:
 - Agendamento (do interesse ate a confirmacao, incluindo sinal se houver):
+- Paciente que ja e cliente e quer marcar retorno:
 - Remarcacao ou cancelamento:
-- Contorno de objecoes:
+- Paciente que faltou:
+- Contorno de objecoes (preco, tempo, medo, indecisao):
+- Paciente que mandou foto, exame ou receita:
 - Intercorrencia, urgencia ou duvida clinica fora do que a Alice pode responder:
+- Reclamacao ou paciente insatisfeito:
+- Paciente que pede desconto:
+- Indicacao de amigo/familiar:
+- Fechamento da conversa quando o paciente agradece ou diz que vai pensar:
 
-== 13. OBSERVACOES LIVRES E MATERIAIS EXTRAS ==
-- Qualquer coisa importante que nao coube acima:
-- Cole aqui qualquer manual, script, tabela de precos ou historico de conversas que ajude a treinar a Alice:
+== 19. TRIAGEM E QUALIFICACAO ==
+- Quais perguntas a Alice deve fazer para entender o paciente antes de oferecer o horario:
+- Que informacoes ela deve registrar sobre o paciente (queixa principal, objetivo, orcamento, urgencia, como conheceu a clinica, ja fez algo parecido):
+- O que torna um paciente "quente" (pronto para agendar) e o que e "frio" (so curiosidade):
+- Quando um paciente deve ser considerado desqualificado (fora da regiao, fora do perfil, so pesquisando preco) e como a Alice encerra com educacao:
+- O que a Alice faz com pacientes que ja foram atendidos (reconhece, agradece, oferece retorno):
+- Etapas do funil de vendas que a clinica usa (ex.: novo contato → em conversa → avaliacao agendada → compareceu → fechou → perdido):
+- Em que momento cada etapa muda (ex.: marcou avaliacao = "avaliacao agendada"):
+
+== 20. ANUNCIOS E MARKETING (se houver) ==
+- A clinica anuncia (Instagram/Facebook/Google)? Qual o investimento e a meta:
+- Mensagens que chegam de anuncio: a Alice deve tratar de forma diferente? Como (ex.: "vi seu anuncio de X"):
+- Quais campanhas estao rodando e que oferta cada uma promete (para a Alice nao contradizer o anuncio):
+- Quer medir resultado real dos anuncios (agendamento, comparecimento, venda)? Tem Pixel/Dataset da Meta e quem administra:
+- URL do site e das paginas de destino dos anuncios:
+- Quais etapas contam como venda fechada, lead qualificado e perdido:
+
+== 21. LGPD, ETICA E LIMITES LEGAIS ==
+- Regras do conselho profissional que a Alice precisa respeitar (ex.: CFM, CRO, CRBM — proibicao de divulgar preco, promessa de resultado, antes e depois):
+- A Alice pode enviar fotos de antes e depois? So com autorizacao do paciente?
+- Como tratar dados sensiveis (fotos, exames, historico de saude) enviados pelo WhatsApp:
+- Como o paciente pede para ser removido de mensagens automaticas e o que a Alice responde:
+- Termos de uso, consentimento ou aviso de privacidade que a Alice deve citar:
+- Existe algo que a Alice jamais pode fazer por determinacao legal ou do conselho:
+
+== 22. OBSERVACOES LIVRES E MATERIAIS EXTRAS ==
+- Qualquer coisa importante que nao coube acima (casos dificeis que ja aconteceram, erros que quer evitar, manias dos pacientes):
+- Como e um atendimento PERFEITO para voces? Descreva ou cole um exemplo real:
+- Como e um atendimento RUIM? O que mais incomoda quando acontece:
+- O que a clinica espera da Alice nos primeiros 30 dias (metas: mais agendamentos, menos falta, menos trabalho da recepcao):
+- Cole aqui qualquer manual, script, tabela de precos, historico de conversas, textos do site/Instagram ou documentos que ajudem a treinar a Alice:
 `;
 
 // ---------------------------------------------------------------------------
@@ -407,6 +576,11 @@ Regras:
 - Secao "mensagens prontas": cada mensagem colada pelo cliente vira um template com mode "exact" (o cliente deu o texto literal) e o whenToUse explicando quando usar. Mensagens de boas-vindas, sinal, confirmacao, "nao entendi" e despedida sao itens tipicos.
 - Secao "roteiros especificos": cada resposta vira um playbook, com scriptType o mais proximo da lista (primeiro_atendimento, preco, agendamento, remarcacao, objecoes, transferir). Transforme a descricao em passos curtos e acionaveis.
 - Politica de cancelamento, devolucao do sinal e palavras-gatilho de transferencia viram rules de categoria "agendamento" (cancelamento/sinal) ou "chamar_equipe" (palavras-gatilho e criterios de transferencia).
+- Secoes "sobre a clinica e o publico", "regras de ouro", "transferencia", "agendamento", "sinal/pagamento/financeiro", "triagem e qualificacao" e "LGPD/etica": cada instrucao objetiva vira uma rule (agendamento, pagamento, tom_de_voz, chamar_equipe ou procedimentos conforme o assunto); diferenciais, historia da clinica, equipe de apoio, politicas e informacoes factuais viram faqs (com a pergunta que o paciente faria); passo a passo de conduta vira playbook. Palavras proibidas e vocabulario preferido viram rule de tom_de_voz.
+- Secao "procedimentos": indicacoes, contraindicacoes, preparo, cuidados pos, efeitos esperados e numero de sessoes que nao tem campo proprio entram na description do procedimento (curto) e/ou viram faqs ("Quais os cuidados depois de X?"). Nunca afirme beneficio ou contraindicacao que o cliente nao escreveu.
+- Secao "pacotes, combos, promocoes": cada pacote/promocao com valor vira uma faq e, se houver regra de quem pode oferecer, uma rule de pagamento.
+- Secao "anuncios e marketing": ofertas de campanha e tratamento de lead de anuncio viram rules/faqs; dados de Pixel/token/etapas NAO sao configurados aqui - registre em warnings para configuracao manual.
+- Itens que o painel configura a parte (intervalo de almoco, feriados, bloqueios de agenda, Google Agenda, importacao de contatos, etapas do funil, fotos de procedimento, chave Pix): registre-os em warnings de forma curta e objetiva ("Configurar manualmente: intervalo de almoco 12h-13h30") para a equipe aplicar depois.
 - Se o cliente colar um manual, script ou historico de conversa fora do formato do questionario (secao de observacoes/materiais extras ou em qualquer lugar do texto), extraia dele TUDO que der pras categorias acima (procedimentos, precos, tom de voz, mensagens exatas, objecoes, roteiros) em vez de jogar so em "warnings". So use warnings pro que realmente nao deu pra aproveitar.
 - warnings: liste o que ficou ambiguo, incompleto ou que voce nao conseguiu mapear, pra pessoa revisar depois.
 - Nao invente valor, prazo, beneficio ou politica que nao esteja no briefing.`;
@@ -627,7 +801,7 @@ export async function parseBriefing(text: string): Promise<ParseResult> {
       model: MODEL,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: clean.slice(0, 60_000) },
+        { role: "user", content: clean.slice(0, 150_000) },
       ],
       tools,
       tool_choice: { type: "function", function: { name: "save_briefing" } },
