@@ -608,7 +608,7 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
   if (!reminder) {
     await prisma.reminderRule.create({
       data: {
-        clinicId: clinic.id, hoursBefore: 24, active: true,
+        clinicId: clinic.id, hoursBefore: 24, active: false, // desligado ate a Lisboa validar o fluxo (evita disparo ao conectar)
         message: "Oi, {primeiro_nome}! 💗 Passando para lembrar do seu atendimento amanhã, {data_hora}, aqui na Lisboa Beauty Center. Podemos confirmar sua presença? ✨",
       },
     });
@@ -619,7 +619,7 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
   if (!birthday) {
     await prisma.birthdayRule.create({
       data: {
-        clinicId: clinic.id, name: birthdayName, sendHour: 10, active: true,
+        clinicId: clinic.id, name: birthdayName, sendHour: 10, active: false, // idem: ligar so depois de conferir os contatos importados
         message: "Feliz aniversário, {primeiro_nome}! 🎀 A equipe da Lisboa Beauty Center te deseja um dia muito especial. 💗",
       },
     });
@@ -658,7 +658,7 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
     prisma.messageTemplate.count({ where: { clinicId: clinic.id } }),
     prisma.customRule.count({ where: { clinicId: clinic.id, status: "active" } }),
     prisma.playbook.count({ where: { clinicId: clinic.id, active: true } }),
-    prisma.reminderRule.count({ where: { clinicId: clinic.id, active: true } }),
+    prisma.reminderRule.count({ where: { clinicId: clinic.id } }),
   ]);
 
   return {
@@ -690,6 +690,7 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
       "Meta/Pixel (Dataset, token, site, responsável): PENDENTE. Funil do cliente bate com o padrão da Alice.",
       "Bios das profissionais e Instagram delas: PENDENTES.",
       "Pacotes e combos (valores, validade) e campanhas ativas: só a regra geral foi cadastrada; os valores precisam ser incluídos.",
+      "AUTOMAÇÕES DESLIGADAS de propósito (lembrete 24h, aniversário, recontato, reativação): ligar uma a uma no painel só depois de a Lisboa conectar, importar os contatos e validar o fluxo. Evita disparo em massa e risco de banimento do número.",
       "Login do cliente: usado lisboabeauty@aliceconversa.com por padrão (confirmar).",
     ],
   };
