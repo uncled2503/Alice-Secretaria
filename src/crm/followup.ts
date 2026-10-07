@@ -56,6 +56,17 @@ function withinWindow(hour: number, start: number | null, end: number | null): b
   return start <= end ? hour >= start && hour < end : hour >= start || hour < end;
 }
 
+// Travas contra disparo em massa (risco de banimento do numero). Incidente:
+// ao reconectar o WhatsApp de uma clinica, todas as conversas antigas viraram
+// "due" ao mesmo tempo e o recontato foi pra todo mundo de uma vez.
+// - MAX_OVERDUE_MS: nunca manda recontato atrasado alem desta tolerancia
+//   (silencio passou muito do ponto da regra = conversa fria, nao recontato).
+// - MAX_SENDS_PER_CLINIC: teto por clinica a cada execucao (15min).
+// - pausa aleatoria entre envios, pra nao parecer rajada.
+const MAX_OVERDUE_MS = 3 * 24 * 3_600_000;
+const MAX_SENDS_PER_CLINIC = 8;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 // Verifica cada conversa aberta e dispara a proxima mensagem da cascata de
 // recontato quando o paciente fica um tempo sem responder (silencio contado a
 // partir da ultima mensagem DELE).
@@ -63,11 +74,12 @@ export async function runFollowUpCheck(): Promise<void> {
   stagesCache.clear();
   clinicCache.clear();
   rulesCache.clear();
+  const sentByClinic = new Map<string, number>();
 
   const conversations = await prisma.conversation.findMany({
     where: { status: "active", humanTakeover: false, patient: { clinic: PAID_CLINIC_WHERE } },
     include: {
-      patient: true,
+      patient: { include: { clinic: { select: { importStatus: true } } } },
       messages: { where: { role: "user" }, orderBy: { createdAt: "desc" }, take: 1 },
     },
   });
@@ -77,6 +89,7 @@ export async function runFollowUpCheck(): Promise<void> {
     if (!lastPatientMessage) continue;
 
     const clinicId = conversation.patient.clinicId;
+    if (conversation.patient.clinic.importStatus === "running") continue; // importando historico: nada de disparo
     const stages = await cachedStages(clinicId);
     const recoveryEligible = new Set(stages.filter((s) => s.kind === "aberta").map((s) => s.stageId));
 
@@ -134,6 +147,9 @@ export async function runFollowUpCheck(): Promise<void> {
     const silenceMin = (Date.now() - lastPatientMessage.createdAt.getTime()) / 60_000;
     const thresholdMin = rule.afterMinutes > 0 ? rule.afterMinutes : rule.afterDays * 1440;
     if (silenceMin < thresholdMin) continue;
+    if (silenceMin - thresholdMin > MAX_OVERDUE_MS / 60_000) continue; // conversa fria demais, nao recontata
+
+    if ((sentByClinic.get(clinicId) ?? 0) >= MAX_SENDS_PER_CLINIC) continue; // o resto fica pra proxima execucao
 
     const clinic = await cachedClinic(clinicId);
     if (!withinWindow(localHour(clinic.timezone), rule.sendWindowStart, rule.sendWindowEnd)) continue;
@@ -154,6 +170,7 @@ export async function runFollowUpCheck(): Promise<void> {
       continue;
     }
 
+    sentByClinic.set(clinicId, (sentByClinic.get(clinicId) ?? 0) + 1);
     await prisma.message.create({
       data: { conversationId: conversation.id, role: "assistant", content: text, authorName: "Recontato automático" },
     });
@@ -174,6 +191,7 @@ export async function runFollowUpCheck(): Promise<void> {
         note: "sem resposta no recontato",
       });
     }
+    await sleep(3000 + Math.random() * 5000);
   }
 }
 
