@@ -48,6 +48,10 @@ import { seedDrSaulo } from "../maintenance/seedDrSaulo.js";
 import { seedTeste } from "../maintenance/seedTeste.js";
 import { seedDiamondClinic } from "../maintenance/seedDiamondClinic.js";
 import { seedLisboa } from "../maintenance/seedLisboa.js";
+import { connectAccount, disconnectAccount, ceStatusFor } from "../clinicaexperts/client.js";
+import { syncCatalog } from "../clinicaexperts/sync.js";
+import { invalidateCeCache } from "../clinicaexperts/availability.js";
+import { pushAppointmentInBackground, removeAppointmentInBackground } from "../integrations/calendarSync.js";
 import { setupIsacFollowup } from "../maintenance/setupIsacFollowup.js";
 import {
   googleConfigured,
@@ -58,8 +62,6 @@ import {
   disconnect as disconnectGoogle,
   statusFor as googleStatusFor,
   invalidateBusyCache as invalidateGoogleBusyCache,
-  pushAppointmentInBackground,
-  removeAppointmentInBackground,
 } from "../google/calendar.js";
 import { notifyStaff } from "../crm/notify.js";
 import { sendAppointmentConfirmationToPatient } from "../crm/appointmentMessages.js";
@@ -3615,6 +3617,108 @@ apiRouter.patch(
     });
     invalidateGoogleBusyCache(clinic.id);
     res.json(await googleStatusFor(clinic.id));
+  })
+);
+
+// ======================= CLINICA EXPERTS ====================================
+// Liga a Alice ao sistema de agenda da clinica: ela so oferece horario que o
+// Clinica Experts diz estar livre e espelha la o que agenda/remarca/cancela.
+
+apiRouter.get(
+  "/clinica-experts/status",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    res.json(await ceStatusFor(clinic.id));
+  })
+);
+
+apiRouter.post(
+  "/clinica-experts/connect",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const { token } = req.body as { token?: string };
+    if (!token?.trim()) {
+      res.status(400).json({ error: "Cole o token da API do Clínica Experts." });
+      return;
+    }
+    const result = await connectAccount(clinic.id, token);
+    if (!result.ok) {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+    invalidateCeCache(clinic.id);
+    await logActivity({
+      clinicId: clinic.id,
+      type: "integration_connected",
+      area: "agenda",
+      title: "Clínica Experts conectado",
+      description: "A Alice passa a respeitar a agenda do Clínica Experts.",
+      actorName: req.staff?.name ?? null,
+    });
+    res.json(await ceStatusFor(clinic.id));
+  })
+);
+
+apiRouter.post(
+  "/clinica-experts/disconnect",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    await disconnectAccount(clinic.id);
+    invalidateCeCache(clinic.id);
+    await logActivity({
+      clinicId: clinic.id,
+      type: "integration_disconnected",
+      area: "agenda",
+      title: "Clínica Experts desconectado",
+      description: "A Alice voltou a usar só a agenda dela.",
+      actorName: req.staff?.name ?? null,
+    });
+    res.json(await ceStatusFor(clinic.id));
+  })
+);
+
+apiRouter.patch(
+  "/clinica-experts/settings",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const { syncOut, blockBusy } = req.body as { syncOut?: boolean; blockBusy?: boolean };
+    const account = await prisma.clinicaExpertsAccount.findUnique({ where: { clinicId: clinic.id } });
+    if (!account) {
+      res.status(404).json({ error: "Clínica Experts não está conectado nesta clínica." });
+      return;
+    }
+    await prisma.clinicaExpertsAccount.update({
+      where: { clinicId: clinic.id },
+      data: {
+        ...(typeof syncOut === "boolean" ? { syncOut } : {}),
+        ...(typeof blockBusy === "boolean" ? { blockBusy } : {}),
+      },
+    });
+    invalidateCeCache(clinic.id);
+    res.json(await ceStatusFor(clinic.id));
+  })
+);
+
+// Importa profissionais e procedimentos do Clinica Experts (so cria/vincula,
+// nunca sobrescreve o que a clinica ja editou). Pode demorar alguns segundos.
+apiRouter.post(
+  "/clinica-experts/sync-catalog",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const result = await syncCatalog(clinic.id);
+    if (!result.ok) {
+      res.status(502).json({ error: result.error ?? "Falha ao importar do Clínica Experts." });
+      return;
+    }
+    await logActivity({
+      clinicId: clinic.id,
+      type: "briefing_applied",
+      area: "agenda",
+      title: "Catálogo importado do Clínica Experts",
+      description: `+${result.professionals.created} profissionais, +${result.procedures.created} procedimentos (${result.professionalLinks} vínculos de profissional).`,
+      actorName: req.staff?.name ?? null,
+    });
+    res.json(result);
   })
 );
 

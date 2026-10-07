@@ -23,70 +23,9 @@ const SEED_MARKER = "seed:lisboa";
 
 const HANDOFF_PHRASE = "Claro! Vou encaminhar sua mensagem para nossa equipe responsável verificar isso com atenção para você. ✨";
 
-// --- Procedimentos -----------------------------------------------------
-// O briefing so trouxe o PORTFOLIO (nomes). Nao veio preco, duracao,
-// descricao nem cuidados: por isso priceVariable=true (a Alice nao inventa
-// valor) e duracao padrao de 60 min - ver pending[]. Biomedicas fazem tudo;
-// esteticistas ficam so com o que nao e injetavel/tecnologia de habilitacao.
-type Proc = { name: string; aliases?: string; injectable?: boolean };
-const PROCEDURES: readonly Proc[] = [
-  // Tecnologias e peelings
-  { name: "HIPRO", injectable: true },
-  { name: "Lavieen", injectable: true },
-  { name: "Black Peel" },
-  { name: "Laser CO2", aliases: "CO2, laser de CO2", injectable: true },
-  { name: "Hibrius" },
-  // Injetaveis faciais
-  { name: "Toxina Botulínica", aliases: "botox, toxina", injectable: true },
-  { name: "Elleva", aliases: "bioestimulador Elleva", injectable: true },
-  { name: "Radiesse", aliases: "bioestimulador Radiesse", injectable: true },
-  { name: "Sculptra", aliases: "bioestimulador Sculptra", injectable: true },
-  { name: "Fios de PDO", aliases: "fios PDO, fio de sustentação", injectable: true },
-  { name: "Preenchimento Labial", aliases: "preenchimento de lábios, preenchimento labial, lábios", injectable: true },
-  { name: "Preenchimento de Olheiras", aliases: "olheiras, preenchimento olheira", injectable: true },
-  { name: "Preenchimento Malar", aliases: "malar, maçã do rosto", injectable: true },
-  { name: "Preenchimento de Mandíbula", aliases: "mandíbula, contorno de mandíbula", injectable: true },
-  { name: "Preenchimento de Mento", aliases: "mento, queixo, preenchimento de queixo", injectable: true },
-  { name: "Preenchimento de Têmporas", aliases: "têmporas, preenchimento de têmpora", injectable: true },
-  { name: "Preenchimento de Marionete", aliases: "marionete, linha de marionete", injectable: true },
-  { name: "Preenchimento de Sulco Nasogeniano", aliases: "sulco nasogeniano, bigode chinês, bigode chines", injectable: true },
-  { name: "Papada com Enzimas", aliases: "enzima na papada, lipo de papada, papada", injectable: true },
-  { name: "Enzima Intramuscular", aliases: "enzimas, enzima", injectable: true },
-  // Corporal
-  { name: "Criolipólise de Placas", aliases: "criolipólise, criolipolise" },
-  { name: "Criofrequência", aliases: "criofrequencia" },
-  { name: "Lipocavitação / Heccus", aliases: "lipocavitação, lipocavitacao, heccus" },
-  { name: "Radiofrequência", aliases: "radiofrequencia" },
-  { name: "Ondas de Choque" },
-  { name: "Endermologia" },
-  { name: "Carboxiterapia", injectable: true },
-  { name: "CM Slim", aliases: "cm slim" },
-  { name: "Drenagem", aliases: "drenagens, drenagem linfática, drenagem facial, drenagem corporal" },
-  { name: "Subcisão para Celulite", aliases: "subcisão, subcisao, celulite", injectable: true },
-  { name: "Secagem de Vasinhos", aliases: "vasinhos, escleroterapia", injectable: true },
-  { name: "Ozonioterapia", injectable: true },
-  { name: "Pós-operatório", aliases: "pos operatorio, pós operatório" },
-  // Pele
-  { name: "Limpeza de Pele" },
-  { name: "Peeling Químico", aliases: "peeling" },
-  { name: "Microagulhamento", aliases: "microagulha" },
-];
-
-const EVALUATION = "Avaliação Estética Gratuita";
-
-// --- Profissionais -------------------------------------------------------
-// Briefing: Sabrina terca e quinta 12h-21h; Amanda sabado 8h-15h; demais
-// "seguir agenda". O sistema so tem UM horario de expediente por clinica
-// (8h-21h) e nao tem horario por dia da semana: pra Alice nunca oferecer
-// sabado depois das 15h, so a Amanda foi liberada no sabado, e as demais
-// ficaram de segunda a sexta - ver pending[].
-const PROFESSIONALS = [
-  { name: "Amanda", kind: "bio", workDays: "6", start: 8, end: 15, bio: "Biomédica com habilitação/pós em estética e CRBM ativo.", color: "#ec4899" },
-  { name: "Sabrina", kind: "bio", workDays: "2,4", start: 12, end: 21, bio: "Biomédica com habilitação/pós em estética e CRBM ativo.", color: "#8b5cf6" },
-  { name: "Talita", kind: "est", workDays: "1,2,3,4,5", start: 8, end: 21, bio: null, color: "#0ea5e9" },
-  { name: "Adriana", kind: "est", workDays: "1,2,3,4,5", start: 8, end: 21, bio: null, color: "#10b981" },
-  { name: "Suelen", kind: "est", workDays: "1,2,3,4,5", start: 8, end: 21, bio: null, color: "#f59e0b" },
-] as const;
+// Procedimentos e profissionais NAO sao criados aqui: vem do Clinica Experts
+// (precos, duracoes e quem executa de verdade) pelo botao "Importar do Clinica
+// Experts" em Configuracoes > Clinica Experts.
 
 // --- FAQ -----------------------------------------------------------------
 const FAQS = [
@@ -634,51 +573,6 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
     });
   }
 
-  const procedureIds = new Map<string, string>();
-  const allProcs: Proc[] = [...PROCEDURES, { name: EVALUATION, aliases: "avaliação, avaliação gratuita, avaliação estética, consulta" }];
-  for (const item of allProcs) {
-    const current = await prisma.procedure.findFirst({ where: { clinicId: clinic.id, name: item.name } });
-    if (current) {
-      procedureIds.set(item.name, current.id);
-      continue;
-    }
-    const isEvaluation = item.name === EVALUATION;
-    const procedure = await prisma.procedure.create({
-      data: {
-        clinicId: clinic.id,
-        name: item.name,
-        durationMin: isEvaluation ? 30 : 60, // duracao real nao informada - ver pending
-        description: isEvaluation ? "Avaliação estética personalizada e gratuita para entender a queixa, os objetivos e traçar as possibilidades de tratamento." : null,
-        price: isEvaluation ? 0 : null,
-        priceVariable: !isEvaluation, // valor nao informado no briefing: a Alice nao inventa
-        offerInstallments: false,
-        maxInstallments: null,
-        paymentMethods: "",
-        paymentLink: null,
-        goals: null,
-        benefits: null,
-        aliases: item.aliases ?? null,
-        resultTimeline: null,
-      },
-    });
-    procedureIds.set(item.name, procedure.id);
-  }
-
-  // Profissionais: biomedicas atendem tudo; esteticistas so o nao injetavel.
-  const nonInjectable = PROCEDURES.filter((p) => !p.injectable).map((p) => p.name);
-  for (const item of PROFESSIONALS) {
-    const current = await prisma.professional.findFirst({ where: { clinicId: clinic.id, name: item.name } });
-    if (current) continue;
-    const names = item.kind === "bio" ? [...PROCEDURES.map((p) => p.name), EVALUATION] : [...nonInjectable, EVALUATION];
-    await prisma.professional.create({
-      data: {
-        clinic: { connect: { id: clinic.id } }, name: item.name, bio: item.bio, instagram: null, color: item.color,
-        active: true, workDays: item.workDays, workStartHour: item.start, workEndHour: item.end, lunchStartHour: null, lunchEndHour: null,
-        procedures: { connect: names.map((n) => ({ id: procedureIds.get(n)! })) },
-      },
-    });
-  }
-
   for (const faq of FAQS) {
     const current = await prisma.clinicFaq.findFirst({ where: { clinicId: clinic.id, question: faq.question } });
     if (current) continue;
@@ -782,20 +676,13 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
       reminders: reminderCount,
     },
     pending: [
-      "PREÇOS: o briefing não trouxe nenhum valor. Todos os procedimentos estão como 'depende de avaliação' (a Alice não informa preço). Cadastrar preço, parcelamento e formas de pagamento no painel.",
-      "DURAÇÕES: não vieram. Usado 60 min em tudo (avaliação 30 min). IMPORTANTE corrigir antes de confiar na agenda automática.",
-      "DESCRIÇÃO, indicações, contraindicações, preparo e cuidados pós de cada procedimento: não vieram. A Alice só fala disso depois de cadastrado.",
-      "AGENDA DA CLÍNICA EXPERTS: a Alice agenda no sistema DELA, que não está integrado ao Clínica Experts (e a clínica não usa Google Agenda). Sem sincronização, há risco de horário duplicado. Definir como fazer a ponte (bloqueios manuais, Google Agenda ou rotina de conferência).",
-      "HORÁRIOS: o sistema tem um único horário por clínica (8h-21h). Sábado fecha às 15h, então só a Amanda foi liberada no sábado (8h-15h) e Talita/Adriana/Suelen ficaram de segunda a sexta. Confirmar a escala real: Amanda trabalha só no sábado? Esteticistas atendem sábado? Quais dias cada uma?",
-      "Sabrina: terça e quinta, 12h-21h (cadastrado como veio). Amanda: sábado 8h-15h (cadastrado como veio).",
-      "Quais procedimentos cada profissional faz: assumi biomédicas = todos e esteticistas = só não injetáveis/tecnologia de habilitação (HIPRO, Lavieen, CO2, toxina, preenchimentos, bioestimuladores, fios, enzimas, carboxiterapia, subcisão, vasinhos, ozonioterapia). Revisar.",
-      "Fabi e Brenda (consultoras de vendas) NÃO foram cadastradas como profissionais de agenda. Recontatos comerciais são centralizados pela Brenda após as 18h; falta definir se elas fazem avaliações.",
+      "CLÍNICA EXPERTS: em Configurações > Clínica Experts, colar o token da API e clicar em 'Importar do Clínica Experts'. Isso traz profissionais, procedimentos (com preço e duração reais) e quem executa cada um. Sem isso a clínica fica sem procedimentos.",
+      "DESCRIÇÃO, indicações, contraindicações, preparo e cuidados pós de cada procedimento: não vieram no briefing nem existem no Clínica Experts. A Alice só fala disso depois de cadastrado.",
+      "Procedimentos sem preço no Clínica Experts ficam como 'depende de avaliação' (a Alice não informa valor). Parcelamento e formas de pagamento por procedimento: não informados.",
       "NÚMERO INTERNO de avisos (agendamento/cancelamento/transferência): PENDENTE no briefing. Eventos configurados, mas sem número.",
       "CEP, ponto de referência, estacionamento, Google Maps: PENDENTES. Endereço cadastrado: Avenida Indico, 294, Jardim do Mar.",
-      "Intervalo de almoço e feriados/recessos: PENDENTES (cliente disse 'seguir bloqueios da agenda'). Nada cadastrado; bloquear datas no painel.",
+      "Intervalo de almoço e feriados/recessos: o Clínica Experts já bloqueia quando necessário; nada cadastrado aqui. Confirmar se há regra fixa de feriados.",
       "Devolução de sinal: PENDENTE (a Alice está instruída a não prometer). Valor do sinal por procedimento: não informado.",
-      "Duração da avaliação gratuita: PENDENTE (assumido 30 min).",
-      "Regra de criança em sala: PENDENTE.",
       "Recontato (quantidade/intervalo) e reativação de inativos: texto cadastrado, mas DESLIGADOS até o cliente definir intervalo e janela (janela 18h-21h pré-configurada).",
       "Pós-procedimento: só com texto aprovado por procedimento - nenhuma automação criada. Renovação: só com intervalos validados pela profissional - nenhuma criada.",
       "NPS (horário, nota de corte, link do Google Meu Negócio): PENDENTE, não ligado.",

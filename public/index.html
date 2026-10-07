@@ -614,6 +614,7 @@
           <button data-sub="funnel">Funil</button>
           <button data-sub="blocks" class="biz-clinica-only">Bloqueios de agenda</button>
           <button data-sub="google" class="biz-clinica-only">Google Agenda</button>
+          <button data-sub="clinica-experts" class="biz-clinica-only">Clínica Experts</button>
           <button data-sub="waitlist" class="biz-clinica-only" data-plan-lock="lista-espera">Lista de espera</button>
           <button data-sub="history">Histórico</button>
           <button data-sub="learning" data-plan-lock="aprendizado">Aprendizado da Alice</button>
@@ -1075,6 +1076,38 @@
               <span>Respeitar os compromissos que já estão no Google Agenda<br /><span class="hint">A Alice não oferece nem aceita horário que esteja ocupado lá.</span></span>
             </label>
             <p class="hint" style="margin:0.9rem 0 0">Agenda usada: <code id="google-calendar-id">primary</code> (a agenda principal da conta conectada).</p>
+          </div>
+        </div>
+
+        <div id="sub-clinica-experts" class="settings-subpanel biz-clinica-only">
+          <p class="hint" style="margin-top:0">Liga a Alice ao <strong>Clínica Experts</strong>, o sistema de agenda da clínica. A Alice só oferece e aceita horários que o Clínica Experts mostra livres (escala, bloqueios e agendamentos da recepção), e o que ela marca, remarca ou cancela aparece lá na hora.</p>
+          <div class="card">
+            <div class="section-header">Conexão</div>
+            <p id="ce-state" class="hint" style="margin:0 0 0.8rem">Carregando…</p>
+            <label for="ce-token" class="hint" style="display:block;margin-bottom:0.3rem">Token da API (Clínica Experts &gt; Configurações &gt; Integrações)</label>
+            <input id="ce-token" type="password" autocomplete="off" placeholder="Cole o token aqui" style="width:100%;max-width:34rem" />
+            <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.6rem">
+              <button type="button" id="btn-ce-connect" class="btn-brand">Conectar</button>
+              <button type="button" id="btn-ce-disconnect" class="btn-brand btn-brand--secondary" hidden>Desconectar</button>
+            </div>
+            <p id="ce-error" class="hint" style="margin:0.8rem 0 0;color:#b91c1c" hidden></p>
+          </div>
+          <div class="card" id="ce-options" hidden>
+            <div class="section-header">O que sincronizar</div>
+            <label style="display:flex;gap:0.5rem;align-items:flex-start;margin-bottom:0.7rem">
+              <input type="checkbox" id="ce-block-busy" style="margin-top:0.25rem" />
+              <span>Só oferecer horários livres no Clínica Experts<br /><span class="hint">Considera a escala de cada profissional, bloqueios e os agendamentos já feitos lá.</span></span>
+            </label>
+            <label style="display:flex;gap:0.5rem;align-items:flex-start">
+              <input type="checkbox" id="ce-sync-out" style="margin-top:0.25rem" />
+              <span>Lançar no Clínica Experts o que a Alice agenda, remarca e cancela<br /><span class="hint">Cria o paciente lá se ainda não existir. Se der erro, a equipe é avisada para lançar à mão.</span></span>
+            </label>
+          </div>
+          <div class="card" id="ce-catalog" hidden>
+            <div class="section-header">Profissionais e procedimentos</div>
+            <p class="hint" style="margin-top:0">Importa do Clínica Experts os profissionais ativos e os procedimentos que podem ser vendidos (com preço e duração reais), ignorando cortesias, brindes e itens internos. Quem executa cada procedimento é deduzido do histórico dos últimos 120 dias. <strong>Só cria e vincula: nunca altera o que você já editou.</strong></p>
+            <button type="button" id="btn-ce-sync" class="btn-brand btn-brand--secondary">Importar do Clínica Experts</button>
+            <p id="ce-sync-result" class="hint" style="margin:0.6rem 0 0" hidden></p>
           </div>
         </div>
 

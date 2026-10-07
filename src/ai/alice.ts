@@ -12,7 +12,7 @@ import {
 } from "../scheduling/slots.js";
 import { offerFreedSlotToWaitlist } from "../scheduling/waitlist.js";
 import { formatInZone, formatDayInZone, formatDateTimeInZone, upcomingWeekdayTable, isoDateInZone, zonedWallClockToUtc } from "../scheduling/time.js";
-import { pushAppointmentInBackground, removeAppointmentInBackground } from "../google/calendar.js";
+import { pushAppointmentInBackground, removeAppointmentInBackground } from "../integrations/calendarSync.js";
 import { sendMedia } from "../uazapi/client.js";
 import { getActiveRulesPrompt } from "./rules.js";
 import { getFunnelStages } from "../crm/stages.js";

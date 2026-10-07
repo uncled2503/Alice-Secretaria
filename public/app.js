@@ -6817,6 +6817,71 @@ for (const [id, field] of [["google-sync-out", "syncOut"], ["google-block-busy",
   });
 }
 
+// --- Clínica Experts ---
+async function loadClinicaExperts() {
+  const s = await api("/clinica-experts/status");
+  const errorEl = document.getElementById("ce-error");
+  errorEl.hidden = !s.lastError;
+  errorEl.textContent = s.lastError || "";
+  document.getElementById("ce-options").hidden = !s.connected;
+  document.getElementById("ce-catalog").hidden = !s.connected;
+  document.getElementById("btn-ce-disconnect").hidden = !s.connected;
+  document.getElementById("btn-ce-connect").textContent = s.connected ? "Trocar token" : "Conectar";
+  const stateEl = document.getElementById("ce-state");
+  if (s.connected) {
+    const cat = s.lastCatalogAt ? ` · catálogo importado em ${new Date(s.lastCatalogAt).toLocaleString("pt-BR")}` : " · catálogo ainda não importado";
+    stateEl.textContent = `Conectado (token ${s.tokenHint || ""}) · ${s.linkedProfessionals} profissionais e ${s.linkedProcedures} procedimentos vinculados${cat}.`;
+    document.getElementById("ce-block-busy").checked = !!s.blockBusy;
+    document.getElementById("ce-sync-out").checked = !!s.syncOut;
+  } else {
+    stateEl.textContent = "Ainda não conectado.";
+  }
+}
+
+document.getElementById("btn-ce-connect").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const input = document.getElementById("ce-token");
+  if (!input.value.trim()) return;
+  btn.disabled = true;
+  try {
+    await api("/clinica-experts/connect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: input.value }) });
+    input.value = "";
+    await loadClinicaExperts();
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("btn-ce-disconnect").addEventListener("click", async () => {
+  if (!await showConfirm("Desconectar o Clínica Experts? A Alice volta a usar só a agenda dela e deixa de lançar os agendamentos lá.")) return;
+  await api("/clinica-experts/disconnect", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  await loadClinicaExperts();
+});
+
+for (const [id, field] of [["ce-sync-out", "syncOut"], ["ce-block-busy", "blockBusy"]]) {
+  document.getElementById(id).addEventListener("change", async (e) => {
+    await api("/clinica-experts/settings", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ [field]: e.currentTarget.checked }) });
+    await loadClinicaExperts();
+  });
+}
+
+document.getElementById("btn-ce-sync").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const out = document.getElementById("ce-sync-result");
+  btn.disabled = true;
+  out.hidden = false;
+  out.textContent = "Importando… pode levar alguns segundos.";
+  try {
+    const r = await api("/clinica-experts/sync-catalog", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    out.textContent = `Pronto: ${r.professionals.created} profissionais novos (${r.professionals.linked} vinculados), ${r.procedures.created} procedimentos novos (${r.procedures.linked} vinculados, ${r.procedures.skipped} já existiam), ${r.professionalLinks} vínculos de quem executa, com base em ${r.historyBookings} agendamentos dos últimos 120 dias.`;
+    await loadClinicaExperts();
+  } catch (err) {
+    out.textContent = err.message || "Falha ao importar.";
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 const SETTINGS_SUB_LOADERS = {
   "clinic-data": () => {
     loadClinicDataForm();
@@ -6837,6 +6902,7 @@ const SETTINGS_SUB_LOADERS = {
   followup: loadFollowUpRules,
   blocks: loadScheduleBlocks,
   google: loadGoogleCalendar,
+  "clinica-experts": loadClinicaExperts,
   waitlist: loadWaitlist,
   history: () => loadActivityLog(true),
   funnel: loadStagesConfig,

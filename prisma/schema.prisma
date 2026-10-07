@@ -115,6 +115,7 @@ model Clinic {
   metaEvents    MetaEvent[]
   learningInsights LearningInsight[]
   googleCalendar GoogleCalendarAccount?
+  clinicaExperts ClinicaExpertsAccount?
   learningRunAt  DateTime?
 
   // Limite de atendimentos/mes (conversas que a Alice atende). null no override
@@ -376,6 +377,7 @@ model Procedure {
   // agenda contra outro agendamento do MESMO procedimento; continua
   // conflitando normalmente com procedimentos que nao tem essa flag.
   allowConcurrentBooking Boolean @default(false)
+  ceId           Int?      // id do procedimento no Clinica Experts (null = nao vinculado)
 
   appointments  Appointment[]
   professionals Professional[] @relation("ProfessionalProcedures")
@@ -410,6 +412,7 @@ model Professional {
   bio       String?
   color     String?  // cor de identificacao (ex: na agenda), hex
   photoUrl  String?  // data URI (base64) da foto enviada
+  ceUuid    String?  // uuid do profissional no Clinica Experts (null = nao vinculado)
   active    Boolean  @default(true)
   // Agenda propria do profissional. null = herda o expediente da clinica.
   workDays      String? // dias de atendimento (0=domingo..6=sabado), separados por virgula
@@ -460,6 +463,7 @@ model Patient {
   optedOutAt    DateTime?
   active          Boolean @default(true)  // paciente ainda em acompanhamento com a clinica ou nao
   hasPrescription Boolean @default(false) // controla se os lembretes de renovacao de receita aparecem/valem
+  ceUuid          String?  // uuid do paciente no Clinica Experts (cache pra nao buscar toda vez)
 
   // Atribuicao de campanha Meta, capturada na criacao do lead (Click-to-WhatsApp).
   // Fica vinculada ao lead pra eventos posteriores do CRM baterem com o anuncio.
@@ -781,6 +785,7 @@ model Appointment {
   status         String        @default("confirmed") // confirmed | completed | cancelled | no_show
   source         String?       // whatsapp | instagram | presencial | telefone (null = nao informado)
   googleEventId  String?       // id do evento espelhado no Google Agenda (null = nao sincronizado)
+  ceBookingUuid  String?       // uuid do agendamento espelhado no Clinica Experts (null = nao sincronizado)
   patientConfirmed Boolean     @default(false) // paciente confirmou presenca (resposta ao lembrete)
   confirmedAt    DateTime?
   createdAt      DateTime      @default(now())
@@ -962,4 +967,21 @@ model BirthdaySent {
   sentAt    DateTime     @default(now())
 
   @@unique([patientId, ruleId, year])
+}
+
+// Integracao com o Clinica Experts (sistema de agenda da clinica): a Alice le a
+// disponibilidade real de la e espelha os agendamentos dela. Token da API
+// criptografado (mesma chave da Meta/Google), nunca volta pro navegador.
+model ClinicaExpertsAccount {
+  id            String    @id @default(cuid())
+  clinicId      String    @unique
+  clinic        Clinic    @relation(fields: [clinicId], references: [id])
+  tokenEnc      String
+  tokenHint     String?   // ex "••••••••1234" pra mostrar na tela
+  syncOut       Boolean   @default(true)  // cria/remarca/cancela la o que a Alice agenda
+  blockBusy     Boolean   @default(true)  // so oferece horario que o Clinica Experts diz estar livre
+  lastSyncAt    DateTime?
+  lastCatalogAt DateTime?
+  lastError     String?
+  createdAt     DateTime  @default(now())
 }

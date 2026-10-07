@@ -1,6 +1,8 @@
 import { prisma } from "../db/client.js";
 import { wallClockInZone, zonedWallClockToUtc, formatInZone, formatDayInZone, isoDateInZone } from "./time.js";
-import { googleBusyIntervals, pushAppointmentInBackground } from "../google/calendar.js";
+import { googleBusyIntervals } from "../google/calendar.js";
+import { pushAppointmentInBackground } from "../integrations/calendarSync.js";
+import { ceGateFor, type SlotGate } from "../clinicaexperts/availability.js";
 import { nationalHolidayOn } from "./holidays.js";
 
 export interface Slot {
@@ -138,6 +140,10 @@ export function evaluateSlot(params: {
   // valendo pros dois: isso nao e "horario de funcionamento", e um horario ja
   // comprometido de verdade.
   enforceHours?: boolean;
+  // Disponibilidade confirmada pelo sistema de agenda da clinica (Clinica
+  // Experts), quando integrado: o horario so passa se o profissional estiver
+  // livre la pela duracao inteira do procedimento.
+  gate?: SlotGate | null;
 }): SlotVerdict {
   const { startUtc, durationMin, hours, busy } = params;
   const blocks = params.blocks ?? [];
@@ -172,6 +178,7 @@ export function evaluateSlot(params: {
   for (const b of busy) {
     if (s < b.end && e > b.start) return { ok: false, reason: "conflict" };
   }
+  if (params.gate && !params.gate(s, durationMin)) return { ok: false, reason: "conflict" };
   return { ok: true };
 }
 
@@ -187,6 +194,8 @@ export function generateSlots(params: {
   now?: Date;
   professionalId?: string | null;
   professionalName?: string | null;
+  gate?: SlotGate | null;
+  stepMin?: number;
 }): Slot[] {
   const { hours, durationMin, busy } = params;
   const blocks = params.blocks ?? [];
@@ -210,10 +219,10 @@ export function generateSlots(params: {
     for (
       let cursor = hours.workStartMinutes;
       cursor < hours.workEndMinutes && slots.length < limit;
-      cursor += 60
+      cursor += params.stepMin ?? 60
     ) {
       const startUtc = zonedWallClockToUtc(hours.timezone, wc.year, wc.month, wc.day, Math.floor(cursor / 60), cursor % 60);
-      if (evaluateSlot({ startUtc, durationMin, hours, busy, blocks, now }).ok) {
+      if (evaluateSlot({ startUtc, durationMin, hours, busy, blocks, now, gate: params.gate }).ok) {
         slots.push({
           start: startUtc,
           end: new Date(startUtc.getTime() + durationMin * 60_000),
@@ -327,6 +336,7 @@ export async function findAvailableSlots(
       const professional = await prisma.professional.findFirst({ where: { id, clinicId } });
       if (!professional) return [];
       const ctx = await loadBusyContext(clinicId, { professionalId: id, excludeProcedureId });
+      const gate = await ceGateFor(clinicId, professional, new Date(), daysAhead, clinic.timezone || "America/Sao_Paulo");
       return generateSlots({
         hours: resolveHours(clinic, professional),
         durationMin: procedure.durationMin,
@@ -336,6 +346,8 @@ export async function findAvailableSlots(
         limit,
         professionalId: id,
         professionalName: professional.name,
+        gate,
+        stepMin: gate ? 30 : 60,
       });
     }),
   );
@@ -471,6 +483,7 @@ export async function checkSpecificTime(
       ignoreAppointmentId: opts.ignoreAppointmentId,
       excludeProcedureId: procedure.allowConcurrentBooking ? procedure.id : undefined,
     });
+    const gate = opts.enforceHours === false ? null : await ceGateFor(clinicId, c.professional, startUtc, 1, tz);
     const verdict = evaluateSlot({
       startUtc,
       durationMin: procedure.durationMin,
@@ -478,6 +491,7 @@ export async function checkSpecificTime(
       busy: ctx.busy,
       blocks: ctx.blocks,
       enforceHours: opts.enforceHours,
+      gate,
     });
     if (verdict.ok) {
       free.push({ id: c.id, name: c.professional?.name ?? null });
@@ -547,6 +561,7 @@ async function findAvailableSlotsFrom(
   for (const id of ids) {
     const professional = id ? await prisma.professional.findFirst({ where: { id, clinicId } }) : null;
     const ctx = await loadBusyContext(clinicId, { professionalId: id, excludeProcedureId });
+    const gate = await ceGateFor(clinicId, professional, fromUtc, daysAhead, clinic.timezone || "America/Sao_Paulo");
     out.push(
       ...generateSlots({
         hours: resolveHours(clinic, professional),
@@ -558,6 +573,8 @@ async function findAvailableSlotsFrom(
         limit,
         professionalId: id,
         professionalName: professional?.name ?? null,
+        gate,
+        stepMin: gate ? 30 : 60,
       }),
     );
   }
@@ -606,6 +623,10 @@ export async function createBooking(params: {
   // Fora da transacao de proposito: e uma chamada de rede (nao pode segurar a
   // transacao aberta) e ja vem de cache curto.
   const googleBusy = await googleBusyIntervals(clinicId);
+  // Mesma razao: consulta o Clinica Experts antes de abrir a transacao.
+  // Agendamento manual (enforceHours:false) e decisao da clinica, que usa o
+  // proprio Clinica Experts: nao passa pelo portao de disponibilidade.
+  const ceGate = params.enforceHours === false ? null : await ceGateFor(clinicId, professional, startUtc, 1, tz);
 
   const result = await prisma.$transaction(async (tx) => {
     const appts = await tx.appointment.findMany({
@@ -637,7 +658,7 @@ export async function createBooking(params: {
       ...googleBusy,
     ];
 
-    const verdict = evaluateSlot({ startUtc, durationMin: procedure.durationMin, hours, busy, blocks, enforceHours: params.enforceHours });
+    const verdict = evaluateSlot({ startUtc, durationMin: procedure.durationMin, hours, busy, blocks, enforceHours: params.enforceHours, gate: ceGate });
     if (!verdict.ok) return { ok: false as const, error: verdict.reason };
 
     const appointment = await tx.appointment.create({

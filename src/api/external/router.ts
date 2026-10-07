@@ -10,7 +10,7 @@ import { sendAppointmentConfirmationToPatient } from "../../crm/appointmentMessa
 import { findAvailableSlots, checkSpecificTime, createBooking, professionalsForProcedure, SLOT_REASON_PT } from "../../scheduling/slots.js";
 import { formatInZone, wallClockInZone } from "../../scheduling/time.js";
 import { offerFreedSlotToWaitlist } from "../../scheduling/waitlist.js";
-import { pushAppointmentInBackground, removeAppointmentInBackground } from "../../google/calendar.js";
+import { pushAppointmentInBackground, removeAppointmentInBackground } from "../../integrations/calendarSync.js";
 
 export const externalApiRouter = Router();
 externalApiRouter.use((_req, res, next) => {
