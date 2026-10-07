@@ -1637,3 +1637,6 @@ code { background: var(--accent-50); color: var(--accent-dark); padding: 0.1rem 
   .panel-ai-fab, .panel-ai-fab-label, .panel-ai-window { transition: none; }
   .panel-ai-typing span { animation: none; }
 }
+
+.chat-search { padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.chat-search input { width: 100%; box-sizing: border-box; padding: 0.5rem 0.7rem; border: 1px solid var(--border); border-radius: 8px; font-size: 0.9rem; background: var(--bg, #fff); color: inherit; }

@@ -880,6 +880,11 @@ async function requestStageMove(patient, col) {
 // --- Chat ---
 state.chatFilter = "all";
 
+document.getElementById("chat-search")?.addEventListener("input", (e) => {
+  state.chatQuery = e.target.value;
+  renderConversationsList();
+});
+
 async function loadConversations() {
   const conversations = await api("/conversations");
   state.conversations = conversations;
@@ -932,6 +937,21 @@ function notifyNewHandoffs(conversations) {
   }
 }
 
+// Busca no chat: nome, telefone (so digitos, com ou sem 55), etiquetas e ultima
+// mensagem. Com busca ativa, olha tambem as arquivadas e ignora a aba (senao o
+// lead procurado some por estar na aba errada).
+const chatFold = (v) => String(v ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+function conversationMatches(c, rawQuery) {
+  const q = chatFold(rawQuery);
+  if (!q) return true;
+  const digitsQ = q.replace(/\D/g, "");
+  const phone = String(c.patient?.phone ?? "").replace(/\D/g, "");
+  if (digitsQ.length >= 3 && (phone.includes(digitsQ) || phone.includes(digitsQ.replace(/^55/, "")))) return true;
+  const haystack = [c.patient?.name, c.patient?.phone, c.lastMessage, ...(c.patient?.tags || []).map((t) => t.label)].map(chatFold).join(" | ");
+  // todas as palavras digitadas precisam aparecer (ordem livre)
+  return q.split(/\s+/).every((word) => haystack.includes(word));
+}
+
 function renderConversationsList() {
   const conversations = state.conversations || [];
   const archived = state.archivedConversations || [];
@@ -943,9 +963,11 @@ function renderConversationsList() {
   tabs.children[2].textContent = `Humano (${humanCount})`;
   tabs.children[3].textContent = archived.length ? `Arquivadas (${archived.length})` : "Arquivadas";
 
-  const source = state.chatFilter === "archived" ? archived : conversations;
+  const query = (state.chatQuery || "").trim();
+  const source = query ? [...conversations, ...archived] : state.chatFilter === "archived" ? archived : conversations;
   const filtered = source
     .filter((c) => {
+      if (query) return conversationMatches(c, query);
       if (state.chatFilter === "alice") return !c.humanTakeover;
       if (state.chatFilter === "human") return c.humanTakeover;
       return true;
@@ -983,7 +1005,7 @@ function renderConversationsList() {
   list.innerHTML = "";
   if (!filtered.length) {
     list.appendChild(el("li", { class: "conv-empty" }, [
-      state.chatFilter === "archived" ? "Nenhuma conversa arquivada." : "Nenhuma conversa aqui.",
+      query ? `Nenhuma conversa encontrada para "${query}".` : state.chatFilter === "archived" ? "Nenhuma conversa arquivada." : "Nenhuma conversa aqui.",
     ]));
     return;
   }
