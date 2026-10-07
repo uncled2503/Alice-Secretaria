@@ -72,3 +72,24 @@ test("profissional inativo nunca e vinculado", () => {
   );
   assert.deepEqual(r.get(1), []);
 });
+
+import { mapCeStatus, normalizeCePhone } from "../dist/clinicaexperts/pull.js";
+import { reminderSendTime } from "../dist/reminders/cron.js";
+
+test("status e telefone do Clinica Experts viram os da Alice", () => {
+  assert.equal(mapCeStatus("scheduled"), "confirmed");
+  assert.equal(mapCeStatus("canceled"), "cancelled");
+  assert.equal(mapCeStatus("noshow"), "no_show");
+  assert.equal(mapCeStatus("completed"), "completed");
+  assert.equal(normalizeCePhone("+55 11 94949-4707"), "5511949494707");
+  assert.equal(normalizeCePhone("11949494707"), "5511949494707");
+  assert.equal(normalizeCePhone("123"), null);
+});
+
+test("lembrete nunca sai antes das 7h locais", () => {
+  const consulta8h = new Date(Date.UTC(2026, 9, 8, 11, 0)); // 08:00 em Sao Paulo
+  // 3h antes seria 05:00 -> adia pra 07:00
+  assert.equal(reminderSendTime(consulta8h, 3, TZ).getTime(), Date.UTC(2026, 9, 8, 10, 0));
+  // 24h antes = 08:00 do dia anterior, sem ajuste
+  assert.equal(reminderSendTime(consulta8h, 24, TZ).getTime(), consulta8h.getTime() - 24 * 3_600_000);
+});

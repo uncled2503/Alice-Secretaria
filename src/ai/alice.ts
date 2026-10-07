@@ -213,6 +213,10 @@ const tools: ChatCompletionTool[] = [
   },
 ];
 
+// Ferramentas de agenda que ficam indisponiveis quando a clinica pede que o
+// agendamento seja feito pela equipe (Clinic.aliceCanBook = false).
+const BOOKING_TOOLS = new Set(["check_availability", "check_specific_time", "book_appointment", "manage_my_appointment", "join_waitlist"]);
+
 async function findProcedure(clinicId: string, name: unknown): Promise<Procedure | null> {
   const raw = String(name ?? "").trim();
   if (!raw) return null;
@@ -293,6 +297,9 @@ async function runTool(
   input: any,
 ): Promise<string> {
   const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId } });
+  if (!clinic.aliceCanBook && BOOKING_TOOLS.has(name)) {
+    return JSON.stringify({ erro: "Nesta clinica quem agenda, remarca e cancela e a EQUIPE. Colete procedimento de interesse e preferencia de dia/turno, escreva a frase de transferencia e chame transfer_to_human com esse resumo. Nao diga que agendou." });
+  }
   const tz = clinic.timezone || "America/Sao_Paulo";
   const patientLabelOf = (p: { name: string | null; phone: string } | null) => p?.name ?? p?.phone ?? "paciente";
 
@@ -808,6 +815,10 @@ Tudo isso SEM quebrar as regras cadastradas: nunca invente preco, estoque ou pra
       ? `\nSEGURANCA MEDICA (prioridade sobre qualquer objetivo comercial): nunca diagnostique, prescreva, interprete exame, garanta cirurgia, determine quantidade de ml, nem afirme que um procedimento e o indicado sem avaliacao. "O que eu tenho?", "preciso operar?", "quantos ml?", "isso e cancer?" nao se respondem como decisao medica - de informacao geral e conduza pra avaliacao, ou transfira pra equipe. Foto nao diagnostica.`
       : "";
 
+  const teamBooksLine = clinic.aliceCanBook
+    ? ""
+    : `
+AGENDAMENTO PELA EQUIPE: voce NAO agenda, NAO remarca, NAO cancela e NAO oferece nem confirma horarios - quem faz isso e a equipe da clinica. Quando o paciente quiser marcar (avaliacao ou procedimento), remarcar ou cancelar: acolha, confirme o procedimento de interesse, pergunte o dia e o turno de preferencia, escreva a frase de transferencia e chame transfer_to_human com um resumo (nome, procedimento, preferencia de dia/turno). Nunca diga que ficou agendado, nem prometa um horario especifico. Voce continua respondendo duvidas, valores cadastrados e condicoes normalmente.`;
   const evalFirstLine = clinic.evaluationFirst
     ? `\nAVALIACAO PRIMEIRO: nunca exija que o paciente saiba qual procedimento precisa. Sempre ofereca os dois caminhos ("voce ja tem algo em mente ou prefere uma avaliacao pra o profissional entender seu caso?"). Se ele nao sabe e quer ser avaliado, isso e intencao valida de agendamento - conduza direto, sem listar procedimentos.`
     : "";
@@ -819,6 +830,21 @@ Tudo isso SEM quebrar as regras cadastradas: nunca invente preco, estoque ou pra
   const schedulingLinkLine = clinic.schedulingLink?.trim()
     ? `\nLINK DE AUTO-AGENDAMENTO: quando o paciente demonstrar intencao clara de agendar, voce pode enviar direto o link ${clinic.schedulingLink.trim()} (nao pergunte "quer que eu mande o link?", mande). Use este link em vez de book_appointment quando a clinica preferir que o paciente escolha o horario sozinho.`
     : "";
+
+  // Mesmo dia: se ja falou com a pessoa hoje, nao se reapresenta nem repete
+  // saudacao - so continua o atendimento (pedido da Lisboa, 08/10/2026).
+  let continuityLine = "";
+  if (ctx.patientId) {
+    const tzNow = clinic.timezone || "America/Sao_Paulo";
+    const [yy, mm, dd] = isoDateInZone(new Date(), tzNow).split("-").map(Number);
+    const startOfToday = zonedWallClockToUtc(tzNow, yy, mm, dd, 0, 0);
+    const talkedToday = await prisma.message.count({
+      where: { role: "assistant", createdAt: { gte: startOfToday }, conversation: { patientId: ctx.patientId } },
+    });
+    if (talkedToday > 0) {
+      continuityLine = `\nCONTINUIDADE: voce JA conversou com esta pessoa HOJE. NAO se apresente de novo, NAO diga "aqui e a ${a}", NAO repita boas-vindas nem pergunte "como posso ajudar hoje?" como se fosse o primeiro contato. Se ela mandar so um cumprimento ("ola", "oi"), responda curto e retome de onde pararam (ex.: "Oi de novo! Pode falar, em que posso te ajudar?"), sem se reapresentar.`;
+    }
+  }
 
   let surveyLine = "";
   if (ctx.patientId) {
@@ -947,7 +973,7 @@ Seu trabalho:
 2. Manter a etapa do paciente no funil atualizada (update_crm_stage) conforme a conversa avanca.
 3. Checar disponibilidade real (check_specific_time / check_availability) antes de falar de qualquer data.
 4. Confirmar o horario escolhido com o paciente e so entao usar book_appointment.
-5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${noRepeatLine}
+5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${teamBooksLine}${continuityLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${noRepeatLine}
 
 Procedimentos oferecidos pela clinica:
 ${procedureList || "(nenhum procedimento cadastrado ainda)"}
@@ -1301,13 +1327,16 @@ export async function generateReply(
     });
   }
 
+  const canBook = (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { aliceCanBook: true } }))?.aliceCanBook ?? true;
+  const activeTools = canBook ? tools : tools.filter((t) => !(t.type === "function" && BOOKING_TOOLS.has(t.function.name)));
+
   let finalText = "";
   let didTransfer = false;
   for (let turn = 0; turn < 6; turn++) {
     const response = await openai.chat.completions.create({
       model: MODEL,
       messages,
-      tools,
+      tools: activeTools,
       frequency_penalty: 0.3,
       presence_penalty: 0.2,
     });

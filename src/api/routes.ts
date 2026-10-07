@@ -199,6 +199,7 @@ apiRouter.get(
         splitThresholdChars: true,
         replyDelaySeconds: true,
         requireDepositProof: true,
+        aliceCanBook: true,
         businessType: true,
         businessLabel: true,
         servicePosture: true,
@@ -277,6 +278,7 @@ apiRouter.put(
       splitThresholdChars?: number;
       replyDelaySeconds?: number;
       requireDepositProof?: boolean;
+      aliceCanBook?: boolean;
       businessType?: string;
       businessLabel?: string | null;
       servicePosture?: string;
@@ -367,6 +369,7 @@ apiRouter.put(
           ...(b.splitThresholdChars !== undefined ? { splitThresholdChars: Math.min(Math.max(b.splitThresholdChars, 120), 2000) } : {}),
           ...(b.replyDelaySeconds !== undefined ? { replyDelaySeconds: Math.min(Math.max(Math.round(b.replyDelaySeconds), 0), 60) } : {}),
           ...(b.requireDepositProof !== undefined ? { requireDepositProof: b.requireDepositProof } : {}),
+          ...(b.aliceCanBook !== undefined ? { aliceCanBook: b.aliceCanBook } : {}),
           ...(b.businessType !== undefined ? { businessType: b.businessType } : {}),
           ...(b.businessLabel !== undefined ? { businessLabel: b.businessLabel?.trim() || null } : {}),
           ...(b.servicePosture !== undefined ? { servicePosture: b.servicePosture } : {}),

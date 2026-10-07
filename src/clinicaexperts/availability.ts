@@ -1,6 +1,6 @@
 import { prisma } from "../db/client.js";
 import { isoDateInZone, zonedWallClockToUtc } from "../scheduling/time.js";
-import { ceRequest, getAccount, isoWithOffset } from "./client.js";
+import { ceRequest, getAccount, isoWithOffset, noteError } from "./client.js";
 
 // O endpoint /available-hours do Clinica Experts devolve, pra um profissional
 // num dia, os horarios de INICIO livres (ja descontando a escala dele,
@@ -63,6 +63,10 @@ async function hoursForDay(
     query: { professional_uuid: uuid, date: isoWithOffset(midnight, timeZone), interval: CELL_MIN },
   });
   const hours = res.ok && Array.isArray(res.data?.data) ? res.data.data : null;
+  // Falha aqui faz o portao "abrir" (nunca derrubamos a agenda por falha de
+  // integracao) - entao a falha PRECISA aparecer, senao a Alice oferece horario
+  // ocupado sem ninguem saber por que. Aparece em Configuracoes > Clinica Experts.
+  if (!hours) await noteError(clinicId, `Consulta de disponibilidade falhou (a Alice pode oferecer horário já ocupado): ${res.ok ? "resposta inesperada" : res.error}`);
   dayCache.set(key, { at: Date.now(), hours });
   return hours;
 }

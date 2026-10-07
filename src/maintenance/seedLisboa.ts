@@ -304,14 +304,17 @@ const PLAYBOOKS = [
     ],
   },
   {
-    name: "Paciente vai pensar ou agradece",
+    name: "Paciente vai pensar ou responde só 'ok'",
     scriptType: "objecoes",
-    triggerText: "Paciente diz que vai pensar, agradece ou encerra a conversa.",
-    goal: "Fechar bem deixando a porta aberta.",
+    triggerText: "Paciente diz 'vou pensar', 'entendi', 'ok', 'depois eu vejo' ou agradece sem agendar.",
+    goal: "Descobrir o motivo e a dúvida real e seguir conduzindo até o agendamento, sem aceitar passivamente.",
     steps: [
-      "Diga que ela pode ficar à vontade para pensar.",
-      "Avise que está por aqui para qualquer dúvida.",
-      "Ofereça verificar horários para a avaliação quando ela quiser.",
+      "NÃO se despeça nem diga 'fique à vontade'. Acolha em uma frase curta.",
+      "Pergunte com interesse o que ficou pesando (valor, dúvida sobre o procedimento, resultado, tempo, medo) e qual é a dúvida dela.",
+      "Responda à dúvida com o que está cadastrado e conecte com a queixa que ela contou.",
+      "Proponha a avaliação estética gratuita como forma sem compromisso de tirar as dúvidas.",
+      "Termine perguntando qual dia e turno ficam melhores para a equipe agendar.",
+      "Só encerre se ela recusar com clareza mais de uma vez ou pedir para parar.",
     ],
   },
 ] as const;
@@ -414,7 +417,7 @@ const TEMPLATES = [
   {
     name: "Agradecimento e despedida",
     mode: "adapt",
-    whenToUse: "Encerramento da conversa.",
+    whenToUse: "SÓ depois que o atendimento foi encaminhado/agendado pela equipe, ou se o paciente pedir para parar. Nunca como resposta a 'vou pensar' ou 'ok': nesses casos continue a conversa com uma pergunta.",
     body: "Eu que agradeço pelo contato e pela confiança. 💗 Quando precisar, estamos por aqui. Será um prazer cuidar de você na Lisboa Beauty Center! ✨",
   },
   {
@@ -508,6 +511,24 @@ const RULES = [
   { category: "chamar_equipe", instruction: "A Alice pode responder áudios, fotos e documentos enviados pelo paciente, respeitando as regras de transferência para casos clínicos." },
 ] as const;
 
+// Quem e quem (esclarecido pela Aline em 08/10/2026). Bloco proprio com
+// marker proprio: o treino principal ja foi aplicado antes disso.
+const TEAM_RULES = [
+  { category: "tom_de_voz", instruction: "Equipe da Lisboa: SÓ Sabrina e Amanda são 'Dra.' (biomédicas). Talita, Adriana e Suelen são esteticistas: chame apenas pelo primeiro nome, SEM 'Dra.'. Nunca chame ninguém de 'Dra.' por conta própria." },
+  { category: "procedimentos", instruction: "Aline, Brenda e Fabi são da equipe administrativa e comercial e NÃO realizam atendimentos nem procedimentos. Nunca as cite como profissional que atende, nem ofereça agendar 'com a Aline', 'com a Fabi' ou 'com a Brenda'. Quando o paciente quiser marcar, quem cuida disso é a equipe." },
+  { category: "procedimentos", instruction: "Só cite quem realiza um procedimento se estiver cadastrado para ele. Na dúvida, diga que a equipe confirma qual profissional atende, em vez de listar nomes." },
+] as const;
+
+// Postura comercial (pedido da Aline, 07/10/2026): a Alice estava aceitando
+// "vou pensar" e se despedindo. Bloco proprio com marker proprio.
+const SALES_RULES = [
+  { category: "tom_de_voz", instruction: "Toda resposta termina com UMA pergunta que avança a conversa (qual a dúvida, qual a queixa, qual dia e turno), até o paciente chegar ao agendamento. Nunca termine só com 'qualquer dúvida estou aqui' ou 'é só me chamar'." },
+  { category: "tom_de_voz", instruction: "Seja comercial de verdade, não apenas receptiva: entenda o PORQUÊ do paciente (a queixa, o que ele quer mudar) e qual é a DÚVIDA dele, responda e continue conduzindo até o agendamento. Aceitar passivamente o que o paciente diz é erro." },
+  { category: "tom_de_voz", instruction: "Se o paciente disser 'vou pensar', 'entendi', 'ok' ou 'depois eu vejo', NÃO aceite nem se despeça. Acolha em uma frase, pergunte o que ficou pesando (valor, dúvida, resultado, tempo, medo), responda e proponha a avaliação gratuita perguntando o melhor dia e turno. Só encerre se ele recusar com clareza repetidamente ou pedir para parar." },
+  { category: "pagamento", instruction: "Depois de informar valores, não pare: pergunte qual região ou resultado o paciente quer e conduza para a avaliação gratuita, perguntando o melhor dia e turno." },
+  { category: "agendamento", instruction: "Como a equipe é quem agenda, siga perguntando até obter o procedimento de interesse e o melhor dia e turno; com isso em mãos, escreva a frase de transferência e passe para a equipe marcar. Não deixe a conversa esfriar antes disso." },
+] as const;
+
 export interface SeedLisboaResult {
   clinicId: string;
   login: string;
@@ -545,6 +566,7 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
     evaluationFirst: true,
     allowEmojis: true,
     schedulingLink: null,
+    aliceCanBook: false, // 08/10/2026 (pedido da Aline): a EQUIPE agenda; a Alice coleta interesse e transfere
   };
 
   // So CRIA a clinica quando ainda nao existe - depois disso os dados sao
@@ -602,16 +624,19 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
 
   await seedDefaultRules(clinic.id);
   await seedRulesOnce(clinic.id, SEED_MARKER, RULES);
+  await seedRulesOnce(clinic.id, "seed:lisboa-equipe", TEAM_RULES);
+  await seedRulesOnce(clinic.id, "seed:lisboa-comercial", SALES_RULES);
 
   // Automacoes: so o que o cliente pediu com todos os dados.
-  const reminder = await prisma.reminderRule.findFirst({ where: { clinicId: clinic.id, hoursBefore: 24 } });
-  if (!reminder) {
-    await prisma.reminderRule.create({
-      data: {
-        clinicId: clinic.id, hoursBefore: 24, active: false, // desligado ate a Lisboa validar o fluxo (evita disparo ao conectar)
-        message: "Oi, {primeiro_nome}! 💗 Passando para lembrar do seu atendimento amanhã, {data_hora}, aqui na Lisboa Beauty Center. Podemos confirmar sua presença? ✨",
-      },
-    });
+  const REMINDERS = [
+    { hoursBefore: 24, message: "Oi, {primeiro_nome}! 💗 Passando para lembrar do seu atendimento amanhã, {data_hora}, aqui na Lisboa Beauty Center. Podemos confirmar sua presença? ✨" },
+    { hoursBefore: 3, message: "Oi, {primeiro_nome}! ✨ Passando para lembrar do seu atendimento hoje, às {hora}, aqui na Lisboa Beauty Center. Te esperamos! 💗" },
+  ];
+  for (const r of REMINDERS) {
+    const reminder = await prisma.reminderRule.findFirst({ where: { clinicId: clinic.id, hoursBefore: r.hoursBefore } });
+    if (reminder) continue;
+    // desligados ate a Lisboa validar o fluxo (evita disparo ao conectar)
+    await prisma.reminderRule.create({ data: { clinicId: clinic.id, hoursBefore: r.hoursBefore, active: false, message: r.message } });
   }
 
   const birthdayName = "Aniversário do paciente";
@@ -625,16 +650,30 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
     });
   }
 
-  // Recontato e reativacao: o cliente deu o TEXTO mas nao o intervalo
-  // (PENDENTE) - ficam cadastrados DESLIGADOS, prontos pra ligar no painel.
-  const followup = await prisma.followUpRule.findFirst({ where: { clinicId: clinic.id, order: 1 } });
-  if (!followup) {
+  // Recontato: 4h, 1 dia, 3, 7 e 15 dias (pedido da Aline, 08/10/2026), das 9h
+  // as 20h. Cadastrados DESLIGADOS: ligar um a um depois de conectar o numero,
+  // importar os contatos e conferir que nada saiu sozinho.
+  const FOLLOWUPS = [
+    { order: 1, name: "Recontato Lisboa - 4 horas", afterMinutes: 240, message: "Oi, {primeiro_nome}! ✨ Passando para saber se ficou alguma dúvida sobre o procedimento. Se quiser, posso encaminhar para nossa equipe verificar os horários ou a condição vigente para você." },
+    { order: 2, name: "Recontato Lisboa - 1 dia", afterMinutes: 1440, message: "Oi, {primeiro_nome}! 💗 Conseguiu pensar com calma? Se quiser, nossa equipe verifica o melhor horário para a sua avaliação gratuita. ✨" },
+    { order: 3, name: "Recontato Lisboa - 3 dias", afterMinutes: 4320, message: "Oi, {primeiro_nome}! Tudo bem? 💗 Ficou alguma dúvida sobre o procedimento ou sobre como funciona a avaliação gratuita? Estou por aqui para ajudar. ✨" },
+    { order: 4, name: "Recontato Lisboa - 7 dias", afterMinutes: 10080, message: "Oi, {primeiro_nome}! ✨ Passando para saber se você ainda tem interesse. Se quiser, nossa equipe confirma uma condição vigente e o melhor horário para você. 💗" },
+    { order: 5, name: "Recontato Lisboa - 15 dias", afterMinutes: 21600, message: "Oi, {primeiro_nome}! 💗 Vou encerrar seu acompanhamento por aqui para não te incomodar, mas a Lisboa continua à disposição sempre que você quiser retomar seus cuidados. ✨" },
+  ];
+  for (const f of FOLLOWUPS) {
+    const current = await prisma.followUpRule.findFirst({ where: { clinicId: clinic.id, order: f.order } });
+    if (current) {
+      // Troca o rascunho antigo (2 dias, desligado, nunca editado) pela nova cascata.
+      const legacy = f.order === 1 && current.name === "Recontato Lisboa" && !current.active;
+      if (!legacy) continue;
+      await prisma.followUpRule.update({ where: { id: current.id }, data: { name: f.name, afterMinutes: f.afterMinutes, afterDays: 1, message: f.message, sendWindowStart: 9, sendWindowEnd: 20 } });
+      continue;
+    }
     await prisma.followUpRule.create({
       data: {
-        clinicId: clinic.id, order: 1, name: "Recontato Lisboa", afterDays: 2, afterMinutes: 0,
-        message: "Oi, {primeiro_nome}! ✨ Passando para saber se ficou alguma dúvida sobre o procedimento. Se quiser, posso verificar horários ou a condição vigente para você.",
-        repeatMode: "once", skipIfHumanTakeover: true, skipIfUpcomingAppt: true,
-        sendWindowStart: 18, sendWindowEnd: 21, active: false,
+        clinicId: clinic.id, order: f.order, name: f.name, afterDays: Math.max(1, Math.round(f.afterMinutes / 1440)), afterMinutes: f.afterMinutes,
+        message: f.message, repeatMode: "once", skipIfHumanTakeover: true, skipIfUpcomingAppt: true,
+        sendWindowStart: 9, sendWindowEnd: 20, active: false,
       },
     });
   }
@@ -683,14 +722,16 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
       "CEP, ponto de referência, estacionamento, Google Maps: PENDENTES. Endereço cadastrado: Avenida Indico, 294, Jardim do Mar.",
       "Intervalo de almoço e feriados/recessos: o Clínica Experts já bloqueia quando necessário; nada cadastrado aqui. Confirmar se há regra fixa de feriados.",
       "Devolução de sinal: PENDENTE (a Alice está instruída a não prometer). Valor do sinal por procedimento: não informado.",
-      "Recontato (quantidade/intervalo) e reativação de inativos: texto cadastrado, mas DESLIGADOS até o cliente definir intervalo e janela (janela 18h-21h pré-configurada).",
+      "Recontato 4h, 1 dia, 3, 7 e 15 dias cadastrado (9h às 20h), DESLIGADO: ligar um a um no painel depois de conectar e validar. Reativação de inativos também desligada (intervalo não definido).",
       "Pós-procedimento: só com texto aprovado por procedimento - nenhuma automação criada. Renovação: só com intervalos validados pela profissional - nenhuma criada.",
       "NPS (horário, nota de corte, link do Google Meu Negócio): PENDENTE, não ligado.",
       "Campanhas sazonais (Dia das Mães, Black Friday, Outubro Rosa etc.) e Grupo VIP: disparo pontual com texto aprovado pela gestão - usar a ferramenta de campanha do painel, não foi cadastrado.",
       "Meta/Pixel (Dataset, token, site, responsável): PENDENTE. Funil do cliente bate com o padrão da Alice.",
       "Bios das profissionais e Instagram delas: PENDENTES.",
+      "EQUIPE: só Sabrina e Amanda são 'Dra.' (biomédicas); Talita, Adriana e Suelen são esteticistas; Aline, Brenda e Fabi são administrativo/comercial e NÃO atendem. Ao importar do Clínica Experts, Aline e Fabíola vêm como profissionais: desativá-las em Profissionais (a migração de 08/10 já desativou as que existiam).",
       "Pacotes e combos (valores, validade) e campanhas ativas: só a regra geral foi cadastrada; os valores precisam ser incluídos.",
-      "AUTOMAÇÕES DESLIGADAS de propósito (lembrete 24h, aniversário, recontato, reativação): ligar uma a uma no painel só depois de a Lisboa conectar, importar os contatos e validar o fluxo. Evita disparo em massa e risco de banimento do número.",
+      "AUTOMAÇÕES DESLIGADAS de propósito (lembretes 24h e 3h, aniversário, recontatos, reativação): ligar uma a uma no painel só depois de a Lisboa conectar, importar os contatos e validar o fluxo. Evita disparo em massa e risco de banimento do número.",
+      "AGENDAMENTO PELA EQUIPE: a Alice não agenda, remarca nem cancela (Configurações da Alice > Quem agenda). Ela coleta procedimento e dia/turno e transfere. A agenda do Clínica Experts é importada a cada 10 min para os lembretes.",
       "Login do cliente: usado lisboabeauty@aliceconversa.com por padrão (confirmar).",
     ],
   };
