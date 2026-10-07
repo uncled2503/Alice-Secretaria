@@ -5506,6 +5506,27 @@ document.getElementById("btn-seed-diamond-clinic").addEventListener("click", asy
   }
 });
 
+document.getElementById("btn-seed-lisboa").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const out = document.getElementById("seed-lisboa-result");
+  if (!await showConfirm("Aplicar a configuração da Lisboa Beauty Center? Só cria o que ainda não existe (clínica, profissionais, procedimentos, mensagens, regras e automações); nunca sobrescreve o que já foi editado no painel.")) return;
+  btn.disabled = true;
+  out.hidden = true;
+  try {
+    const r = await api("/clinics/seed-lisboa", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const c = r.counts || {};
+    const senha = r.password ? ` · senha: ${r.password}` : "";
+    let txt = `${r.created ? "Conta criada" : "Configuração reaplicada"}. Login: ${r.login}${senha}. ${c.procedures || 0} procedimentos, ${c.professionals || 0} profissionais, ${c.faqs || 0} FAQ, ${c.templates || 0} mensagens, ${c.activeRules || 0} regras, ${c.playbooks || 0} roteiros.`;
+    if (Array.isArray(r.pending) && r.pending.length) txt += `\nPendências pra completar depois: ${r.pending.join("; ")}.`;
+    out.textContent = txt;
+    out.hidden = false;
+    await loadClinicsList();
+    await loadClinics();
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 document.getElementById("btn-seed-teste").addEventListener("click", async (e) => {
   const btn = e.currentTarget;
   const out = document.getElementById("seed-teste-result");

@@ -47,6 +47,7 @@ import { seedHarmonizze } from "../maintenance/seedHarmonizze.js";
 import { seedDrSaulo } from "../maintenance/seedDrSaulo.js";
 import { seedTeste } from "../maintenance/seedTeste.js";
 import { seedDiamondClinic } from "../maintenance/seedDiamondClinic.js";
+import { seedLisboa } from "../maintenance/seedLisboa.js";
 import { setupIsacFollowup } from "../maintenance/setupIsacFollowup.js";
 import {
   googleConfigured,
@@ -860,6 +861,27 @@ apiRouter.post(
       area: "clinica",
       title: result.created ? "Conta Diamond Clinic criada" : "Configuração da Diamond Clinic reaplicada",
       description: `${c.procedures} procedimentos, ${c.professionals} profissionais, ${c.activeRules} regras, ${c.followups} recontatos.`,
+      actorName: req.staff?.name ?? null,
+    });
+    res.json(result);
+  })
+);
+
+// Cria/atualiza a conta da Lisboa Beauty Center (Sao Bernardo do Campo/SP,
+// estetica avancada) a partir do briefing completo de 07/10/2026. So cria o
+// que ainda nao existe. So admin.
+apiRouter.post(
+  "/clinics/seed-lisboa",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const result = await seedLisboa();
+    const c = result.counts;
+    await logActivity({
+      clinicId: result.clinicId,
+      type: "briefing_applied",
+      area: "clinica",
+      title: result.created ? "Conta Lisboa criada" : "Configuração da Lisboa reaplicada",
+      description: `${c.procedures} procedimentos, ${c.professionals} profissionais, ${c.faqs} FAQ, ${c.activeRules} regras, ${c.playbooks} roteiros.`,
       actorName: req.staff?.name ?? null,
     });
     res.json(result);
