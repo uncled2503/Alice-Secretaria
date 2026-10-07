@@ -21,6 +21,8 @@ const LOGIN = "lisboabeauty@aliceconversa.com";
 const INITIAL_PASSWORD = process.env.LISBOA_INITIAL_PASSWORD?.trim() || "lisboabeauty1234";
 const SEED_MARKER = "seed:lisboa";
 
+const PARKING = "Estacionamento próprio e convênio com desconto na Av. Índico, 231 – Jardim do Mar – São Bernardo do Campo.";
+
 const HANDOFF_PHRASE = "Claro! Vou encaminhar sua mensagem para nossa equipe responsável verificar isso com atenção para você. ✨";
 
 // Procedimentos e profissionais NAO sao criados aqui: vem do Clinica Experts
@@ -52,7 +54,12 @@ const FAQS = [
   {
     question: "Onde fica a clínica?",
     alternates: "endereço\nonde vocês ficam\ncomo chegar\nlocalização",
-    answer: "Estamos na Avenida Indico, 294, no Jardim do Mar, em São Bernardo do Campo - SP. ✨",
+    answer: "Estamos na Av. Índico, 294, no Jardim do Mar, em São Bernardo do Campo - SP, CEP 09750-600. ✨",
+  },
+  {
+    question: "Tem estacionamento?",
+    alternates: "estacionamento\nonde estaciono\ncomo funciona o estacionamento\nvaga para carro",
+    answer: "Sim! Temos estacionamento próprio e também um convênio com desconto na Av. Índico, 231, no Jardim do Mar, em São Bernardo do Campo. 🚗",
   },
   {
     question: "Qual o horário de funcionamento?",
@@ -590,12 +597,19 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
   }
 
   const currentLocation = await prisma.clinicLocation.findFirst({ where: { clinicId: clinic.id } });
+  if (currentLocation && (!currentLocation.zipCode || !currentLocation.arrivalInstructions)) {
+    await prisma.clinicLocation.update({
+      where: { id: currentLocation.id },
+      data: { zipCode: currentLocation.zipCode || "09750-600", arrivalInstructions: currentLocation.arrivalInstructions || PARKING },
+    });
+  }
   if (!currentLocation) {
     await prisma.clinicLocation.create({
       data: {
         clinicId: clinic.id, name: "Lisboa Beauty Center - São Bernardo do Campo",
         city: "São Bernardo do Campo", state: "SP", country: "Brasil", timezone: "America/Sao_Paulo",
-        street: "Avenida Indico", number: "294", neighborhood: "Jardim do Mar", zipCode: null,
+        street: "Avenida Indico", number: "294", neighborhood: "Jardim do Mar", zipCode: "09750-600",
+        arrivalInstructions: PARKING,
         active: true, order: 0,
       },
     });
@@ -634,13 +648,24 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
   await seedRulesOnce(clinic.id, "seed:lisboa-comercial", SALES_RULES);
 
   // Automacoes: so o que o cliente pediu com todos os dados.
+  const LEGACY_24H = "Oi, {primeiro_nome}! 💗 Passando para lembrar do seu atendimento amanhã, {data_hora}, aqui na Lisboa Beauty Center. Podemos confirmar sua presença? ✨";
   const REMINDERS = [
-    { hoursBefore: 24, message: "Oi, {primeiro_nome}! 💗 Passando para lembrar do seu atendimento amanhã, {data_hora}, aqui na Lisboa Beauty Center. Podemos confirmar sua presença? ✨" },
-    { hoursBefore: 3, message: "Oi, {primeiro_nome}! ✨ Passando para lembrar do seu atendimento hoje, às {hora}, aqui na Lisboa Beauty Center. Te esperamos! 💗" },
+    {
+      hoursBefore: 24,
+      message: "Olá, {primeiro_nome}! ♥️ Tudo bem?\nAqui é a Alice, da Clínica Lisboa Beauty Center ✨\nPassando para confirmar o seu agendamento conosco:\n📅 Data: {data} (amanhã)\n⏰ Horário: {hora}\n\n📍 Endereço: Av. Índico, 294 – São Bernardo do Campo/SP – 09750-600\n🚗 Disponibilizamos estacionamento próprio e também temos convênio com desconto no endereço: Av. Índico, 231 – Jardim do Mar – São Bernardo do Campo.\n\nPosso confirmar a sua presença?\n\nEm caso de necessidade de cancelamento ou reagendamento, pedimos a gentileza de avisar com antecedência 💖",
+    },
+    {
+      hoursBefore: 3,
+      message: "Olá, {primeiro_nome}! ☀️ Tudo bem?\nEstamos muito felizes em te receber hoje às {hora} 🥰\nSerá um prazer tê-la conosco e proporcionar uma experiência especial ❤️",
+    },
   ];
   for (const r of REMINDERS) {
     const reminder = await prisma.reminderRule.findFirst({ where: { clinicId: clinic.id, hoursBefore: r.hoursBefore } });
-    if (reminder) continue;
+    if (reminder) {
+      // Troca so o texto antigo, nunca editado pela clinica.
+      if (reminder.message === LEGACY_24H) await prisma.reminderRule.update({ where: { id: reminder.id }, data: { message: r.message } });
+      continue;
+    }
     // desligados ate a Lisboa validar o fluxo (evita disparo ao conectar)
     await prisma.reminderRule.create({ data: { clinicId: clinic.id, hoursBefore: r.hoursBefore, active: false, message: r.message } });
   }
@@ -725,7 +750,7 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
       "DESCRIÇÃO, indicações, contraindicações, preparo e cuidados pós de cada procedimento: não vieram no briefing nem existem no Clínica Experts. A Alice só fala disso depois de cadastrado.",
       "Procedimentos sem preço no Clínica Experts ficam como 'depende de avaliação' (a Alice não informa valor). Parcelamento e formas de pagamento por procedimento: não informados.",
       "NÚMERO INTERNO de avisos (agendamento/cancelamento/transferência): PENDENTE no briefing. Eventos configurados, mas sem número.",
-      "CEP, ponto de referência, estacionamento, Google Maps: PENDENTES. Endereço cadastrado: Avenida Indico, 294, Jardim do Mar.",
+      "Ponto de referência e link do Google Maps: PENDENTES. Endereço: Av. Índico, 294, Jardim do Mar, CEP 09750-600; estacionamento próprio + convênio na Av. Índico, 231 (informado pela clínica).",
       "Intervalo de almoço e feriados/recessos: o Clínica Experts já bloqueia quando necessário; nada cadastrado aqui. Confirmar se há regra fixa de feriados.",
       "Devolução de sinal: PENDENTE (a Alice está instruída a não prometer). Valor do sinal por procedimento: não informado.",
       "Recontato 4h, 1 dia, 3, 7 e 15 dias cadastrado (9h às 20h), DESLIGADO: ligar um a um no painel depois de conectar e validar. Reativação de inativos também desligada (intervalo não definido).",

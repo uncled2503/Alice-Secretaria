@@ -29,6 +29,7 @@ export function renderMessageTemplate(template: string, ctx: TemplateContext): s
     .replace(/\{unidade\}/gi, ctx.locationName ?? ctx.clinicName)
     .replace(/\{procedimento\}/gi, ctx.procedureName ?? "")
     .replace(/\{profissional\}/gi, ctx.professionalName ?? "")
+    .replace(/\{data\}/gi, when.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", year: "numeric" }))
     .replace(/\{data_hora\}/gi, when.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }))
     .replace(/\{hora\}/gi, when.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" }))
     .replace(/\{aniversario\}/gi, ctx.birthDate ? `${String(ctx.birthDate.getUTCDate()).padStart(2, "0")}/${String(ctx.birthDate.getUTCMonth() + 1).padStart(2, "0")}` : "")
