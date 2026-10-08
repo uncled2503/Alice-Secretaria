@@ -43,12 +43,33 @@ export function inReminderWindow(
   return now.getTime() >= from && now.getTime() < to;
 }
 
+// Mudanca de janela/pausa AGENDADA numa regra (ex.: "a partir de amanha"):
+// guardada em ReminderRule.scheduledChange e aplicada sozinha quando a data chega.
+export interface ScheduledChange {
+  from: string; // ISO
+  sendHour?: number;
+  sendMinute?: number;
+  sendEndHour?: number;
+  pauseMinSec?: number;
+  pauseMaxSec?: number;
+}
+
+// PURO: devolve a mudanca se ja esta na hora de aplicar; null se nao (ou JSON invalido).
+export function dueScheduledChange(raw: string | null | undefined, now: Date): ScheduledChange | null {
+  if (!raw) return null;
+  try {
+    const c = JSON.parse(raw) as ScheduledChange;
+    const from = new Date(c.from).getTime();
+    return Number.isFinite(from) && now.getTime() >= from ? c : null;
+  } catch {
+    return null;
+  }
+}
+
 // Janela de envio: os lembretes de uma regra com sendEndHour saem espalhados
 // entre o inicio e o fim da janela, com pausa aleatoria entre um paciente e
 // outro e um teto por rodada (protege o numero de bloqueio por rajada).
 const MAX_SENDS_PER_RUN = 12;
-const PAUSE_MIN_MS = 15_000;
-const PAUSE_MAX_MS = 45_000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let reminderRunning = false;
 
@@ -60,7 +81,21 @@ export function startReminderJob(): void {
     if (reminderRunning) return; // rodada anterior (com pausas) ainda em andamento
     reminderRunning = true;
     try {
-    const rules = await prisma.reminderRule.findMany({ where: { active: true, clinic: PAID_CLINIC_WHERE } });
+    const loaded = await prisma.reminderRule.findMany({ where: { active: true, clinic: PAID_CLINIC_WHERE } });
+    const rules: typeof loaded = [];
+    for (const r of loaded) {
+      const change = dueScheduledChange(r.scheduledChange, new Date());
+      if (!change) { rules.push(r); continue; }
+      const data = {
+        ...(change.sendHour !== undefined ? { sendHour: change.sendHour } : {}),
+        ...(change.sendMinute !== undefined ? { sendMinute: change.sendMinute } : {}),
+        ...(change.sendEndHour !== undefined ? { sendEndHour: change.sendEndHour } : {}),
+        ...(change.pauseMinSec !== undefined ? { pauseMinSec: change.pauseMinSec } : {}),
+        ...(change.pauseMaxSec !== undefined ? { pauseMaxSec: change.pauseMaxSec } : {}),
+        scheduledChange: null,
+      };
+      rules.push(await prisma.reminderRule.update({ where: { id: r.id }, data }));
+    }
     const clinicInfoCache = new Map<string, Awaited<ReturnType<typeof getClinicTemplateInfo>>>();
 
     for (const rule of rules) {
@@ -128,7 +163,7 @@ export function startReminderJob(): void {
         } catch (err) {
           console.error(`Falha ao enviar lembrete (regra ${rule.id}) para ${appt.patient.phone}:`, err);
         }
-        if (rule.sendEndHour != null) await sleep(PAUSE_MIN_MS + Math.random() * (PAUSE_MAX_MS - PAUSE_MIN_MS));
+        if (rule.sendEndHour != null) await sleep((rule.pauseMinSec + Math.random() * Math.max(0, rule.pauseMaxSec - rule.pauseMinSec)) * 1000);
       }
     }
     } finally {

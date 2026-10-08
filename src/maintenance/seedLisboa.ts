@@ -669,14 +669,14 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
   // as 11h do dia anterior; confirmacao do dia de 7h as 8h do proprio dia.
   // Os envios sao espalhados dentro da janela, com pausa entre pacientes.
   const REMINDERS = [
-    { hoursBefore: 24, dayOffset: 1, sendHour: 8, sendMinute: 0, sendEndHour: 11, message: "Olá, {primeiro_nome}! ♥️ Tudo bem?\nAqui é a Fabi, da Clínica Lisboa Beauty Center ✨\nPassando para confirmar o seu agendamento conosco:\n\n📅 Data: {data} (amanhã)\n⏰ Horário: {hora}\n💆 Procedimento: {procedimento}\n\n📍 Endereço: Av. Índico, 294 – São Bernardo do Campo/SP – 09750-600\n🚗 Disponibilizamos estacionamento próprio e também temos convênio com desconto no endereço: Av. Índico, 231 – Jardim do Mar – São Bernardo do Campo.\n\nPosso confirmar a sua presença?\n\nEm caso de necessidade de cancelamento ou reagendamento, pedimos a gentileza de avisar com antecedência 💖" },
-    { hoursBefore: 3, dayOffset: 0, sendHour: 7, sendMinute: 0, sendEndHour: 8, message: "Bom dia, {primeiro_nome}! Tudo bem? ☀️\nEstamos muito felizes em te receber hoje às {hora} 🥰\nSerá um prazer tê-la conosco e proporcionar uma experiência especial ❤️" },
+    { hoursBefore: 24, dayOffset: 1, sendHour: 8, sendMinute: 0, sendEndHour: 11, pauseMinSec: 10, pauseMaxSec: 30, message: "Olá, {primeiro_nome}! ♥️ Tudo bem?\nAqui é a Fabi, da Clínica Lisboa Beauty Center ✨\nPassando para confirmar o seu agendamento conosco:\n\n📅 Data: {data} (amanhã)\n⏰ Horário: {hora}\n💆 Procedimento: {procedimento}\n\n📍 Endereço: Av. Índico, 294 – São Bernardo do Campo/SP – 09750-600\n🚗 Disponibilizamos estacionamento próprio e também temos convênio com desconto no endereço: Av. Índico, 231 – Jardim do Mar – São Bernardo do Campo.\n\nPosso confirmar a sua presença?\n\nEm caso de necessidade de cancelamento ou reagendamento, pedimos a gentileza de avisar com antecedência 💖" },
+    { hoursBefore: 3, dayOffset: 0, sendHour: 7, sendMinute: 0, sendEndHour: 8, pauseMinSec: 10, pauseMaxSec: 30, message: "Bom dia, {primeiro_nome}! Tudo bem? ☀️\nEstamos muito felizes em te receber hoje às {hora} 🥰\nSerá um prazer tê-la conosco e proporcionar uma experiência especial ❤️" },
   ];
   for (const r of REMINDERS) {
     const reminder = await prisma.reminderRule.findFirst({ where: { clinicId: clinic.id, hoursBefore: r.hoursBefore } });
     if (reminder) continue; // nunca sobrescreve o que a clinica editou
     await prisma.reminderRule.create({
-      data: { clinicId: clinic.id, hoursBefore: r.hoursBefore, dayOffset: r.dayOffset, sendHour: r.sendHour, sendMinute: r.sendMinute, sendEndHour: r.sendEndHour, active: true, message: r.message },
+      data: { clinicId: clinic.id, hoursBefore: r.hoursBefore, dayOffset: r.dayOffset, sendHour: r.sendHour, sendMinute: r.sendMinute, sendEndHour: r.sendEndHour, pauseMinSec: r.pauseMinSec, pauseMaxSec: r.pauseMaxSec, active: true, message: r.message },
     });
   }
 

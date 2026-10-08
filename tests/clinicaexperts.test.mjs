@@ -142,3 +142,13 @@ test("janela de confirmacao: dia seguinte 12h-18h e do dia 7h-10h", () => {
   assert.equal(inReminderWindow(consulta, local(9, 9, 59), hoje, TZ), true);
   assert.equal(inReminderWindow(consulta, local(9, 10), hoje, TZ), false);
 });
+
+import { dueScheduledChange } from "../dist/reminders/cron.js";
+
+test("mudanca agendada so entra na data marcada (amanha 00:00 de Sao Paulo)", () => {
+  const raw = JSON.stringify({ from: "2026-10-09T03:00:00.000Z", sendHour: 8, sendEndHour: 11, pauseMinSec: 10, pauseMaxSec: 30 });
+  assert.equal(dueScheduledChange(raw, new Date("2026-10-09T02:59:59.000Z")), null); // 23:59 de hoje: ainda nao
+  assert.equal(dueScheduledChange(raw, new Date("2026-10-09T03:00:00.000Z"))?.sendEndHour, 11); // 00:00 de amanha: entra
+  assert.equal(dueScheduledChange(null, new Date()), null);
+  assert.equal(dueScheduledChange("lixo", new Date()), null);
+});
