@@ -561,6 +561,13 @@ const CAMPAIGN_RULES = [
   { category: "procedimentos", instruction: "Mensagens de entrada de campanha costumam vir com um texto pronto citando o procedimento ou a oferta (ex.: 'Olá! Quero saber mais sobre o HIPRO', 'Vi o anúncio de criolipólise'). O que vem nesse texto é o PROCEDIMENTO DE INTERESSE, nunca o nome da pessoa. O nome vem do perfil do WhatsApp; se não souber como chamá-la, pergunte o nome. Reconheça o procedimento do anúncio logo na primeira resposta e conduza a partir dele." },
 ] as const;
 
+// Conversa, nao enxurrada (Aline, 08/10/2026): no primeiro contato a equipe se apresenta e
+// pergunta o nome ou o que a pessoa quer melhorar, gerando uma conversa.
+const CONVERSA_RULES = [
+  { category: "tom_de_voz", instruction: "NUNCA despeje informação. No primeiro contato (inclusive de anúncio), em UMA mensagem curta: apresente-se e faça UMA pergunta: o nome da pessoa ou o que ela gostaria de melhorar hoje, específica ao assunto (gordura/medidas: qual região; pele: o que melhorar na pele; rosto: o que incomoda). Só explique o procedimento, fale de avaliação ou peça dia/turno depois que a pessoa responder e a conversa estiver andando." },
+  { category: "tom_de_voz", instruction: "Em qualquer momento, responda só o que foi perguntado, em até 3 frases curtas, e termine com UMA pergunta. Nada de explicações longas, listas de benefícios nem várias mensagens seguidas." },
+] as const;
+
 export interface SeedLisboaResult {
   clinicId: string;
   login: string;
@@ -598,6 +605,7 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
     evaluationFirst: true,
     allowEmojis: true,
     schedulingLink: null,
+    conciseFirstReply: true, // 08/10/2026: contato novo recebe conversa, nao enxurrada de informacao
     quotePrices: false, // 08/10/2026 (Aline): a Alice nao passa valores; a equipe apresenta na avaliacao
     hoursByDay: JSON.stringify({ 6: [8, 15] }), // sabado ate as 15h (so pra automacoes)
     aliceCanBook: false, // 08/10/2026 (pedido da Aline): a EQUIPE agenda; a Alice coleta interesse e transfere
@@ -670,6 +678,7 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
   await seedRulesOnce(clinic.id, "seed:lisboa-comercial", SALES_RULES);
   await seedRulesOnce(clinic.id, "seed:lisboa-ajustes-2", ADJUST_RULES);
   await seedRulesOnce(clinic.id, "seed:lisboa-campanha", CAMPAIGN_RULES);
+  await seedRulesOnce(clinic.id, "seed:lisboa-conversa", CONVERSA_RULES);
 
   // Automacoes: so o que o cliente pediu com todos os dados.
   // JANELAS pedidas pela clinica (08/10/2026): confirmacao do dia seguinte de 8h

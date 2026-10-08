@@ -3664,6 +3664,7 @@ function loadAliceSettings() {
   document.getElementById("as-deposit").checked = !!c.requireDepositProof;
   document.getElementById("as-can-book").checked = c.aliceCanBook !== false;
   document.getElementById("as-quote-prices").checked = c.quotePrices !== false;
+  document.getElementById("as-first-short").checked = !!c.conciseFirstReply;
   document.getElementById("as-nps").checked = !!c.npsEnabled;
   document.getElementById("as-nps-hours").value = c.npsHoursAfter ?? 24;
   document.getElementById("as-nps-threshold").value = c.npsThreshold ?? 9;
@@ -3704,6 +3705,7 @@ document.getElementById("alice-settings-form").addEventListener("submit", async 
     requireDepositProof: document.getElementById("as-deposit").checked,
     aliceCanBook: document.getElementById("as-can-book").checked,
     quotePrices: document.getElementById("as-quote-prices").checked,
+    conciseFirstReply: document.getElementById("as-first-short").checked,
     npsEnabled: document.getElementById("as-nps").checked,
     npsHoursAfter: Number(document.getElementById("as-nps-hours").value) || 24,
     npsThreshold: Number(document.getElementById("as-nps-threshold").value),

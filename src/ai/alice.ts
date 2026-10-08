@@ -885,6 +885,17 @@ AGENDAMENTO PELA EQUIPE: voce NAO agenda, NAO remarca, NAO cancela e NAO oferece
   const dateLine = `
 CALENDARIO DE HOJE (use exatamente): HOJE e ${formatDayInZone(dayNow, dayTz)}. AMANHA e ${formatDayInZone(dayTomorrow, dayTz)}. So escreva "(hoje)" ou "(amanha)" ao lado de um dia da semana se for exatamente um desses dois dias; para qualquer outro dia, escreva so o dia da semana e a data, SEM "hoje"/"amanha".`;
 
+  // Primeiro contato (clinicas com "primeira resposta curta"): conversa, nao enxurrada.
+  let firstContactLine = "";
+  if (clinic.conciseFirstReply && ctx.patientId) {
+    const priorReplies = await prisma.message.count({
+      where: { role: "assistant", authorName: null, conversation: { patientId: ctx.patientId } },
+    });
+    if (priorReplies === 0) {
+      firstContactLine = `\nPRIMEIRA RESPOSTA A UM CONTATO NOVO (regra rigida desta clinica): responda em UMA unica mensagem, com NO MAXIMO 2 frases curtas. Se apresente ("Oi! Aqui e a ${a}, da equipe ${clinic.name}") e faca UMA unica pergunta para comecar a conversa: se nao souber o nome, pergunte o nome; ou pergunte o que a pessoa gostaria de melhorar hoje, de forma especifica ao assunto dela (gordura/medidas: qual regiao; pele: o que gostaria de melhorar na pele; rosto/harmonizacao: o que a incomoda; e assim por diante). NAO explique o procedimento, NAO descreva beneficios, NAO fale de avaliacao gratuita, de valores nem de agendamento, NAO mande mais de uma mensagem. Mesmo que ela venha de anuncio, so reconheca o assunto em poucas palavras ("vi que voce veio pelo anuncio de peeling") e pergunte. So passe a informacoes depois que ela responder.`;
+    }
+  }
+
   let surveyLine = "";
   if (ctx.patientId) {
     const pending = await prisma.satisfactionSurvey.findFirst({
@@ -1012,7 +1023,7 @@ Seu trabalho:
 2. Manter a etapa do paciente no funil atualizada (update_crm_stage) conforme a conversa avanca.
 3. Checar disponibilidade real (check_specific_time / check_availability) antes de falar de qualquer data.
 4. Confirmar o horario escolhido com o paciente e so entao usar book_appointment.
-5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${adLine}${dateLine}${apptLine}${teamBooksLine}${continuityLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${noRepeatLine}
+5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${firstContactLine}${adLine}${dateLine}${apptLine}${teamBooksLine}${continuityLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${noRepeatLine}
 
 Procedimentos oferecidos pela clinica:
 ${procedureList || "(nenhum procedimento cadastrado ainda)"}
@@ -1274,6 +1285,30 @@ export async function recordOutgoingFromDevice(params: {
 // PASSO 2 (pode ser adiado): olha TODAS as mensagens acumuladas da conversa,
 // gera a resposta da Alice, grava e devolve o texto pra enviar. Devolve "" se
 // nao deve responder (humano assumiu, ou chegou mensagem nova durante a geracao).
+const FIRST_REPLY_MAX_CHARS = 320;
+
+// Reescreve a primeira resposta em no maximo 2 frases: apresentacao + UMA pergunta.
+async function shortenFirstReply(draft: string, patientMessages: string[], clinicName: string, assistantName: string): Promise<string | null> {
+  try {
+    const res = await openai.chat.completions.create({
+      model: MODEL,
+      temperature: 0.3,
+      messages: [
+        {
+          role: "system",
+          content: `Voce reescreve a PRIMEIRA mensagem de uma secretaria de clinica (${assistantName}, da equipe ${clinicName}) a um contato novo no WhatsApp. A versao original despejou informacao demais. Reescreva em UMA unica mensagem de NO MAXIMO 2 frases curtas: (1) apresentacao curta ("Oi! Aqui e a ${assistantName}, da equipe ${clinicName}.") e, se vier de anuncio, reconheca o assunto em poucas palavras; (2) UMA unica pergunta para comecar a conversa: o nome da pessoa (se ainda nao se sabe) OU o que ela gostaria de melhorar, de forma especifica ao assunto (gordura: qual regiao; pele: o que melhorar na pele; rosto: o que incomoda). PROIBIDO: explicar o procedimento, listar beneficios, falar de avaliacao gratuita, valores, agendamento ou dia/turno. Sem listas, sem markdown. Tom proximo e acolhedor, no maximo 1 emoji. Responda SO com a mensagem.`,
+        },
+        { role: "user", content: `Mensagens da pessoa:\n${patientMessages.join("\n").slice(0, 600)}\n\nVersao original (longa demais):\n${draft.slice(0, 1500)}` },
+      ],
+    });
+    const text = res.choices[0]?.message?.content?.trim();
+    return text && text.length >= 20 && text.length < draft.length ? text : null;
+  } catch (err) {
+    console.error("[primeira-resposta] falha ao encurtar:", err);
+    return null;
+  }
+}
+
 // Uma resposta por vez POR CONVERSA. Sem isso, duas mensagens seguidas do paciente
 // ("Oi boa tarde" + "quanto custa?") geravam duas respostas em paralelo, cada uma
 // sem enxergar a outra, e o paciente recebia a mesma coisa 2 ou 3 vezes.
@@ -1470,6 +1505,16 @@ async function generateReplyUnlocked(
   // esta (ja e velha) - o novo agrupamento vai gerar uma resposta atualizada.
   if (opts.guardAgainstNewerThan && after && after.messages.length > 0) {
     return "";
+  }
+
+  // Primeira resposta a um contato novo ficou longa (enxurrada de informacao): reescreve
+  // curta - apresentacao + UMA pergunta. Vale mesmo se o modelo ignorar a instrucao.
+  if (!didTransfer && finalText.trim() && (finalText.length > FIRST_REPLY_MAX_CHARS || (finalText.match(/?/g) ?? []).length > 1) && !history.some((m) => m.role === "assistant")) {
+    const conciseOn = (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { conciseFirstReply: true, name: true, assistantName: true } })) ?? null;
+    if (conciseOn?.conciseFirstReply) {
+      const shortText = await shortenFirstReply(finalText, history.filter((m) => m.role === "user").map((m) => m.content).slice(-3), conciseOn.name, conciseOn.assistantName || "Alice");
+      if (shortText) finalText = shortText;
+    }
   }
 
   // Redundante: a propria Alice acabou de mandar (quase) isso. Nao reenvia.

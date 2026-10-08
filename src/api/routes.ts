@@ -202,6 +202,7 @@ apiRouter.get(
         id: true,
         name: true,
         aliceActive: true,
+        conciseFirstReply: true,
         whatsappPhone: true,
         timezone: true,
         workStartHour: true,
@@ -309,6 +310,7 @@ apiRouter.put(
       requireDepositProof?: boolean;
       aliceCanBook?: boolean;
       quotePrices?: boolean;
+      conciseFirstReply?: boolean;
       businessType?: string;
       businessLabel?: string | null;
       servicePosture?: string;
@@ -401,6 +403,7 @@ apiRouter.put(
           ...(b.requireDepositProof !== undefined ? { requireDepositProof: b.requireDepositProof } : {}),
           ...(b.aliceCanBook !== undefined ? { aliceCanBook: b.aliceCanBook } : {}),
           ...(b.quotePrices !== undefined ? { quotePrices: b.quotePrices } : {}),
+          ...(b.conciseFirstReply !== undefined ? { conciseFirstReply: b.conciseFirstReply } : {}),
           ...(b.businessType !== undefined ? { businessType: b.businessType } : {}),
           ...(b.businessLabel !== undefined ? { businessLabel: b.businessLabel?.trim() || null } : {}),
           ...(b.servicePosture !== undefined ? { servicePosture: b.servicePosture } : {}),
