@@ -152,3 +152,15 @@ test("mudanca agendada so entra na data marcada (amanha 00:00 de Sao Paulo)", ()
   assert.equal(dueScheduledChange(null, new Date()), null);
   assert.equal(dueScheduledChange("lixo", new Date()), null);
 });
+
+import { parseCeInstant } from "../dist/clinicaexperts/pull.js";
+
+test("horario do Clinica Experts: com fuso usa direto, sem fuso le no fuso da clinica", () => {
+  const esperado = Date.UTC(2026, 9, 9, 18, 0); // 15:00 em Sao Paulo
+  assert.equal(parseCeInstant("2026-10-09T15:00:00-03:00", TZ).getTime(), esperado);
+  assert.equal(parseCeInstant("2026-10-09T18:00:00Z", TZ).getTime(), esperado);
+  assert.equal(parseCeInstant("2026-10-09T18:00:00.000000Z", TZ).getTime(), esperado);
+  assert.equal(parseCeInstant("2026-10-09T15:00:00", TZ).getTime(), esperado); // sem fuso: 15h de Sao Paulo, nao do servidor
+  assert.equal(parseCeInstant("2026-10-09 15:00:00", TZ).getTime(), esperado);
+  assert.ok(Number.isNaN(parseCeInstant("lixo", TZ).getTime()));
+});

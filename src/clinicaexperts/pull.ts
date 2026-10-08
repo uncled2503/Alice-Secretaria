@@ -1,6 +1,7 @@
 import cron from "node-cron";
 import { prisma } from "../db/client.js";
 import { ceRequest, dayBoundIso, noteError } from "./client.js";
+import { zonedWallClockToUtc } from "../scheduling/time.js";
 
 // ---------------------------------------------------------------------------
 // Clinica Experts -> Alice: agendamentos feitos DIRETO no Clinica Experts
@@ -56,6 +57,18 @@ async function pickProcedure(clinicId: string, b: CeBookingLite) {
   return ordered.find((p) => !isEvaluationName(p.name)) ?? ordered[0] ?? null;
 }
 
+// PURO: instante de uma reserva do Clinica Experts. Com fuso explicito (Z ou
+// +/-hh:mm) usa direto; SEM fuso ("2026-10-09T15:00:00") le como horario de
+// parede no fuso da clinica - nunca no fuso do servidor (que e UTC no VPS e
+// deslocaria o horario em 3h).
+export function parseCeInstant(raw: string, timeZone: string): Date {
+  const text = raw.trim();
+  if (/(Z|[+-]\d{2}:?\d{2})$/i.test(text)) return new Date(text);
+  const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(text);
+  if (!m) return new Date(NaN);
+  return zonedWallClockToUtc(timeZone, Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5]));
+}
+
 export interface PullResult {
   created: number;
   updated: number;
@@ -84,7 +97,7 @@ export async function pullClinicBookings(clinicId: string): Promise<PullResult> 
   for (const b of bookings) {
     if (!b.uuid || seen.has(b.uuid) || !b.starts_at) continue;
     seen.add(b.uuid);
-    const when = new Date(b.starts_at);
+    const when = parseCeInstant(b.starts_at, tz);
     if (Number.isNaN(when.getTime())) { result.skipped++; continue; }
     const status = mapCeStatus(b.status);
 

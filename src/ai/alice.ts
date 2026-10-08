@@ -860,6 +860,24 @@ AGENDAMENTO PELA EQUIPE: voce NAO agenda, NAO remarca, NAO cancela e NAO oferece
     if (ad) adLine = `\nORIGEM: este paciente chegou por um ANUNCIO (${ad}). Identifique o procedimento ou oferta desse anuncio pelo nome dele e retome-o na conversa (ex.: "Vi que voce veio pelo nosso anuncio de ..."), sem contradizer a oferta. Se o nome do anuncio nao deixar claro o procedimento, pergunte qual o interesse.`;
   }
 
+  // Agendamentos REAIS do paciente: unica fonte de verdade pra dia/horario. Sem
+  // isso a Alice "confirmava" o horario que o paciente sugeria (ou o que lembrava
+  // de uma mensagem antiga) mesmo quando a agenda dizia outra coisa.
+  let apptLine = "";
+  if (ctx.patientId) {
+    const tzAppt = clinic.timezone || "America/Sao_Paulo";
+    const upcoming = await prisma.appointment.findMany({
+      where: { clinicId, patientId: ctx.patientId, status: "confirmed", scheduledAt: { gte: new Date() } },
+      orderBy: { scheduledAt: "asc" },
+      take: 5,
+      include: { procedure: { select: { name: true } }, professional: { select: { name: true } } },
+    });
+    const list = upcoming.length
+      ? upcoming.map((a) => `- ${formatInZone(a.scheduledAt, tzAppt)} - ${a.procedure.name}${a.professional ? ` (com ${a.professional.name})` : ""}`).join("\n")
+      : "(nenhum agendamento futuro registrado)";
+    apptLine = `\nAGENDAMENTOS REAIS DESTE PACIENTE (unica fonte de verdade para dia e horario):\n${list}\nSobre dia/horario de agendamento: use SOMENTE esta lista. Se o paciente citar um horario diferente do da lista, duvidar do horario ("nao e as 15h?") ou pedir para mudar, NAO concorde, NAO corrija e NAO invente: diga que vai confirmar com a equipe e chame transfer_to_human com o horario que ele citou e o que consta aqui. Nunca confirme um horario que nao esteja na lista. Se a lista estiver vazia, nao ha agendamento registrado: nao diga que esta agendado, encaminhe para a equipe.`;
+  }
+
   let surveyLine = "";
   if (ctx.patientId) {
     const pending = await prisma.satisfactionSurvey.findFirst({
@@ -987,7 +1005,7 @@ Seu trabalho:
 2. Manter a etapa do paciente no funil atualizada (update_crm_stage) conforme a conversa avanca.
 3. Checar disponibilidade real (check_specific_time / check_availability) antes de falar de qualquer data.
 4. Confirmar o horario escolhido com o paciente e so entao usar book_appointment.
-5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${adLine}${teamBooksLine}${continuityLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${noRepeatLine}
+5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${adLine}${apptLine}${teamBooksLine}${continuityLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${noRepeatLine}
 
 Procedimentos oferecidos pela clinica:
 ${procedureList || "(nenhum procedimento cadastrado ainda)"}
