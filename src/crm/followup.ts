@@ -6,6 +6,7 @@ import { movePatientToKind, movePatientToStage } from "./stageAutomation.js";
 import { renderMessageTemplate, getClinicTemplateInfo, type ClinicTemplateInfo } from "./template.js";
 import { PAID_CLINIC_WHERE } from "./plan.js";
 import { isWithinClinicHours, type OpenHoursClinic } from "./openHours.js";
+import { isClosingMessage } from "./followupGuards.js";
 
 // Cache simples por execucao do job.
 const stagesCache = new Map<string, Awaited<ReturnType<typeof getFunnelStages>>>();
@@ -129,12 +130,22 @@ export async function runFollowUpCheck(): Promise<void> {
       continue;
     }
 
-    if (rule.skipIfUpcomingAppt) {
-      const upcoming = await prisma.appointment.findFirst({
-        where: { patientId: conversation.patientId, status: "confirmed", scheduledAt: { gte: new Date() } },
-      });
-      if (upcoming) continue;
-    }
+    // Quem ja tem horario (futuro, de hoje ou que acabou de acontecer) NAO e lead
+    // sumido: nunca recebe recontato - independente da opcao da regra.
+    const active = await prisma.appointment.findFirst({
+      where: {
+        patientId: conversation.patientId,
+        OR: [
+          { status: "confirmed", scheduledAt: { gte: new Date(Date.now() - 24 * 3_600_000) } },
+          { status: "completed", scheduledAt: { gte: new Date(Date.now() - 7 * 24 * 3_600_000) } },
+        ],
+      },
+      select: { id: true },
+    });
+    if (active) continue;
+
+    // Encerrou o assunto ("ok", "estarei ai", "obrigada"): nao ha o que retomar.
+    if (isClosingMessage(lastPatientMessage.content)) continue;
 
     if (rule.repeatMode === "once") {
       const already = await prisma.followUpSent.findUnique({
@@ -159,6 +170,13 @@ export async function runFollowUpCheck(): Promise<void> {
     // So manda dentro do expediente da clinica (dias e horarios de atendimento).
     if (!isWithinClinicHours(clinic.hours, new Date())) continue;
     if (!withinWindow(localHour(clinic.timezone), rule.sendWindowStart, rule.sendWindowEnd)) continue;
+
+    const lastAny = await prisma.message.findFirst({
+      where: { conversationId: conversation.id, role: { in: ["user", "assistant", "human"] } },
+      orderBy: { createdAt: "desc" },
+      select: { role: true },
+    });
+    if (lastAny?.role === "user") continue; // o paciente falou por ultimo: a bola esta com a clinica, nao e silencio dele
 
     const text = renderMessageTemplate(rule.message, {
       patientName: conversation.patient.name,

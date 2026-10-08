@@ -175,3 +175,25 @@ test("nomes da planilha casam com o catalogo sem confundir variacoes", () => {
   assert.ok(nameKeys("Escleroterapia (Secagem de Vasinhos)").includes("escleroterapia"));
   assert.ok(!nameKeys("Radiofrequência").includes("radiofrequencia facial")); // variacoes nao se misturam
 });
+
+import { fixRelativeDayLabels } from "../dist/ai/relativeDays.js";
+import { isClosingMessage } from "../dist/crm/followupGuards.js";
+
+test("'hoje'/'amanha' sao corrigidos pelo calendario real (hoje = quinta 08/10/2026)", () => {
+  const quinta = new Date(Date.UTC(2026, 9, 8, 18, 0)); // quinta, 15h em Sao Paulo
+  const fix = (t) => fixRelativeDayLabels(t, quinta, TZ);
+  assert.equal(fix("Prefere quinta-feira (amanhã) ou sexta-feira?"), "Prefere quinta-feira (hoje) ou sexta-feira?"); // o erro do print
+  assert.equal(fix("sexta-feira (amanhã) às 10h"), "sexta-feira (amanhã) às 10h"); // correto: nao mexe
+  assert.equal(fix("sábado (amanhã)"), "sábado"); // rotulo errado e removido
+  assert.equal(fix("quinta-feira, 08/10 (amanhã)"), "quinta-feira, 08/10 (hoje)");
+  assert.equal(fix("Te espero amanhã (quinta-feira) às 14h"), "Te espero hoje (quinta-feira) às 14h");
+  assert.equal(fix("amanhã, sexta-feira, às 9h"), "amanhã, sexta-feira, às 9h");
+  assert.equal(fix("amanhã (segunda-feira)"), "segunda-feira");
+  assert.equal(fix("Te espero amanhã às 14h"), "Te espero amanhã às 14h"); // sem dia da semana: nao mexe
+  assert.equal(fix("Quarta-feira (hoje)"), "Quarta-feira"); // hoje e quinta
+});
+
+test("conversa encerrada pelo paciente nao recebe recontato", () => {
+  for (const t of ["Ok", "ok!", "Estarei aí", "Obrigada", "obrigado!!", "Combinado", "Perfeito", "👍", "❤️🙏", "Até lá", "Valeu"]) assert.equal(isClosingMessage(t), true, t);
+  for (const t of ["Gostaria de saber valores de pacotes", "Eu quero, por favor", "Ok, mas e o valor?", "Oi", "", "Não sei ainda, vou ver com meu marido e te falo"]) assert.equal(isClosingMessage(t), false, t);
+});

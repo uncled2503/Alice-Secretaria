@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
 import { prisma } from "../db/client.js";
 import { enrichPatientFromCe } from "../clinicaexperts/sync.js";
+import { fixRelativeDayLabels } from "./relativeDays.js";
 import {
   findAvailableSlots,
   findAvailableSlotsOnDay,
@@ -878,6 +879,12 @@ AGENDAMENTO PELA EQUIPE: voce NAO agenda, NAO remarca, NAO cancela e NAO oferece
     apptLine = `\nAGENDAMENTOS REAIS DESTE PACIENTE (unica fonte de verdade para dia e horario):\n${list}\nSobre dia/horario de agendamento: use SOMENTE esta lista. Se o paciente citar um horario diferente do da lista, duvidar do horario ("nao e as 15h?") ou pedir para mudar, NAO concorde, NAO corrija e NAO invente: diga que vai confirmar com a equipe e chame transfer_to_human com o horario que ele citou e o que consta aqui. Nunca confirme um horario que nao esteja na lista. Se a lista estiver vazia, nao ha agendamento registrado: nao diga que esta agendado, encaminhe para a equipe.`;
   }
 
+  const dayNow = new Date();
+  const dayTz = clinic.timezone || "America/Sao_Paulo";
+  const dayTomorrow = new Date(dayNow.getTime() + 86_400_000);
+  const dateLine = `
+CALENDARIO DE HOJE (use exatamente): HOJE e ${formatDayInZone(dayNow, dayTz)}. AMANHA e ${formatDayInZone(dayTomorrow, dayTz)}. So escreva "(hoje)" ou "(amanha)" ao lado de um dia da semana se for exatamente um desses dois dias; para qualquer outro dia, escreva so o dia da semana e a data, SEM "hoje"/"amanha".`;
+
   let surveyLine = "";
   if (ctx.patientId) {
     const pending = await prisma.satisfactionSurvey.findFirst({
@@ -1005,7 +1012,7 @@ Seu trabalho:
 2. Manter a etapa do paciente no funil atualizada (update_crm_stage) conforme a conversa avanca.
 3. Checar disponibilidade real (check_specific_time / check_availability) antes de falar de qualquer data.
 4. Confirmar o horario escolhido com o paciente e so entao usar book_appointment.
-5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${adLine}${apptLine}${teamBooksLine}${continuityLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${noRepeatLine}
+5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${adLine}${dateLine}${apptLine}${teamBooksLine}${continuityLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${noRepeatLine}
 
 Procedimentos oferecidos pela clinica:
 ${procedureList || "(nenhum procedimento cadastrado ainda)"}
@@ -1450,6 +1457,8 @@ export async function generateReply(
   }
 
   if (finalText.trim()) {
+    const clinicTz = (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { timezone: true } }))?.timezone || "America/Sao_Paulo";
+    finalText = fixRelativeDayLabels(finalText, new Date(), clinicTz); // "quinta (amanha)" numa quinta vira "quinta (hoje)"
     await prisma.message.create({
       data: { conversationId: conversation.id, role: "assistant", content: finalText },
     });
