@@ -1274,7 +1274,35 @@ export async function recordOutgoingFromDevice(params: {
 // PASSO 2 (pode ser adiado): olha TODAS as mensagens acumuladas da conversa,
 // gera a resposta da Alice, grava e devolve o texto pra enviar. Devolve "" se
 // nao deve responder (humano assumiu, ou chegou mensagem nova durante a geracao).
-export async function generateReply(
+// Uma resposta por vez POR CONVERSA. Sem isso, duas mensagens seguidas do paciente
+// ("Oi boa tarde" + "quanto custa?") geravam duas respostas em paralelo, cada uma
+// sem enxergar a outra, e o paciente recebia a mesma coisa 2 ou 3 vezes.
+const replyLocks = new Map<string, Promise<unknown>>();
+
+export function generateReply(
+  conversationId: string,
+  opts: { imageDataUrl?: string; guardAgainstNewerThan?: Date } = {},
+): Promise<string> {
+  const prev = replyLocks.get(conversationId) ?? Promise.resolve();
+  const run = prev.catch(() => undefined).then(() => generateReplyUnlocked(conversationId, opts));
+  replyLocks.set(conversationId, run);
+  void run.finally(() => {
+    if (replyLocks.get(conversationId) === run) replyLocks.delete(conversationId);
+  }).catch(() => undefined);
+  return run;
+}
+
+// Ja mandou algo MUITO parecido nos ultimos 2 minutos? Entao esta resposta e
+// redundante: descarta em silencio (diferente do anti-loop, que transfere).
+const RECENT_DUPLICATE_SIMILARITY = 0.6;
+const RECENT_DUPLICATE_WINDOW_MS = 120_000;
+
+export function isRecentDuplicate(text: string, recentAliceReplies: string[]): boolean {
+  if (normalizeReply(text).length <= 25) return false;
+  return recentAliceReplies.some((r) => replySimilarity(text, r) >= RECENT_DUPLICATE_SIMILARITY);
+}
+
+async function generateReplyUnlocked(
   conversationId: string,
   opts: { imageDataUrl?: string; guardAgainstNewerThan?: Date } = {},
 ): Promise<string> {
@@ -1286,6 +1314,15 @@ export async function generateReply(
   if (conversation.humanTakeover) return "";
 
   const clinicId = conversation.patient.clinicId;
+  // Nada a responder: a ultima fala da conversa ja e da Alice (ou da equipe). Acontece
+  // quando duas chamadas disputam a mesma mensagem - a primeira ja respondeu tudo.
+  const lastTurn = await prisma.message.findFirst({
+    where: { conversationId, role: { in: ["user", "assistant", "human"] } },
+    orderBy: { createdAt: "desc" },
+    select: { role: true },
+  });
+  if (lastTurn && lastTurn.role !== "user") return "";
+
   const patient = conversation.patient;
   const { imageDataUrl } = opts;
 
@@ -1433,6 +1470,18 @@ export async function generateReply(
   // esta (ja e velha) - o novo agrupamento vai gerar uma resposta atualizada.
   if (opts.guardAgainstNewerThan && after && after.messages.length > 0) {
     return "";
+  }
+
+  // Redundante: a propria Alice acabou de mandar (quase) isso. Nao reenvia.
+  if (!didTransfer && finalText.trim()) {
+    const recent = await prisma.message.findMany({
+      where: { conversationId: conversation.id, role: "assistant", authorName: null, createdAt: { gte: new Date(Date.now() - RECENT_DUPLICATE_WINDOW_MS) } },
+      select: { content: true },
+    });
+    if (isRecentDuplicate(finalText, recent.map((m) => m.content))) {
+      console.warn(`[dedupe] resposta repetida descartada (conv ${conversation.id})`);
+      return "";
+    }
   }
 
   // Trava anti-loop: a Alice ia mandar de novo (quase) a mesma resposta que
