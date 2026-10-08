@@ -49,6 +49,7 @@ import { seedDrSaulo } from "../maintenance/seedDrSaulo.js";
 import { seedTeste } from "../maintenance/seedTeste.js";
 import { seedDiamondClinic } from "../maintenance/seedDiamondClinic.js";
 import { seedLisboa } from "../maintenance/seedLisboa.js";
+import { applyLisboaServicos } from "../maintenance/applyLisboaServicos.js";
 import { connectAccount, disconnectAccount, ceStatusFor } from "../clinicaexperts/client.js";
 import { syncCatalog } from "../clinicaexperts/sync.js";
 import { undoCeImport } from "../clinicaexperts/undo.js";
@@ -894,6 +895,34 @@ apiRouter.post(
       description: `${c.procedures} procedimentos, ${c.professionals} profissionais, ${c.faqs} FAQ, ${c.activeRules} regras, ${c.playbooks} roteiros.`,
       actorName: req.staff?.name ?? null,
     });
+    res.json(result);
+  })
+);
+
+// Aplica o catalogo de servicos da planilha da Lisboa nos procedimentos que ela ja
+// tem (so os que casam por nome e so campos vazios). dryRun (padrao) so mostra a
+// previa. So admin.
+apiRouter.post(
+  "/clinics/lisboa-servicos",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await prisma.clinic.findFirst({ where: { name: "Lisboa Beauty Center" } });
+    if (!clinic) {
+      res.status(404).json({ error: "Clínica Lisboa não encontrada (aplique primeiro a configuração da Lisboa)." });
+      return;
+    }
+    const { dryRun } = (req.body ?? {}) as { dryRun?: boolean };
+    const result = await applyLisboaServicos(clinic.id, { dryRun: dryRun !== false });
+    if (!result.dryRun) {
+      await logActivity({
+        clinicId: clinic.id,
+        type: "briefing_applied",
+        area: "clinica",
+        title: "Catálogo de serviços da planilha aplicado",
+        description: `${result.proceduresTouched} procedimentos atualizados; ${result.unmatched.length} serviços da planilha sem correspondência.`,
+        actorName: req.staff?.name ?? null,
+      });
+    }
     res.json(result);
   })
 );

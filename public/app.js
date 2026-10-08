@@ -5558,6 +5558,33 @@ document.getElementById("btn-seed-lisboa").addEventListener("click", async (e) =
   }
 });
 
+document.getElementById("btn-lisboa-servicos").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const out = document.getElementById("seed-lisboa-result");
+  const post = (dryRun) => api("/clinics/lisboa-servicos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dryRun }) });
+  btn.disabled = true;
+  try {
+    const p = await post(true);
+    const f = p.fieldsFilled;
+    const semMatch = p.unmatched.slice(0, 12).map((u) => u.sheet + (u.suggestions.length ? ` (parecidos: ${u.suggestions.join(", ")})` : "")).join("; ");
+    const msg = `Aplicar o cadastro de serviços da planilha?
+
+• ${p.matchedSheet} de ${p.sheetTotal} serviços da planilha casaram com procedimentos da clínica
+• ${p.proceduresTouched} procedimentos serão atualizados (só campos vazios): ${f.description} descrições, ${f.goals} objetivos, ${f.benefits} benefícios, ${f.aliases} sinônimos, ${f.resultTimeline} prazos
+• ${p.proceduresUntouched} procedimentos ficam como estão
+• ${p.unmatched.length} serviços da planilha SEM correspondência${semMatch ? ": " + semMatch + (p.unmatched.length > 12 ? "…" : "") : ""}
+
+Não altera duração, valor nem o que já foi escrito.`;
+    if (!p.proceduresTouched) { showError("Nada a atualizar: nenhum procedimento casou ou todos já estão preenchidos."); return; }
+    if (!(await showConfirm(msg))) return;
+    const r = await post(false);
+    out.textContent = `Cadastro aplicado: ${r.proceduresTouched} procedimentos atualizados; ${r.unmatched.length} serviços da planilha sem correspondência (${r.unmatched.map((u) => u.sheet).join(", ")}).`;
+    out.hidden = false;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 document.getElementById("btn-seed-teste").addEventListener("click", async (e) => {
   const btn = e.currentTarget;
   const out = document.getElementById("seed-teste-result");

@@ -164,3 +164,14 @@ test("horario do Clinica Experts: com fuso usa direto, sem fuso le no fuso da cl
   assert.equal(parseCeInstant("2026-10-09 15:00:00", TZ).getTime(), esperado);
   assert.ok(Number.isNaN(parseCeInstant("lixo", TZ).getTime()));
 });
+
+import { normName, nameKeys } from "../dist/maintenance/applyLisboaServicos.js";
+
+test("nomes da planilha casam com o catalogo sem confundir variacoes", () => {
+  assert.equal(normName("Drenagem Linfática"), "drenagem linfatica");
+  assert.equal(normName("  BLACK   PEEL "), "black peel");
+  assert.deepEqual(nameKeys("Radiofrequência"), ["radiofrequencia"]);
+  assert.ok(nameKeys("Escleroterapia (Secagem de Vasinhos)").includes("secagem de vasinhos"));
+  assert.ok(nameKeys("Escleroterapia (Secagem de Vasinhos)").includes("escleroterapia"));
+  assert.ok(!nameKeys("Radiofrequência").includes("radiofrequencia facial")); // variacoes nao se misturam
+});
