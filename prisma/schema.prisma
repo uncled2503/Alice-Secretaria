@@ -870,6 +870,7 @@ model ReminderRule {
   hoursBefore Int      @default(24)
   dayOffset   Int?     // se preenchido, horario FIXO: 1 = dia anterior, 0 = no proprio dia (usa sendHour/sendMinute); null = "hoursBefore" horas antes
   sendHour    Int?
+  parentRuleId String? // se preenchido, esta regra so manda pra quem recebeu a regra-mae e NAO confirmou (nao respondeu desde o envio e patientConfirmed=false)
   pauseMinSec Int      @default(15) // pausa minima (s) entre um paciente e outro nos envios em janela
   pauseMaxSec Int      @default(45)
   scheduledChange String? // JSON {from, sendHour, sendMinute, sendEndHour, pauseMinSec, pauseMaxSec}: mudanca de janela/pausa que entra sozinha na data 'from'

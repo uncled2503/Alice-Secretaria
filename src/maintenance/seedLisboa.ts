@@ -555,6 +555,12 @@ const ADJUST_RULES = [
   { category: "chamar_equipe", instruction: "Nunca diga 'não consigo ler arquivos', 'não leio PDF' ou 'não vejo anexos'. Se chegar um arquivo que você não consegue interpretar, diga que recebeu e que a equipe vai analisar, e transfira." },
 ] as const;
 
+// Leads de campanha (checklist da Aline, 07/10/2026): o texto de entrada traz o
+// procedimento anunciado; ele nao e o nome do cliente.
+const CAMPAIGN_RULES = [
+  { category: "procedimentos", instruction: "Mensagens de entrada de campanha costumam vir com um texto pronto citando o procedimento ou a oferta (ex.: 'Olá! Quero saber mais sobre o HIPRO', 'Vi o anúncio de criolipólise'). O que vem nesse texto é o PROCEDIMENTO DE INTERESSE, nunca o nome da pessoa. O nome vem do perfil do WhatsApp; se não souber como chamá-la, pergunte o nome. Reconheça o procedimento do anúncio logo na primeira resposta e conduza a partir dele." },
+] as const;
+
 export interface SeedLisboaResult {
   clinicId: string;
   login: string;
@@ -663,6 +669,7 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
   await seedRulesOnce(clinic.id, "seed:lisboa-equipe-2", TEAM_RULES_2);
   await seedRulesOnce(clinic.id, "seed:lisboa-comercial", SALES_RULES);
   await seedRulesOnce(clinic.id, "seed:lisboa-ajustes-2", ADJUST_RULES);
+  await seedRulesOnce(clinic.id, "seed:lisboa-campanha", CAMPAIGN_RULES);
 
   // Automacoes: so o que o cliente pediu com todos os dados.
   // JANELAS pedidas pela clinica (08/10/2026): confirmacao do dia seguinte de 8h
@@ -672,12 +679,30 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
     { hoursBefore: 24, dayOffset: 1, sendHour: 8, sendMinute: 0, sendEndHour: 11, pauseMinSec: 10, pauseMaxSec: 30, message: "Olá, {primeiro_nome}! ♥️ Tudo bem?\nAqui é a Fabi, da Clínica Lisboa Beauty Center ✨\nPassando para confirmar o seu agendamento conosco:\n\n📅 Data: {data} (amanhã)\n⏰ Horário: {hora}\n💆 Procedimento: {procedimento}\n\n📍 Endereço: Av. Índico, 294 – São Bernardo do Campo/SP – 09750-600\n🚗 Disponibilizamos estacionamento próprio e também temos convênio com desconto no endereço: Av. Índico, 231 – Jardim do Mar – São Bernardo do Campo.\n\nPosso confirmar a sua presença?\n\nEm caso de necessidade de cancelamento ou reagendamento, pedimos a gentileza de avisar com antecedência 💖" },
     { hoursBefore: 3, dayOffset: 0, sendHour: 7, sendMinute: 0, sendEndHour: 8, pauseMinSec: 10, pauseMaxSec: 30, message: "Bom dia, {primeiro_nome}! Tudo bem? ☀️\nEstamos muito felizes em te receber hoje às {hora} 🥰\nSerá um prazer tê-la conosco e proporcionar uma experiência especial ❤️" },
   ];
+  // Segunda cobranca (pedido da clinica, 08/10/2026): quem recebeu a confirmacao do dia
+  // seguinte e NAO respondeu recebe, as 16h do dia anterior, um novo pedido de confirmacao.
+  const FOLLOWUP_CONFIRM = {
+    message: "Olá, {primeiro_nome}! 💗 Tudo bem?\nPassando para lembrar que ainda não recebemos a sua confirmação para o seu agendamento de amanhã:\n\n📅 Data: {data} (amanhã)\n⏰ Horário: {hora}\n💆 Procedimento: {procedimento}\n\nPode nos confirmar a sua presença? ✨\nEm caso de imprevisto, pedimos a gentileza de avisar com antecedência para reagendarmos 💖",
+  };
   for (const r of REMINDERS) {
     const reminder = await prisma.reminderRule.findFirst({ where: { clinicId: clinic.id, hoursBefore: r.hoursBefore } });
     if (reminder) continue; // nunca sobrescreve o que a clinica editou
     await prisma.reminderRule.create({
       data: { clinicId: clinic.id, hoursBefore: r.hoursBefore, dayOffset: r.dayOffset, sendHour: r.sendHour, sendMinute: r.sendMinute, sendEndHour: r.sendEndHour, pauseMinSec: r.pauseMinSec, pauseMaxSec: r.pauseMaxSec, active: true, message: r.message },
     });
+  }
+
+  const parent24 = await prisma.reminderRule.findFirst({ where: { clinicId: clinic.id, dayOffset: 1, parentRuleId: null } });
+  if (parent24) {
+    const child = await prisma.reminderRule.findFirst({ where: { clinicId: clinic.id, parentRuleId: parent24.id } });
+    if (!child) {
+      await prisma.reminderRule.create({
+        data: {
+          clinicId: clinic.id, hoursBefore: 24, dayOffset: 1, sendHour: 16, sendMinute: 0, sendEndHour: 17, pauseMinSec: 10, pauseMaxSec: 30,
+          parentRuleId: parent24.id, active: true, message: FOLLOWUP_CONFIRM.message,
+        },
+      });
+    }
   }
 
   const birthdayName = "Aniversário do paciente";

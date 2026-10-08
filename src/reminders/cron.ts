@@ -3,6 +3,7 @@ import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js";
 import { PAID_CLINIC_WHERE } from "../crm/plan.js";
+import type { ReminderRule } from "@prisma/client";
 import { recordAutomatedMessage } from "../crm/conversationLog.js";
 import { isoDateInZone, zonedWallClockToUtc } from "../scheduling/time.js";
 
@@ -73,6 +74,51 @@ const MAX_SENDS_PER_RUN = 12;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let reminderRunning = false;
 
+// Quem deve receber esta regra AGORA (sem enviar nada): janela/horario, status,
+// "ainda nao recebeu" e, nas regras de cobranca, "nao confirmou nem respondeu".
+export async function selectDueAppointments(rule: ReminderRule, now: Date, tz: string) {
+  const target = new Date(now.getTime() + rule.hoursBefore * 60 * 60_000);
+  const candidates = await prisma.appointment.findMany({
+    where: {
+      clinicId: rule.clinicId,
+      status: "confirmed",
+      scheduledAt: { gt: now, lte: new Date(Math.max(target.getTime() + 8 * 3_600_000, now.getTime() + 54 * 3_600_000)) },
+      // Regra de "nao confirmou": so quem recebeu a regra-mae e ainda nao confirmou.
+      ...(rule.parentRuleId
+        ? { patientConfirmed: false, AND: [{ reminders: { none: { ruleId: rule.id } } }, { reminders: { some: { ruleId: rule.parentRuleId } } }] }
+        : { reminders: { none: { ruleId: rule.id } } }),
+    },
+    include: { patient: true, procedure: true, professional: true, reminders: { where: { ruleId: rule.parentRuleId ?? "-" }, select: { sentAt: true } } },
+  });
+  let due = candidates.filter((appt) => {
+    if (rule.dayOffset != null && rule.sendHour != null && rule.sendEndHour != null) {
+      return inReminderWindow(appt.scheduledAt, now, { dayOffset: rule.dayOffset, sendHour: rule.sendHour, sendMinute: rule.sendMinute, sendEndHour: rule.sendEndHour }, tz);
+    }
+    const sendAt =
+      rule.dayOffset != null && rule.sendHour != null
+        ? fixedReminderTime(appt.scheduledAt, rule.dayOffset, rule.sendHour, rule.sendMinute, tz)
+        : reminderSendTime(appt.scheduledAt, rule.hoursBefore, tz);
+    const late = now.getTime() - sendAt.getTime();
+    // Dentro da janela estreita apos o horario previsto E ainda antes da consulta.
+    return late >= 0 && late <= SEND_TOLERANCE_MS;
+  });
+
+  if (rule.parentRuleId) {
+    // Quem respondeu algo depois da confirmacao nao e cobrado de novo.
+    const silent: typeof due = [];
+    for (const appt of due) {
+      const sentAt = appt.reminders[0]?.sentAt;
+      if (!sentAt) continue;
+      const replies = await prisma.message.count({ where: { role: "user", createdAt: { gt: sentAt }, conversation: { patientId: appt.patientId } } });
+      if (replies === 0) silent.push(appt);
+    }
+    due = silent;
+  }
+
+
+  return due;
+}
+
 // Roda a cada 15min. Cada regra ativa dispara uma vez por agendamento (marca
 // em ReminderSent) - assim da pra ter mais de uma regra (ex: 24h antes e 2h
 // antes) sem mandar a mesma coisa duas vezes nem perder uma por causa da outra.
@@ -113,27 +159,7 @@ export function startReminderJob(): void {
       const clinicRow = await prisma.clinic.findUnique({ where: { id: rule.clinicId }, select: { timezone: true } });
       const tz = clinicRow?.timezone || "America/Sao_Paulo";
 
-      const candidates = await prisma.appointment.findMany({
-        where: {
-          clinicId: rule.clinicId,
-          status: "confirmed",
-          scheduledAt: { gt: now, lte: new Date(Math.max(target.getTime() + 8 * 3_600_000, now.getTime() + 54 * 3_600_000)) },
-          reminders: { none: { ruleId: rule.id } },
-        },
-        include: { patient: true, procedure: true, professional: true },
-      });
-      const due = candidates.filter((appt) => {
-        if (rule.dayOffset != null && rule.sendHour != null && rule.sendEndHour != null) {
-          return inReminderWindow(appt.scheduledAt, now, { dayOffset: rule.dayOffset, sendHour: rule.sendHour, sendMinute: rule.sendMinute, sendEndHour: rule.sendEndHour }, tz);
-        }
-        const sendAt =
-          rule.dayOffset != null && rule.sendHour != null
-            ? fixedReminderTime(appt.scheduledAt, rule.dayOffset, rule.sendHour, rule.sendMinute, tz)
-            : reminderSendTime(appt.scheduledAt, rule.hoursBefore, tz);
-        const late = now.getTime() - sendAt.getTime();
-        // Dentro da janela estreita apos o horario previsto E ainda antes da consulta.
-        return late >= 0 && late <= SEND_TOLERANCE_MS;
-      });
+      const due = await selectDueAppointments(rule, now, tz);
 
       if (due.length === 0) continue;
       due.sort((a, b) => a.scheduledAt.getTime() - b.scheduledAt.getTime()); // quem atende primeiro recebe primeiro
