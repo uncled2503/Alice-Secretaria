@@ -4,6 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import express from "express";
 import helmet from "helmet";
+import compression from "compression";
 import { rateLimit } from "express-rate-limit";
 import { startReminderJob } from "./reminders/cron.js";
 import { startPostProcedureJob } from "./reminders/postProcedure.js";
@@ -29,6 +30,9 @@ import { prisma } from "./db/client.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
+// gzip: o painel (HTML+JS+CSS) tem ~590 KB e o cache esta desligado de proposito;
+// sem compressao toda carga baixava tudo cru (tela preta ate o JS chegar).
+app.use(compression());
 
 // Em producao a Alice roda atras de um proxy reverso (EasyPanel/Traefik), que
 // injeta X-Forwarded-For/Proto. Sem isto o Express ignora esses headers e o
