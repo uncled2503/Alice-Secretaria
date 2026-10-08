@@ -294,7 +294,7 @@ process.on("unhandledRejection", (reason) => console.error("[process] unhandledR
 process.on("uncaughtException", (err) => console.error("[process] uncaughtException:", err));
 
 const port = Number(process.env.PORT ?? 3000);
-void enableWalMode();
+await enableWalMode(); // antes de abrir o servidor e iniciar os jobs: o banco esta livre
 app.listen(port, () => {
   console.log(`Alice rodando na porta ${port}`);
   startReminderJob();

@@ -20,9 +20,15 @@ export const prisma = url ? new PrismaClient({ datasources: { db: { url } } }) :
 // continua consistente. Melhor esforco: se falhar, segue no modo anterior.
 export async function enableWalMode(): Promise<void> {
   if (!process.env.DATABASE_URL?.startsWith("file:")) return;
-  try {
-    await prisma.$queryRawUnsafe("PRAGMA journal_mode=WAL");
-  } catch (err) {
-    console.error("[db] nao consegui ligar o modo WAL:", err);
+  // Trocar o modo do diario exige o banco livre por um instante: tenta algumas
+  // vezes antes de desistir (na subida pode haver outra conexao usando o arquivo).
+  for (let attempt = 1; attempt <= 6; attempt++) {
+    try {
+      await prisma.$queryRawUnsafe("PRAGMA journal_mode=WAL");
+      return;
+    } catch (err) {
+      if (attempt === 6) console.error("[db] nao consegui ligar o modo WAL:", err);
+      else await new Promise((r) => setTimeout(r, 500 * attempt));
+    }
   }
 }
