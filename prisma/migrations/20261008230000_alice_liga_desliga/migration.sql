@@ -1,0 +1,1 @@
+ALTER TABLE "Clinic" ADD COLUMN "aliceActive" BOOLEAN NOT NULL DEFAULT true;

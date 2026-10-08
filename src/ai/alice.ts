@@ -1293,8 +1293,18 @@ export async function generateReply(
   // novo - passa direto pra equipe. Conversas ja em andamento continuam.
   const usageClinic = await prisma.clinic.findUnique({
     where: { id: clinicId },
-    select: { id: true, plan: true, conversationLimitOverride: true, usageMonth: true, usageCount: true, usageLimitNotified: true },
+    select: { id: true, plan: true, aliceActive: true, conversationLimitOverride: true, usageMonth: true, usageCount: true, usageLimitNotified: true },
   });
+  // Alice PAUSADA pela clinica (botao "Alice atendendo"): nao responde. A conversa
+  // fica como "nao lida" pra equipe, sem virar atendimento humano (quando a Alice
+  // voltar, ela retoma normalmente).
+  if (usageClinic && !usageClinic.aliceActive) {
+    await prisma.conversation.updateMany({
+      where: { id: conversation.id, handoffPending: false },
+      data: { handoffPending: true, handoffReason: "Alice pausada" },
+    });
+    return "";
+  }
   // Plano grátis: a Alice nao atende. O lead e o evento Lead ja foram criados
   // em recordIncomingMessage (atribuicao da Meta intacta); a conversa fica so
   // pra virar evento de CRM quando a equipe mover o lead no funil.

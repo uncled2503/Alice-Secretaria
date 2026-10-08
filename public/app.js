@@ -4461,6 +4461,37 @@ document.getElementById("rp-period-row").addEventListener("click", (e) => {
 });
 
 // --- Selecao de clinica (multi-clinica) ---
+// Botao "Alice atendendo / pausada" do menu lateral.
+function renderAlicePower() {
+  const btn = document.getElementById("alice-power");
+  if (!btn) return;
+  const c = (state.clinics || []).find((x) => x.id === state.clinicId);
+  const on = !c || c.aliceActive !== false;
+  btn.classList.toggle("is-off", !on);
+  btn.setAttribute("aria-pressed", String(on));
+  document.getElementById("alice-power-label").textContent = on ? "Alice atendendo" : "Alice pausada";
+}
+
+document.getElementById("alice-power")?.addEventListener("click", async (e) => {
+  const c = (state.clinics || []).find((x) => x.id === state.clinicId);
+  if (!c) return;
+  const turnOn = c.aliceActive === false;
+  const msg = turnOn
+    ? "Ligar a Alice? Ela volta a responder os pacientes e a fazer recontato."
+    : "Pausar a Alice? Ela para de responder e de fazer recontato nesta clínica. As mensagens que chegarem ficam como NÃO LIDAS no Chat para a equipe responder. Confirmações e lembretes de agendamento continuam saindo.";
+  if (!(await showConfirm(msg))) return;
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  try {
+    await api("/clinic/alice-active", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ active: turnOn }) });
+    c.aliceActive = turnOn;
+    renderAlicePower();
+    showError(turnOn ? "✅ Alice ligada." : "⏸ Alice pausada. As conversas novas ficam para a equipe.");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 async function loadClinics() {
   const clinics = await api("/clinics");
   state.clinics = clinics;
@@ -4480,6 +4511,7 @@ async function loadClinics() {
   state.clinicId = initial;
   select.value = initial ?? "";
   updateBrandName();
+  renderAlicePower();
 
   select.addEventListener("change", () => {
     state.clinicId = select.value;
@@ -4491,6 +4523,7 @@ async function loadClinics() {
     state.activeConversationId = null;
     resetChatPane();
     updateBrandName();
+    renderAlicePower();
     refreshAll();
   });
 }

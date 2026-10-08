@@ -1640,3 +1640,8 @@ code { background: var(--accent-50); color: var(--accent-dark); padding: 0.1rem 
 
 .chat-search { padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border); flex-shrink: 0; }
 .chat-search input { width: 100%; box-sizing: border-box; padding: 0.5rem 0.7rem; border: 1px solid var(--border); border-radius: 8px; font-size: 0.9rem; background: var(--bg, #fff); color: inherit; }
+
+.alice-power { display: flex; align-items: center; gap: 0.55rem; width: calc(100% - 1.4rem); margin: 0.5rem 0.7rem 0; padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: 10px; background: rgba(16, 185, 129, 0.1); color: inherit; font: inherit; font-size: 0.85rem; font-weight: 600; cursor: pointer; text-align: left; }
+.alice-power .alice-power-dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: #10b981; box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.25); flex-shrink: 0; }
+.alice-power.is-off { background: rgba(148, 163, 184, 0.14); }
+.alice-power.is-off .alice-power-dot { background: #94a3b8; box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.25); }

@@ -167,6 +167,30 @@ function assertClinicAccess(req: Request, res: Response, resourceClinicId: strin
   return true;
 }
 
+// Liga/desliga o atendimento da Alice na clinica (botao do menu lateral). Qualquer
+// conta da clinica pode usar. Desligada: nao responde nem recontata.
+apiRouter.post(
+  "/clinic/alice-active",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const { active } = (req.body ?? {}) as { active?: boolean };
+    if (typeof active !== "boolean") {
+      res.status(400).json({ error: "active (true/false) obrigatorio" });
+      return;
+    }
+    await prisma.clinic.update({ where: { id: clinic.id }, data: { aliceActive: active } });
+    await logActivity({
+      clinicId: clinic.id,
+      type: "clinic_updated",
+      area: "clinica",
+      title: active ? "Alice ligada" : "Alice pausada",
+      description: active ? "A Alice voltou a atender e a fazer recontato." : "A Alice parou de responder e de fazer recontato. As conversas ficam não lidas para a equipe.",
+      actorName: req.staff?.name ?? null,
+    });
+    res.json({ ok: true, aliceActive: active });
+  })
+);
+
 apiRouter.get(
   "/clinics",
   asyncRoute(async (req, res) => {
@@ -177,6 +201,7 @@ apiRouter.get(
       select: {
         id: true,
         name: true,
+        aliceActive: true,
         whatsappPhone: true,
         timezone: true,
         workStartHour: true,

@@ -85,7 +85,7 @@ export async function runFollowUpCheck(): Promise<void> {
   const judgedByClinic = new Map<string, number>();
 
   const conversations = await prisma.conversation.findMany({
-    where: { status: "active", humanTakeover: false, patient: { clinic: PAID_CLINIC_WHERE } },
+    where: { status: "active", humanTakeover: false, patient: { clinic: { ...PAID_CLINIC_WHERE, aliceActive: true } } }, // Alice pausada = sem recontato
     include: {
       patient: { include: { clinic: { select: { importStatus: true } } } },
       messages: { where: { role: "user" }, orderBy: { createdAt: "desc" }, take: 1 },
