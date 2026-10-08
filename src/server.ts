@@ -26,7 +26,7 @@ import { apiRouter } from "./api/routes.js";
 import { externalApiRouter } from "./api/external/router.js";
 import { readStaffSession, clearSessionCookie } from "./api/staffSession.js";
 import { isFreePlan, freePlanBlocksPath } from "./crm/plan.js";
-import { prisma } from "./db/client.js";
+import { prisma, enableWalMode } from "./db/client.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -260,7 +260,7 @@ app.use(
 // Error handler generico: garante que uma falha numa rota (ex: paciente/
 // conversa inexistente, WhatsApp desconectado) responda em vez de
 // derrubar o processo — sem isso o atendimento de todos os pacientes para junto.
-app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+app.use((err: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
   if (res.headersSent) return;
 
   // findUniqueOrThrow/findFirstOrThrow lancam esse codigo quando o registro
@@ -272,7 +272,7 @@ app.use((err: unknown, _req: express.Request, res: express.Response, _next: expr
     return;
   }
 
-  console.error("Erro na API:", err);
+  console.error(`Erro na API (${req.method} ${req.originalUrl.split("?")[0]}):`, err);
   res.status(500).json({ error: "Erro interno" });
 });
 
@@ -294,6 +294,7 @@ process.on("unhandledRejection", (reason) => console.error("[process] unhandledR
 process.on("uncaughtException", (err) => console.error("[process] uncaughtException:", err));
 
 const port = Number(process.env.PORT ?? 3000);
+void enableWalMode();
 app.listen(port, () => {
   console.log(`Alice rodando na porta ${port}`);
   startReminderJob();
