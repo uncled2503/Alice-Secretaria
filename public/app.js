@@ -3034,7 +3034,7 @@ function renderReminderRules() {
       el("tr", {}, [
         el("td", { class: "cell-truncate", title: r.message }, [r.message]),
         el("td", {}, [r.dayOffset != null && r.sendHour != null
-          ? `${r.dayOffset === 1 ? "Dia anterior" : "No dia"} às ${String(r.sendHour).padStart(2, "0")}:${String(r.sendMinute || 0).padStart(2, "0")}`
+          ? `${r.dayOffset === 1 ? "Dia anterior" : "No dia"}, ${String(r.sendHour).padStart(2, "0")}:${String(r.sendMinute || 0).padStart(2, "0")}${r.sendEndHour != null ? ` às ${String(r.sendEndHour).padStart(2, "0")}:00` : ""}`
           : `${r.hoursBefore}h antes`]),
         el("td", {}, [el("span", { class: `badge ${r.active ? "badge-green" : "badge-neutral"}` }, [r.active ? "Ativo" : "Pausado"])]),
         el("td", { class: "actions" }, [editBtn]),

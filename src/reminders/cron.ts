@@ -30,11 +30,36 @@ export function fixedReminderTime(scheduledAt: Date, dayOffset: number, hour: nu
   return zonedWallClockToUtc(timeZone, day.getUTCFullYear(), day.getUTCMonth() + 1, day.getUTCDate(), hour, minute);
 }
 
+// PURO: "agora" esta dentro da janela de envio da regra pra essa consulta?
+// Vale a janela inteira (ex.: 12h-18h do dia anterior), nao so o comeco.
+export function inReminderWindow(
+  scheduledAt: Date,
+  now: Date,
+  w: { dayOffset: number; sendHour: number; sendMinute: number; sendEndHour: number },
+  timeZone: string,
+): boolean {
+  const from = fixedReminderTime(scheduledAt, w.dayOffset, w.sendHour, w.sendMinute, timeZone).getTime();
+  const to = fixedReminderTime(scheduledAt, w.dayOffset, w.sendEndHour, 0, timeZone).getTime();
+  return now.getTime() >= from && now.getTime() < to;
+}
+
+// Janela de envio: os lembretes de uma regra com sendEndHour saem espalhados
+// entre o inicio e o fim da janela, com pausa aleatoria entre um paciente e
+// outro e um teto por rodada (protege o numero de bloqueio por rajada).
+const MAX_SENDS_PER_RUN = 12;
+const PAUSE_MIN_MS = 15_000;
+const PAUSE_MAX_MS = 45_000;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+let reminderRunning = false;
+
 // Roda a cada 15min. Cada regra ativa dispara uma vez por agendamento (marca
 // em ReminderSent) - assim da pra ter mais de uma regra (ex: 24h antes e 2h
 // antes) sem mandar a mesma coisa duas vezes nem perder uma por causa da outra.
 export function startReminderJob(): void {
   cron.schedule("*/15 * * * *", async () => {
+    if (reminderRunning) return; // rodada anterior (com pausas) ainda em andamento
+    reminderRunning = true;
+    try {
     const rules = await prisma.reminderRule.findMany({ where: { active: true, clinic: PAID_CLINIC_WHERE } });
     const clinicInfoCache = new Map<string, Awaited<ReturnType<typeof getClinicTemplateInfo>>>();
 
@@ -63,6 +88,9 @@ export function startReminderJob(): void {
         include: { patient: true, procedure: true, professional: true },
       });
       const due = candidates.filter((appt) => {
+        if (rule.dayOffset != null && rule.sendHour != null && rule.sendEndHour != null) {
+          return inReminderWindow(appt.scheduledAt, now, { dayOffset: rule.dayOffset, sendHour: rule.sendHour, sendMinute: rule.sendMinute, sendEndHour: rule.sendEndHour }, tz);
+        }
         const sendAt =
           rule.dayOffset != null && rule.sendHour != null
             ? fixedReminderTime(appt.scheduledAt, rule.dayOffset, rule.sendHour, rule.sendMinute, tz)
@@ -73,6 +101,8 @@ export function startReminderJob(): void {
       });
 
       if (due.length === 0) continue;
+      due.sort((a, b) => a.scheduledAt.getTime() - b.scheduledAt.getTime()); // quem atende primeiro recebe primeiro
+      if (rule.sendEndHour != null) due.splice(MAX_SENDS_PER_RUN); // o resto fica pra proxima rodada (15 min)
 
       if (!clinicInfoCache.has(rule.clinicId)) {
         clinicInfoCache.set(rule.clinicId, await getClinicTemplateInfo(rule.clinicId));
@@ -98,7 +128,11 @@ export function startReminderJob(): void {
         } catch (err) {
           console.error(`Falha ao enviar lembrete (regra ${rule.id}) para ${appt.patient.phone}:`, err);
         }
+        if (rule.sendEndHour != null) await sleep(PAUSE_MIN_MS + Math.random() * (PAUSE_MAX_MS - PAUSE_MIN_MS));
       }
+    }
+    } finally {
+      reminderRunning = false;
     }
   });
 }

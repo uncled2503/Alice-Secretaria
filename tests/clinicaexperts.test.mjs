@@ -123,3 +123,22 @@ test("avaliacao e reconhecida pelo nome", () => {
   assert.equal(isEvaluationName("Avaliacao"), true);
   assert.equal(isEvaluationName("Drenagem Linfática"), false);
 });
+
+import { inReminderWindow } from "../dist/reminders/cron.js";
+
+test("janela de confirmacao: dia seguinte 12h-18h e do dia 7h-10h", () => {
+  const consulta = new Date(Date.UTC(2026, 9, 9, 17, 0)); // 09/10 14:00 em Sao Paulo
+  const amanha = { dayOffset: 1, sendHour: 12, sendMinute: 0, sendEndHour: 18 };
+  const hoje = { dayOffset: 0, sendHour: 7, sendMinute: 0, sendEndHour: 10 };
+  const local = (d, h, m = 0) => new Date(Date.UTC(2026, 9, d, h + 3, m));
+  // dia seguinte: so na tarde do dia 08
+  assert.equal(inReminderWindow(consulta, local(8, 11, 59), amanha, TZ), false);
+  assert.equal(inReminderWindow(consulta, local(8, 12), amanha, TZ), true);
+  assert.equal(inReminderWindow(consulta, local(8, 17, 59), amanha, TZ), true);
+  assert.equal(inReminderWindow(consulta, local(8, 18), amanha, TZ), false);
+  // do dia: manha do dia 09, mesmo pra consulta das 14h
+  assert.equal(inReminderWindow(consulta, local(9, 6, 59), hoje, TZ), false);
+  assert.equal(inReminderWindow(consulta, local(9, 7), hoje, TZ), true);
+  assert.equal(inReminderWindow(consulta, local(9, 9, 59), hoje, TZ), true);
+  assert.equal(inReminderWindow(consulta, local(9, 10), hoje, TZ), false);
+});

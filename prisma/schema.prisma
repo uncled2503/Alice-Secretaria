@@ -870,6 +870,7 @@ model ReminderRule {
   hoursBefore Int      @default(24)
   dayOffset   Int?     // se preenchido, horario FIXO: 1 = dia anterior, 0 = no proprio dia (usa sendHour/sendMinute); null = "hoursBefore" horas antes
   sendHour    Int?
+  sendEndHour Int?     // fim da JANELA de envio (hora cheia): com ele, a regra manda de sendHour:sendMinute ate sendEndHour, espalhando os envios
   sendMinute  Int      @default(0)
   message     String   // suporta as mesmas variaveis do broadcast + {procedimento}/{profissional}/{hora}
   active      Boolean  @default(true)
