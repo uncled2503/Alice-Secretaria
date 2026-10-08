@@ -6857,6 +6857,7 @@ async function loadClinicaExperts() {
   document.getElementById("ce-options").hidden = !s.connected;
   document.getElementById("ce-catalog").hidden = !s.connected;
   document.getElementById("btn-ce-disconnect").hidden = !s.connected;
+  document.getElementById("btn-ce-undo").hidden = !(s.connected && state.staff?.role === "admin");
   document.getElementById("btn-ce-connect").textContent = s.connected ? "Trocar token" : "Conectar";
   const stateEl = document.getElementById("ce-state");
   if (s.connected) {
@@ -6881,6 +6882,26 @@ document.getElementById("btn-ce-connect").addEventListener("click", async (e) =>
   } finally {
     btn.disabled = false;
   }
+});
+
+document.getElementById("btn-ce-undo").addEventListener("click", async () => {
+  const post = (body) => api("/clinica-experts/undo-import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const preview = await post({ dryRun: true });
+  const msg = `Desfazer a importação do Clínica Experts nesta clínica?
+
+Vai APAGAR o que a conexão criou (desde ${new Date(preview.since).toLocaleString("pt-BR")}):
+• ${preview.appointmentsDeleted} agendamentos
+• ${preview.patientsDeleted} pacientes (sem conversa)
+• ${preview.proceduresDeleted} procedimentos${preview.sample.procedures.length ? ` (ex.: ${preview.sample.procedures.slice(0, 6).join(", ")}…)` : ""}
+• ${preview.professionalsDeleted} profissionais${preview.sample.professionals.length ? ` (${preview.sample.professionals.join(", ")})` : ""}
+
+O que a clínica já tinha antes só perde o vínculo${preview.cancelledInCe ? `.
+${preview.cancelledInCe} agendamento(s) da Alice espelhados na agenda errada serão cancelados lá` : ""}.
+Depois disso o Clínica Experts é desconectado.`;
+  if (!(await showConfirm(msg))) return;
+  const r = await post({ dryRun: false });
+  showError(`✅ Importação desfeita: ${r.appointmentsDeleted} agendamentos, ${r.patientsDeleted} pacientes, ${r.proceduresDeleted} procedimentos, ${r.professionalsDeleted} profissionais removidos.${r.failures.length ? ` ${r.failures.length} item(ns) não puderam ser removidos.` : ""}`);
+  await loadClinicaExperts();
 });
 
 document.getElementById("btn-ce-disconnect").addEventListener("click", async () => {

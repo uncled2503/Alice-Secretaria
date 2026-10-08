@@ -51,6 +51,7 @@ import { seedDiamondClinic } from "../maintenance/seedDiamondClinic.js";
 import { seedLisboa } from "../maintenance/seedLisboa.js";
 import { connectAccount, disconnectAccount, ceStatusFor } from "../clinicaexperts/client.js";
 import { syncCatalog } from "../clinicaexperts/sync.js";
+import { undoCeImport } from "../clinicaexperts/undo.js";
 import { invalidateCeCache } from "../clinicaexperts/availability.js";
 import { pushAppointmentInBackground, removeAppointmentInBackground } from "../integrations/calendarSync.js";
 import { setupIsacFollowup } from "../maintenance/setupIsacFollowup.js";
@@ -3680,6 +3681,39 @@ apiRouter.post(
       actorName: req.staff?.name ?? null,
     });
     res.json(await ceStatusFor(clinic.id));
+  })
+);
+
+// Desfaz a importacao quando o Clinica Experts foi conectado na clinica errada:
+// apaga o que a conexao CRIOU (pacientes, agendamentos, procedimentos, profissionais),
+// cancela espelhos errados e desconecta. dryRun=true so mostra os numeros. So admin.
+apiRouter.post(
+  "/clinica-experts/undo-import",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await getClinic(req);
+    const { dryRun, since } = (req.body ?? {}) as { dryRun?: boolean; since?: string };
+    const sinceDate = since ? new Date(since) : undefined;
+    if (sinceDate && Number.isNaN(sinceDate.getTime())) {
+      res.status(400).json({ error: "since invalido (use data/hora ISO)" });
+      return;
+    }
+    try {
+      const result = await undoCeImport(clinic.id, { dryRun: dryRun !== false, since: sinceDate });
+      if (!result.dryRun) {
+        await logActivity({
+          clinicId: clinic.id,
+          type: "integration_disconnected",
+          area: "agenda",
+          title: "Importação do Clínica Experts desfeita",
+          description: `${result.appointmentsDeleted} agendamentos, ${result.patientsDeleted} pacientes, ${result.proceduresDeleted} procedimentos e ${result.professionalsDeleted} profissionais removidos.`,
+          actorName: req.staff?.name ?? null,
+        });
+      }
+      res.json(result);
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
   })
 );
 
