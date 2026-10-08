@@ -1509,7 +1509,7 @@ async function generateReplyUnlocked(
 
   // Primeira resposta a um contato novo ficou longa (enxurrada de informacao): reescreve
   // curta - apresentacao + UMA pergunta. Vale mesmo se o modelo ignorar a instrucao.
-  if (!didTransfer && finalText.trim() && (finalText.length > FIRST_REPLY_MAX_CHARS || (finalText.match(/?/g) ?? []).length > 1) && !history.some((m) => m.role === "assistant")) {
+  if (!didTransfer && finalText.trim() && (finalText.length > FIRST_REPLY_MAX_CHARS || (finalText.match(/\?/g) ?? []).length > 1) && !history.some((m) => m.role === "assistant")) {
     const conciseOn = (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { conciseFirstReply: true, name: true, assistantName: true } })) ?? null;
     if (conciseOn?.conciseFirstReply) {
       const shortText = await shortenFirstReply(finalText, history.filter((m) => m.role === "user").map((m) => m.content).slice(-3), conciseOn.name, conciseOn.assistantName || "Alice");
