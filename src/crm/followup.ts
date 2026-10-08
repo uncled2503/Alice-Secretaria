@@ -7,6 +7,7 @@ import { renderMessageTemplate, getClinicTemplateInfo, type ClinicTemplateInfo }
 import { PAID_CLINIC_WHERE } from "./plan.js";
 import { isWithinClinicHours, type OpenHoursClinic } from "./openHours.js";
 import { isClosingMessage } from "./followupGuards.js";
+import { judgeConversation } from "./recontactJudge.js";
 
 // Cache simples por execucao do job.
 const stagesCache = new Map<string, Awaited<ReturnType<typeof getFunnelStages>>>();
@@ -70,6 +71,7 @@ function withinWindow(hour: number, start: number | null, end: number | null): b
 // - pausa aleatoria entre envios, pra nao parecer rajada.
 const MAX_OVERDUE_MS = 3 * 24 * 3_600_000;
 const MAX_SENDS_PER_CLINIC = 8;
+const MAX_JUDGE_CALLS_PER_CLINIC = 25; // teto de consultas a IA por clinica a cada execucao (controla custo)
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Verifica cada conversa aberta e dispara a proxima mensagem da cascata de
@@ -80,6 +82,7 @@ export async function runFollowUpCheck(): Promise<void> {
   clinicCache.clear();
   rulesCache.clear();
   const sentByClinic = new Map<string, number>();
+  const judgedByClinic = new Map<string, number>();
 
   const conversations = await prisma.conversation.findMany({
     where: { status: "active", humanTakeover: false, patient: { clinic: PAID_CLINIC_WHERE } },
@@ -177,6 +180,13 @@ export async function runFollowUpCheck(): Promise<void> {
       select: { role: true },
     });
     if (lastAny?.role === "user") continue; // o paciente falou por ultimo: a bola esta com a clinica, nao e silencio dele
+
+    // Ultima palavra: uma IA le a conversa e decide se o recontato faz sentido.
+    // Falha da IA = nao envia (e tenta de novo no proximo ciclo).
+    if ((judgedByClinic.get(clinicId) ?? 0) >= MAX_JUDGE_CALLS_PER_CLINIC) continue;
+    judgedByClinic.set(clinicId, (judgedByClinic.get(clinicId) ?? 0) + 1);
+    const verdict = await judgeConversation(conversation.id, conversation.patientId, clinic.info.name);
+    if (!verdict || !verdict.recontact) continue;
 
     const text = renderMessageTemplate(rule.message, {
       patientName: conversation.patient.name,

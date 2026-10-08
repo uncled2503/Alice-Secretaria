@@ -569,6 +569,9 @@ model Conversation {
   aliceMonth        String    @default("")    // "YYYY-MM" da ultima vez que a Alice atendeu (conta 1 atendimento/mes)
   lastFollowUpOrder Int       @default(0) // ultima etapa de recontato ja enviada (0 = nenhuma)
   lastMessageAt     DateTime  @default(now())
+  recontactVerdict  String?   // veredito da IA sobre recontatar esta conversa: yes | no
+  recontactReason   String?   // motivo curto dado pela IA
+  recontactJudgedFor DateTime? // createdAt da ultima mensagem que a IA avaliou (se a conversa nao mudou, reaproveita o veredito)
   unansweredAlertAt DateTime? // quando a equipe foi avisada de que o paciente ficou sem resposta (uma vez por mensagem)
   createdAt         DateTime  @default(now())
 
