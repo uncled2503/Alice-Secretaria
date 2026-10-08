@@ -66,10 +66,15 @@ export function startPostProcedureJob(): void {
         });
 
         try {
-          await sendText(appt.clinicId, appt.patient.phone, text);
           await prisma.postProcedureSent.create({ data: { appointmentId: appt.id, ruleId: rule.id } });
+        } catch {
+          continue; // reserva atomica: outro processo ja pegou
+        }
+        try {
+          await sendText(appt.clinicId, appt.patient.phone, text);
           await recordAutomatedMessage(appt.patientId, text, rule.name || "Pós-procedimento automático");
         } catch (err) {
+          await prisma.postProcedureSent.deleteMany({ where: { appointmentId: appt.id, ruleId: rule.id } }); // devolve a reserva
           console.error(`Falha ao enviar pos-procedimento (regra ${rule.id}) para ${appt.patient.phone}:`, err);
           // Sem isso a falha so aparecia no log do servidor - a clinica nunca
           // ficava sabendo que a mensagem automatica nao saiu. O robo tenta de

@@ -77,7 +77,19 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // Verifica cada conversa aberta e dispara a proxima mensagem da cascata de
 // recontato quando o paciente fica um tempo sem responder (silencio contado a
 // partir da ultima mensagem DELE).
+let followUpRunning = false;
+
 export async function runFollowUpCheck(): Promise<void> {
+  if (followUpRunning) return; // rodada anterior (juiz de IA + pausas) ainda em andamento
+  followUpRunning = true;
+  try {
+    await runFollowUpCheckInner();
+  } finally {
+    followUpRunning = false;
+  }
+}
+
+async function runFollowUpCheckInner(): Promise<void> {
   stagesCache.clear();
   clinicCache.clear();
   rulesCache.clear();
@@ -197,10 +209,21 @@ export async function runFollowUpCheck(): Promise<void> {
       birthDate: conversation.patient.birthDate,
     });
 
+    // RESERVA atomica no banco ANTES de enviar: se outro processo (ou outra rodada
+    // sobreposta, ou o servidor antigo durante uma troca de versao) ja pegou este
+    // recontato, o contador nao bate e este aqui nao envia.
+    const claimed = await prisma.conversation.updateMany({
+      where: { id: conversation.id, lastFollowUpOrder: conversation.lastFollowUpOrder },
+      data: { lastFollowUpOrder: nextOrder },
+    });
+    if (claimed.count !== 1) continue;
+
     try {
       await sendText(clinicId, conversation.patient.phone, text);
     } catch (err) {
       console.error(`Falha ao enviar recontato para ${conversation.patient.phone}:`, err);
+      // Nao enviou: devolve a reserva pra tentar de novo no proximo ciclo.
+      await prisma.conversation.updateMany({ where: { id: conversation.id, lastFollowUpOrder: nextOrder }, data: { lastFollowUpOrder: conversation.lastFollowUpOrder } });
       continue;
     }
 
@@ -213,7 +236,7 @@ export async function runFollowUpCheck(): Promise<void> {
       data: { lastFollowUpOrder: nextOrder },
     });
     if (rule.repeatMode === "once") {
-      await prisma.followUpSent.create({ data: { conversationId: conversation.id, ruleId: rule.id } });
+      await prisma.followUpSent.create({ data: { conversationId: conversation.id, ruleId: rule.id } }).catch(() => undefined); // ja registrado por outra rodada
     }
 
     // "recuperacao" e o slug padrao pra essa etapa; se a clinica renomeou/

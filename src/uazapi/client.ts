@@ -383,8 +383,47 @@ function splitMessage(text: string, maxParts: number): string[] {
 
 // `manual` = mensagem escrita por uma pessoa da equipe no painel. Só isso pode
 // sair pelo WhatsApp de uma clinica no plano gratuito.
+// Campo que ficou SEM preencher na mensagem ("[PROCEDIMENTO]", "[NOME]", "{primeiro_nome}"):
+// mensagem assim nunca pode ir para um paciente.
+export function hasUnresolvedPlaceholder(text: string): string | null {
+  const m = /\[[A-ZÀ-ÚÇ][A-ZÀ-ÚÇ0-9 _\/]{2,}\]|\{[a-zà-ú_]{3,}\}/.exec(text);
+  return m ? m[0] : null;
+}
+
+// Mesmo texto (>= 40 caracteres) para o mesmo numero em poucos minutos: e duplicata
+// (duas rodadas de automacao, dois servidores no ar na troca de versao...).
+const recentSends = new Map<string, number>();
+const DUPLICATE_WINDOW_MS = 10 * 60_000;
+export function isDuplicateSend(clinicId: string, phone: string, text: string, now = Date.now()): boolean {
+  if (text.trim().length < 40) return false;
+  for (const [k, at] of recentSends) if (now - at > DUPLICATE_WINDOW_MS) recentSends.delete(k);
+  const key = `${clinicId}|${phone.replace(/\D/g, "")}|${text.trim().replace(/\s+/g, " ")}`;
+  if (recentSends.has(key)) return true;
+  recentSends.set(key, now);
+  return false;
+}
+
+const placeholderAlerted = new Map<string, number>();
+
 export async function sendText(clinicId: string, phone: string, text: string, opts: { manual?: boolean } = {}): Promise<void> {
   if (await automatedSendBlocked(clinicId, opts.manual === true)) return;
+  if (opts.manual !== true) {
+    const missing = hasUnresolvedPlaceholder(text);
+    if (missing) {
+      // Avisa a equipe (no maximo 1x por hora por clinica+campo) e NAO envia.
+      const k = `${clinicId}|${missing}`;
+      if (Date.now() - (placeholderAlerted.get(k) ?? 0) > 3_600_000) {
+        placeholderAlerted.set(k, Date.now());
+        const { notifyStaff } = await import("../crm/notify.js");
+        await notifyStaff(clinicId, "automation_failed", `⚠️ Bloqueei o envio de uma mensagem automática porque o campo ${missing} ficou sem preencher no texto. Corrija o texto da automação (use campos como {procedimento}, com chaves).`);
+      }
+      throw new Error(`Mensagem bloqueada: campo sem preencher ${missing}`);
+    }
+    if (isDuplicateSend(clinicId, phone, text)) {
+      console.warn(`[uazapi] envio duplicado descartado para ${phone.slice(-4)}`);
+      return;
+    }
+  }
   const [credentials, config] = await Promise.all([
     clinicCredentials(clinicId),
     prisma.clinic.findUnique({

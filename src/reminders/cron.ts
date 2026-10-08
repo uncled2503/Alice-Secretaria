@@ -182,12 +182,19 @@ export function startReminderJob(): void {
           when: appt.scheduledAt,
         });
 
+        // RESERVA atomica antes de enviar (chave unica agendamento+regra): se outro
+        // processo ja pegou, nao envia de novo.
+        try {
+          await prisma.reminderSent.create({ data: { appointmentId: appt.id, ruleId: rule.id } });
+        } catch {
+          continue;
+        }
         try {
           await sendText(appt.clinicId, appt.patient.phone, text);
-          await prisma.reminderSent.create({ data: { appointmentId: appt.id, ruleId: rule.id } });
           await recordAutomatedMessage(appt.patientId, text, "Lembrete de consulta");
         } catch (err) {
           console.error(`Falha ao enviar lembrete (regra ${rule.id}) para ${appt.patient.phone}:`, err);
+          await prisma.reminderSent.deleteMany({ where: { appointmentId: appt.id, ruleId: rule.id } }); // devolve a reserva: tenta de novo
         }
         if (rule.sendEndHour != null) await sleep((rule.pauseMinSec + Math.random() * Math.max(0, rule.pauseMaxSec - rule.pauseMinSec)) * 1000);
       }

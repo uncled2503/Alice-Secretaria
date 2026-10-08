@@ -138,3 +138,25 @@ test("reacao, edicao e apagar mensagem nao viram mensagem do contato", () => {
   // mensagem normal continua passando
   assert.equal(parseWebhookPayload({ message: { ...base, messageType: "conversation", text: "oi, tudo bem?" } }).length, 1);
 });
+
+import { hasUnresolvedPlaceholder, isDuplicateSend } from "../dist/uazapi/client.js";
+
+test("mensagem com campo sem preencher e barrada (o '[PROCEDIMENTO]' do print)", () => {
+  assert.equal(hasUnresolvedPlaceholder("Ontem conversamos sobre [PROCEDIMENTO] e fiquei à disposição"), "[PROCEDIMENTO]");
+  assert.equal(hasUnresolvedPlaceholder("Oi, [NOME]! Seu horário é [DATA] às [HORÁRIO]"), "[NOME]");
+  assert.equal(hasUnresolvedPlaceholder("Oi {primeiro_nome}, tudo bem?"), "{primeiro_nome}");
+  assert.equal(hasUnresolvedPlaceholder("Oi, Clarinda! Ontem conversamos sobre drenagem."), null);
+  assert.equal(hasUnresolvedPlaceholder("Temos a opção [Avaliação] gratuita e Pix (CNPJ 44.438.614/0001-25)"), null); // colchete normal passa
+});
+
+test("o mesmo texto para o mesmo numero em minutos e duplicata (3 mensagens iguais do print)", () => {
+  const t = "Oi, Clarinda! Tudo bem? Ontem conversamos sobre drenagem e fiquei à disposição para te ajudar.";
+  const t0 = 1_000_000_000_000;
+  assert.equal(isDuplicateSend("c1", "5511999990001", t, t0), false); // 1a vez passa
+  assert.equal(isDuplicateSend("c1", "5511999990001", t, t0 + 2_000), true); // 2a: barrada
+  assert.equal(isDuplicateSend("c1", "5511999990001", t, t0 + 4_000), true); // 3a: barrada
+  assert.equal(isDuplicateSend("c1", "5511999990002", t, t0 + 5_000), false); // outro numero passa
+  assert.equal(isDuplicateSend("c1", "5511999990001", t, t0 + 11 * 60_000), false); // depois de 10 min libera
+  assert.equal(isDuplicateSend("c1", "5511999990003", "Ok!", t0), false); // texto curto nunca conta
+  assert.equal(isDuplicateSend("c1", "5511999990003", "Ok!", t0 + 1), false);
+});
