@@ -11,6 +11,7 @@ import { zonedWallClockToUtc } from "../scheduling/time.js";
 // ---------------------------------------------------------------------------
 
 const DAYS_AHEAD = 3; // hoje + proximos dias
+const DAYS_BEHIND = 2; // dias passados: SO atualizam status (ex.: concluido depois do dia), nunca criam
 const PULL_EVERY = "*/10 * * * *";
 
 export interface CeBookingLite {
@@ -83,7 +84,7 @@ export async function pullClinicBookings(clinicId: string): Promise<PullResult> 
   const tz = clinic?.timezone || "America/Sao_Paulo";
 
   const bookings: CeBookingLite[] = [];
-  for (let i = 0; i <= DAYS_AHEAD; i++) {
+  for (let i = -DAYS_BEHIND; i <= DAYS_AHEAD; i++) {
     const day = new Date(Date.now() + i * 24 * 3_600_000);
     // /bookings so e confiavel com janela de DIA INTEIRO (ver memoria da integracao).
     const res = await ceRequest<{ data: CeBookingLite[] }>(clinicId, "/bookings", {
@@ -119,6 +120,10 @@ export async function pullClinicBookings(clinicId: string): Promise<PullResult> 
     }
 
     if (status === "cancelled" || status === "no_show") { result.skipped++; continue; }
+    // Reserva JA PASSADA que nunca foi importada: nao cria (so serviria pra disparar
+    // pos-procedimento/recontato retroativo). Os dias passados da janela existem so
+    // pra atualizar o status do que ja estava aqui.
+    if (when.getTime() < Date.now()) { result.skipped++; continue; }
 
     const procedure = picked;
     const phone = normalizeCePhone(b.patient?.phone);
