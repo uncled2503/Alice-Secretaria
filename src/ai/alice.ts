@@ -675,10 +675,12 @@ const PAYMENT_METHOD_LABELS: Record<string, string> = {
 
 // So passa pro prompt o que a clinica realmente cadastrou - nunca inventa
 // indicacao, beneficio, prazo ou preco que nao veio do banco.
-function describeProcedureForPrompt(p: Procedure): string {
+function describeProcedureForPrompt(p: Procedure, quotePrices = true): string {
   const lines = [`- ${p.name} (${p.durationMin}min)`];
 
-  if (p.price != null) {
+  if (!quotePrices) {
+    lines.push("  Valor: apresentado pela equipe na avaliacao (NAO informar valor, parcelas nem formas de pagamento)");
+  } else if (p.price != null) {
     let priceLine = `  Valor: R$ ${p.price.toFixed(2)}`;
     if (p.offerInstallments && p.maxInstallments) {
       priceLine += ` (ate ${p.maxInstallments}x de R$ ${(p.price / p.maxInstallments).toFixed(2)})`;
@@ -759,7 +761,7 @@ export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: str
   });
 
   const a = clinic.assistantName || "Alice";
-  const procedureList = clinic.procedures.map((p) => describeProcedureForPrompt(p)).join("\n\n");
+  const procedureList = clinic.procedures.map((p) => describeProcedureForPrompt(p, clinic.quotePrices)).join("\n\n");
 
   const areaLine = clinic.activityArea?.trim()
     ? `\nArea de atuacao: ${clinic.activityArea.trim()}.`
@@ -815,6 +817,9 @@ Tudo isso SEM quebrar as regras cadastradas: nunca invente preco, estoque ou pra
       ? `\nSEGURANCA MEDICA (prioridade sobre qualquer objetivo comercial): nunca diagnostique, prescreva, interprete exame, garanta cirurgia, determine quantidade de ml, nem afirme que um procedimento e o indicado sem avaliacao. "O que eu tenho?", "preciso operar?", "quantos ml?", "isso e cancer?" nao se respondem como decisao medica - de informacao geral e conduza pra avaliacao, ou transfira pra equipe. Foto nao diagnostica.`
       : "";
 
+  const noPricesLine = clinic.quotePrices
+    ? ""
+    : `\nVALORES: voce NAO informa valores, parcelas nem formas de pagamento de procedimento algum. Quando perguntarem preco, diga com naturalidade que o investimento e apresentado pela equipe na avaliacao gratuita (personalizada para o caso dela), reforce o valor da avaliacao e pergunte o melhor dia e turno. Nao dê faixas nem estimativas.`;
   const teamBooksLine = clinic.aliceCanBook
     ? ""
     : `
@@ -973,7 +978,7 @@ Seu trabalho:
 2. Manter a etapa do paciente no funil atualizada (update_crm_stage) conforme a conversa avanca.
 3. Checar disponibilidade real (check_specific_time / check_availability) antes de falar de qualquer data.
 4. Confirmar o horario escolhido com o paciente e so entao usar book_appointment.
-5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${teamBooksLine}${continuityLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${noRepeatLine}
+5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${teamBooksLine}${continuityLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${noRepeatLine}
 
 Procedimentos oferecidos pela clinica:
 ${procedureList || "(nenhum procedimento cadastrado ainda)"}

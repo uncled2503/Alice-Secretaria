@@ -3033,7 +3033,9 @@ function renderReminderRules() {
     body.appendChild(
       el("tr", {}, [
         el("td", { class: "cell-truncate", title: r.message }, [r.message]),
-        el("td", {}, [`${r.hoursBefore}h antes`]),
+        el("td", {}, [r.dayOffset != null && r.sendHour != null
+          ? `${r.dayOffset === 1 ? "Dia anterior" : "No dia"} às ${String(r.sendHour).padStart(2, "0")}:${String(r.sendMinute || 0).padStart(2, "0")}`
+          : `${r.hoursBefore}h antes`]),
         el("td", {}, [el("span", { class: `badge ${r.active ? "badge-green" : "badge-neutral"}` }, [r.active ? "Ativo" : "Pausado"])]),
         el("td", { class: "actions" }, [editBtn]),
       ])
@@ -3661,6 +3663,7 @@ function loadAliceSettings() {
   document.getElementById("as-reply-delay").value = c.replyDelaySeconds ?? 0;
   document.getElementById("as-deposit").checked = !!c.requireDepositProof;
   document.getElementById("as-can-book").checked = c.aliceCanBook !== false;
+  document.getElementById("as-quote-prices").checked = c.quotePrices !== false;
   document.getElementById("as-nps").checked = !!c.npsEnabled;
   document.getElementById("as-nps-hours").value = c.npsHoursAfter ?? 24;
   document.getElementById("as-nps-threshold").value = c.npsThreshold ?? 9;
@@ -3700,6 +3703,7 @@ document.getElementById("alice-settings-form").addEventListener("submit", async 
     replyDelaySeconds: Number(document.getElementById("as-reply-delay").value) || 0,
     requireDepositProof: document.getElementById("as-deposit").checked,
     aliceCanBook: document.getElementById("as-can-book").checked,
+    quotePrices: document.getElementById("as-quote-prices").checked,
     npsEnabled: document.getElementById("as-nps").checked,
     npsHoursAfter: Number(document.getElementById("as-nps-hours").value) || 24,
     npsThreshold: Number(document.getElementById("as-nps-threshold").value),

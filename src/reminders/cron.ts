@@ -4,6 +4,7 @@ import { sendText } from "../uazapi/client.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js";
 import { PAID_CLINIC_WHERE } from "../crm/plan.js";
 import { recordAutomatedMessage } from "../crm/conversationLog.js";
+import { isoDateInZone, zonedWallClockToUtc } from "../scheduling/time.js";
 
 const EARLIEST_SEND_HOUR = 7; // nunca manda lembrete antes das 7h (hora local da clinica)
 const SEND_TOLERANCE_MS = 40 * 60_000; // janela de disparo apos o horario previsto (cron roda a cada 15min)
@@ -18,6 +19,15 @@ export function reminderSendTime(scheduledAt: Date, hoursBefore: number, timeZon
   const m = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
   if (h >= EARLIEST_SEND_HOUR) return ideal;
   return new Date(ideal.getTime() + ((EARLIEST_SEND_HOUR - h) * 60 - m) * 60_000);
+}
+
+// PURO: instante do lembrete de horario FIXO (ex.: 7h30 do dia anterior, 7h do
+// proprio dia), no fuso da clinica. dayOffset: 1 = dia anterior, 0 = no dia.
+export function fixedReminderTime(scheduledAt: Date, dayOffset: number, hour: number, minute: number, timeZone: string): Date {
+  const key = isoDateInZone(scheduledAt, timeZone);
+  const [y, m, d] = key.split("-").map(Number);
+  const day = new Date(Date.UTC(y, m - 1, d - dayOffset));
+  return zonedWallClockToUtc(timeZone, day.getUTCFullYear(), day.getUTCMonth() + 1, day.getUTCDate(), hour, minute);
 }
 
 // Roda a cada 15min. Cada regra ativa dispara uma vez por agendamento (marca
@@ -47,13 +57,17 @@ export function startReminderJob(): void {
         where: {
           clinicId: rule.clinicId,
           status: "confirmed",
-          scheduledAt: { gt: now, lte: new Date(target.getTime() + 8 * 3_600_000) },
+          scheduledAt: { gt: now, lte: new Date(Math.max(target.getTime() + 8 * 3_600_000, now.getTime() + 54 * 3_600_000)) },
           reminders: { none: { ruleId: rule.id } },
         },
         include: { patient: true, procedure: true, professional: true },
       });
       const due = candidates.filter((appt) => {
-        const late = now.getTime() - reminderSendTime(appt.scheduledAt, rule.hoursBefore, tz).getTime();
+        const sendAt =
+          rule.dayOffset != null && rule.sendHour != null
+            ? fixedReminderTime(appt.scheduledAt, rule.dayOffset, rule.sendHour, rule.sendMinute, tz)
+            : reminderSendTime(appt.scheduledAt, rule.hoursBefore, tz);
+        const late = now.getTime() - sendAt.getTime();
         // Dentro da janela estreita apos o horario previsto E ainda antes da consulta.
         return late >= 0 && late <= SEND_TOLERANCE_MS;
       });

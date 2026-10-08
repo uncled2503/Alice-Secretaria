@@ -53,6 +53,8 @@ model Clinic {
   splitMaxMessages     Int     @default(4)
   splitThresholdChars  Int     @default(450) // a partir de quantos caracteres ja e "resposta longa"
   replyDelaySeconds    Int     @default(0) // espera N seg pra agrupar mensagens quebradas do cliente (0 = responde na hora)
+  hoursByDay           String? // expediente por dia da semana pra AUTOMACOES (JSON {"6":[8,15]}: sabado 8h-15h); vazio = usa workStart/workEnd. Nao afeta a agenda
+  quotePrices          Boolean @default(true) // false = a Alice NAO informa valores de procedimento (o preco nem entra no prompt); quem apresenta o investimento e a equipe
   aliceCanBook         Boolean @default(true) // false = a Alice NAO agenda/remarca/cancela/oferece horario: coleta interesse e transfere pra equipe marcar
   requireDepositProof  Boolean @default(false) // so confirma agendamento apos o paciente enviar comprovante do sinal
 
@@ -864,6 +866,9 @@ model ReminderRule {
   clinicId    String
   clinic      Clinic   @relation(fields: [clinicId], references: [id])
   hoursBefore Int      @default(24)
+  dayOffset   Int?     // se preenchido, horario FIXO: 1 = dia anterior, 0 = no proprio dia (usa sendHour/sendMinute); null = "hoursBefore" horas antes
+  sendHour    Int?
+  sendMinute  Int      @default(0)
   message     String   // suporta as mesmas variaveis do broadcast + {procedimento}/{profissional}/{hora}
   active      Boolean  @default(true)
   createdAt   DateTime @default(now())

@@ -93,3 +93,33 @@ test("lembrete nunca sai antes das 7h locais", () => {
   // 24h antes = 08:00 do dia anterior, sem ajuste
   assert.equal(reminderSendTime(consulta8h, 24, TZ).getTime(), consulta8h.getTime() - 24 * 3_600_000);
 });
+
+import { fixedReminderTime } from "../dist/reminders/cron.js";
+import { isWithinClinicHours } from "../dist/crm/openHours.js";
+import { isEvaluationName } from "../dist/clinicaexperts/pull.js";
+
+test("confirmacao em horario fixo: 7h30 do dia anterior e 7h do proprio dia", () => {
+  const consulta = new Date(Date.UTC(2026, 9, 8, 13, 0)); // 08/10 10:00 em Sao Paulo
+  assert.equal(fixedReminderTime(consulta, 1, 7, 30, TZ).getTime(), Date.UTC(2026, 9, 7, 10, 30)); // 07/10 07:30
+  assert.equal(fixedReminderTime(consulta, 0, 7, 0, TZ).getTime(), Date.UTC(2026, 9, 8, 10, 0)); // 08/10 07:00
+  // virada de mes: consulta dia 1 -> dia anterior e o ultimo do mes anterior
+  const dia1 = new Date(Date.UTC(2026, 10, 1, 13, 0));
+  assert.equal(fixedReminderTime(dia1, 1, 7, 30, TZ).getTime(), Date.UTC(2026, 9, 31, 10, 30));
+});
+
+test("recontato so dentro do expediente (dias, horas e sabado ate 15h)", () => {
+  const clinic = { timezone: TZ, workDays: "1,2,3,4,5,6", workStartHour: 8, workEndHour: 21, hoursByDay: '{"6":[8,15]}' };
+  const at = (d, h) => new Date(Date.UTC(2026, 9, d, h + 3, 0)); // outubro/2026, hora local
+  assert.equal(isWithinClinicHours(clinic, at(7, 10)), true); // quarta 10h
+  assert.equal(isWithinClinicHours(clinic, at(7, 21)), false); // quarta 21h (fechou)
+  assert.equal(isWithinClinicHours(clinic, at(7, 7)), false); // quarta 7h (antes de abrir)
+  assert.equal(isWithinClinicHours(clinic, at(10, 14)), true); // sabado 14h
+  assert.equal(isWithinClinicHours(clinic, at(10, 16)), false); // sabado 16h (fecha 15h)
+  assert.equal(isWithinClinicHours(clinic, at(11, 10)), false); // domingo
+});
+
+test("avaliacao e reconhecida pelo nome", () => {
+  assert.equal(isEvaluationName("Avaliação Estética Gratuita"), true);
+  assert.equal(isEvaluationName("Avaliacao"), true);
+  assert.equal(isEvaluationName("Drenagem Linfática"), false);
+});

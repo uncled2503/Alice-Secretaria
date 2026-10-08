@@ -200,6 +200,7 @@ apiRouter.get(
         replyDelaySeconds: true,
         requireDepositProof: true,
         aliceCanBook: true,
+        quotePrices: true,
         businessType: true,
         businessLabel: true,
         servicePosture: true,
@@ -279,6 +280,7 @@ apiRouter.put(
       replyDelaySeconds?: number;
       requireDepositProof?: boolean;
       aliceCanBook?: boolean;
+      quotePrices?: boolean;
       businessType?: string;
       businessLabel?: string | null;
       servicePosture?: string;
@@ -370,6 +372,7 @@ apiRouter.put(
           ...(b.replyDelaySeconds !== undefined ? { replyDelaySeconds: Math.min(Math.max(Math.round(b.replyDelaySeconds), 0), 60) } : {}),
           ...(b.requireDepositProof !== undefined ? { requireDepositProof: b.requireDepositProof } : {}),
           ...(b.aliceCanBook !== undefined ? { aliceCanBook: b.aliceCanBook } : {}),
+          ...(b.quotePrices !== undefined ? { quotePrices: b.quotePrices } : {}),
           ...(b.businessType !== undefined ? { businessType: b.businessType } : {}),
           ...(b.businessLabel !== undefined ? { businessLabel: b.businessLabel?.trim() || null } : {}),
           ...(b.servicePosture !== undefined ? { servicePosture: b.servicePosture } : {}),
@@ -2975,10 +2978,13 @@ apiRouter.put(
     if (!assertClinicAccess(req, res, existing.clinicId)) return;
 
     const { hoursBefore, message, active } = req.body as { hoursBefore?: number; message?: string; active?: boolean };
+    // O modal sempre manda hoursBefore; so trata como "mudei pra X horas antes"
+    // (e solta o horario fixo) se o valor realmente mudou.
+    const hoursChanged = hoursBefore !== undefined && hoursBefore !== existing.hoursBefore;
     const rule = await prisma.reminderRule.update({
       where: { id: req.params.id },
       data: {
-        ...(hoursBefore !== undefined ? { hoursBefore } : {}),
+        ...(hoursChanged ? { hoursBefore, dayOffset: null, sendHour: null } : {}),
         ...(message !== undefined ? { message } : {}),
         ...(active !== undefined ? { active } : {}),
       },

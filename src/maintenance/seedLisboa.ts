@@ -542,6 +542,14 @@ const SALES_RULES = [
   { category: "agendamento", instruction: "Como a equipe é quem agenda, siga perguntando até obter o procedimento de interesse e o melhor dia e turno; com isso em mãos, escreva a frase de transferência e passe para a equipe marcar. Não deixe a conversa esfriar antes disso." },
 ] as const;
 
+// Ajustes da Aline em 07/10/2026 (noite). Bloco proprio com marker proprio.
+const ADJUST_RULES = [
+  { category: "pagamento", instruction: "NUNCA informe valores, faixas de preço, parcelas ou formas de pagamento de procedimentos, nem diga que 'vai verificar a condição vigente'. Diga que o investimento é apresentado pela equipe na avaliação gratuita (personalizada), reforce que a avaliação não tem custo e pergunte o melhor dia e turno. A chave Pix só é enviada quando houver sinal a pagar." },
+  { category: "agendamento", instruction: "Antes de passar para a equipe agendar, confirme o NOME COMPLETO do paciente: se você não tiver o nome completo (só o primeiro nome, ou nome desconhecido), pergunte 'Pode me informar seu nome completo para o agendamento?'. Só transfira depois de ter nome completo, procedimento de interesse e dia/turno de preferência." },
+  { category: "chamar_equipe", instruction: "Quando o paciente enviar uma imagem, PDF ou arquivo que parece ser comprovante de pagamento (ou disser que pagou/enviou o comprovante), NÃO diga que não lê arquivos. Agradeça, diga que recebeu e que a equipe vai conferir o pagamento, e chame transfer_to_human com motivo 'comprovante de pagamento' e o nome do paciente. Não confirme o pagamento por conta própria." },
+  { category: "chamar_equipe", instruction: "Nunca diga 'não consigo ler arquivos', 'não leio PDF' ou 'não vejo anexos'. Se chegar um arquivo que você não consegue interpretar, diga que recebeu e que a equipe vai analisar, e transfira." },
+] as const;
+
 export interface SeedLisboaResult {
   clinicId: string;
   login: string;
@@ -579,6 +587,8 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
     evaluationFirst: true,
     allowEmojis: true,
     schedulingLink: null,
+    quotePrices: false, // 08/10/2026 (Aline): a Alice nao passa valores; a equipe apresenta na avaliacao
+    hoursByDay: JSON.stringify({ 6: [8, 15] }), // sabado ate as 15h (so pra automacoes)
     aliceCanBook: false, // 08/10/2026 (pedido da Aline): a EQUIPE agenda; a Alice coleta interesse e transfere
   };
 
@@ -646,28 +656,21 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
   await seedRulesOnce(clinic.id, SEED_MARKER, RULES);
   await seedRulesOnce(clinic.id, "seed:lisboa-equipe", TEAM_RULES);
   await seedRulesOnce(clinic.id, "seed:lisboa-comercial", SALES_RULES);
+  await seedRulesOnce(clinic.id, "seed:lisboa-ajustes-2", ADJUST_RULES);
 
   // Automacoes: so o que o cliente pediu com todos os dados.
-  const LEGACY_24H = "Oi, {primeiro_nome}! 💗 Passando para lembrar do seu atendimento amanhã, {data_hora}, aqui na Lisboa Beauty Center. Podemos confirmar sua presença? ✨";
+  // Horarios FIXOS pedidos pela Aline (07/10/2026): confirmacao do dia seguinte as
+  // 7h30 do dia anterior e confirmacao do dia as 7h do proprio dia.
   const REMINDERS = [
-    {
-      hoursBefore: 24,
-      message: "Olá, {primeiro_nome}! ♥️ Tudo bem?\nAqui é a Alice, da Clínica Lisboa Beauty Center ✨\nPassando para confirmar o seu agendamento conosco:\n📅 Data: {data} (amanhã)\n⏰ Horário: {hora}\n\n📍 Endereço: Av. Índico, 294 – São Bernardo do Campo/SP – 09750-600\n🚗 Disponibilizamos estacionamento próprio e também temos convênio com desconto no endereço: Av. Índico, 231 – Jardim do Mar – São Bernardo do Campo.\n\nPosso confirmar a sua presença?\n\nEm caso de necessidade de cancelamento ou reagendamento, pedimos a gentileza de avisar com antecedência 💖",
-    },
-    {
-      hoursBefore: 3,
-      message: "Olá, {primeiro_nome}! ☀️ Tudo bem?\nEstamos muito felizes em te receber hoje às {hora} 🥰\nSerá um prazer tê-la conosco e proporcionar uma experiência especial ❤️",
-    },
+    { hoursBefore: 24, dayOffset: 1, sendHour: 7, sendMinute: 30, message: "Olá, {primeiro_nome}! ♥️ Tudo bem?\nAqui é a Alice, da Clínica Lisboa Beauty Center ✨\nPassando para confirmar o seu agendamento conosco:\n📅 Data: {data} (amanhã)\n⏰ Horário: {hora}\n💆 Procedimento: {procedimento}\n\n📍 Endereço: Av. Índico, 294 – São Bernardo do Campo/SP – 09750-600\n🚗 Disponibilizamos estacionamento próprio e também temos convênio com desconto no endereço: Av. Índico, 231 – Jardim do Mar – São Bernardo do Campo.\n\nPosso confirmar a sua presença?\n\nEm caso de necessidade de cancelamento ou reagendamento, pedimos a gentileza de avisar com antecedência 💖" },
+    { hoursBefore: 3, dayOffset: 0, sendHour: 7, sendMinute: 0, message: "Olá, {primeiro_nome}! ☀️ Tudo bem?\nEstamos muito felizes em te receber hoje às {hora} 🥰\nSerá um prazer tê-la conosco e proporcionar uma experiência especial ❤️" },
   ];
   for (const r of REMINDERS) {
     const reminder = await prisma.reminderRule.findFirst({ where: { clinicId: clinic.id, hoursBefore: r.hoursBefore } });
-    if (reminder) {
-      // Troca so o texto antigo, nunca editado pela clinica.
-      if (reminder.message === LEGACY_24H) await prisma.reminderRule.update({ where: { id: reminder.id }, data: { message: r.message } });
-      continue;
-    }
-    // desligados ate a Lisboa validar o fluxo (evita disparo ao conectar)
-    await prisma.reminderRule.create({ data: { clinicId: clinic.id, hoursBefore: r.hoursBefore, active: false, message: r.message } });
+    if (reminder) continue; // nunca sobrescreve o que a clinica editou
+    await prisma.reminderRule.create({
+      data: { clinicId: clinic.id, hoursBefore: r.hoursBefore, dayOffset: r.dayOffset, sendHour: r.sendHour, sendMinute: r.sendMinute, active: true, message: r.message },
+    });
   }
 
   const birthdayName = "Aniversário do paciente";
@@ -697,14 +700,14 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
       // Troca o rascunho antigo (2 dias, desligado, nunca editado) pela nova cascata.
       const legacy = f.order === 1 && current.name === "Recontato Lisboa" && !current.active;
       if (!legacy) continue;
-      await prisma.followUpRule.update({ where: { id: current.id }, data: { name: f.name, afterMinutes: f.afterMinutes, afterDays: 1, message: f.message, sendWindowStart: 9, sendWindowEnd: 20 } });
+      await prisma.followUpRule.update({ where: { id: current.id }, data: { name: f.name, afterMinutes: f.afterMinutes, afterDays: 1, message: f.message, sendWindowStart: null, sendWindowEnd: null } });
       continue;
     }
     await prisma.followUpRule.create({
       data: {
         clinicId: clinic.id, order: f.order, name: f.name, afterDays: Math.max(1, Math.round(f.afterMinutes / 1440)), afterMinutes: f.afterMinutes,
         message: f.message, repeatMode: "once", skipIfHumanTakeover: true, skipIfUpcomingAppt: true,
-        sendWindowStart: 9, sendWindowEnd: 20, active: false,
+        sendWindowStart: null, sendWindowEnd: null, active: false,
       },
     });
   }

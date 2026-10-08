@@ -40,15 +40,32 @@ export function normalizeCePhone(raw: string | null | undefined): string | null 
   return d;
 }
 
+// PURO: nome de procedimento que e so a avaliacao (nao o servico em si).
+export function isEvaluationName(name: string): boolean {
+  return /^\s*avalia/i.test(name.normalize("NFD").replace(/[\u0300-\u036f]/g, ""));
+}
+
+// Uma reserva pode ter varios procedimentos (ex.: "Avaliacao" + o procedimento
+// de verdade). A confirmacao tem que citar o PROCEDIMENTO, nao a avaliacao:
+// prefere o primeiro que nao seja avaliacao e que exista na Alice.
+async function pickProcedure(clinicId: string, b: CeBookingLite) {
+  const ceIds = (b.procedures ?? []).map((p) => p.id);
+  const candidates = ceIds.length ? await prisma.procedure.findMany({ where: { clinicId, ceId: { in: ceIds } } }) : [];
+  const byCeId = new Map(candidates.map((p) => [p.ceId, p]));
+  const ordered = ceIds.map((id) => byCeId.get(id)).filter((p): p is NonNullable<typeof p> => !!p);
+  return ordered.find((p) => !isEvaluationName(p.name)) ?? ordered[0] ?? null;
+}
+
 export interface PullResult {
   created: number;
   updated: number;
   skipped: number;
+  skippedNote: string[];
   error?: string;
 }
 
 export async function pullClinicBookings(clinicId: string): Promise<PullResult> {
-  const result: PullResult = { created: 0, updated: 0, skipped: 0 };
+  const result: PullResult = { created: 0, updated: 0, skipped: 0, skippedNote: [] };
   const clinic = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { timezone: true } });
   const tz = clinic?.timezone || "America/Sao_Paulo";
 
@@ -71,9 +88,12 @@ export async function pullClinicBookings(clinicId: string): Promise<PullResult> 
     if (Number.isNaN(when.getTime())) { result.skipped++; continue; }
     const status = mapCeStatus(b.status);
 
-    const existing = await prisma.appointment.findFirst({ where: { clinicId, ceBookingUuid: b.uuid } });
+    const picked = await pickProcedure(clinicId, b);
+    const existing = await prisma.appointment.findFirst({ where: { clinicId, ceBookingUuid: b.uuid }, include: { procedure: true } });
     if (existing) {
-      const data: { scheduledAt?: Date; status?: string; professionalId?: string | null } = {};
+      const data: { scheduledAt?: Date; status?: string; professionalId?: string | null; procedureId?: string } = {};
+      // Importado antes como "Avaliacao" mas a reserva tem o procedimento de verdade: corrige.
+      if (picked && picked.id !== existing.procedureId && isEvaluationName(existing.procedure.name) && !isEvaluationName(picked.name)) data.procedureId = picked.id;
       if (existing.scheduledAt.getTime() !== when.getTime()) data.scheduledAt = when;
       // "confirmed" nunca rebaixa um atendimento que ja foi concluido/faltou aqui.
       if (status !== "confirmed" && existing.status !== status) data.status = status;
@@ -87,10 +107,9 @@ export async function pullClinicBookings(clinicId: string): Promise<PullResult> 
 
     if (status === "cancelled" || status === "no_show") { result.skipped++; continue; }
 
-    const ceProcId = b.procedures?.[0]?.id;
-    const procedure = ceProcId != null ? await prisma.procedure.findFirst({ where: { clinicId, ceId: ceProcId } }) : null;
+    const procedure = picked;
     const phone = normalizeCePhone(b.patient?.phone);
-    if (!procedure || !phone) { result.skipped++; continue; } // sem procedimento vinculado ou sem telefone: nada a lembrar
+    if (!procedure || !phone) { result.skipped++; result.skippedNote.push(!phone ? "sem telefone" : "procedimento sem vínculo"); continue; } // sem procedimento vinculado ou sem telefone: nada a lembrar
 
     const professional = b.professional?.uuid ? await prisma.professional.findFirst({ where: { clinicId, ceUuid: b.professional.uuid } }) : null;
 
@@ -136,7 +155,13 @@ export function startCeBookingPullJob(): void {
         try {
           const r = await pullClinicBookings(a.clinicId);
           if (r.error) await noteError(a.clinicId, `Importação da agenda: ${r.error}`);
-          else await prisma.clinicaExpertsAccount.updateMany({ where: { clinicId: a.clinicId }, data: { lastSyncAt: new Date(), lastError: null } });
+          else {
+            // Reservas sem telefone ou com procedimento nao vinculado NAO recebem lembrete: avisa na tela.
+            const notes = r.skippedNote.length
+              ? `Aviso: ${r.skippedNote.length} agendamento(s) dos próximos dias não entram nos lembretes (${[...new Set(r.skippedNote)].join(", ")}). Confira o telefone no Clínica Experts ou rode "Importar do Clínica Experts".`
+              : null;
+            await prisma.clinicaExpertsAccount.updateMany({ where: { clinicId: a.clinicId }, data: { lastSyncAt: new Date(), lastError: notes } });
+          }
         } catch (err) {
           console.error("[clinicaexperts] pull:", err);
         }

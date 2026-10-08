@@ -5,10 +5,11 @@ import { getFunnelStages } from "./stages.js";
 import { movePatientToKind, movePatientToStage } from "./stageAutomation.js";
 import { renderMessageTemplate, getClinicTemplateInfo, type ClinicTemplateInfo } from "./template.js";
 import { PAID_CLINIC_WHERE } from "./plan.js";
+import { isWithinClinicHours, type OpenHoursClinic } from "./openHours.js";
 
 // Cache simples por execucao do job.
 const stagesCache = new Map<string, Awaited<ReturnType<typeof getFunnelStages>>>();
-const clinicCache = new Map<string, { timezone: string; info: ClinicTemplateInfo }>();
+const clinicCache = new Map<string, { timezone: string; hours: OpenHoursClinic; info: ClinicTemplateInfo }>();
 const rulesCache = new Map<string, Awaited<ReturnType<typeof prisma.followUpRule.findMany>>>();
 
 async function cachedRules(clinicId: string) {
@@ -39,8 +40,11 @@ async function cachedStages(clinicId: string) {
 async function cachedClinic(clinicId: string) {
   let entry = clinicCache.get(clinicId);
   if (!entry) {
-    const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { timezone: true } });
-    entry = { timezone: clinic.timezone || "America/Sao_Paulo", info: await getClinicTemplateInfo(clinicId) };
+    const clinic = await prisma.clinic.findUniqueOrThrow({
+      where: { id: clinicId },
+      select: { timezone: true, workDays: true, workStartHour: true, workEndHour: true, hoursByDay: true },
+    });
+    entry = { timezone: clinic.timezone || "America/Sao_Paulo", hours: clinic, info: await getClinicTemplateInfo(clinicId) };
     clinicCache.set(clinicId, entry);
   }
   return entry;
@@ -152,6 +156,8 @@ export async function runFollowUpCheck(): Promise<void> {
     if ((sentByClinic.get(clinicId) ?? 0) >= MAX_SENDS_PER_CLINIC) continue; // o resto fica pra proxima execucao
 
     const clinic = await cachedClinic(clinicId);
+    // So manda dentro do expediente da clinica (dias e horarios de atendimento).
+    if (!isWithinClinicHours(clinic.hours, new Date())) continue;
     if (!withinWindow(localHour(clinic.timezone), rule.sendWindowStart, rule.sendWindowEnd)) continue;
 
     const text = renderMessageTemplate(rule.message, {
