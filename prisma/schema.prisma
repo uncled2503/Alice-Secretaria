@@ -411,6 +411,7 @@ model Professional {
   clinicId  String
   clinic    Clinic   @relation(fields: [clinicId], references: [id])
   name      String
+  title     String?  // tratamento usado pela Alice (ex.: "Dra."); vazio = so o nome
   instagram String?
   bio       String?
   color     String?  // cor de identificacao (ex: na agenda), hex
@@ -568,6 +569,7 @@ model Conversation {
   aliceMonth        String    @default("")    // "YYYY-MM" da ultima vez que a Alice atendeu (conta 1 atendimento/mes)
   lastFollowUpOrder Int       @default(0) // ultima etapa de recontato ja enviada (0 = nenhuma)
   lastMessageAt     DateTime  @default(now())
+  unansweredAlertAt DateTime? // quando a equipe foi avisada de que o paciente ficou sem resposta (uma vez por mensagem)
   createdAt         DateTime  @default(now())
 
   messages          Message[]

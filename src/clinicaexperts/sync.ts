@@ -55,6 +55,35 @@ async function alertFailure(clinicId: string, text: string): Promise<void> {
   );
 }
 
+// Procura o paciente no Clinica Experts pelo telefone e, se achar, guarda o
+// vinculo e completa o NOME (so troca quando o nome atual e vazio ou de uma
+// palavra so, ex.: apelido do WhatsApp). Melhor esforco: nunca lanca. Cada
+// paciente e consultado no maximo 1x por 6h (evita bater na API a cada mensagem).
+const lookedUp = new Map<string, number>();
+export async function enrichPatientFromCe(clinicId: string, patient: { id: string; name: string | null; phone: string; ceUuid: string | null }): Promise<void> {
+  try {
+    const last = lookedUp.get(patient.id);
+    if (last && Date.now() - last < 6 * 3_600_000) return;
+    if (!(await getAccount(clinicId))) return;
+    lookedUp.set(patient.id, Date.now());
+    const digits = patient.phone.replace(/\D/g, "");
+    if (!digits) return;
+    const found = await ceRequest<{ data: { uuid: string; name?: string | null; phone: string | null }[] }>(clinicId, "/patients", { query: { phone: digits, per_page: 5 } });
+    if (!found.ok) return;
+    const tail = digits.slice(-8);
+    const match = found.data.data?.find((p) => (p.phone ?? "").replace(/\D/g, "").endsWith(tail));
+    if (!match) return;
+    const ceName = match.name?.trim();
+    const needsName = !!ceName && (!patient.name || !/\s/.test(patient.name.trim()));
+    await prisma.patient.update({
+      where: { id: patient.id },
+      data: { ...(patient.ceUuid ? {} : { ceUuid: match.uuid }), ...(needsName ? { name: ceName } : {}) },
+    });
+  } catch (err) {
+    console.error("[clinicaexperts] enrichPatientFromCe:", err);
+  }
+}
+
 export function syncAppointment(appointmentId: string): Promise<void> {
   return serial(appointmentId, async () => {
     const appt = await prisma.appointment.findUnique({

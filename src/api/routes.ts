@@ -1476,8 +1476,9 @@ apiRouter.get(
 apiRouter.post(
   "/professionals",
   asyncRoute(async (req, res) => {
-    const { name, instagram, bio, color, photoUrl, procedureIds, workDays, workStartHour, workStartMinute, workEndHour, workEndMinute, lunchStartHour, lunchStartMinute, lunchEndHour, lunchEndMinute } = req.body as {
+    const { name, title, instagram, bio, color, photoUrl, procedureIds, workDays, workStartHour, workStartMinute, workEndHour, workEndMinute, lunchStartHour, lunchStartMinute, lunchEndHour, lunchEndMinute } = req.body as {
       name?: string;
+      title?: string;
       instagram?: string;
       bio?: string;
       color?: string;
@@ -1507,6 +1508,7 @@ apiRouter.post(
       data: {
         clinicId: clinic.id,
         name,
+        title: title?.trim() || null,
         instagram: instagram || null,
         bio: bio || null,
         color: color || null,
@@ -1534,8 +1536,9 @@ apiRouter.put(
     const existing = await prisma.professional.findUniqueOrThrow({ where: { id: req.params.id } });
     if (!assertClinicAccess(req, res, existing.clinicId)) return;
 
-    const { name, instagram, bio, color, photoUrl, active, procedureIds, workDays, workStartHour, workStartMinute, workEndHour, workEndMinute, lunchStartHour, lunchStartMinute, lunchEndHour, lunchEndMinute } = req.body as {
+    const { name, title, instagram, bio, color, photoUrl, active, procedureIds, workDays, workStartHour, workStartMinute, workEndHour, workEndMinute, lunchStartHour, lunchStartMinute, lunchEndHour, lunchEndMinute } = req.body as {
       name?: string;
+      title?: string;
       instagram?: string;
       bio?: string;
       color?: string;
@@ -1561,6 +1564,7 @@ apiRouter.put(
       where: { id: req.params.id },
       data: {
         ...(name !== undefined ? { name } : {}),
+        ...(title !== undefined ? { title: title?.trim() || null } : {}),
         ...(instagram !== undefined ? { instagram: instagram || null } : {}),
         ...(bio !== undefined ? { bio: bio || null } : {}),
         ...(color !== undefined ? { color: color || null } : {}),

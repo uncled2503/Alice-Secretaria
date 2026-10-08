@@ -4893,6 +4893,7 @@ async function openProfessionalModal(prof) {
   document.getElementById("professional-modal-title").textContent = prof ? "Editar Profissional" : "Adicionar Profissional";
   document.getElementById("pf-id").value = prof?.id || "";
   document.getElementById("pf-name").value = prof?.name || "";
+  document.getElementById("pf-title").value = prof?.title || "";
   document.getElementById("pf-instagram").value = prof?.instagram || "";
   document.getElementById("pf-bio").value = prof?.bio || "";
   document.getElementById("pf-active").checked = prof ? !!prof.active : true;
@@ -4975,6 +4976,7 @@ document.getElementById("professional-form").addEventListener("submit", async (e
   const workDays = Array.from(document.querySelectorAll("#pf-workdays input:checked")).map((c) => c.value).join(",");
   const payload = {
     name: document.getElementById("pf-name").value.trim(),
+    title: document.getElementById("pf-title").value.trim(),
     instagram: document.getElementById("pf-instagram").value.trim(),
     bio: document.getElementById("pf-bio").value.trim(),
     color: activeColor ? activeColor.dataset.color : "",

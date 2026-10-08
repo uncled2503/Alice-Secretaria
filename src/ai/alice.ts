@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
 import { prisma } from "../db/client.js";
+import { enrichPatientFromCe } from "../clinicaexperts/sync.js";
 import {
   findAvailableSlots,
   findAvailableSlotsOnDay,
@@ -753,7 +754,7 @@ export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: str
   const clinic = await prisma.clinic.findUniqueOrThrow({
     where: { id: clinicId },
     include: {
-      procedures: { include: { professionals: { where: { active: true }, select: { name: true } } } },
+      procedures: { include: { professionals: { where: { active: true }, select: { name: true, title: true } } } },
       messageTemplates: { where: { active: true } },
       faqs: { where: { active: true } },
       playbooks: { where: { active: true } },
@@ -851,6 +852,14 @@ AGENDAMENTO PELA EQUIPE: voce NAO agenda, NAO remarca, NAO cancela e NAO oferece
     }
   }
 
+  // Origem por anuncio (Click-to-WhatsApp): a Alice reconhece a oferta e nao contradiz.
+  let adLine = "";
+  if (ctx.patientId) {
+    const origin = await prisma.patient.findUnique({ where: { id: ctx.patientId }, select: { adName: true, adCampaignName: true, adsetName: true, sourceUrl: true } });
+    const ad = [origin?.adName, origin?.adCampaignName].filter(Boolean).join(" / ");
+    if (ad) adLine = `\nORIGEM: este paciente chegou por um ANUNCIO (${ad}). Identifique o procedimento ou oferta desse anuncio pelo nome dele e retome-o na conversa (ex.: "Vi que voce veio pelo nosso anuncio de ..."), sem contradizer a oferta. Se o nome do anuncio nao deixar claro o procedimento, pergunte qual o interesse.`;
+  }
+
   let surveyLine = "";
   if (ctx.patientId) {
     const pending = await prisma.satisfactionSurvey.findFirst({
@@ -893,10 +902,10 @@ AGENDAMENTO PELA EQUIPE: voce NAO agenda, NAO remarca, NAO cancela e NAO oferece
     .join(", ");
   const prosByProcedure = clinic.procedures
     .filter((p) => p.professionals.length > 0)
-    .map((p) => `- ${p.name}: ${p.professionals.map((pr) => pr.name).join(", ")}`)
+    .map((p) => `- ${p.name}: ${p.professionals.map((pr) => `${pr.title ? pr.title + " " : ""}${pr.name}`).join(", ")}`)
     .join("\n");
   const professionalsBlock = prosByProcedure
-    ? `\n\nProfissionais por procedimento:\n${prosByProcedure}\nSe houver mais de um profissional, pergunte a preferencia do paciente (ou ofereca o primeiro horario livre de qualquer um). Passe professional_name/professional_id nas ferramentas de agenda.`
+    ? `\n\nProfissionais por procedimento (use o nome EXATAMENTE como escrito aqui; quem esta sem 'Dr./Dra.' e chamado so pelo nome, nunca invente titulo):\n${prosByProcedure}\nSe houver mais de um profissional, pergunte a preferencia do paciente (ou ofereca o primeiro horario livre de qualquer um). Passe professional_name/professional_id nas ferramentas de agenda.`
     : "";
 
   const scheduleBlock = `\n\nAGENDA E HORARIOS (regras rigidas):
@@ -978,7 +987,7 @@ Seu trabalho:
 2. Manter a etapa do paciente no funil atualizada (update_crm_stage) conforme a conversa avanca.
 3. Checar disponibilidade real (check_specific_time / check_availability) antes de falar de qualquer data.
 4. Confirmar o horario escolhido com o paciente e so entao usar book_appointment.
-5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${teamBooksLine}${continuityLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${noRepeatLine}
+5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${adLine}${teamBooksLine}${continuityLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${noRepeatLine}
 
 Procedimentos oferecidos pela clinica:
 ${procedureList || "(nenhum procedimento cadastrado ainda)"}
@@ -1246,7 +1255,7 @@ export async function generateReply(
 ): Promise<string> {
   const conversation = await prisma.conversation.findUnique({
     where: { id: conversationId },
-    include: { patient: { select: { id: true, clinicId: true, name: true, phone: true } } },
+    include: { patient: { select: { id: true, clinicId: true, name: true, phone: true, ceUuid: true } } },
   });
   if (!conversation) return "";
   if (conversation.humanTakeover) return "";
@@ -1295,6 +1304,7 @@ export async function generateReply(
     })
   ).reverse();
 
+  await enrichPatientFromCe(clinicId, patient); // nome completo/vinculo pelo Clinica Experts (melhor esforco)
   const system = await buildSystemPrompt(clinicId, { patientId: patient.id });
 
   const messages: ChatCompletionMessageParam[] = [
