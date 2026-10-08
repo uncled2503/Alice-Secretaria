@@ -533,6 +533,11 @@ export function parseWebhookPayload(bodyValue: unknown): IncomingUazapiMessage[]
     if (!content && typeof message.content === "string" && message.content.trim().startsWith("{")) {
       try { content = record(JSON.parse(message.content)); } catch { /* ignore */ }
     }
+    // Eventos que NAO sao uma fala do contato: reacao (emoji em cima de uma
+    // mensagem), apagar/editar mensagem, voto de enquete. Tratar como mensagem
+    // fazia a Alice responder ("Que otimo!") a algo que a pessoa nunca escreveu.
+    if (/reaction|protocol|revoke|pollupdate|keepinchat|senderkeydistribution|edited/.test(type)) continue;
+    if (content && (content.reactionMessage || content.protocolMessage || content.pollUpdateMessage || content.editedMessage || content.keepInChatMessage)) continue;
     const imgNode = record(content?.imageMessage);
     const vidNode = record(content?.videoMessage);
     const audNode = record(content?.audioMessage);

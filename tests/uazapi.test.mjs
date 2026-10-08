@@ -128,3 +128,13 @@ test("rejeita URL sem HTTPS e remove barra final", () => {
   // dominio fora da lista permitida e rejeitado (mensagem nao cita o provedor)
   assert.throws(() => normalizeUazapiBaseUrl("https://example.com"), /servidor invalid/i);
 });
+
+test("reacao, edicao e apagar mensagem nao viram mensagem do contato", () => {
+  const base = { messageid: "r1", sender_pn: "5511999999999@s.whatsapp.net" };
+  assert.equal(parseWebhookPayload({ message: { ...base, messageType: "ReactionMessage", text: "❤️" } }).length, 0);
+  assert.equal(parseWebhookPayload({ message: { ...base, messageType: "reaction", text: "👍" } }).length, 0);
+  assert.equal(parseWebhookPayload({ message: { ...base, content: { reactionMessage: { text: "❤️" } } } }).length, 0);
+  assert.equal(parseWebhookPayload({ message: { ...base, messageType: "ProtocolMessage", text: "x" } }).length, 0);
+  // mensagem normal continua passando
+  assert.equal(parseWebhookPayload({ message: { ...base, messageType: "conversation", text: "oi, tudo bem?" } }).length, 1);
+});
