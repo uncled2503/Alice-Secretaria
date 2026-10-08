@@ -1,4 +1,5 @@
 import { prisma } from "../db/client.js";
+import { realActivity, realNewContacts } from "./realStats.js";
 
 const SOURCES = ["whatsapp", "instagram", "presencial", "telefone"] as const;
 
@@ -7,11 +8,7 @@ const SOURCES = ["whatsapp", "instagram", "presencial", "telefone"] as const;
 export async function buildReport(clinicId: string, start: Date, end: Date) {
   const now = new Date();
 
-  const [patients, appts, inboundRows, followUps, satisfaction] = await Promise.all([
-    prisma.patient.findMany({
-      where: { clinicId, createdAt: { gte: start, lte: end } },
-      select: { id: true },
-    }),
+  const [appts, realActivity_, followUps, satisfaction] = await Promise.all([
     prisma.appointment.findMany({
       where: { clinicId, scheduledAt: { gte: start, lte: end } },
       include: {
@@ -19,11 +16,7 @@ export async function buildReport(clinicId: string, start: Date, end: Date) {
         professional: { select: { id: true, name: true } },
       },
     }),
-    prisma.message.findMany({
-      where: { role: "user", createdAt: { gte: start, lte: end }, conversation: { patient: { clinicId } } },
-      select: { conversation: { select: { patientId: true } } },
-      distinct: ["conversationId"],
-    }),
+    realActivity(clinicId, start, end),
     prisma.followUpSent.findMany({
       where: { conversation: { patient: { clinicId } } },
       select: { sentAt: true, conversation: { select: { patientId: true } } },
@@ -36,6 +29,8 @@ export async function buildReport(clinicId: string, start: Date, end: Date) {
     }),
   ]);
 
+  const realLeads = await realNewContacts(clinicId, start, end); // so quem de fato conversou (exclui importacao/recepcao)
+
   const priceOf = (a: (typeof appts)[number]) => a.procedure.price ?? 0;
   const past = appts.filter((a) => a.scheduledAt <= now);
   const completed = appts.filter((a) => a.status === "completed");
@@ -46,7 +41,7 @@ export async function buildReport(clinicId: string, start: Date, end: Date) {
   // Funil do periodo
   const bookedPatientIds = new Set(appts.map((a) => a.patientId));
   const funnel = {
-    leads: patients.length,
+    leads: realLeads,
     agendaram: bookedPatientIds.size,
     compareceram: completed.length,
     nao_compareceram: noShow.length,
@@ -115,7 +110,7 @@ export async function buildReport(clinicId: string, start: Date, end: Date) {
   ).size;
 
   // Atendidos pela Alice
-  const atendidos = new Set(inboundRows.map((r) => r.conversation.patientId)).size;
+  const atendidos = realActivity_.aliceRepliedPatients.size;
 
   // Satisfacao / NPS
   const scores = satisfaction.map((s) => s.score!).filter((n) => typeof n === "number");

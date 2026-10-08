@@ -34,6 +34,7 @@ import { enqueueTestLead, enqueueSchedule, META_MAX_ATTEMPTS } from "../meta/eve
 import { retryMetaEvent } from "../meta/worker.js";
 import { RULE_CATEGORIES, seedDefaultRules, reseedRulesForProfile } from "../ai/rules.js";
 import { createTeachingSuggestion, approveTeachingSuggestion } from "../ai/teach.js";
+import { realActivity, realNewContacts, aliceBookings } from "../crm/realStats.js";
 import { BRIEFING_TEMPLATE, parseBriefing, applyBriefing, BriefingPlanSchema } from "../ai/briefing.js";
 import { runLearningJob, approveInsight, rejectInsight } from "../ai/learning.js";
 import { ensureManualTakeover } from "../ai/alice.js";
@@ -1154,37 +1155,26 @@ apiRouter.get(
     const startDate = start ? new Date(start) : new Date(Date.now() - 30 * 24 * 60 * 60_000);
     const endDate = end ? new Date(end) : new Date();
 
-    const [attended, appointments, newContacts, activeConversations, attendedPhones] = await Promise.all([
-      prisma.message
-        .findMany({
-          where: {
-            role: "user",
-            createdAt: { gte: startDate, lte: endDate },
-            conversation: { patient: { clinicId: clinic.id } },
-          },
-          select: { conversation: { select: { patientId: true } } },
-          distinct: ["conversationId"],
-        })
-        .then((rows) => new Set(rows.map((r) => r.conversation.patientId)).size),
-      prisma.appointment.findMany({
-        where: { clinicId: clinic.id, scheduledAt: { gte: startDate, lte: endDate } },
-        select: { scheduledAt: true, status: true },
-      }),
-      // Metricas uteis pra negocio sem agenda (loja/servico): contatos novos e
-      // conversas com atividade no periodo.
-      prisma.patient.count({ where: { clinicId: clinic.id, createdAt: { gte: startDate, lte: endDate } } }),
-      prisma.conversation.count({
-        where: { patient: { clinicId: clinic.id }, lastMessageAt: { gte: startDate, lte: endDate } },
-      }),
-      // Telefones dos contatos atendidos no periodo -> mapa de leads por estado (DDD)
-      prisma.patient.findMany({
-        where: {
-          clinicId: clinic.id,
-          conversations: { some: { messages: { some: { role: "user", createdAt: { gte: startDate, lte: endDate } } } } },
-        },
-        select: { phone: true },
-      }),
+    // Numeros REAIS (ver crm/realStats.ts): so o que a Alice de fato fez. No plano
+    // gratis a Alice nao atende - a agenda e o chat sao manuais - entao la os
+    // cartoes seguem mostrando a operacao da clinica.
+    const aliceMode = !isFreePlan(clinic.plan);
+    const range = { gte: startDate, lte: endDate };
+    const [activity, appointments, agendaTotal, newContacts] = await Promise.all([
+      realActivity(clinic.id, startDate, endDate),
+      aliceMode
+        ? aliceBookings(clinic.id, startDate, endDate)
+        : prisma.appointment.findMany({ where: { clinicId: clinic.id, scheduledAt: range }, select: { createdAt: true, scheduledAt: true, status: true } }),
+      prisma.appointment.count({ where: { clinicId: clinic.id, scheduledAt: range } }),
+      aliceMode ? realNewContacts(clinic.id, startDate, endDate) : prisma.patient.count({ where: { clinicId: clinic.id, createdAt: range } }),
     ]);
+    const attendedIds = aliceMode ? activity.aliceRepliedPatients : activity.liveContactPatients;
+    const attended = attendedIds.size;
+    const activeConversations = activity.activeConversations.size;
+    // Telefones dos contatos atendidos no periodo -> mapa de leads por estado (DDD)
+    const attendedPhones = attendedIds.size
+      ? await prisma.patient.findMany({ where: { clinicId: clinic.id, id: { in: [...attendedIds] } }, select: { phone: true } })
+      : [];
 
     const completed = appointments.filter((a) => a.status === "completed").length;
     const cancelled = appointments.filter((a) => a.status === "cancelled").length;
@@ -1192,7 +1182,8 @@ apiRouter.get(
 
     const dailyMap = new Map<string, number>();
     for (const a of appointments) {
-      const key = a.scheduledAt.toISOString().slice(0, 10);
+      // Alice: dia em que ela marcou; plano gratis (agenda manual): dia da consulta.
+      const key = (aliceMode ? a.createdAt : a.scheduledAt).toISOString().slice(0, 10);
       dailyMap.set(key, (dailyMap.get(key) ?? 0) + 1);
     }
     const daily: { date: string; count: number }[] = [];
@@ -1208,6 +1199,8 @@ apiRouter.get(
     res.json({
       attended,
       appointmentsTotal: total,
+      appointmentsAgenda: agendaTotal, // agenda inteira da clinica no periodo (todas as origens), so pra contexto
+      realOnly: aliceMode,
       appointmentsCompleted: completed,
       appointmentsCancelled: cancelled,
       newContacts,

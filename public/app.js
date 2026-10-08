@@ -4186,7 +4186,8 @@ async function loadDashboard() {
   document.getElementById("stat-attended").textContent = stats.attended;
   document.getElementById("stat-appointments").textContent = stats.appointmentsTotal;
   document.getElementById("stat-appointments-hint").textContent =
-    stats.appointmentsTotal > 0 ? `${stats.appointmentsCompleted} concluídos` : "Nenhum no período";
+    (stats.appointmentsTotal > 0 ? `${stats.appointmentsCompleted} concluídos` : "Nenhum feito pela Alice no período") +
+    (stats.realOnly && stats.appointmentsAgenda != null ? ` · ${stats.appointmentsAgenda} na agenda da clínica` : "");
   document.getElementById("stat-completed").textContent = stats.appointmentsCompleted;
   const pctDone = stats.appointmentsTotal > 0 ? Math.round((stats.appointmentsCompleted / stats.appointmentsTotal) * 100) : 0;
   const pctCancel = stats.appointmentsTotal > 0 ? Math.round((stats.appointmentsCancelled / stats.appointmentsTotal) * 100) : 0;
