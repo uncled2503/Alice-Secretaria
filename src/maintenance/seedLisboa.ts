@@ -522,8 +522,13 @@ const RULES = [
 // marker proprio: o treino principal ja foi aplicado antes disso.
 const TEAM_RULES = [
   { category: "tom_de_voz", instruction: "Equipe da Lisboa: SÓ Sabrina e Amanda são 'Dra.' (biomédicas). Talita, Adriana e Suelen são esteticistas: chame apenas pelo primeiro nome, SEM 'Dra.'. Nunca chame ninguém de 'Dra.' por conta própria." },
-  { category: "procedimentos", instruction: "Aline, Brenda e Fabi são da equipe administrativa e comercial e NÃO realizam atendimentos nem procedimentos. Nunca as cite como profissional que atende, nem ofereça agendar 'com a Aline', 'com a Fabi' ou 'com a Brenda'. Quando o paciente quiser marcar, quem cuida disso é a equipe." },
   { category: "procedimentos", instruction: "Só cite quem realiza um procedimento se estiver cadastrado para ele. Na dúvida, diga que a equipe confirma qual profissional atende, em vez de listar nomes." },
+] as const;
+
+// Correcao (08/10/2026): Aline e Fabiola ATENDEM na clinica; so nao sao "Dra." por nao
+// serem medicas. Brenda e do comercial/administrativo.
+const TEAM_RULES_2 = [
+  { category: "tom_de_voz", instruction: "Aline e Fabíola atendem na clínica como esteticistas, mas NÃO são 'Dra.' (não são médicas): chame-as apenas pelo primeiro nome, como Talita, Adriana e Suelen. Só Sabrina e Amanda são 'Dra.'. Brenda é do comercial/administrativo e não realiza procedimentos." },
 ] as const;
 
 // Postura comercial (pedido da Aline, 07/10/2026): a Alice estava aceitando
@@ -655,6 +660,7 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
   await seedDefaultRules(clinic.id);
   await seedRulesOnce(clinic.id, SEED_MARKER, RULES);
   await seedRulesOnce(clinic.id, "seed:lisboa-equipe", TEAM_RULES);
+  await seedRulesOnce(clinic.id, "seed:lisboa-equipe-2", TEAM_RULES_2);
   await seedRulesOnce(clinic.id, "seed:lisboa-comercial", SALES_RULES);
   await seedRulesOnce(clinic.id, "seed:lisboa-ajustes-2", ADJUST_RULES);
 
@@ -762,7 +768,7 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
       "Campanhas sazonais (Dia das Mães, Black Friday, Outubro Rosa etc.) e Grupo VIP: disparo pontual com texto aprovado pela gestão - usar a ferramenta de campanha do painel, não foi cadastrado.",
       "Meta/Pixel (Dataset, token, site, responsável): PENDENTE. Funil do cliente bate com o padrão da Alice.",
       "Bios das profissionais e Instagram delas: PENDENTES.",
-      "EQUIPE: só Sabrina e Amanda são 'Dra.' (biomédicas); Talita, Adriana e Suelen são esteticistas; Aline, Brenda e Fabi são administrativo/comercial e NÃO atendem. Ao importar do Clínica Experts, Aline e Fabíola vêm como profissionais: desativá-las em Profissionais (a migração de 08/10 já desativou as que existiam).",
+      "EQUIPE: só Sabrina e Amanda são 'Dra.' (biomédicas); Aline, Fabíola, Talita, Adriana e Suelen atendem como esteticistas (sem 'Dra.'); Brenda é comercial/administrativo. Aline e Fabíola vêm do Clínica Experts como profissionais e devem ficar ATIVAS.",
       "Pacotes e combos (valores, validade) e campanhas ativas: só a regra geral foi cadastrada; os valores precisam ser incluídos.",
       "AUTOMAÇÕES DESLIGADAS de propósito (lembretes 24h e 3h, aniversário, recontatos, reativação): ligar uma a uma no painel só depois de a Lisboa conectar, importar os contatos e validar o fluxo. Evita disparo em massa e risco de banimento do número.",
       "AGENDAMENTO PELA EQUIPE: a Alice não agenda, remarca nem cancela (Configurações da Alice > Quem agenda). Ela coleta procedimento e dia/turno e transfere. A agenda do Clínica Experts é importada a cada 10 min para os lembretes.",
