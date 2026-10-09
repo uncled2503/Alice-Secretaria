@@ -6319,6 +6319,7 @@ async function loadScheduleBlocks() {
       ])
     );
   }
+  paintIcons(body); // sem isto a lixeira (criada via JS) ficava invisivel e nao dava pra remover o bloqueio
   document.getElementById("blocks-empty").style.display = blocks.length ? "none" : "block";
 }
 
