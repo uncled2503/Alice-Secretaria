@@ -1,4 +1,4 @@
-import cron from "node-cron";
+import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js";
@@ -22,7 +22,7 @@ function localParts(at: Date, timeZone: string): { hour: number; month: number; 
 // bate com rule.sendHour, manda parabens pra quem faz aniversario hoje e ainda
 // nao recebeu essa regra neste ano (BirthdaySent trava por paciente/regra/ano).
 export function startBirthdayJob(): void {
-  cron.schedule("5 * * * *", async () => {
+  scheduleLocked("aniversario", "5 * * * *", async () => {
     const rules = await prisma.birthdayRule.findMany({
       where: { active: true, clinic: PAID_CLINIC_WHERE },
       include: { clinic: { select: { timezone: true } } },

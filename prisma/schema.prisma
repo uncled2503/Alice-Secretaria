@@ -1006,3 +1006,10 @@ model ClinicaExpertsAccount {
   lastError     String?
   createdAt     DateTime  @default(now())
 }
+
+// Concessao de tarefa agendada: so UMA copia do servidor roda cada tarefa por vez (ver src/jobs/lock.ts).
+model JobLock {
+  name      String   @id
+  holder    String
+  expiresAt DateTime
+}

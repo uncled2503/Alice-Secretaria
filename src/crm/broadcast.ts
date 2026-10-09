@@ -1,4 +1,4 @@
-import cron from "node-cron";
+import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 import { PAID_CLINIC_WHERE } from "./plan.js";
@@ -185,7 +185,7 @@ export async function runBroadcastTick(): Promise<void> {
 
 // A cada 5 minutos: ativa campanhas que chegaram na hora e manda o proximo lote.
 export function startBroadcastJob(): void {
-  cron.schedule("*/5 * * * *", () => {
+  scheduleLocked("disparos-em-massa", "*/5 * * * *", () => {
     runBroadcastTick().catch((err) => console.error("Erro no job de mensagens programadas:", err));
   });
 }

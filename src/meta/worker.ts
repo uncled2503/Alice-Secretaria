@@ -1,4 +1,4 @@
-import cron from "node-cron";
+import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
 import { sendCapiEvent, type CapiEvent } from "./capi.js";
 import { backoffMs, META_MAX_ATTEMPTS, dueEventsFilter } from "./events.js";
@@ -107,7 +107,7 @@ export async function retryMetaEvent(id: string): Promise<boolean> {
 }
 
 export function startMetaEventWorker(): void {
-  cron.schedule("* * * * *", () => {
+  scheduleLocked("meta-eventos", "* * * * *", () => {
     processMetaEventQueue().catch((err) => console.error("[meta] worker falhou:", err));
   });
   // recupera eventos presos em "processing" de um restart no meio do envio

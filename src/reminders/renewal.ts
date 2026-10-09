@@ -1,4 +1,4 @@
-import cron from "node-cron";
+import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js";
@@ -29,7 +29,7 @@ function intervalDays(value: number, unit: string): number | null {
 // X meses/anos apos o fim do atendimento, respeitando "so apos concluido" e o
 // filtro de procedimentos (procedureIds vazio = todos).
 export function startRenewalJob(): void {
-  cron.schedule("0 */6 * * *", async () => {
+  scheduleLocked("renovacao", "0 */6 * * *", async () => {
     const rules = await prisma.renewalRule.findMany({ where: { active: true, clinic: PAID_CLINIC_WHERE } });
     const clinicInfoCache = new Map<string, Awaited<ReturnType<typeof getClinicTemplateInfo>>>();
 

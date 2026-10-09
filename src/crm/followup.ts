@@ -1,4 +1,4 @@
-import cron from "node-cron";
+import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 import { getFunnelStages } from "./stages.js";
@@ -254,7 +254,7 @@ async function runFollowUpCheckInner(): Promise<void> {
 
 // Roda a cada 15min - agora que os recontatos podem ter janela em minutos.
 export function startFollowUpJob(): void {
-  cron.schedule("*/15 * * * *", () => {
+  scheduleLocked("recontato", "*/15 * * * *", () => {
     runFollowUpCheck().catch((err) => console.error("Erro no job de recontato:", err));
   });
 }

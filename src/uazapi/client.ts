@@ -1010,10 +1010,13 @@ export async function processUazapiWebhookQueue(): Promise<void> {
         orderBy: { createdAt: "asc" },
       });
       if (!event) break;
-      await prisma.uazapiWebhookEvent.update({
-        where: { id: event.id },
+      // RESERVA atomica: so uma copia do servidor processa cada evento. Antes era "ler e depois
+      // marcar": duas copias pegavam o mesmo evento e a Alice respondia duas vezes.
+      const claimed = await prisma.uazapiWebhookEvent.updateMany({
+        where: { id: event.id, status: event.status },
         data: { status: "processing", attempts: { increment: 1 }, error: null },
       });
+      if (claimed.count !== 1) continue; // outra copia pegou
       try {
         await handleQueuedPayload(event.clinicId, JSON.parse(event.payload));
         await prisma.uazapiWebhookEvent.update({ where: { id: event.id }, data: { status: "done" } });
@@ -1030,7 +1033,12 @@ export async function processUazapiWebhookQueue(): Promise<void> {
 
 export async function startUazapiWebhookWorker(): Promise<void> {
   await resetStaleHistoryImports();
-  await prisma.uazapiWebhookEvent.updateMany({ where: { status: "processing" }, data: { status: "pending" } });
+  // So devolve pra fila o que ficou TRAVADO (sem atividade ha mais de 5 min). Antes toda copia que
+  // iniciava reabria os eventos que a outra copia estava processando naquele instante.
+  await prisma.uazapiWebhookEvent.updateMany({
+    where: { status: "processing", updatedAt: { lt: new Date(Date.now() - 5 * 60_000) } },
+    data: { status: "pending" },
+  });
   await prisma.uazapiWebhookEvent.deleteMany({
     where: { status: "done", createdAt: { lt: new Date(Date.now() - 7 * 24 * 60 * 60_000) } },
   });

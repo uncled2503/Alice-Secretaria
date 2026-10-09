@@ -1,4 +1,4 @@
-import cron from "node-cron";
+import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js";
@@ -20,7 +20,7 @@ function todayUtcMidnight(timeZone: string): Date {
 // escolhidas pela equipe por paciente, ate 2 por vez) disparam uma unica
 // vez quando a data chega, respeitando o opt-out (LGPD).
 export function startPrescriptionReminderJob(): void {
-  cron.schedule("*/15 * * * *", async () => {
+  scheduleLocked("renovacao-receita", "*/15 * * * *", async () => {
     const clinics = await prisma.clinic.findMany({ where: PAID_CLINIC_WHERE, select: { id: true, timezone: true } });
 
     for (const clinic of clinics) {

@@ -1,4 +1,4 @@
-import cron from "node-cron";
+import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
 import { logActivity } from "../crm/activity.js";
 
@@ -38,7 +38,7 @@ async function flagExpiredPlans(): Promise<void> {
 // De hora em hora. Roda tambem uma vez logo apos o boot pra nao esperar ate a
 // proxima hora cheia quando o servidor sobe com um plano ja vencido.
 export function startPlanExpiryJob(): void {
-  cron.schedule("10 * * * *", () => {
+  scheduleLocked("vencimento-plano", "10 * * * *", () => {
     flagExpiredPlans().catch((err) => console.error("[plano] Falha ao verificar vencimentos:", err));
   });
   setTimeout(() => {

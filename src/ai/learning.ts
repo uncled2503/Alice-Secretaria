@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
-import cron from "node-cron";
+import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
 import { normalizeReply, replySimilarity } from "./alice.js";
 import { logActivity } from "../crm/activity.js";
@@ -350,7 +350,7 @@ export async function rejectInsight(id: string, actorName: string | null): Promi
 
 export function startLearningJob(): void {
   // 04:10 todo dia. Roda clinica por clinica com pausa, sem travar o processo.
-  cron.schedule("10 4 * * *", async () => {
+  scheduleLocked("aprendizado-noturno", "10 4 * * *", async () => {
     try {
       const clinics = await prisma.clinic.findMany({ where: { active: true, plan: { not: FREE_PLAN } }, select: { id: true, name: true } });
       for (const c of clinics) {

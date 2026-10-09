@@ -1,4 +1,4 @@
-import cron from "node-cron";
+import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js";
@@ -123,7 +123,7 @@ export async function selectDueAppointments(rule: ReminderRule, now: Date, tz: s
 // em ReminderSent) - assim da pra ter mais de uma regra (ex: 24h antes e 2h
 // antes) sem mandar a mesma coisa duas vezes nem perder uma por causa da outra.
 export function startReminderJob(): void {
-  cron.schedule("*/15 * * * *", async () => {
+  scheduleLocked("lembretes", "*/15 * * * *", async () => {
     if (reminderRunning) return; // rodada anterior (com pausas) ainda em andamento
     reminderRunning = true;
     try {

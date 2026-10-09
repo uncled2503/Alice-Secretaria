@@ -1,4 +1,4 @@
-import cron from "node-cron";
+import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
 import { PAID_CLINIC_WHERE } from "./plan.js";
 import { isWithinClinicHours } from "./openHours.js";
@@ -57,7 +57,7 @@ export async function runUnansweredCheck(now = new Date()): Promise<number> {
 }
 
 export function startUnansweredJob(): void {
-  cron.schedule("*/5 * * * *", () => {
+  scheduleLocked("aviso-sem-resposta", "*/5 * * * *", () => {
     runUnansweredCheck().catch((err) => console.error("Erro no aviso de conversa sem resposta:", err));
   });
 }

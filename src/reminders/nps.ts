@@ -1,4 +1,4 @@
-import cron from "node-cron";
+import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 import { getClinicTemplateInfo } from "../crm/template.js";
@@ -12,7 +12,7 @@ const DEFAULT_MESSAGE =
 // aquele agendamento, manda a pergunta e cria o registro. A nota chega pela
 // conversa e a Alice grava com a ferramenta record_satisfaction.
 export function startNpsJob(): void {
-  cron.schedule("*/15 * * * *", async () => {
+  scheduleLocked("pesquisa-satisfacao", "*/15 * * * *", async () => {
     const clinics = await prisma.clinic.findMany({
       where: { npsEnabled: true, plan: { not: FREE_PLAN } },
       select: { id: true, npsHoursAfter: true, npsMessage: true, name: true },

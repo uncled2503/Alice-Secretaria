@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
-import cron from "node-cron";
+import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
 import { FREE_PLAN } from "./plan.js";
 
@@ -183,7 +183,7 @@ export async function runLeadSummaryJob(clinicId: string): Promise<LeadSummaryRu
 export function startLeadSummaryJob(): void {
   // A cada 15min. As conversas so entram depois de esfriar, entao na pratica
   // cada atendimento gera uma chamada quando termina.
-  cron.schedule("*/15 * * * *", async () => {
+  scheduleLocked("resumo-crm", "*/15 * * * *", async () => {
     try {
       const clinics = await prisma.clinic.findMany({
         where: { active: true, plan: { not: FREE_PLAN } },

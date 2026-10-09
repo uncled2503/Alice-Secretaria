@@ -22,6 +22,10 @@ export async function notifyStaff(clinicId: string, event: NotifyEvent, message:
     select: { notifyPhone: true, notifyEvents: true },
   });
   if (!clinic?.notifyPhone) return;
+  // Numero claramente invalido (so zeros, curto demais): nao tenta - antes gerava um erro a cada
+  // 5 minutos ("is not on WhatsApp"). A clinica precisa corrigir o numero de avisos.
+  const digits = clinic.notifyPhone.replace(/\D/g, "");
+  if (digits.length < 10 || /^0+$/.test(digits)) return;
 
   const events = clinic.notifyEvents.split(",").map((e) => e.trim());
   if (!events.includes(event) && !ALWAYS_ON_EVENTS.includes(event)) return;

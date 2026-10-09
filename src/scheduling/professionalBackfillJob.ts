@@ -1,4 +1,4 @@
-import cron from "node-cron";
+import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
 import { backfillMissingProfessionalIds } from "../maintenance/backfillProfessionals.js";
 
@@ -23,7 +23,7 @@ async function runForAllClinics(): Promise<void> {
 // De hora em hora, e uma vez logo apos o boot (pra corrigir rapido sem
 // esperar ate a proxima hora cheia).
 export function startProfessionalBackfillJob(): void {
-  cron.schedule("20 * * * *", () => {
+  scheduleLocked("backfill-profissionais", "20 * * * *", () => {
     runForAllClinics().catch((err) => console.error("[agenda] Falha no backfill de profissional:", err));
   });
   setTimeout(() => {

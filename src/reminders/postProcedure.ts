@@ -1,4 +1,4 @@
-import cron from "node-cron";
+import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js";
@@ -24,7 +24,7 @@ const MAX_PER_TICK = 30; // teto de seguranca por regra a cada execucao (15min)
 // PostProcedureSent), respeitando "so apos concluido" e o filtro de
 // procedimentos (procedureIds vazio = vale pra todos).
 export function startPostProcedureJob(): void {
-  cron.schedule("*/15 * * * *", async () => {
+  scheduleLocked("pos-procedimento", "*/15 * * * *", async () => {
     const rules = await prisma.postProcedureRule.findMany({ where: { active: true, clinic: PAID_CLINIC_WHERE } });
     const clinicInfoCache = new Map<string, Awaited<ReturnType<typeof getClinicTemplateInfo>>>();
 

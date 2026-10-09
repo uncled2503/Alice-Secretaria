@@ -1,4 +1,4 @@
-import cron from "node-cron";
+import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
 import { ceRequest, dayBoundIso, noteError } from "./client.js";
 import { zonedWallClockToUtc } from "../scheduling/time.js";
@@ -174,7 +174,7 @@ export async function pullClinicBookings(clinicId: string): Promise<PullResult> 
 let running = false;
 
 export function startCeBookingPullJob(): void {
-  cron.schedule(PULL_EVERY, async () => {
+  scheduleLocked("importacao-clinica-experts", PULL_EVERY, async () => {
     if (running) return;
     running = true;
     try {
