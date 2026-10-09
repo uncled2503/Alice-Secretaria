@@ -20,6 +20,7 @@ import { startFollowUpJob } from "./crm/followup.js";
 import { startLeadSummaryJob } from "./crm/leadSummary.js";
 import { startCeBookingPullJob } from "./clinicaexperts/pull.js";
 import { startUnansweredJob } from "./crm/unanswered.js";
+import { startPhoneContactsJob } from "./crm/phoneContacts.js";
 import { startBroadcastJob } from "./crm/broadcast.js";
 import { startUazapiWebhookWorker } from "./uazapi/client.js";
 import { apiRouter } from "./api/routes.js";
@@ -328,5 +329,6 @@ app.listen(port, () => {
   startLeadSummaryJob();
   startCeBookingPullJob();
   startUnansweredJob();
+  startPhoneContactsJob();
   startUazapiWebhookWorker().catch((err) => console.error("Falha ao iniciar fila de webhooks UAZAPI:", err));
 });

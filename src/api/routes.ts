@@ -243,6 +243,7 @@ apiRouter.get(
         humanizedTone: true,
         softSell: true,
         handoffOnPrice: true,
+        saveContactsToPhone: true,
         whatsappPhone: true,
         timezone: true,
         workStartHour: true,
@@ -355,6 +356,7 @@ apiRouter.put(
       humanizedTone?: boolean;
       softSell?: boolean;
       handoffOnPrice?: boolean;
+      saveContactsToPhone?: boolean;
       businessType?: string;
       businessLabel?: string | null;
       servicePosture?: string;
@@ -452,6 +454,7 @@ apiRouter.put(
           ...(b.humanizedTone !== undefined ? { humanizedTone: b.humanizedTone } : {}),
           ...(b.softSell !== undefined ? { softSell: b.softSell } : {}),
           ...(b.handoffOnPrice !== undefined ? { handoffOnPrice: b.handoffOnPrice } : {}),
+          ...(b.saveContactsToPhone !== undefined ? { saveContactsToPhone: b.saveContactsToPhone } : {}),
           ...(b.businessType !== undefined ? { businessType: b.businessType } : {}),
           ...(b.businessLabel !== undefined ? { businessLabel: b.businessLabel?.trim() || null } : {}),
           ...(b.servicePosture !== undefined ? { servicePosture: b.servicePosture } : {}),

@@ -1182,3 +1182,22 @@ export async function resetStaleHistoryImports(): Promise<void> {
   });
   if (count > 0) console.warn(`[UAZAPI] ${count} importacao(oes) presa(s) em "running" marcada(s) como falha no boot`);
 }
+
+// Salva o contato na agenda do celular da clinica (POST /contact/add da UAZAPI).
+// "invalid" = numero invalido / conta comercial / grupo (nao adianta repetir);
+// "retry" = sem sessao ou erro do servidor (tenta depois).
+export async function saveContactToPhone(clinicId: string, phone: string, name: string): Promise<"ok" | "invalid" | "retry"> {
+  try {
+    const credentials = await clinicCredentials(clinicId);
+    await request(credentials, "/contact/add", {
+      method: "POST",
+      body: JSON.stringify({ number: phone.replace(/[^0-9]/g, ""), name }),
+    });
+    return "ok";
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/HTTP 400|invalid|not on whatsapp|business/i.test(msg) || msg.includes("inválido")) return "invalid";
+    console.error("[contatos] falha ao salvar " + phone.slice(-4) + " na agenda do celular:", msg.slice(0, 160));
+    return "retry";
+  }
+}

@@ -249,3 +249,14 @@ test("numero sem WhatsApp e falha permanente; erro de rede nao", () => {
   assert.equal(isPermanentSendError(new Error("Servidor de conexao HTTP 500: the number 5584912027270@s.whatsapp.net is not on WhatsApp")), true);
   assert.equal(isPermanentSendError(new Error("HTTP 429 max instances")), false);
 });
+
+import { usableContactName } from "../dist/crm/phoneContacts.js";
+
+test("nome de contato: precisa ter letras; numero, emoji e vazio nao viram contato", () => {
+  assert.equal(usableContactName("  Maria   Souza "), "Maria Souza");
+  assert.equal(usableContactName("Ana 🌸"), "Ana 🌸");
+  assert.equal(usableContactName("5511999999999"), null);
+  assert.equal(usableContactName("🌸"), null);
+  assert.equal(usableContactName(null), null);
+  assert.equal(usableContactName("A"), null);
+});
