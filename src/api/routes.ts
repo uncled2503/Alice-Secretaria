@@ -169,6 +169,41 @@ function assertClinicAccess(req: Request, res: Response, resourceClinicId: strin
 
 // Liga/desliga o atendimento da Alice na clinica (botao do menu lateral). Qualquer
 // conta da clinica pode usar. Desligada: nao responde nem recontata.
+// Diagnostico (admin): mensagens identicas que a Alice/automacoes gravaram para o mesmo
+// paciente em ate 5 minutos, nas ultimas N horas. Se o chat mostra UMA e o celular do
+// paciente recebeu DUAS, a duplicacao e do provedor; se mostra duas, e nossa.
+apiRouter.get(
+  "/clinics/duplicate-sends",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await getClinic(req);
+    const hours = Math.min(Math.max(Number(req.query.hours) || 24, 1), 168);
+    const rows = await prisma.message.findMany({
+      where: { role: "assistant", createdAt: { gte: new Date(Date.now() - hours * 3_600_000) }, conversation: { patient: { clinicId: clinic.id } } },
+      orderBy: { createdAt: "asc" },
+      select: { content: true, createdAt: true, authorName: true, conversation: { select: { patientId: true, patient: { select: { name: true, phone: true } } } } },
+    });
+    const groups = new Map<string, { patient: string; text: string; sentAt: string[]; authors: string[] }>();
+    for (const r of rows) {
+      const key = `${r.conversation.patientId}|${r.content.trim()}`;
+      const g = groups.get(key);
+      if (g && new Date(g.sentAt[g.sentAt.length - 1]).getTime() >= r.createdAt.getTime() - 5 * 60_000) {
+        g.sentAt.push(r.createdAt.toISOString());
+        g.authors.push(r.authorName ?? "Alice");
+      } else {
+        groups.set(g ? `${key}|${r.createdAt.getTime()}` : key, {
+          patient: r.conversation.patient.name ?? r.conversation.patient.phone,
+          text: r.content.slice(0, 90),
+          sentAt: [r.createdAt.toISOString()],
+          authors: [r.authorName ?? "Alice"],
+        });
+      }
+    }
+    const duplicates = [...groups.values()].filter((g) => g.sentAt.length > 1);
+    res.json({ hours, totalMessages: rows.length, duplicateGroups: duplicates.length, duplicates: duplicates.slice(0, 100) });
+  })
+);
+
 apiRouter.post(
   "/clinic/alice-active",
   asyncRoute(async (req, res) => {

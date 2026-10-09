@@ -6,7 +6,7 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/stamp.mjs",
     "test": "npm run build && node --test tests/*.test.mjs",
     "check": "npm run test",
     "backup": "npm run build && node dist/maintenance/backup.js",

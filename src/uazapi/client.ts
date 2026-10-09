@@ -405,7 +405,7 @@ export function isDuplicateSend(clinicId: string, phone: string, text: string, n
 
 const placeholderAlerted = new Map<string, number>();
 
-export async function sendText(clinicId: string, phone: string, text: string, opts: { manual?: boolean } = {}): Promise<void> {
+export async function sendText(clinicId: string, phone: string, text: string, opts: { manual?: boolean; alice?: boolean } = {}): Promise<void> {
   if (await automatedSendBlocked(clinicId, opts.manual === true)) return;
   if (opts.manual !== true) {
     const missing = hasUnresolvedPlaceholder(text);
@@ -423,6 +423,18 @@ export async function sendText(clinicId: string, phone: string, text: string, op
       console.warn(`[uazapi] envio duplicado descartado para ${phone.slice(-4)}`);
       return;
     }
+    // Automacao (nao a conversa da Alice, que ja grava a resposta antes de enviar): olha o
+    // BANCO - se outra rodada/processo ja mandou exatamente este texto, nao manda de novo.
+    if (opts.alice !== true && text.trim().length >= 40) {
+      const already = await prisma.message.findFirst({
+        where: { role: "assistant", content: text, createdAt: { gte: new Date(Date.now() - DUPLICATE_WINDOW_MS) }, conversation: { patient: { clinicId, phone } } },
+        select: { id: true },
+      });
+      if (already) {
+        console.warn(`[uazapi] envio duplicado (ja registrado no chat) descartado para ${phone.slice(-4)}`);
+        return;
+      }
+    }
   }
   const [credentials, config] = await Promise.all([
     clinicCredentials(clinicId),
@@ -431,7 +443,8 @@ export async function sendText(clinicId: string, phone: string, text: string, op
       select: { splitLongMessages: true, splitMaxMessages: true, splitThresholdChars: true },
     }),
   ]);
-  const parts = config?.splitLongMessages && text.length > config.splitThresholdChars
+  // Confirmacao, lembrete, recontato etc. vao SEMPRE numa mensagem so; so a conversa da Alice quebra em bolhas.
+  const parts = opts.alice === true && config?.splitLongMessages && text.length > config.splitThresholdChars
     ? splitMessage(text, Math.max(config.splitMaxMessages, 1))
     : [text];
 
@@ -830,7 +843,7 @@ function scheduleGroupedReply(clinicId: string, phone: string, conversationId: s
       .then((reply) => {
         // Um novo agrupamento comecou enquanto gerava -> nao envia esta.
         if (pendingReplies.has(key)) return;
-        if (reply) return sendText(clinicId, phone, reply);
+        if (reply) return sendText(clinicId, phone, reply, { alice: true });
       })
       .catch((err) => console.error("[reply-group] falha ao gerar/enviar:", err));
   }, wait);
@@ -930,7 +943,7 @@ async function handleQueuedPayload(clinicId: string, body: unknown): Promise<voi
     }
 
     const reply = await generateReply(recorded.conversationId, { imageDataUrl });
-    if (reply) await sendText(clinicId, incoming.phone, reply);
+    if (reply) await sendText(clinicId, incoming.phone, reply, { alice: true });
   }
 }
 

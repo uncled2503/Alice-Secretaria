@@ -182,6 +182,24 @@ export function startReminderJob(): void {
           when: appt.scheduledAt,
         });
 
+        // Duas regras IGUAIS (mesmo texto, mesmo horario) cadastradas por engano: se a irma
+        // ja enviou este lembrete para este agendamento, esta nao envia de novo.
+        const sibling = await prisma.reminderSent.findFirst({
+          where: {
+            appointmentId: appt.id,
+            ruleId: { not: rule.id },
+            rule: {
+              clinicId: rule.clinicId,
+              message: rule.message,
+              parentRuleId: rule.parentRuleId,
+              dayOffset: rule.dayOffset,
+              ...(rule.dayOffset == null ? { hoursBefore: rule.hoursBefore } : {}),
+            },
+          },
+          select: { id: true },
+        });
+        if (sibling) continue;
+
         // RESERVA atomica antes de enviar (chave unica agendamento+regra): se outro
         // processo ja pegou, nao envia de novo.
         try {

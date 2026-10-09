@@ -73,11 +73,19 @@ app.use((req, res, next) => {
 // que aceitam foto (produtos/profissionais) sao os unicos que chegam perto.
 app.use(express.json({ limit: "4mb" }));
 
+// Versao que esta rodando (gravada no build por scripts/stamp.mjs).
+let buildInfo: { commit: string; builtAt: string } = { commit: "dev", builtAt: "" };
+try {
+  buildInfo = JSON.parse(fs.readFileSync(path.join(__dirname, "build.json"), "utf8"));
+} catch {
+  /* rodando via tsx/dev: sem build.json */
+}
+
 app.get("/health", async (_req, res) => {
   res.set("Cache-Control", "no-store");
   try {
     await prisma.$queryRaw`SELECT 1`;
-    res.json({ ok: true, database: "ok", uptimeSeconds: Math.floor(process.uptime()) });
+    res.json({ ok: true, database: "ok", uptimeSeconds: Math.floor(process.uptime()), commit: buildInfo.commit, builtAt: buildInfo.builtAt });
   } catch (error) {
     console.error("Health check falhou:", error);
     res.status(503).json({ ok: false, database: "unavailable" });
