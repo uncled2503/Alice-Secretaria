@@ -30,18 +30,42 @@ export interface UndoResult {
 // assim). O mais antigo marca o comeco; recua 6h pra pegar profissionais/catalogo
 // importados logo antes do primeiro agendamento.
 export async function inferImportSince(clinicId: string): Promise<Date | null> {
+  // 1) Pacientes que so a importacao da agenda cria (vinculo do CE e nenhuma conversa).
   const first = await prisma.patient.findFirst({
     where: { clinicId, ceUuid: { not: null }, conversations: { none: {} } },
     orderBy: { createdAt: "asc" },
     select: { createdAt: true },
   });
-  return first ? new Date(first.createdAt.getTime() - 6 * 3_600_000) : null;
+  if (first) return new Date(first.createdAt.getTime() - 6 * 3_600_000);
+
+  // 2) So o CATALOGO foi importado ("Importar do Clinica Experts"): profissionais criados em lote.
+  //    Agrupa por proximidade (lacuna < 30 min) e pega o maior grupo (>= 2). Profissional que a
+  //    clinica ja tinha e foi so vinculado tem data bem anterior e fica fora do lote.
+  const pros = await prisma.professional.findMany({
+    where: { clinicId, ceUuid: { not: null } },
+    orderBy: { createdAt: "asc" },
+    select: { createdAt: true },
+  });
+  let best: Date[] = [];
+  let current: Date[] = [];
+  for (const p of pros) {
+    if (current.length && p.createdAt.getTime() - current[current.length - 1].getTime() > 30 * 60_000) current = [];
+    current.push(p.createdAt);
+    if (current.length > best.length) best = [...current];
+  }
+  if (best.length >= 2) return new Date(best[0].getTime() - 3_600_000);
+
+  // 3) Sobraram so procedimentos "crus" vinculados (procedimento nao tem data de criacao): nao ha
+  //    como datar. Devolve "agora": pacientes e profissionais NAO sao tocados, so os procedimentos
+  //    que nunca foram personalizados.
+  const rawProcs = await prisma.procedure.count({ where: { clinicId, ceId: { not: null } } });
+  return rawProcs > 0 ? new Date() : null;
 }
 
 export async function undoCeImport(clinicId: string, opts: { dryRun: boolean; since?: Date }): Promise<UndoResult> {
   const account = await prisma.clinicaExpertsAccount.findUnique({ where: { clinicId }, select: { createdAt: true } });
   const since = opts.since ?? account?.createdAt ?? (await inferImportSince(clinicId));
-  if (!since) throw new Error("Nao encontrei nada importado do Clinica Experts nesta clinica (nenhum paciente criado pela importacao). Nada a desfazer.");
+  if (!since) throw new Error("Nao encontrei nada importado do Clinica Experts nesta clinica (sem pacientes, profissionais nem procedimentos vinculados). Nada a desfazer.");
 
   const result: UndoResult = {
     dryRun: opts.dryRun,
