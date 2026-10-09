@@ -1762,7 +1762,9 @@ apiRouter.get(
       ...(onlyArchived ? { take: 200 } : {}),
       include: {
         patient: { include: { tags: { include: { tag: { select: { id: true, label: true, color: true } } } } } },
-        messages: { orderBy: { createdAt: "desc" }, take: 1 },
+        // So texto e tipo: o anexo (foto/audio em base64) NAO pode vir junto, senao cada
+        // atualizacao do Chat carregava dezenas de MB so pra mostrar a previa.
+        messages: { orderBy: { createdAt: "desc" }, take: 1, select: { content: true, mediaType: true } },
       },
     });
 

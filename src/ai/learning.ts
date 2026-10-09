@@ -224,7 +224,7 @@ export async function runLearningJob(clinicId: string): Promise<{ analyzed: numb
     take: MAX_CONVERSATIONS,
     include: {
       patient: { select: { name: true } },
-      messages: { orderBy: { createdAt: "asc" }, take: 200 },
+      messages: { orderBy: { createdAt: "asc" }, take: 200, select: { role: true, content: true, authorName: true, createdAt: true } },
     },
   });
 

@@ -21,7 +21,7 @@ export async function runUnansweredCheck(now = new Date()): Promise<number> {
     },
     include: {
       patient: { select: { name: true, phone: true, clinicId: true, clinic: { select: { timezone: true, workDays: true, workStartHour: true, workEndHour: true, hoursByDay: true } } } },
-      messages: { where: { role: { in: ["user", "assistant"] } }, orderBy: { createdAt: "desc" }, take: 1 },
+      messages: { where: { role: { in: ["user", "assistant"] } }, orderBy: { createdAt: "desc" }, take: 1, select: { role: true, content: true, createdAt: true } },
     },
   });
 

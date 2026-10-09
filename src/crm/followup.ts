@@ -100,7 +100,7 @@ async function runFollowUpCheckInner(): Promise<void> {
     where: { status: "active", humanTakeover: false, patient: { clinic: { ...PAID_CLINIC_WHERE, aliceActive: true } } }, // Alice pausada = sem recontato
     include: {
       patient: { include: { clinic: { select: { importStatus: true } } } },
-      messages: { where: { role: "user" }, orderBy: { createdAt: "desc" }, take: 1 },
+      messages: { where: { role: "user" }, orderBy: { createdAt: "desc" }, take: 1, select: { content: true, createdAt: true } },
     },
   });
 

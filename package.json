@@ -16,7 +16,7 @@
     "seed:teste": "npm run build && node dist/maintenance/seedTeste.js",
     "seed:diamond-clinic": "npm run build && node dist/maintenance/seedDiamondClinic.js",
     "setup:isac-followup": "npm run build && node dist/maintenance/setupIsacFollowup.js",
-    "start": "prisma migrate deploy && node dist/server.js",
+    "start": "node scripts/start.mjs",
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",

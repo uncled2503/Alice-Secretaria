@@ -1470,6 +1470,7 @@ async function generateReplyUnlocked(
       where: { conversationId },
       orderBy: { createdAt: "desc" },
       take: 30,
+      select: { id: true, role: true, content: true, authorName: true, createdAt: true }, // sem o anexo em base64
     })
   ).reverse();
 

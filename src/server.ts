@@ -81,15 +81,23 @@ try {
   /* rodando via tsx/dev: sem build.json */
 }
 
-app.get("/health", async (_req, res) => {
+// Saude: responde na hora (sem esperar o banco). Com 1 nucleo de CPU em uso alto, uma consulta
+// ao banco aqui demorava, a checagem falhava e a hospedagem DERRUBAVA o servidor. O estado do
+// banco e verificado em segundo plano e so informado.
+let dbHealthy = true;
+let dbCheckedAt = 0;
+function refreshDbHealth(): void {
+  if (Date.now() - dbCheckedAt < 15_000) return;
+  dbCheckedAt = Date.now();
+  void prisma.$queryRaw`SELECT 1`.then(() => (dbHealthy = true)).catch((error) => {
+    dbHealthy = false;
+    console.error("Health check do banco falhou:", error);
+  });
+}
+app.get("/health", (_req, res) => {
   res.set("Cache-Control", "no-store");
-  try {
-    await prisma.$queryRaw`SELECT 1`;
-    res.json({ ok: true, database: "ok", uptimeSeconds: Math.floor(process.uptime()), commit: buildInfo.commit, builtAt: buildInfo.builtAt });
-  } catch (error) {
-    console.error("Health check falhou:", error);
-    res.status(503).json({ ok: false, database: "unavailable" });
-  }
+  refreshDbHealth();
+  res.json({ ok: true, database: dbHealthy ? "ok" : "unavailable", uptimeSeconds: Math.floor(process.uptime()), commit: buildInfo.commit, builtAt: buildInfo.builtAt });
 });
 
 // Painel administrativo: so a "casca" HTML/CSS/JS, sem dado nenhum - fica

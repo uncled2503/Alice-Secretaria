@@ -50,11 +50,9 @@ export function isEvaluationName(name: string): boolean {
 // Uma reserva pode ter varios procedimentos (ex.: "Avaliacao" + o procedimento
 // de verdade). A confirmacao tem que citar o PROCEDIMENTO, nao a avaliacao:
 // prefere o primeiro que nao seja avaliacao e que exista na Alice.
-async function pickProcedure(clinicId: string, b: CeBookingLite) {
+function pickProcedure<P extends { id: string; name: string }>(b: CeBookingLite, byCeId: Map<number, P>): P | null {
   const ceIds = (b.procedures ?? []).map((p) => p.id);
-  const candidates = ceIds.length ? await prisma.procedure.findMany({ where: { clinicId, ceId: { in: ceIds } } }) : [];
-  const byCeId = new Map(candidates.map((p) => [p.ceId, p]));
-  const ordered = ceIds.map((id) => byCeId.get(id)).filter((p): p is NonNullable<typeof p> => !!p);
+  const ordered = ceIds.map((id) => byCeId.get(id)).filter((p): p is P => !!p);
   return ordered.find((p) => !isEvaluationName(p.name)) ?? ordered[0] ?? null;
 }
 
@@ -94,6 +92,18 @@ export async function pullClinicBookings(clinicId: string): Promise<PullResult> 
     bookings.push(...(res.data.data ?? []));
   }
 
+  // Carrega TUDO de uma vez (antes eram ~7 consultas ao banco POR reserva, a cada 10 min - com 1
+  // nucleo de CPU isso saturava o servidor).
+  const procRows = await prisma.procedure.findMany({ where: { clinicId, ceId: { not: null } } });
+  const procByCeId = new Map(procRows.map((p) => [p.ceId as number, p]));
+  const proRows = await prisma.professional.findMany({ where: { clinicId, ceUuid: { not: null } }, select: { id: true, ceUuid: true } });
+  const proByUuid = new Map(proRows.map((p) => [p.ceUuid as string, p]));
+  const uuids = bookings.map((b) => b.uuid).filter((u): u is string => !!u);
+  const existingRows = uuids.length
+    ? await prisma.appointment.findMany({ where: { clinicId, ceBookingUuid: { in: uuids } }, include: { procedure: true } })
+    : [];
+  const existingByUuid = new Map(existingRows.map((a) => [a.ceBookingUuid as string, a]));
+
   const seen = new Set<string>();
   for (const b of bookings) {
     if (!b.uuid || seen.has(b.uuid) || !b.starts_at) continue;
@@ -102,8 +112,8 @@ export async function pullClinicBookings(clinicId: string): Promise<PullResult> 
     if (Number.isNaN(when.getTime())) { result.skipped++; continue; }
     const status = mapCeStatus(b.status);
 
-    const picked = await pickProcedure(clinicId, b);
-    const existing = await prisma.appointment.findFirst({ where: { clinicId, ceBookingUuid: b.uuid }, include: { procedure: true } });
+    const picked = pickProcedure(b, procByCeId);
+    const existing = existingByUuid.get(b.uuid) ?? null;
     if (existing) {
       const data: { scheduledAt?: Date; status?: string; professionalId?: string | null; procedureId?: string } = {};
       // Importado antes como "Avaliacao" mas a reserva tem o procedimento de verdade: corrige.
@@ -129,7 +139,7 @@ export async function pullClinicBookings(clinicId: string): Promise<PullResult> 
     const phone = normalizeCePhone(b.patient?.phone);
     if (!procedure || !phone) { result.skipped++; result.skippedNote.push(!phone ? "sem telefone" : "procedimento sem vínculo"); continue; } // sem procedimento vinculado ou sem telefone: nada a lembrar
 
-    const professional = b.professional?.uuid ? await prisma.professional.findFirst({ where: { clinicId, ceUuid: b.professional.uuid } }) : null;
+    const professional = b.professional?.uuid ? proByUuid.get(b.professional.uuid) ?? null : null;
 
     // Agendamento da propria Alice cujo uuid ainda nao tinha sido gravado (corrida
     // com o espelhamento): so anexa o uuid, nao duplica.
