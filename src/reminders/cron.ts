@@ -1,6 +1,6 @@
 import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
-import { sendText } from "../uazapi/client.js";
+import { sendText, isPermanentSendError } from "../uazapi/client.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js";
 import { PAID_CLINIC_WHERE } from "../crm/plan.js";
 import type { ReminderRule } from "@prisma/client";
@@ -212,6 +212,7 @@ export function startReminderJob(): void {
           await recordAutomatedMessage(appt.patientId, text, "Lembrete de consulta");
         } catch (err) {
           console.error(`Falha ao enviar lembrete (regra ${rule.id}) para ${appt.patient.phone}:`, err);
+          if (isPermanentSendError(err)) continue; // numero sem WhatsApp: mantem a reserva, nao insiste
           await prisma.reminderSent.deleteMany({ where: { appointmentId: appt.id, ruleId: rule.id } }); // devolve a reserva: tenta de novo
         }
         if (rule.sendEndHour != null) await sleep((rule.pauseMinSec + Math.random() * Math.max(0, rule.pauseMaxSec - rule.pauseMinSec)) * 1000);

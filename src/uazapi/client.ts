@@ -385,6 +385,12 @@ function splitMessage(text: string, maxParts: number): string[] {
 // sair pelo WhatsApp de uma clinica no plano gratuito.
 // Campo que ficou SEM preencher na mensagem ("[PROCEDIMENTO]", "[NOME]", "{primeiro_nome}"):
 // mensagem assim nunca pode ir para um paciente.
+// Falha que nao adianta repetir: o numero nao tem WhatsApp. Sem isto a automacao tentava de novo
+// (e avisava a equipe) a cada 15 minutos para sempre.
+export function isPermanentSendError(err: unknown): boolean {
+  return /not on whatsapp|n[aã]o (est[aá]|tem) no whatsapp/i.test(err instanceof Error ? err.message : String(err));
+}
+
 export function hasUnresolvedPlaceholder(text: string): string | null {
   const m = /\[[A-ZÀ-ÚÇ][A-ZÀ-ÚÇ0-9 _\/]{2,}\]|\{[a-zà-ú_]{3,}\}/.exec(text);
   return m ? m[0] : null;
@@ -415,12 +421,14 @@ export async function sendText(clinicId: string, phone: string, text: string, op
       if (Date.now() - (placeholderAlerted.get(k) ?? 0) > 3_600_000) {
         placeholderAlerted.set(k, Date.now());
         const { notifyStaff } = await import("../crm/notify.js");
-        await notifyStaff(clinicId, "automation_failed", `⚠️ Bloqueei o envio de uma mensagem automática porque o campo ${missing} ficou sem preencher no texto. Corrija o texto da automação (use campos como {procedimento}, com chaves).`);
+        await notifyStaff(clinicId, "automation_failed", `⚠️ Bloqueei o envio de uma mensagem automática porque o campo ${missing.replace(/[\[\]{}]/g, "")} ficou sem preencher no texto. Corrija o texto da automação: os campos do paciente vão entre chaves (nome, procedimento, profissional, data, hora).`);
       }
       throw new Error(`Mensagem bloqueada: campo sem preencher ${missing}`);
     }
     if (isDuplicateSend(clinicId, phone, text)) {
-      console.warn(`[uazapi] envio duplicado descartado para ${phone.slice(-4)}`);
+      // Mostra o inicio do texto e quem chamou: sem isso o log so dizia "duplicado" e nao dava pra achar a origem.
+      const caller = (new Error().stack ?? "").split("\n").slice(2, 5).map((l) => l.trim().replace(/^at /, "").replace(/\(.*[\\/]/, "(")).join(" < ");
+      console.warn(`[uazapi] envio duplicado descartado para ${phone.slice(-4)}: "${text.trim().replace(/\s+/g, " ").slice(0, 60)}" [${caller}]`);
       return;
     }
     // Automacao (nao a conversa da Alice, que ja grava a resposta antes de enviar): olha o

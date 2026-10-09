@@ -234,3 +234,18 @@ test("pergunta de valor e detectada; duvida que nao e de preco passa", () => {
   const not = ["Quanto tempo dura o efeito?", "quantas sessões precisa?", "dói muito?", "Quero agendar uma avaliação", "tenho muito valor por esse trabalho de vocês"];
   for (const t of not.slice(0, 4)) assert.equal(PRICE_ASK_RE.test(normalizeReply(t)), false, t);
 });
+
+import { renderMessageTemplate } from "../dist/crm/template.js";
+import { isPermanentSendError, hasUnresolvedPlaceholder } from "../dist/uazapi/client.js";
+
+test("colchetes valem como chaves no texto das automacoes ([PROCEDIMENTO], [NOME])", () => {
+  const ctx = { patientName: "Maria Souza", patientPhone: "5511999999999", clinicName: "Lisboa", procedureName: "Botox" };
+  assert.equal(renderMessageTemplate("Oi [NOME]! Ainda tem interesse em [PROCEDIMENTO]?", ctx), "Oi Maria! Ainda tem interesse em Botox?");
+  assert.equal(renderMessageTemplate("Oi {nome}, sobre {procedimento}", ctx), "Oi Maria, sobre Botox");
+  assert.equal(hasUnresolvedPlaceholder(renderMessageTemplate("sobre [PROCEDIMENTO]", ctx)), null);
+});
+
+test("numero sem WhatsApp e falha permanente; erro de rede nao", () => {
+  assert.equal(isPermanentSendError(new Error("Servidor de conexao HTTP 500: the number 5584912027270@s.whatsapp.net is not on WhatsApp")), true);
+  assert.equal(isPermanentSendError(new Error("HTTP 429 max instances")), false);
+});

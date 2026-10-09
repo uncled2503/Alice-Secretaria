@@ -1,6 +1,6 @@
 import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
-import { sendText } from "../uazapi/client.js";
+import { sendText, isPermanentSendError } from "../uazapi/client.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js";
 import { PAID_CLINIC_WHERE } from "../crm/plan.js";
 import { notifyStaff } from "../crm/notify.js";
@@ -74,6 +74,12 @@ export function startPostProcedureJob(): void {
           await sendText(appt.clinicId, appt.patient.phone, text);
           await recordAutomatedMessage(appt.patientId, text, rule.name || "Pós-procedimento automático");
         } catch (err) {
+          if (isPermanentSendError(err)) {
+            // Numero sem WhatsApp: mantem a reserva (nao tenta de novo a cada 15 min) e avisa a equipe uma vez.
+            console.error(`Pos-procedimento nao enviado: ${appt.patient.phone} nao tem WhatsApp.`);
+            await notifyStaff(appt.clinicId, "automation_failed", `⚠️ O número de ${appt.patient.name ?? appt.patient.phone} (${appt.patient.phone}) não tem WhatsApp, então a mensagem de acompanhamento ("${rule.name}") não foi enviada. Confira o telefone no cadastro.`);
+            continue;
+          }
           await prisma.postProcedureSent.deleteMany({ where: { appointmentId: appt.id, ruleId: rule.id } }); // devolve a reserva
           console.error(`Falha ao enviar pos-procedimento (regra ${rule.id}) para ${appt.patient.phone}:`, err);
           // Sem isso a falha so aparecia no log do servidor - a clinica nunca

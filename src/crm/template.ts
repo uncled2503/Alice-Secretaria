@@ -20,7 +20,12 @@ export function renderMessageTemplate(template: string, ctx: TemplateContext): s
   const firstName = fullName.split(" ")[0] ?? "";
   const when = ctx.when ?? new Date();
 
-  return template
+  // Texto escrito com colchetes ([PROCEDIMENTO], [NOME]) vale igual ao escrito com chaves.
+  const normalized = template.replace(
+    /\[(nome|primeiro_nome|nome_completo|telefone|endere[cç]o|unidade|procedimento|profissional|data|data_hora|hora|aniversario)\]/gi,
+    (_m, k: string) => `{${k.toLowerCase().replace("ç", "c")}}`,
+  );
+  return normalized
     .replace(/\{nome\}/gi, firstName)
     .replace(/\{primeiro_nome\}/gi, firstName)
     .replace(/\{nome_completo\}/gi, fullName)

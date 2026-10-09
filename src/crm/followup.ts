@@ -1,6 +1,6 @@
 import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
-import { sendText } from "../uazapi/client.js";
+import { sendText, isPermanentSendError } from "../uazapi/client.js";
 import { getFunnelStages } from "./stages.js";
 import { movePatientToKind, movePatientToStage } from "./stageAutomation.js";
 import { renderMessageTemplate, getClinicTemplateInfo, type ClinicTemplateInfo } from "./template.js";
@@ -193,6 +193,11 @@ async function runFollowUpCheckInner(): Promise<void> {
     });
     if (lastAny?.role === "user") continue; // o paciente falou por ultimo: a bola esta com a clinica, nao e silencio dele
 
+    // O texto cita o procedimento, mas ainda nao sabemos qual interessa a este paciente: nao envia
+    // (e nem gasta consulta a IA); tenta de novo quando o resumo do CRM descobrir o interesse.
+    const interest = conversation.patient.interestNote?.split(",")[0]?.trim() || null;
+    if (!interest && /[{\[]procedimento[}\]]/i.test(rule.message)) continue;
+
     // Ultima palavra: uma IA le a conversa e decide se o recontato faz sentido.
     // Falha da IA = nao envia (e tenta de novo no proximo ciclo).
     if ((judgedByClinic.get(clinicId) ?? 0) >= MAX_JUDGE_CALLS_PER_CLINIC) continue;
@@ -201,6 +206,7 @@ async function runFollowUpCheckInner(): Promise<void> {
     if (!verdict || !verdict.recontact) continue;
 
     const text = renderMessageTemplate(rule.message, {
+      procedureName: interest,
       patientName: conversation.patient.name,
       patientPhone: conversation.patient.phone,
       clinicName: clinic.info.name,
@@ -222,6 +228,8 @@ async function runFollowUpCheckInner(): Promise<void> {
       await sendText(clinicId, conversation.patient.phone, text);
     } catch (err) {
       console.error(`Falha ao enviar recontato para ${conversation.patient.phone}:`, err);
+      // Numero sem WhatsApp: nao adianta insistir - mantem a reserva (este recontato fica pulado).
+      if (isPermanentSendError(err)) continue;
       // Nao enviou: devolve a reserva pra tentar de novo no proximo ciclo.
       await prisma.conversation.updateMany({ where: { id: conversation.id, lastFollowUpOrder: nextOrder }, data: { lastFollowUpOrder: conversation.lastFollowUpOrder } });
       continue;
