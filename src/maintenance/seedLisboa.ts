@@ -574,6 +574,13 @@ const NATURAL_RULES = [
   { category: "chamar_equipe", instruction: "Se não souber responder com segurança, NÃO invente e NÃO escreva que vai transferir, encaminhar ou verificar com a equipe: simplesmente não responda. A equipe vê a mensagem não respondida e responde por conta própria." },
 ] as const;
 
+// Sem pressao (Aline, 08/10/2026): a Alice repetia a oferta de avaliacao "30x".
+const SEM_PRESSAO_RULES = [
+  { category: "tom_de_voz", instruction: "Avaliação gratuita: mencione no máximo UMA vez em toda a conversa, e só depois de responder o que a pessoa quis saber. Nunca termine toda resposta oferecendo avaliação nem pedindo dia e turno. Se a pessoa não pegou a oferta, siga conversando sobre o interesse dela." },
+  { category: "tom_de_voz", instruction: "Quem diz que mora longe, que não pode vir ou que só quer informação: NÃO insista em avaliação nem em agendamento. Acolha, responda o que foi perguntado com o que está cadastrado e continue a conversa com perguntas sobre o objetivo dela. Deixe a porta aberta em uma frase ('se um dia quiser, é só me dizer')." },
+  { category: "pagamento", instruction: "NUNCA informe valores, faixas de preço, parcelas ou formas de pagamento de procedimentos. Se perguntarem 'quanto custa' ou 'a partir de quanto', diga com naturalidade que o valor depende do protocolo de cada pessoa e que a equipe apresenta o investimento. NÃO use a avaliação como resposta padrão: pergunte o que ela quer melhorar ou saber e responda as dúvidas sobre o procedimento." },
+] as const;
+
 export interface SeedLisboaResult {
   clinicId: string;
   login: string;
@@ -611,6 +618,7 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
     evaluationFirst: true,
     allowEmojis: true,
     schedulingLink: null,
+    softSell: true, // 09/10/2026: sem insistir em avaliacao
     humanizedTone: true, // 09/10/2026 (Aline): atendimento humano e natural
     silentHandoff: true, // idem: o que nao souber responder, fica em silencio pra equipe responder
     conciseFirstReply: true, // 08/10/2026: contato novo recebe conversa, nao enxurrada de informacao
@@ -688,6 +696,7 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
   await seedRulesOnce(clinic.id, "seed:lisboa-campanha", CAMPAIGN_RULES);
   await seedRulesOnce(clinic.id, "seed:lisboa-conversa", CONVERSA_RULES);
   await seedRulesOnce(clinic.id, "seed:lisboa-natural", NATURAL_RULES);
+  await seedRulesOnce(clinic.id, "seed:lisboa-sem-pressao", SEM_PRESSAO_RULES);
 
   // Automacoes: so o que o cliente pediu com todos os dados.
   // JANELAS pedidas pela clinica (08/10/2026): confirmacao do dia seguinte de 8h

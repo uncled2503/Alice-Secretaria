@@ -215,3 +215,13 @@ test("urgencia clinica e anuncio de transferencia sao reconhecidos", () => {
   assert.ok(!SAYS_HANDOFF_RE.test("Temos horário amanhã às 10h."));
   assert.ok(EMERGENCY_RE.test("Procure imediatamente um serviço de emergência"));
 });
+
+import { EVAL_PITCH_RE, SCHEDULING_INTENT_RE } from "../dist/ai/alice.js";
+
+test("oferta de avaliacao e intencao de agendar sao reconhecidas", () => {
+  const n = normalizeReply;
+  for (const t of ["Qual dia e turno você prefere?", "Posso verificar um horário pra você?", "Temos uma avaliação gratuita", "Quer agendar a avaliação?"]) assert.ok(EVAL_PITCH_RE.test(n(t)), t);
+  for (const t of ["O valor depende do protocolo de cada pessoa.", "O Lavieen ajuda com manchas. O que você quer melhorar?"]) assert.ok(!EVAL_PITCH_RE.test(n(t)), t);
+  for (const t of ["Quero marcar pra sexta", "tem horário amanhã?", "pode ser à tarde"]) assert.ok(SCHEDULING_INTENT_RE.test(n(t)), t);
+  for (const t of ["A partir de quanto?", "Moro longe, quero saber mais"]) assert.ok(!SCHEDULING_INTENT_RE.test(n(t)), t);
+});

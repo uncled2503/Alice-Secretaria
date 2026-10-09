@@ -821,7 +821,7 @@ Tudo isso SEM quebrar as regras cadastradas: nunca invente preco, estoque ou pra
 
   const noPricesLine = clinic.quotePrices
     ? ""
-    : `\nVALORES: voce NAO informa valores, parcelas nem formas de pagamento de procedimento algum. Quando perguntarem preco, diga com naturalidade que o investimento e apresentado pela equipe na avaliacao gratuita (personalizada para o caso dela), reforce o valor da avaliacao e pergunte o melhor dia e turno. Nao dê faixas nem estimativas.`;
+    : `\nVALORES: voce NAO informa valores, parcelas nem formas de pagamento de procedimento algum. Quando perguntarem preco, diga com naturalidade que o valor depende do protocolo de cada pessoa e que a equipe apresenta o investimento. ${clinic.softSell ? "NAO use a avaliacao como resposta padrao e NAO peca dia e turno: pergunte o que ela quer melhorar ou saber e responda as duvidas sobre o procedimento." : "Reforce que a avaliacao e gratuita e pergunte o melhor dia e turno."} Nao dê faixas nem estimativas.`;
   const teamBooksLine = clinic.aliceCanBook
     ? ""
     : `
@@ -832,6 +832,15 @@ AGENDAMENTO PELA EQUIPE: voce NAO agenda, NAO remarca, NAO cancela e NAO oferece
   const humanLine = clinic.humanizedTone
     ? "\nNATURALIDADE (atendimento humano e natural): escreva como uma recepcionista de verdade no WhatsApp: frases curtas e soltas, sem listas, sem negrito, sem markdown, sem titulos. Varie as aberturas (nao comece toda resposta com 'Claro!' nem 'Perfeito!'), nao repita o nome da pessoa toda hora, use linguagem do dia a dia ('pra', 'ta', 'combinado') com moderacao e no maximo 1 emoji. NUNCA se descreva por conta propria como 'assistente virtual', 'IA', 'robo', 'sistema' ou 'automatica'. Se a pessoa perguntar DIRETAMENTE se voce e um robo, uma IA ou uma pessoa, nunca afirme ser humana: responda com naturalidade e verdade, em uma frase curta ('Sou a Alice, assistente virtual da equipe 😊'), e continue ajudando."
     : "";
+  let evalPitchLine = "";
+  if (clinic.softSell && ctx.patientId) {
+    const offers = await prisma.message.count({
+      where: { role: "assistant", authorName: null, content: { contains: "avalia" }, conversation: { patientId: ctx.patientId } },
+    });
+    evalPitchLine = offers > 0
+      ? `\nSEM INSISTIR EM AVALIACAO: voce JA mencionou a avaliacao nesta conversa (${offers}x). NAO ofereca de novo, NAO fale em dia/turno e NAO tente agendar, a menos que a pessoa peca para agendar ou marcar. Responda o que ela perguntou, com o que esta cadastrado, e continue a conversa com UMA pergunta sobre o interesse dela (o que quer melhorar, o que quer saber). Se ela disse que mora longe, que nao pode vir ou que so quer informacao, respeite: converse por aqui e deixe a porta aberta em uma frase, sem pressionar.`
+      : "\nAVALIACAO: mencione a avaliacao gratuita no MAXIMO UMA vez em toda a conversa, e so depois de responder o que a pessoa quis saber. Nunca termine toda resposta oferecendo avaliacao nem pedindo dia e turno.";
+  }
   const evalFirstLine = clinic.evaluationFirst
     ? `\nAVALIACAO PRIMEIRO: nunca exija que o paciente saiba qual procedimento precisa. Sempre ofereca os dois caminhos ("voce ja tem algo em mente ou prefere uma avaliacao pra o profissional entender seu caso?"). Se ele nao sabe e quer ser avaliado, isso e intencao valida de agendamento - conduza direto, sem listar procedimentos.`
     : "";
@@ -1029,7 +1038,7 @@ Seu trabalho:
 2. Manter a etapa do paciente no funil atualizada (update_crm_stage) conforme a conversa avanca.
 3. Checar disponibilidade real (check_specific_time / check_availability) antes de falar de qualquer data.
 4. Confirmar o horario escolhido com o paciente e so entao usar book_appointment.
-5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${firstContactLine}${adLine}${dateLine}${apptLine}${teamBooksLine}${continuityLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${silentLine}${humanLine}${noRepeatLine}
+5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${evalPitchLine}${firstContactLine}${adLine}${dateLine}${apptLine}${teamBooksLine}${continuityLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${silentLine}${humanLine}${noRepeatLine}
 
 Procedimentos oferecidos pela clinica:
 ${procedureList || "(nenhum procedimento cadastrado ainda)"}
@@ -1296,6 +1305,12 @@ const FIRST_REPLY_MAX_CHARS = 320;
 // Urgencia clinica: nem no modo silencioso a Alice cala (orientar emergencia salva gente).
 export const EMERGENCY_RE = /emerg[eê]ncia|samu|pronto[- ]socorro|hospital|procure (imediatamente )?(um )?(atendimento|servi[cç]o|pronto)/i;
 
+// Resposta que oferece avaliacao / pede dia e turno / tenta agendar (texto normalizado).
+export const EVAL_PITCH_RE = /avaliacao|dia e turno|qual dia|melhor dia|agendar|marcar um horario|horario pra voce|horario para voce/;
+
+// A pessoa esta falando de agendar (texto normalizado): ai a oferta faz sentido.
+export const SCHEDULING_INTENT_RE = /agend|marc|horario|turno|disponib|vaga|amanha|segunda|terca|quarta|quinta|sexta|sabado|domingo|semana|manha|tarde|pode ser|quero ir|quero fazer|quando/;
+
 // Pergunta DIRETA do paciente se esta falando com robo/IA/pessoa (texto ja normalizado:
 // minusculo, sem acento nem pontuacao). A resposta e fixa e honesta.
 export const ASKS_IF_BOT_RE =
@@ -1311,6 +1326,28 @@ const URGENT_TEXT =
 // Texto em que a Alice ANUNCIA que vai passar pra equipe / verificar com a equipe.
 export const SAYS_HANDOFF_RE =
   /(vou|irei|iremos|vamos|j[aá] vou)[^.!?]{0,60}(transferir|encaminhar|passar|verificar|confirmar|checar|consultar|repassar)[^.!?]{0,50}(equipe|time|respons[aá]vel|profissional|atendente|setor|colega)|(nossa|a) equipe (vai|ir[aá]|entrar[aá]|retorna|responde)|(aguarde|um instante|s[oó] um momento)[^.!?]{0,40}(equipe|verific)/i;
+
+// Tira a oferta de avaliacao / pedido de dia e turno de uma resposta que ia insistir nisso.
+async function removeEvaluationPitch(draft: string, patientMessages: string[], clinicName: string): Promise<string | null> {
+  try {
+    const res = await openai.chat.completions.create({
+      model: MODEL,
+      temperature: 0.3,
+      messages: [
+        {
+          role: "system",
+          content: `Voce reescreve a resposta de uma secretaria de clinica (${clinicName}) no WhatsApp. A versao original insiste em avaliacao/agendamento, e a pessoa NAO pediu isso. Reescreva SEM nenhuma oferta de avaliacao, convite para agendar, pergunta de dia/turno ou de horario. Responda ao que a pessoa perguntou ou disse usando o que ha de informativo no rascunho (sem inventar nada; nao informe valores) e termine com UMA unica pergunta sobre o interesse dela (o que quer melhorar ou saber). Se ela perguntou VALOR, responda isso primeiro: o valor depende do protocolo de cada pessoa e a equipe apresenta o investimento (sem dar numero). Se ela disse que mora longe ou nao pode vir, respeite e deixe a porta aberta em uma frase. NAO comece com saudacao (Oi/Ola): a conversa ja esta em andamento. No maximo 3 frases curtas, tom natural de WhatsApp, sem markdown, no maximo 1 emoji. Responda SO com a mensagem.`,
+        },
+        { role: "user", content: `Mensagens recentes da pessoa:\n${patientMessages.join("\n").slice(0, 600)}\n\nRascunho:\n${draft.slice(0, 1500)}` },
+      ],
+    });
+    const text = res.choices[0]?.message?.content?.trim();
+    return text && text.length >= 15 ? text : null;
+  } catch (err) {
+    console.error("[sem-pressao] falha ao reescrever:", err);
+    return null;
+  }
+}
 
 // Reescreve a primeira resposta em no maximo 2 frases: apresentacao + UMA pergunta.
 async function shortenFirstReply(draft: string, patientMessages: string[], clinicName: string, assistantName: string): Promise<string | null> {
@@ -1390,7 +1427,7 @@ async function generateReplyUnlocked(
   // novo - passa direto pra equipe. Conversas ja em andamento continuam.
   const usageClinic = await prisma.clinic.findUnique({
     where: { id: clinicId },
-    select: { id: true, plan: true, aliceActive: true, silentHandoff: true, humanizedTone: true, conversationLimitOverride: true, usageMonth: true, usageCount: true, usageLimitNotified: true },
+    select: { id: true, plan: true, aliceActive: true, silentHandoff: true, humanizedTone: true, softSell: true, conversationLimitOverride: true, usageMonth: true, usageCount: true, usageLimitNotified: true },
   });
   // Alice PAUSADA pela clinica (botao "Alice atendendo"): nao responde. A conversa
   // fica como "nao lida" pra equipe, sem virar atendimento humano (quando a Alice
@@ -1539,6 +1576,18 @@ async function generateReplyUnlocked(
     if (conciseOn?.conciseFirstReply) {
       const shortText = await shortenFirstReply(finalText, history.filter((m) => m.role === "user").map((m) => m.content).slice(-3), conciseOn.name, conciseOn.assistantName || "Alice");
       if (shortText) finalText = shortText;
+    }
+  }
+
+  // SEM INSISTIR EM AVALIACAO (clinicas com "soft sell"): se ja ofereceu e a pessoa nao falou de
+  // agendar, a resposta nao pode oferecer de novo. Reescreve tirando a oferta.
+  if (usageClinic?.softSell && !didTransfer && finalText.trim()) {
+    const prevOffers = history.filter((m) => m.role === "assistant" && !m.authorName && /avalia/i.test(m.content)).length;
+    const lastUserForPitch = normalizeReply(history.filter((m) => m.role === "user").at(-1)?.content ?? "");
+    if (prevOffers >= 1 && EVAL_PITCH_RE.test(normalizeReply(finalText)) && !SCHEDULING_INTENT_RE.test(lastUserForPitch)) {
+      const c3 = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { name: true } });
+      const softer = await removeEvaluationPitch(finalText, history.filter((m) => m.role === "user").map((m) => m.content).slice(-3), c3?.name ?? "a clinica");
+      if (softer) finalText = softer;
     }
   }
 

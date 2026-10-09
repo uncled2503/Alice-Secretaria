@@ -3666,6 +3666,7 @@ function loadAliceSettings() {
   document.getElementById("as-quote-prices").checked = c.quotePrices !== false;
   document.getElementById("as-first-short").checked = !!c.conciseFirstReply;
   document.getElementById("as-human-tone").checked = !!c.humanizedTone;
+  document.getElementById("as-soft-sell").checked = !!c.softSell;
   document.getElementById("as-silent-handoff").checked = !!c.silentHandoff;
   document.getElementById("as-nps").checked = !!c.npsEnabled;
   document.getElementById("as-nps-hours").value = c.npsHoursAfter ?? 24;
@@ -3709,6 +3710,7 @@ document.getElementById("alice-settings-form").addEventListener("submit", async 
     quotePrices: document.getElementById("as-quote-prices").checked,
     conciseFirstReply: document.getElementById("as-first-short").checked,
     humanizedTone: document.getElementById("as-human-tone").checked,
+    softSell: document.getElementById("as-soft-sell").checked,
     silentHandoff: document.getElementById("as-silent-handoff").checked,
     npsEnabled: document.getElementById("as-nps").checked,
     npsHoursAfter: Number(document.getElementById("as-nps-hours").value) || 24,

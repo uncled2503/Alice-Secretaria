@@ -240,6 +240,7 @@ apiRouter.get(
         conciseFirstReply: true,
         silentHandoff: true,
         humanizedTone: true,
+        softSell: true,
         whatsappPhone: true,
         timezone: true,
         workStartHour: true,
@@ -350,6 +351,7 @@ apiRouter.put(
       conciseFirstReply?: boolean;
       silentHandoff?: boolean;
       humanizedTone?: boolean;
+      softSell?: boolean;
       businessType?: string;
       businessLabel?: string | null;
       servicePosture?: string;
@@ -445,6 +447,7 @@ apiRouter.put(
           ...(b.conciseFirstReply !== undefined ? { conciseFirstReply: b.conciseFirstReply } : {}),
           ...(b.silentHandoff !== undefined ? { silentHandoff: b.silentHandoff } : {}),
           ...(b.humanizedTone !== undefined ? { humanizedTone: b.humanizedTone } : {}),
+          ...(b.softSell !== undefined ? { softSell: b.softSell } : {}),
           ...(b.businessType !== undefined ? { businessType: b.businessType } : {}),
           ...(b.businessLabel !== undefined ? { businessLabel: b.businessLabel?.trim() || null } : {}),
           ...(b.servicePosture !== undefined ? { servicePosture: b.servicePosture } : {}),
