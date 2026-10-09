@@ -6925,7 +6925,7 @@ async function loadClinicaExperts() {
   document.getElementById("ce-options").hidden = !s.connected;
   document.getElementById("ce-catalog").hidden = !s.connected;
   document.getElementById("btn-ce-disconnect").hidden = !s.connected;
-  document.getElementById("btn-ce-undo").hidden = !(s.connected && state.staff?.role === "admin");
+  document.getElementById("btn-ce-undo").hidden = state.staff?.role !== "admin"; // tambem desconectado: deduz a data da importacao
   document.getElementById("btn-ce-connect").textContent = s.connected ? "Trocar token" : "Conectar";
   const stateEl = document.getElementById("ce-state");
   if (s.connected) {

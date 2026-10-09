@@ -25,10 +25,23 @@ export interface UndoResult {
   sample: { procedures: string[]; professionals: string[] }; // nomes (ate 15) pra conferir antes de apagar
 }
 
+// Sem a conexao (ja desconectada) a data de inicio some. Deduz pelo que a importacao deixou:
+// pacientes com vinculo do Clinica Experts E sem NENHUMA conversa (so a importacao cria
+// assim). O mais antigo marca o comeco; recua 6h pra pegar profissionais/catalogo
+// importados logo antes do primeiro agendamento.
+export async function inferImportSince(clinicId: string): Promise<Date | null> {
+  const first = await prisma.patient.findFirst({
+    where: { clinicId, ceUuid: { not: null }, conversations: { none: {} } },
+    orderBy: { createdAt: "asc" },
+    select: { createdAt: true },
+  });
+  return first ? new Date(first.createdAt.getTime() - 6 * 3_600_000) : null;
+}
+
 export async function undoCeImport(clinicId: string, opts: { dryRun: boolean; since?: Date }): Promise<UndoResult> {
   const account = await prisma.clinicaExpertsAccount.findUnique({ where: { clinicId }, select: { createdAt: true } });
-  const since = opts.since ?? account?.createdAt;
-  if (!since) throw new Error("Nao sei desde quando importar: o Clinica Experts ja foi desconectado. Informe a data/hora da conexao (since).");
+  const since = opts.since ?? account?.createdAt ?? (await inferImportSince(clinicId));
+  if (!since) throw new Error("Nao encontrei nada importado do Clinica Experts nesta clinica (nenhum paciente criado pela importacao). Nada a desfazer.");
 
   const result: UndoResult = {
     dryRun: opts.dryRun,
@@ -101,7 +114,7 @@ export async function undoCeImport(clinicId: string, opts: { dryRun: boolean; si
   if (opts.dryRun) return result;
 
   // ---- execucao ----
-  for (const m of mirrored) {
+  for (const m of account ? mirrored : []) {
     const res = await ceRequest(clinicId, `/bookings/${m.ceBookingUuid}/cancel`, { method: "PATCH" });
     if (!res.ok) result.failures.push(`cancelar espelho ${m.ceBookingUuid} no Clinica Experts: ${res.error}`);
   }
