@@ -826,6 +826,12 @@ Tudo isso SEM quebrar as regras cadastradas: nunca invente preco, estoque ou pra
     ? ""
     : `
 AGENDAMENTO PELA EQUIPE: voce NAO agenda, NAO remarca, NAO cancela e NAO oferece nem confirma horarios - quem faz isso e a equipe da clinica. Quando o paciente quiser marcar (avaliacao ou procedimento), remarcar ou cancelar: acolha, confirme o procedimento de interesse, pergunte o dia e o turno de preferencia, escreva a frase de transferencia e chame transfer_to_human com um resumo (nome, procedimento, preferencia de dia/turno). Nunca diga que ficou agendado, nem prometa um horario especifico. Voce continua respondendo duvidas, valores cadastrados e condicoes normalmente.`;
+  const silentLine = clinic.silentHandoff
+    ? "\nREGRA MAIOR SOBRE TRANSFERENCIA (vale acima do HANDOFF): quando voce nao souber responder com seguranca ou precisar de uma pessoa, chame transfer_to_human e NAO escreva NADA ao paciente: nada de 'vou transferir', 'vou encaminhar', 'vou verificar com a equipe', 'so um instante', 'a equipe vai te responder'. Fique em silencio: a equipe ve a mensagem e responde. A unica excecao e urgencia clinica (falta de ar, reacao alergica, sangramento intenso, dor forte): ai oriente procurar atendimento de emergencia."
+    : "";
+  const humanLine = clinic.humanizedTone
+    ? "\nNATURALIDADE (atendimento humano e natural): escreva como uma recepcionista de verdade no WhatsApp: frases curtas e soltas, sem listas, sem negrito, sem markdown, sem titulos. Varie as aberturas (nao comece toda resposta com 'Claro!' nem 'Perfeito!'), nao repita o nome da pessoa toda hora, use linguagem do dia a dia ('pra', 'ta', 'combinado') com moderacao e no maximo 1 emoji. NUNCA se descreva por conta propria como 'assistente virtual', 'IA', 'robo', 'sistema' ou 'automatica'. Se a pessoa perguntar DIRETAMENTE se voce e um robo, uma IA ou uma pessoa, nunca afirme ser humana: responda com naturalidade e verdade, em uma frase curta ('Sou a Alice, assistente virtual da equipe 😊'), e continue ajudando."
+    : "";
   const evalFirstLine = clinic.evaluationFirst
     ? `\nAVALIACAO PRIMEIRO: nunca exija que o paciente saiba qual procedimento precisa. Sempre ofereca os dois caminhos ("voce ja tem algo em mente ou prefere uma avaliacao pra o profissional entender seu caso?"). Se ele nao sabe e quer ser avaliado, isso e intencao valida de agendamento - conduza direto, sem listar procedimentos.`
     : "";
@@ -1023,7 +1029,7 @@ Seu trabalho:
 2. Manter a etapa do paciente no funil atualizada (update_crm_stage) conforme a conversa avanca.
 3. Checar disponibilidade real (check_specific_time / check_availability) antes de falar de qualquer data.
 4. Confirmar o horario escolhido com o paciente e so entao usar book_appointment.
-5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${firstContactLine}${adLine}${dateLine}${apptLine}${teamBooksLine}${continuityLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${noRepeatLine}
+5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${firstContactLine}${adLine}${dateLine}${apptLine}${teamBooksLine}${continuityLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${silentLine}${humanLine}${noRepeatLine}
 
 Procedimentos oferecidos pela clinica:
 ${procedureList || "(nenhum procedimento cadastrado ainda)"}
@@ -1287,6 +1293,25 @@ export async function recordOutgoingFromDevice(params: {
 // nao deve responder (humano assumiu, ou chegou mensagem nova durante a geracao).
 const FIRST_REPLY_MAX_CHARS = 320;
 
+// Urgencia clinica: nem no modo silencioso a Alice cala (orientar emergencia salva gente).
+export const EMERGENCY_RE = /emerg[eê]ncia|samu|pronto[- ]socorro|hospital|procure (imediatamente )?(um )?(atendimento|servi[cç]o|pronto)/i;
+
+// Pergunta DIRETA do paciente se esta falando com robo/IA/pessoa (texto ja normalizado:
+// minusculo, sem acento nem pontuacao). A resposta e fixa e honesta.
+export const ASKS_IF_BOT_RE =
+  /(e|eh|era) (um |uma )?(robo|bot|ia|inteligencia artificial|maquina|automatico|automatica)|falando com (um |uma )?(robo|bot|ia|pessoa|humano|humana|maquina)|(pessoa|gente|humano|humana|atendente) (de verdade|real)|(voce|vc|tu) (e|eh) (uma )?(pessoa|gente|humana|humano)|atendimento (e |eh )?(automatico|de robo|robotizado)/;
+
+// Sinais de urgencia clinica na mensagem do paciente (texto normalizado).
+export const URGENT_RE =
+  /falta de ar|nao consigo respirar|dificuldade (pra|para|de) respirar|sangramento|sangrando muito|desmai|dor (muito )?forte|dor no peito|reacao alergica|alergia grave|garganta (fechando|inchad)|rosto (muito )?inchad|necrose|pele (escurecendo|roxa)/;
+
+const URGENT_TEXT =
+  "Sinto muito que isso esteja acontecendo. Se você está com falta de ar, inchaço no rosto ou na garganta, sangramento intenso, desmaio ou dor forte, procure agora um pronto-socorro ou ligue para o SAMU (192). Já estou avisando a nossa equipe para falar com você. 💗";
+
+// Texto em que a Alice ANUNCIA que vai passar pra equipe / verificar com a equipe.
+export const SAYS_HANDOFF_RE =
+  /(vou|irei|iremos|vamos|j[aá] vou)[^.!?]{0,60}(transferir|encaminhar|passar|verificar|confirmar|checar|consultar|repassar)[^.!?]{0,50}(equipe|time|respons[aá]vel|profissional|atendente|setor|colega)|(nossa|a) equipe (vai|ir[aá]|entrar[aá]|retorna|responde)|(aguarde|um instante|s[oó] um momento)[^.!?]{0,40}(equipe|verific)/i;
+
 // Reescreve a primeira resposta em no maximo 2 frases: apresentacao + UMA pergunta.
 async function shortenFirstReply(draft: string, patientMessages: string[], clinicName: string, assistantName: string): Promise<string | null> {
   try {
@@ -1365,7 +1390,7 @@ async function generateReplyUnlocked(
   // novo - passa direto pra equipe. Conversas ja em andamento continuam.
   const usageClinic = await prisma.clinic.findUnique({
     where: { id: clinicId },
-    select: { id: true, plan: true, aliceActive: true, conversationLimitOverride: true, usageMonth: true, usageCount: true, usageLimitNotified: true },
+    select: { id: true, plan: true, aliceActive: true, silentHandoff: true, humanizedTone: true, conversationLimitOverride: true, usageMonth: true, usageCount: true, usageLimitNotified: true },
   });
   // Alice PAUSADA pela clinica (botao "Alice atendendo"): nao responde. A conversa
   // fica como "nao lida" pra equipe, sem virar atendimento humano (quando a Alice
@@ -1550,14 +1575,59 @@ async function generateReplyUnlocked(
     }
     didTransfer = true;
     const c = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { handoffPhrase: true } });
-    finalText = c?.handoffPhrase?.trim() || "Vou pedir pra uma pessoa da equipe continuar com voce por aqui.";
+    finalText = usageClinic?.silentHandoff ? "" : c?.handoffPhrase?.trim() || "Vou pedir pra uma pessoa da equipe continuar com voce por aqui.";
   }
 
   // Se a Alice transferiu pra equipe nesta rodada e nao produziu texto de
   // encerramento, usa a frase de handoff da clinica (ou uma padrao).
-  if (didTransfer && !finalText.trim()) {
+  if (didTransfer && !finalText.trim() && !usageClinic?.silentHandoff) {
     const c = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { handoffPhrase: true } });
     finalText = c?.handoffPhrase?.trim() || "Vou pedir pra uma pessoa da equipe continuar com voce por aqui.";
+  }
+
+  // Pergunta DIRETA se e robo/IA/pessoa: resposta fixa e HONESTA. O modelo as vezes desvia
+  // ("sou eu que cuido do atendimento"), o que nao nega nem diz a verdade.
+  const lastUserNorm = normalizeReply(history.filter((m) => m.role === "user").at(-1)?.content ?? "");
+  if (usageClinic?.humanizedTone && !didTransfer && ASKS_IF_BOT_RE.test(lastUserNorm)) {
+    const ident = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { name: true, assistantName: true } });
+    finalText = `Sou a ${ident?.assistantName || "Alice"}, assistente virtual da equipe da ${ident?.name ?? "clínica"}. 😊 Posso te ajudar por aqui com informações e agendamentos; se preferir falar com uma pessoa da equipe, é só me dizer!`;
+  }
+
+  // MODO SILENCIOSO (pedido da clinica): se a Alice ia avisar "vou transferir/encaminhar/verificar
+  // com a equipe", ela nao escreve nada. A conversa fica nao lida pra equipe, que responde. Garante que a
+  // equipe seja avisada mesmo que o modelo tenha escrito a frase sem chamar a ferramenta.
+  if (usageClinic?.silentHandoff && finalText.trim() && !EMERGENCY_RE.test(finalText)) {
+    if (didTransfer) {
+      finalText = "";
+    } else if (SAYS_HANDOFF_RE.test(finalText)) {
+      const lastUser = history.filter((m) => m.role === "user").at(-1)?.content ?? "";
+      try {
+        await runTool(clinicId, patient.id, conversation.id, "transfer_to_human", {
+          reason: "Alice sem resposta segura (aguardando a equipe)",
+          summary: `Ultima mensagem do paciente: "${String(lastUser).slice(0, 300)}".`,
+        });
+      } catch (err) {
+        console.error("[silencio] falha ao sinalizar a equipe:", err);
+      }
+      didTransfer = true;
+      finalText = "";
+    }
+  }
+
+  // URGENCIA clinica: mesmo em modo silencioso a Alice orienta procurar emergencia e a equipe e avisada.
+  if (usageClinic?.silentHandoff && URGENT_RE.test(lastUserNorm) && !EMERGENCY_RE.test(finalText)) {
+    if (!didTransfer) {
+      try {
+        await runTool(clinicId, patient.id, conversation.id, "transfer_to_human", {
+          reason: "URGENCIA: possivel intercorrencia",
+          summary: `Mensagem do paciente: "${String(history.filter((m) => m.role === "user").at(-1)?.content ?? "").slice(0, 300)}".`,
+        });
+      } catch (err) {
+        console.error("[urgencia] falha ao sinalizar a equipe:", err);
+      }
+      didTransfer = true;
+    }
+    finalText = URGENT_TEXT;
   }
 
   if (finalText.trim()) {

@@ -568,6 +568,12 @@ const CONVERSA_RULES = [
   { category: "tom_de_voz", instruction: "Em qualquer momento, responda só o que foi perguntado, em até 3 frases curtas, e termine com UMA pergunta. Nada de explicações longas, listas de benefícios nem várias mensagens seguidas." },
 ] as const;
 
+// Atendimento natural e silencio quando nao sabe (Aline, 09/10/2026).
+const NATURAL_RULES = [
+  { category: "tom_de_voz", instruction: "Seja natural e humana, como uma recepcionista de verdade no WhatsApp. Não se apresente como 'assistente virtual', 'IA' ou 'robô' por conta própria. Se a pessoa perguntar diretamente se está falando com um robô ou uma pessoa, não afirme ser humana: responda com a verdade em uma frase curta ('Sou a Alice, assistente virtual da equipe da Lisboa 😊') e continue ajudando." },
+  { category: "chamar_equipe", instruction: "Se não souber responder com segurança, NÃO invente e NÃO escreva que vai transferir, encaminhar ou verificar com a equipe: simplesmente não responda. A equipe vê a mensagem não respondida e responde por conta própria." },
+] as const;
+
 export interface SeedLisboaResult {
   clinicId: string;
   login: string;
@@ -605,6 +611,8 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
     evaluationFirst: true,
     allowEmojis: true,
     schedulingLink: null,
+    humanizedTone: true, // 09/10/2026 (Aline): atendimento humano e natural
+    silentHandoff: true, // idem: o que nao souber responder, fica em silencio pra equipe responder
     conciseFirstReply: true, // 08/10/2026: contato novo recebe conversa, nao enxurrada de informacao
     quotePrices: false, // 08/10/2026 (Aline): a Alice nao passa valores; a equipe apresenta na avaliacao
     hoursByDay: JSON.stringify({ 6: [8, 15] }), // sabado ate as 15h (so pra automacoes)
@@ -679,6 +687,7 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
   await seedRulesOnce(clinic.id, "seed:lisboa-ajustes-2", ADJUST_RULES);
   await seedRulesOnce(clinic.id, "seed:lisboa-campanha", CAMPAIGN_RULES);
   await seedRulesOnce(clinic.id, "seed:lisboa-conversa", CONVERSA_RULES);
+  await seedRulesOnce(clinic.id, "seed:lisboa-natural", NATURAL_RULES);
 
   // Automacoes: so o que o cliente pediu com todos os dados.
   // JANELAS pedidas pela clinica (08/10/2026): confirmacao do dia seguinte de 8h

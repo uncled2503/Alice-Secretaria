@@ -197,3 +197,21 @@ test("conversa encerrada pelo paciente nao recebe recontato", () => {
   for (const t of ["Ok", "ok!", "Estarei aí", "Obrigada", "obrigado!!", "Combinado", "Perfeito", "👍", "❤️🙏", "Até lá", "Valeu"]) assert.equal(isClosingMessage(t), true, t);
   for (const t of ["Gostaria de saber valores de pacotes", "Eu quero, por favor", "Ok, mas e o valor?", "Oi", "", "Não sei ainda, vou ver com meu marido e te falo"]) assert.equal(isClosingMessage(t), false, t);
 });
+
+import { ASKS_IF_BOT_RE, URGENT_RE, SAYS_HANDOFF_RE, EMERGENCY_RE, normalizeReply } from "../dist/ai/alice.js";
+
+test("pergunta se e robo e detectada; conversa comum nao", () => {
+  const n = normalizeReply;
+  for (const t of ["Você é um robô?", "isso é uma IA?", "é atendimento automático?", "Estou falando com uma pessoa ou com um robô?", "você é gente de verdade?"]) assert.ok(ASKS_IF_BOT_RE.test(n(t)), t);
+  for (const t of ["Qual o endereço?", "Vocês têm horário pela tarde", "A recepcionista é gente boa", "Posso fazer drenagem?"]) assert.ok(!ASKS_IF_BOT_RE.test(n(t)), t);
+});
+
+test("urgencia clinica e anuncio de transferencia sao reconhecidos", () => {
+  const n = normalizeReply;
+  for (const t of ["estou com falta de ar", "está sangrando muito", "tô com dor muito forte", "reação alérgica no rosto"]) assert.ok(URGENT_RE.test(n(t)), t);
+  assert.ok(!URGENT_RE.test(n("queria saber o valor")));
+  assert.ok(SAYS_HANDOFF_RE.test("Vou encaminhar sua mensagem para nossa equipe verificar isso."));
+  assert.ok(SAYS_HANDOFF_RE.test("Só um instante que vou verificar com a equipe."));
+  assert.ok(!SAYS_HANDOFF_RE.test("Temos horário amanhã às 10h."));
+  assert.ok(EMERGENCY_RE.test("Procure imediatamente um serviço de emergência"));
+});

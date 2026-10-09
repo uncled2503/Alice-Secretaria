@@ -238,6 +238,8 @@ apiRouter.get(
         name: true,
         aliceActive: true,
         conciseFirstReply: true,
+        silentHandoff: true,
+        humanizedTone: true,
         whatsappPhone: true,
         timezone: true,
         workStartHour: true,
@@ -346,6 +348,8 @@ apiRouter.put(
       aliceCanBook?: boolean;
       quotePrices?: boolean;
       conciseFirstReply?: boolean;
+      silentHandoff?: boolean;
+      humanizedTone?: boolean;
       businessType?: string;
       businessLabel?: string | null;
       servicePosture?: string;
@@ -439,6 +443,8 @@ apiRouter.put(
           ...(b.aliceCanBook !== undefined ? { aliceCanBook: b.aliceCanBook } : {}),
           ...(b.quotePrices !== undefined ? { quotePrices: b.quotePrices } : {}),
           ...(b.conciseFirstReply !== undefined ? { conciseFirstReply: b.conciseFirstReply } : {}),
+          ...(b.silentHandoff !== undefined ? { silentHandoff: b.silentHandoff } : {}),
+          ...(b.humanizedTone !== undefined ? { humanizedTone: b.humanizedTone } : {}),
           ...(b.businessType !== undefined ? { businessType: b.businessType } : {}),
           ...(b.businessLabel !== undefined ? { businessLabel: b.businessLabel?.trim() || null } : {}),
           ...(b.servicePosture !== undefined ? { servicePosture: b.servicePosture } : {}),
