@@ -3667,6 +3667,7 @@ function loadAliceSettings() {
   document.getElementById("as-first-short").checked = !!c.conciseFirstReply;
   document.getElementById("as-human-tone").checked = !!c.humanizedTone;
   document.getElementById("as-soft-sell").checked = !!c.softSell;
+  document.getElementById("as-handoff-price").checked = !!c.handoffOnPrice;
   document.getElementById("as-silent-handoff").checked = !!c.silentHandoff;
   document.getElementById("as-nps").checked = !!c.npsEnabled;
   document.getElementById("as-nps-hours").value = c.npsHoursAfter ?? 24;
@@ -3711,6 +3712,7 @@ document.getElementById("alice-settings-form").addEventListener("submit", async 
     conciseFirstReply: document.getElementById("as-first-short").checked,
     humanizedTone: document.getElementById("as-human-tone").checked,
     softSell: document.getElementById("as-soft-sell").checked,
+    handoffOnPrice: document.getElementById("as-handoff-price").checked,
     silentHandoff: document.getElementById("as-silent-handoff").checked,
     npsEnabled: document.getElementById("as-nps").checked,
     npsHoursAfter: Number(document.getElementById("as-nps-hours").value) || 24,
@@ -5785,23 +5787,30 @@ function loadClinicDataForm() {
   document.getElementById("cd-persona-name").value = clinic.assistantPersonaName ?? "";
   syncPersonaNameVisibility();
 
-  document.getElementById("cd-closed-holidays").checked = !!clinic.closedOnHolidays;
-  loadHolidaysPreview();
 }
 
-// Mostra os proximos feriados que o toggle vai bloquear, em vez de pedir
-// confianca cega no que "feriados nacionais" significa.
-async function loadHolidaysPreview() {
-  const el = document.getElementById("cd-holidays-preview");
-  if (!el) return;
-  try {
-    const holidays = await api("/schedule/holidays");
-    if (!holidays.length) { el.textContent = ""; return; }
-    const fmt = (iso) => new Date(iso + "T12:00:00").toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
-    el.textContent = `Próximos feriados cobertos: ${holidays.map((h) => `${fmt(h.date)} (${h.name})`).join(", ")}.`;
-  } catch {
-    el.textContent = "";
-  }
+// Aba Feriados: cada feriado nacional tem "Fecha" (padrao) ou "Abre"; salva ao trocar.
+async function loadHolidays() {
+  const body = document.getElementById("holidays-body");
+  const status = document.getElementById("holidays-status");
+  if (!body) return;
+  const { holidays } = await api("/schedule/holiday-settings");
+  const fmt = (iso) => new Date(iso + "T12:00:00").toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" });
+  body.innerHTML = holidays
+    .map((h) => `<tr><td>${fmt(h.date)}</td><td>${h.name}</td><td><select data-holiday="${h.name}"><option value="closed"${h.open ? "" : " selected"}>Fecha</option><option value="open"${h.open ? " selected" : ""}>Abre</option></select></td></tr>`)
+    .join("");
+  body.querySelectorAll("select[data-holiday]").forEach((sel) => {
+    sel.addEventListener("change", async () => {
+      const open = [...body.querySelectorAll("select[data-holiday]")].filter((x) => x.value === "open").map((x) => x.dataset.holiday);
+      status.textContent = "Salvando…";
+      try {
+        await api("/schedule/holiday-settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ open }) });
+        status.textContent = "Salvo.";
+      } catch (err) {
+        status.textContent = err.message || "Falha ao salvar.";
+      }
+    });
+  });
 }
 
 function syncPersonaNameVisibility() {
@@ -5837,13 +5846,12 @@ document.getElementById("clinic-data-form").addEventListener("submit", async (e)
     .join(",");
   const assistantPersona = document.getElementById("cd-persona").value;
   const assistantPersonaName = document.getElementById("cd-persona-name").value.trim();
-  const closedOnHolidays = document.getElementById("cd-closed-holidays").checked;
   if (!id || !name || !whatsappPhone.replace(/\D/g, "")) return;
 
   await api(`/clinics/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, whatsappPhone, timezone, workStartHour, workStartMinute, workEndHour, workEndMinute, lunchStartHour, lunchStartMinute, lunchEndHour, lunchEndMinute, workDays, closedOnHolidays, notifyPhone, notifyEvents, assistantPersona, assistantPersonaName }),
+    body: JSON.stringify({ name, whatsappPhone, timezone, workStartHour, workStartMinute, workEndHour, workEndMinute, lunchStartHour, lunchStartMinute, lunchEndHour, lunchEndMinute, workDays, notifyPhone, notifyEvents, assistantPersona, assistantPersonaName }),
   });
 
   await loadClinics();
@@ -7030,6 +7038,7 @@ const SETTINGS_SUB_LOADERS = {
   products: loadProducts,
   procedures: loadProcedures,
   staff: loadProfessionals,
+  holidays: loadHolidays,
   broadcasts: () => {
     loadBroadcastTargetOptions();
     loadBroadcasts();

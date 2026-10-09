@@ -619,6 +619,7 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
     allowEmojis: true,
     schedulingLink: null,
     softSell: true, // 09/10/2026: sem insistir em avaliacao
+    handoffOnPrice: true, // 09/10/2026 (Aline): perguntou o valor -> atendimento humano
     humanizedTone: true, // 09/10/2026 (Aline): atendimento humano e natural
     silentHandoff: true, // idem: o que nao souber responder, fica em silencio pra equipe responder
     conciseFirstReply: true, // 08/10/2026: contato novo recebe conversa, nao enxurrada de informacao

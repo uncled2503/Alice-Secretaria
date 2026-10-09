@@ -3,7 +3,7 @@ import { wallClockInZone, zonedWallClockToUtc, formatInZone, formatDayInZone, is
 import { googleBusyIntervals } from "../google/calendar.js";
 import { pushAppointmentInBackground } from "../integrations/calendarSync.js";
 import { ceGateFor, type SlotGate } from "../clinicaexperts/availability.js";
-import { nationalHolidayOn } from "./holidays.js";
+import { nationalHolidayOn, parseHolidayOpen } from "./holidays.js";
 
 export interface Slot {
   start: Date;
@@ -26,6 +26,7 @@ export interface ClinicHours {
   lunchEndMinutes: number | null;
   workDays: Set<number>; // 0=domingo .. 6=sabado
   closedOnHolidays: boolean;
+  holidayOpen?: Set<string>; // feriados nacionais em que a clinica ABRE (aba Feriados)
 }
 
 export type SlotReason = "past" | "closed_day" | "outside_hours" | "lunch_break" | "conflict" | "blocked" | "holiday";
@@ -58,6 +59,7 @@ interface HoursSource {
   lunchEndMinute?: number;
   workDays: string;
   closedOnHolidays?: boolean;
+  holidayOpen?: string;
 }
 
 function parseWorkDays(raw: string): Set<number> {
@@ -78,6 +80,7 @@ export function clinicHoursOf(clinic: HoursSource): ClinicHours {
     lunchEndMinutes: clinic.lunchEndHour != null ? clinic.lunchEndHour * 60 + (clinic.lunchEndMinute ?? 0) : null,
     workDays: parseWorkDays(clinic.workDays),
     closedOnHolidays: clinic.closedOnHolidays ?? false,
+    holidayOpen: parseHolidayOpen(clinic.holidayOpen),
   };
 }
 
@@ -122,6 +125,7 @@ export function resolveHours(
         : base.lunchEndMinutes,
     workDays: professional.workDays ? parseWorkDays(professional.workDays) : base.workDays,
     closedOnHolidays: base.closedOnHolidays,
+    holidayOpen: base.holidayOpen,
   };
 }
 
@@ -158,7 +162,10 @@ export function evaluateSlot(params: {
   if (enforceHours) {
     const wc = wallClockInZone(startUtc, hours.timezone);
     if (!hours.workDays.has(wc.weekday)) return { ok: false, reason: "closed_day" };
-    if (hours.closedOnHolidays && nationalHolidayOn(wc.year, wc.month, wc.day)) return { ok: false, reason: "holiday" };
+    if (hours.closedOnHolidays) {
+      const holiday = nationalHolidayOn(wc.year, wc.month, wc.day);
+      if (holiday && !hours.holidayOpen?.has(holiday)) return { ok: false, reason: "holiday" };
+    }
 
     const startMinutes = wc.hour * 60 + wc.minute;
     const endMinutes = startMinutes + durationMin;

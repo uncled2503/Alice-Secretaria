@@ -13,7 +13,8 @@ import {
   SLOT_REASON_PT,
 } from "../scheduling/slots.js";
 import { offerFreedSlotToWaitlist } from "../scheduling/waitlist.js";
-import { formatInZone, formatDayInZone, formatDateTimeInZone, upcomingWeekdayTable, isoDateInZone, zonedWallClockToUtc } from "../scheduling/time.js";
+import { formatInZone, formatDayInZone, formatDateTimeInZone, upcomingWeekdayTable, isoDateInZone, zonedWallClockToUtc, wallClockInZone } from "../scheduling/time.js";
+import { parseHolidayOpen, upcomingNationalHolidays } from "../scheduling/holidays.js";
 import { pushAppointmentInBackground, removeAppointmentInBackground } from "../integrations/calendarSync.js";
 import { sendMedia } from "../uazapi/client.js";
 import { getActiveRulesPrompt } from "./rules.js";
@@ -900,6 +901,23 @@ AGENDAMENTO PELA EQUIPE: voce NAO agenda, NAO remarca, NAO cancela e NAO oferece
   const dateLine = `
 CALENDARIO DE HOJE (use exatamente): HOJE e ${formatDayInZone(dayNow, dayTz)}. AMANHA e ${formatDayInZone(dayTomorrow, dayTz)}. So escreva "(hoje)" ou "(amanha)" ao lado de um dia da semana se for exatamente um desses dois dias; para qualquer outro dia, escreva so o dia da semana e a data, SEM "hoje"/"amanha".`;
 
+  // FERIADOS: a clinica fecha nos feriados nacionais, menos nos que ela marcou como "abre".
+  // Sem isto a Alice dizia "abrimos segunda" num feriado.
+  const wcHol = wallClockInZone(dayNow, dayTz);
+  const openHolidays = parseHolidayOpen(clinic.holidayOpen);
+  const holidayItems = upcomingNationalHolidays(wcHol.year, wcHol.month, wcHol.day, 4)
+    .filter((h) => new Date(h.date + "T12:00:00Z").getTime() - dayNow.getTime() < 60 * 86_400_000)
+    .map((h) => {
+      const [yy, mm, dd] = h.date.split("-").map(Number);
+      const label = formatDayInZone(new Date(Date.UTC(yy, mm - 1, dd, 15)), dayTz);
+      const opens = !clinic.closedOnHolidays || openHolidays.has(h.name);
+      return `${label} (${h.name}): ${opens ? "ABRE" : "FECHADO"}`;
+    });
+  const holidayLine = holidayItems.length
+    ? `
+FERIADOS PROXIMOS: ${holidayItems.join("; ")}. Se a pessoa perguntar se funciona/abre em um dia desses, responda conforme esta lista (FECHADO = a clinica nao atende, diga com simpatia e sugira o proximo dia util). Nunca diga que abre num dia marcado como FECHADO e nao ofereca horario nele.`
+    : "";
+
   // Primeiro contato (clinicas com "primeira resposta curta"): conversa, nao enxurrada.
   let firstContactLine = "";
   if (clinic.conciseFirstReply && ctx.patientId) {
@@ -1038,7 +1056,7 @@ Seu trabalho:
 2. Manter a etapa do paciente no funil atualizada (update_crm_stage) conforme a conversa avanca.
 3. Checar disponibilidade real (check_specific_time / check_availability) antes de falar de qualquer data.
 4. Confirmar o horario escolhido com o paciente e so entao usar book_appointment.
-5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${evalPitchLine}${firstContactLine}${adLine}${dateLine}${apptLine}${teamBooksLine}${continuityLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${silentLine}${humanLine}${noRepeatLine}
+5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${evalPitchLine}${firstContactLine}${adLine}${dateLine}${holidayLine}${apptLine}${teamBooksLine}${continuityLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${silentLine}${humanLine}${noRepeatLine}
 
 Procedimentos oferecidos pela clinica:
 ${procedureList || "(nenhum procedimento cadastrado ainda)"}
@@ -1316,6 +1334,10 @@ export const SCHEDULING_INTENT_RE = /agend|marc|horario|turno|disponib|vaga|aman
 export const ASKS_IF_BOT_RE =
   /(e|eh|era) (um |uma )?(robo|bot|ia|inteligencia artificial|maquina|automatico|automatica)|falando com (um |uma )?(robo|bot|ia|pessoa|humano|humana|maquina)|(pessoa|gente|humano|humana|atendente) (de verdade|real)|(voce|vc|tu) (e|eh) (uma )?(pessoa|gente|humana|humano)|atendimento (e |eh )?(automatico|de robo|robotizado)/;
 
+// O paciente esta perguntando VALOR/PRECO (texto normalizado). "quanto tempo dura" NAO conta.
+export const PRICE_ASK_RE =
+  /quanto ((voces|vcs|voce|vc|a clinica) )?(custa|cobra|cobram|cobrar|fica|ficaria|sai|vai (custar|ficar|sair)|ta|esta|estao|pago|seria|seriam|vale|e|eh)\b|\b(valor|valores|preco|precos|orcamento|investimento)\b|a partir de quanto|(cobram|cobra|custa|custam) quanto/;
+
 // Sinais de urgencia clinica na mensagem do paciente (texto normalizado).
 export const URGENT_RE =
   /falta de ar|nao consigo respirar|dificuldade (pra|para|de) respirar|sangramento|sangrando muito|desmai|dor (muito )?forte|dor no peito|reacao alergica|alergia grave|garganta (fechando|inchad)|rosto (muito )?inchad|necrose|pele (escurecendo|roxa)/;
@@ -1427,7 +1449,7 @@ async function generateReplyUnlocked(
   // novo - passa direto pra equipe. Conversas ja em andamento continuam.
   const usageClinic = await prisma.clinic.findUnique({
     where: { id: clinicId },
-    select: { id: true, plan: true, aliceActive: true, silentHandoff: true, humanizedTone: true, softSell: true, conversationLimitOverride: true, usageMonth: true, usageCount: true, usageLimitNotified: true },
+    select: { id: true, plan: true, aliceActive: true, silentHandoff: true, handoffOnPrice: true, humanizedTone: true, softSell: true, conversationLimitOverride: true, usageMonth: true, usageCount: true, usageLimitNotified: true },
   });
   // Alice PAUSADA pela clinica (botao "Alice atendendo"): nao responde. A conversa
   // fica como "nao lida" pra equipe, sem virar atendimento humano (quando a Alice
@@ -1473,6 +1495,28 @@ async function generateReplyUnlocked(
       select: { id: true, role: true, content: true, authorName: true, createdAt: true }, // sem o anexo em base64
     })
   ).reverse();
+
+  // PERGUNTOU O VALOR (pedido da clinica): a equipe apresenta o investimento, entao a conversa vai
+  // direto pra atendimento humano, sem a Alice responder nada sobre preco.
+  if (usageClinic?.handoffOnPrice) {
+    const lastUserText = history.filter((m) => m.role === "user").at(-1)?.content ?? "";
+    if (PRICE_ASK_RE.test(normalizeReply(lastUserText))) {
+      try {
+        await runTool(clinicId, patient.id, conversation.id, "transfer_to_human", {
+          reason: "Cliente perguntou o valor",
+          summary: `O paciente perguntou sobre valores: "${String(lastUserText).slice(0, 300)}". A equipe apresenta o investimento.`,
+        });
+      } catch (err) {
+        console.error("[valor] falha ao encaminhar pra equipe:", err);
+      }
+      if (usageClinic.silentHandoff) return "";
+      const c = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { handoffPhrase: true } });
+      const phrase = c?.handoffPhrase?.trim() || "Vou pedir pra uma pessoa da equipe continuar com você por aqui e te passar os valores.";
+      await prisma.message.create({ data: { conversationId: conversation.id, role: "assistant", content: phrase } });
+      await prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: new Date() } });
+      return phrase;
+    }
+  }
 
   await enrichPatientFromCe(clinicId, patient); // nome completo/vinculo pelo Clinica Experts (melhor esforco)
   const system = await buildSystemPrompt(clinicId, { patientId: patient.id });

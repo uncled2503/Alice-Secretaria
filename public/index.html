@@ -616,6 +616,7 @@
           <button data-sub="birthday" data-plan-lock="posvenda">Aniversário</button>
           <button data-sub="followup" data-plan-lock="recontato">Recontato</button>
           <button data-sub="funnel">Funil</button>
+          <button data-sub="holidays" class="biz-clinica-only">Feriados</button>
           <button data-sub="blocks" class="biz-clinica-only">Bloqueios de agenda</button>
           <button data-sub="google" class="biz-clinica-only">Google Agenda</button>
           <button data-sub="clinica-experts" class="biz-clinica-only">Clínica Experts</button>
@@ -690,13 +691,6 @@
                 </div>
               </label>
             </div>
-            <div class="broadcast-form-row biz-clinica-only">
-              <label style="display:flex;gap:0.5rem;align-items:flex-start;flex:1">
-                <input type="checkbox" id="cd-closed-holidays" style="margin-top:0.25rem" />
-                <span>Fechar automaticamente nos feriados nacionais<br /><span class="hint" style="margin:0">A Alice não oferece nem aceita horário nesses dias. Cobre os feriados federais (data fixa + Sexta-feira Santa). Carnaval e Corpus Christi não entram — são ponto facultativo, não feriado por lei; use um bloqueio manual em "Bloqueios de agenda" se sua clínica fecha nesses dias.</span></span>
-              </label>
-            </div>
-            <p id="cd-holidays-preview" class="hint biz-clinica-only" style="margin:0 0 0.8rem"></p>
 
             <div class="section-header" style="margin-top:1rem"><span class="nav-icon" data-icon="building"></span> Como a Alice se apresenta no atendimento</div>
             <p class="hint" style="margin-top:0" data-biz-label="A Alice nunca se identifica como assistente virtual, IA ou atendimento automático. Escolha como ela se apresenta pro paciente:|A Alice nunca se identifica como assistente virtual, IA ou atendimento automático. Escolha como ela se apresenta pro cliente:">A Alice nunca se identifica como assistente virtual, IA ou atendimento automático. Escolha como ela se apresenta pro paciente:</p>
@@ -1030,6 +1024,17 @@
           </div>
         </div>
 
+        <div id="sub-holidays" class="settings-subpanel biz-clinica-only">
+          <p class="hint" style="margin-top:0">Por padrão a clínica <strong>fecha</strong> nos feriados nacionais: a Alice não oferece nem aceita horário nesses dias e avisa quem perguntar. Marque <strong>"Abre"</strong> nos feriados em que vocês funcionam. Carnaval e feriados locais não entram aqui: use "Bloqueios de agenda".</p>
+          <div class="card">
+            <table>
+              <thead><tr><th>Data</th><th>Feriado</th><th>Funcionamento</th></tr></thead>
+              <tbody id="holidays-body"></tbody>
+            </table>
+          </div>
+          <p id="holidays-status" class="hint" style="margin:0.6rem 0 0"></p>
+        </div>
+
         <div id="sub-blocks" class="settings-subpanel biz-clinica-only">
           <p class="hint" style="margin-top:0">Bloqueie feriados, folgas, almoço ou manutenção de equipamento. A Alice não oferece nem aceita agendamento nesses períodos.</p>
           <form id="block-form" class="broadcast-form card">
@@ -1320,6 +1325,9 @@
               <div class="section-header" style="margin-top:1rem">Quem agenda</div>
               <label class="checkbox-row"><input type="checkbox" id="as-can-book" /> A Alice pode agendar, remarcar e cancelar sozinha</label>
               <p class="hint" style="margin-top:0">Desmarcado: a Alice não oferece nem confirma horário. Ela acolhe, entende o interesse e o melhor dia/turno e passa a conversa para a equipe marcar.</p>
+
+              <label class="checkbox-row"><input type="checkbox" id="as-handoff-price" /> Passar para a equipe assim que perguntarem o valor</label>
+              <p class="hint" style="margin-top:0">Ligado: ao perceber que o paciente perguntou preço/valor, a Alice para e a conversa vai para atendimento humano (a equipe é avisada).</p>
 
               <label class="checkbox-row"><input type="checkbox" id="as-soft-sell" /> Não insistir em avaliação/agendamento (mencionar no máximo uma vez)</label>
               <p class="hint" style="margin-top:0">Ligado: a Alice conversa e tira dúvidas antes de falar em avaliação, não repete a oferta e respeita quem diz que mora longe ou só quer informação.</p>

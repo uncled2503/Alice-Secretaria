@@ -207,3 +207,15 @@ test("resolveHours propaga closedOnHolidays da clinica pro profissional (nao e a
   const comProfissional = resolveHours(clinica, { workDays: "1,2,3,4,5,6", workStartHour: null, workEndHour: null });
   assert.equal(comProfissional.closedOnHolidays, true);
 });
+
+test("feriado em que a clinica marcou 'abre' aceita horario; os demais continuam fechados", () => {
+  const now = new Date("2026-09-01T12:00:00Z");
+  const independencia = zonedWallClockToUtc(SP, 2026, 9, 7, 10, 0);
+  const base = { timezone: SP, workStartHour: 9, workEndHour: 18, workDays: "1,2,3,4,5", closedOnHolidays: true };
+  const abre = clinicHoursOf({ ...base, holidayOpen: "Independência do Brasil,Natal" });
+  assert.deepEqual(evaluateSlot({ startUtc: independencia, durationMin: 60, hours: abre, busy: [], now }), { ok: true });
+  const outro = clinicHoursOf({ ...base, holidayOpen: "Natal" });
+  assert.deepEqual(evaluateSlot({ startUtc: independencia, durationMin: 60, hours: outro, busy: [], now }), { ok: false, reason: "holiday" });
+  const vazio = clinicHoursOf({ ...base, holidayOpen: "" });
+  assert.deepEqual(evaluateSlot({ startUtc: independencia, durationMin: 60, hours: vazio, busy: [], now }), { ok: false, reason: "holiday" });
+});

@@ -27,7 +27,8 @@ model Clinic {
   lunchStartMinute Int @default(0)
   lunchEndMinute   Int @default(0)
   workDays      String    @default("1,2,3,4,5,6") // dias da semana com expediente (0=domingo..6=sabado), separados por virgula
-  closedOnHolidays Boolean @default(false) // fecha automaticamente nos feriados nacionais (data fixa + Sexta-feira Santa) - Carnaval/Corpus Christi ficam de fora (ponto facultativo, nao feriado por lei); ver src/scheduling/holidays.ts
+  holidayOpen   String    @default("") // nomes (separados por virgula) dos feriados nacionais em que a clinica ABRE; os demais ela fecha (aba Feriados do painel)
+  closedOnHolidays Boolean @default(true) // fecha automaticamente nos feriados nacionais (data fixa + Sexta-feira Santa) - Carnaval/Corpus Christi ficam de fora (ponto facultativo, nao feriado por lei); ver src/scheduling/holidays.ts
   active        Boolean   @default(true) // false = bloqueada temporariamente (ex: inadimplencia) - contas client dessa clinica nao conseguem logar nem usar a API
   notifyPhone   String?   // numero (com DDI/DDD) que recebe avisos de agendamento/cancelamento/handoff via WhatsApp
   notifyEvents  String    @default("") // quais avisos mandar pro notifyPhone, separados por virgula: new_appointment,reschedule,cancel,human_handoff
@@ -55,6 +56,7 @@ model Clinic {
   replyDelaySeconds    Int     @default(0) // espera N seg pra agrupar mensagens quebradas do cliente (0 = responde na hora)
   hoursByDay           String? // expediente por dia da semana pra AUTOMACOES (JSON {"6":[8,15]}: sabado 8h-15h); vazio = usa workStart/workEnd. Nao afeta a agenda
   softSell             Boolean @default(false) // true = a Alice menciona a avaliacao no maximo UMA vez e nao insiste (nem em resposta de preco); conversa e tira duvidas antes de agendar
+  handoffOnPrice       Boolean @default(false) // true = assim que o paciente pergunta valor/preco, a conversa vai pra equipe (a Alice nao responde)
   silentHandoff        Boolean @default(false) // true = quando a Alice nao sabe responder ela FICA EM SILENCIO (a equipe ve a mensagem nao respondida) em vez de avisar que vai transferir
   humanizedTone        Boolean @default(false) // true = escreve como recepcionista de verdade e nao se apresenta como IA por conta propria (se perguntarem direto, nao nega)
   conciseFirstReply    Boolean @default(false) // true = 1a resposta a um contato novo e CURTA: se apresenta e faz UMA pergunta (nome ou o que quer melhorar), sem despejar informacao

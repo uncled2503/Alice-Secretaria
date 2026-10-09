@@ -23,7 +23,7 @@ import { movePatientToKind, movePatientToRecovery, movePatientToStage } from "..
 import { offerFreedSlotToWaitlist } from "../scheduling/waitlist.js";
 import { createBooking, checkSpecificTime, SLOT_REASON_PT } from "../scheduling/slots.js";
 import { wallClockInZone } from "../scheduling/time.js";
-import { upcomingNationalHolidays } from "../scheduling/holidays.js";
+import { upcomingNationalHolidays, parseHolidayOpen } from "../scheduling/holidays.js";
 import { patientDossier } from "../crm/dossier.js";
 import { buildReport } from "../crm/reports.js";
 import { logActivity, ACTIVITY_AREAS, ACTIVITY_TYPES } from "../crm/activity.js";
@@ -242,6 +242,7 @@ apiRouter.get(
         silentHandoff: true,
         humanizedTone: true,
         softSell: true,
+        handoffOnPrice: true,
         whatsappPhone: true,
         timezone: true,
         workStartHour: true,
@@ -353,6 +354,7 @@ apiRouter.put(
       silentHandoff?: boolean;
       humanizedTone?: boolean;
       softSell?: boolean;
+      handoffOnPrice?: boolean;
       businessType?: string;
       businessLabel?: string | null;
       servicePosture?: string;
@@ -449,6 +451,7 @@ apiRouter.put(
           ...(b.silentHandoff !== undefined ? { silentHandoff: b.silentHandoff } : {}),
           ...(b.humanizedTone !== undefined ? { humanizedTone: b.humanizedTone } : {}),
           ...(b.softSell !== undefined ? { softSell: b.softSell } : {}),
+          ...(b.handoffOnPrice !== undefined ? { handoffOnPrice: b.handoffOnPrice } : {}),
           ...(b.businessType !== undefined ? { businessType: b.businessType } : {}),
           ...(b.businessLabel !== undefined ? { businessLabel: b.businessLabel?.trim() || null } : {}),
           ...(b.servicePosture !== undefined ? { servicePosture: b.servicePosture } : {}),
@@ -2421,6 +2424,43 @@ apiRouter.get(
     const clinic = await getClinic(req);
     const wc = wallClockInZone(new Date(), clinic.timezone || "America/Sao_Paulo");
     res.json(upcomingNationalHolidays(wc.year, wc.month, wc.day, 6));
+  })
+);
+
+// Aba Feriados: proximos feriados nacionais (12) com a escolha da clinica. Padrao: fecha.
+apiRouter.get(
+  "/schedule/holiday-settings",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const wc = wallClockInZone(new Date(), clinic.timezone || "America/Sao_Paulo");
+    const open = parseHolidayOpen(clinic.holidayOpen);
+    res.json({
+      holidays: upcomingNationalHolidays(wc.year, wc.month, wc.day, 12).map((h) => ({ ...h, open: open.has(h.name) })),
+    });
+  })
+);
+
+// Salva quais feriados a clinica ABRE (nomes); os demais ela fecha.
+apiRouter.put(
+  "/schedule/holiday-settings",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const { open } = (req.body ?? {}) as { open?: unknown };
+    if (!Array.isArray(open)) {
+      res.status(400).json({ error: "Informe a lista de feriados em que a clinica abre." });
+      return;
+    }
+    const names = [...new Set(open.map((x) => String(x).trim()).filter((x) => x && !x.includes(",")))];
+    await prisma.clinic.update({ where: { id: clinic.id }, data: { holidayOpen: names.join(","), closedOnHolidays: true } });
+    await logActivity({
+      clinicId: clinic.id,
+      type: "clinic_updated",
+      area: "agenda",
+      title: "Feriados atualizados",
+      description: names.length ? `Abre em: ${names.join(", ")}. Fecha nos demais feriados nacionais.` : "Fecha em todos os feriados nacionais.",
+      actorName: req.staff?.name ?? null,
+    });
+    res.json({ ok: true });
   })
 );
 

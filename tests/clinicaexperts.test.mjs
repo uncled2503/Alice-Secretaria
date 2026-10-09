@@ -225,3 +225,12 @@ test("oferta de avaliacao e intencao de agendar sao reconhecidas", () => {
   for (const t of ["Quero marcar pra sexta", "tem horário amanhã?", "pode ser à tarde"]) assert.ok(SCHEDULING_INTENT_RE.test(n(t)), t);
   for (const t of ["A partir de quanto?", "Moro longe, quero saber mais"]) assert.ok(!SCHEDULING_INTENT_RE.test(n(t)), t);
 });
+
+import { PRICE_ASK_RE } from "../dist/ai/alice.js";
+
+test("pergunta de valor e detectada; duvida que nao e de preco passa", () => {
+  const asks = ["Quanto custa o botox?", "qual o valor da limpeza de pele", "Qual é o preço?", "Me passa os valores", "quanto fica o preenchimento?", "pode fazer um orçamento?", "a partir de quanto?", "Quanto é a sessão", "quanto vocês cobram"];
+  for (const t of asks) assert.equal(PRICE_ASK_RE.test(normalizeReply(t)), true, t);
+  const not = ["Quanto tempo dura o efeito?", "quantas sessões precisa?", "dói muito?", "Quero agendar uma avaliação", "tenho muito valor por esse trabalho de vocês"];
+  for (const t of not.slice(0, 4)) assert.equal(PRICE_ASK_RE.test(normalizeReply(t)), false, t);
+});

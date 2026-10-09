@@ -83,3 +83,8 @@ export function upcomingNationalHolidays(fromYear: number, fromMonth: number, fr
   }
   return out;
 }
+
+// Lista salva na clinica ("Natal,Tiradentes") -> conjunto de nomes de feriados em que ela ABRE.
+export function parseHolidayOpen(raw: string | null | undefined): Set<string> {
+  return new Set((raw ?? "").split(",").map((x) => x.trim()).filter(Boolean));
+}
