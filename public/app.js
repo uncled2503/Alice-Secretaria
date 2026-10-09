@@ -6925,6 +6925,7 @@ async function loadClinicaExperts() {
   document.getElementById("ce-options").hidden = !s.connected;
   document.getElementById("ce-catalog").hidden = !s.connected;
   document.getElementById("btn-ce-disconnect").hidden = !s.connected;
+  document.getElementById("btn-ce-copies").hidden = state.staff?.role !== "admin";
   document.getElementById("btn-ce-undo").hidden = state.staff?.role !== "admin"; // tambem desconectado: deduz a data da importacao
   document.getElementById("btn-ce-connect").textContent = s.connected ? "Trocar token" : "Conectar";
   const stateEl = document.getElementById("ce-state");
@@ -6969,6 +6970,24 @@ Depois disso o Clínica Experts é desconectado.`;
   if (!(await showConfirm(msg))) return;
   const r = await post({ dryRun: false });
   showError(`✅ Importação desfeita: ${r.appointmentsDeleted} agendamentos, ${r.patientsDeleted} pacientes, ${r.proceduresDeleted} procedimentos, ${r.professionalsDeleted} profissionais removidos.${r.failures.length ? ` ${r.failures.length} item(ns) não puderam ser removidos.` : ""}`);
+  await loadClinicaExperts();
+});
+
+document.getElementById("btn-ce-copies").addEventListener("click", async () => {
+  const post = (body) => api("/clinica-experts/remove-copies", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const p = await post({ dryRun: true });
+  const list = (items) => (items.length ? items.map((i) => i.name).join(", ") : "nenhum");
+  const kept = [...p.procedures.keep, ...p.professionals.keep];
+  const msg = `Comparei "${p.fromClinic}" com "${p.referenceClinic}". Vai REMOVER o que é igual:
+
+• ${p.procedures.delete.length} procedimentos: ${list(p.procedures.delete)}
+• ${p.professionals.delete.length} profissionais: ${list(p.professionals.delete)}
+• ${p.patientsDeleted} pacientes e ${p.appointmentsDeleted} agendamentos copiados
+${kept.length ? `\nFICAM (parecidos, mas diferentes): ${kept.map((i) => `${i.name} (${i.reason})`).join("; ")}\n` : ""}
+O Clínica Experts desta clínica será desconectado.`;
+  if (!(await showConfirm(msg))) return;
+  const r = await post({ dryRun: false });
+  showError(`✅ Removido: ${r.procedures.delete.length} procedimentos, ${r.professionals.delete.length} profissionais, ${r.patientsDeleted} pacientes, ${r.appointmentsDeleted} agendamentos.${r.failures.length ? ` ${r.failures.length} item(ns) não puderam ser removidos.` : ""}`);
   await loadClinicaExperts();
 });
 

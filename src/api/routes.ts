@@ -53,6 +53,7 @@ import { applyLisboaServicos } from "../maintenance/applyLisboaServicos.js";
 import { connectAccount, disconnectAccount, ceStatusFor } from "../clinicaexperts/client.js";
 import { syncCatalog } from "../clinicaexperts/sync.js";
 import { undoCeImport } from "../clinicaexperts/undo.js";
+import { removeCopiesOfClinic } from "../clinicaexperts/removeCopies.js";
 import { invalidateCeCache } from "../clinicaexperts/availability.js";
 import { pushAppointmentInBackground, removeAppointmentInBackground } from "../integrations/calendarSync.js";
 import { setupIsacFollowup } from "../maintenance/setupIsacFollowup.js";
@@ -3784,6 +3785,34 @@ apiRouter.post(
       actorName: req.staff?.name ?? null,
     });
     res.json(await ceStatusFor(clinic.id));
+  })
+);
+
+// Compara esta clinica com a Lisboa e remove daqui o que e COPIA do que a Lisboa tem
+// (procedimentos, profissionais, pacientes, agendamentos). dryRun=true so lista. So admin.
+apiRouter.post(
+  "/clinica-experts/remove-copies",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await getClinic(req);
+    const { dryRun } = (req.body ?? {}) as { dryRun?: boolean };
+    const ref = await prisma.clinic.findFirst({ where: { name: { contains: "Lisboa" }, id: { not: clinic.id } }, select: { id: true } });
+    if (!ref) {
+      res.status(400).json({ error: "Nao encontrei a clinica Lisboa para comparar." });
+      return;
+    }
+    const result = await removeCopiesOfClinic(clinic.id, ref.id, { dryRun: dryRun !== false });
+    if (!result.dryRun) {
+      await logActivity({
+        clinicId: clinic.id,
+        type: "integration_disconnected",
+        area: "agenda",
+        title: "Cópias da Lisboa removidas",
+        description: `${result.procedures.delete.length} procedimentos, ${result.professionals.delete.length} profissionais, ${result.patientsDeleted} pacientes e ${result.appointmentsDeleted} agendamentos removidos.`,
+        actorName: req.staff?.name ?? null,
+      });
+    }
+    res.json(result);
   })
 );
 
