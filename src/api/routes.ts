@@ -1929,11 +1929,74 @@ apiRouter.get(
     });
     if (!assertClinicAccess(req, res, conversation.patient.clinicId)) return;
 
-    const messages = await prisma.message.findMany({
-      where: { conversationId: req.params.id },
-      orderBy: { createdAt: "asc" },
+    // A midia NAO vai embutida (base64) na lista: o painel recarrega isso a cada poucos segundos e baixava todos os
+    // videos/fotos da conversa de novo. Cada anexo tem uma URL propria (/messages/:id/media) que o navegador carrega e
+    // guarda em cache. Alem disso o CSP do site nao libera data: pra video/audio - por URL funciona.
+    const [messages, withMedia] = await Promise.all([
+      prisma.message.findMany({
+        where: { conversationId: req.params.id },
+        orderBy: { createdAt: "asc" },
+        select: { id: true, conversationId: true, role: true, content: true, mediaType: true, mediaName: true, authorName: true, deliveryStatus: true, createdAt: true },
+      }),
+      prisma.message.findMany({ where: { conversationId: req.params.id, mediaUrl: { not: null } }, select: { id: true } }),
+    ]);
+    const hasMedia = new Set(withMedia.map((m) => m.id));
+    res.json(messages.map((m) => ({ ...m, mediaUrl: hasMedia.has(m.id) ? `/api/messages/${m.id}/media` : null })));
+  })
+);
+
+// Entrega o anexo de uma mensagem (foto, video, audio, arquivo) como binario, com suporte a Range (o video precisa
+// pra tocar e avancar). So tipos de imagem/video/audio sao exibidos inline; qualquer outro vai como download, pra um
+// arquivo malicioso (ex.: HTML) nunca rodar no site.
+apiRouter.get(
+  "/messages/:id/media",
+  asyncRoute(async (req, res) => {
+    const message = await prisma.message.findUnique({
+      where: { id: req.params.id },
+      select: { mediaUrl: true, mediaType: true, mediaName: true, conversation: { select: { patient: { select: { clinicId: true } } } } },
     });
-    res.json(messages);
+    if (!message?.mediaUrl) {
+      res.status(404).json({ error: "Anexo nao encontrado" });
+      return;
+    }
+    if (!assertClinicAccess(req, res, message.conversation.patient.clinicId)) return;
+
+    const m = /^data:([^;,]*)(?:;[^,]*)?;base64,([\s\S]*)$/.exec(message.mediaUrl);
+    if (!m) {
+      res.status(404).json({ error: "Anexo invalido" });
+      return;
+    }
+    let mime = (m[1] || "").toLowerCase();
+    // Tipo gravado errado (ex.: octet-stream pra um video): corrige pelo tipo da mensagem.
+    if (message.mediaType === "video" && !mime.startsWith("video/")) mime = "video/mp4";
+    if ((message.mediaType === "audio" || message.mediaType === "ptt") && !mime.startsWith("audio/")) mime = "audio/ogg";
+    if (message.mediaType === "image" && !mime.startsWith("image/")) mime = "image/jpeg";
+    const inline = /^(image\/(png|jpe?g|gif|webp|bmp|heic|heif)|video\/|audio\/)/.test(mime);
+    const body = Buffer.from(m[2], "base64");
+
+    res.setHeader("Content-Type", inline ? mime : "application/octet-stream");
+    res.setHeader("Content-Disposition", `${inline ? "inline" : "attachment"}; filename="${(message.mediaName || "arquivo").replace(/[^\w.\- ()]/g, "_")}"`);
+    res.setHeader("Cache-Control", "private, max-age=86400");
+    res.setHeader("Accept-Ranges", "bytes");
+
+    const range = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range ?? ""));
+    if (range && (range[1] || range[2])) {
+      let start = range[1] ? parseInt(range[1], 10) : Math.max(0, body.length - parseInt(range[2], 10));
+      let end = range[1] && range[2] ? parseInt(range[2], 10) : body.length - 1;
+      end = Math.min(end, body.length - 1);
+      if (start > end || start >= body.length) {
+        res.status(416).setHeader("Content-Range", `bytes */${body.length}`);
+        res.end();
+        return;
+      }
+      res.status(206);
+      res.setHeader("Content-Range", `bytes ${start}-${end}/${body.length}`);
+      res.setHeader("Content-Length", String(end - start + 1));
+      res.end(body.subarray(start, end + 1));
+      return;
+    }
+    res.setHeader("Content-Length", String(body.length));
+    res.end(body);
   })
 );
 

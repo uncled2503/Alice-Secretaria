@@ -1226,6 +1226,11 @@ async function loadMessages(conversationId, { forceScroll = false } = {}) {
     throw err;
   }
   const box = document.getElementById("chat-messages");
+  // Nada mudou desde o ultimo desenho: nao mexe no DOM. Refazer a lista a cada poll reiniciava o video/audio que a
+  // pessoa estava assistindo (por isso o video "ficava carregando").
+  const signature = messages.map((m) => `${m.id}:${m.deliveryStatus ?? ""}`).join("|");
+  if (!forceScroll && state._renderedConvId === conversationId && state._renderedSig === signature) return;
+  state._renderedSig = signature;
   // Só rola pro fim se o usuário já estava no fim (ou é uma conversa recém-aberta).
   // Senão, quem rolou pra cima pra ler fica onde estava, sem ser puxado a cada poll.
   const convChanged = state._renderedConvId !== conversationId;
