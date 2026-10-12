@@ -480,6 +480,15 @@ document.getElementById("mobile-nav-toggle")?.addEventListener("click", () => {
   setMobileNav(!_appRoot.classList.contains("nav-open"));
 });
 document.getElementById("sidebar-backdrop")?.addEventListener("click", () => setMobileNav(false));
+
+// Menu lateral recolhivel (desktop): a escolha fica salva neste navegador.
+function setSidebarCollapsed(collapsed) {
+  _appRoot.classList.toggle("sidebar-collapsed", collapsed);
+  try { localStorage.setItem("alice.sidebarCollapsed", collapsed ? "1" : "0"); } catch { /* sem armazenamento: so nao lembra */ }
+}
+try { if (localStorage.getItem("alice.sidebarCollapsed") === "1") _appRoot.classList.add("sidebar-collapsed"); } catch { /* ignora */ }
+document.getElementById("sidebar-collapse")?.addEventListener("click", () => setSidebarCollapsed(true));
+document.getElementById("sidebar-expand")?.addEventListener("click", () => setSidebarCollapsed(false));
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && _appRoot.classList.contains("nav-open")) setMobileNav(false);
 });
