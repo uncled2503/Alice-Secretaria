@@ -1,4 +1,5 @@
 import { Router, type Request, type Response, type RequestHandler } from "express";
+import { Prisma } from "@prisma/client";
 import { rateLimit } from "express-rate-limit";
 import { timingSafeEqual, randomBytes } from "crypto";
 import { prisma } from "../db/client.js";
@@ -1885,11 +1886,23 @@ apiRouter.get(
       take: onlyArchived ? 200 : 400, // as 400 conversas mais recentes (o painel e atualizado a cada poucos segundos)
       include: {
         patient: { include: { tags: { include: { tag: { select: { id: true, label: true, color: true } } } } } },
-        // So texto e tipo: o anexo (foto/audio em base64) NAO pode vir junto, senao cada
-        // atualizacao do Chat carregava dezenas de MB so pra mostrar a previa.
-        messages: { orderBy: { createdAt: "desc" }, take: 1, select: { content: true, mediaType: true } },
       },
     });
+
+    // Ultima mensagem de cada conversa: UMA consulta com subselect que usa o indice (conversationId, createdAt). O include
+    // aninhado do Prisma trazia TODAS as mensagens das conversas pra memoria so pra ficar com a ultima de cada uma.
+    // So texto e tipo: o anexo (base64) nao vem junto.
+    const lastByConversation = new Map<string, { content: string | null; mediaType: string | null }>();
+    if (conversations.length) {
+      const rows = await prisma.$queryRaw<{ id: string; content: string | null; mediaType: string | null }[]>(Prisma.sql`
+        SELECT c.id AS id,
+          (SELECT m.content FROM Message m WHERE m.conversationId = c.id ORDER BY m.createdAt DESC LIMIT 1) AS content,
+          (SELECT m.mediaType FROM Message m WHERE m.conversationId = c.id ORDER BY m.createdAt DESC LIMIT 1) AS mediaType
+        FROM Conversation c
+        WHERE c.id IN (${Prisma.join(conversations.map((c) => c.id))})
+      `);
+      for (const r of rows) lastByConversation.set(r.id, { content: r.content, mediaType: r.mediaType });
+    }
 
     const withAvatars = conversations.map((c) => ({
         id: c.id,
@@ -1907,9 +1920,9 @@ apiRouter.get(
           avatarUrl: getProfilePicUrlCached(clinic.id, c.patient.phone),
           tags: c.patient.tags.map((pt) => pt.tag),
         },
-        lastMessage: c.messages[0]?.mediaType
-          ? mediaPreviewLabel(c.messages[0].mediaType)
-          : c.messages[0]?.content ?? null,
+        lastMessage: lastByConversation.get(c.id)?.mediaType
+          ? mediaPreviewLabel(lastByConversation.get(c.id)!.mediaType!)
+          : lastByConversation.get(c.id)?.content ?? null,
     }));
 
     res.json(withAvatars);
