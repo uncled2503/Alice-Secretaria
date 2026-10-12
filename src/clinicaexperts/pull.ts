@@ -2,6 +2,7 @@ import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
 import { ceRequest, dayBoundIso, noteError } from "./client.js";
 import { zonedWallClockToUtc } from "../scheduling/time.js";
+import { syncAppointmentInBackground } from "./sync.js";
 
 // ---------------------------------------------------------------------------
 // Clinica Experts -> Alice: agendamentos feitos DIRETO no Clinica Experts
@@ -121,7 +122,10 @@ export async function pullClinicBookings(clinicId: string): Promise<PullResult> 
       if (existing.scheduledAt.getTime() !== when.getTime()) data.scheduledAt = when;
       // "confirmed" nunca rebaixa um atendimento que ja foi concluido/faltou aqui.
       if (status !== "confirmed" && existing.status !== status) data.status = status;
-      if (status === "confirmed" && existing.status === "cancelled") data.status = "confirmed"; // reativado la
+      // Cancelado AQUI mas ainda "confirmado" la: o cancelamento nao chegou no Clinica Experts (o espelho so perde o
+      // vinculo quando o cancelamento da certo). Reativar aqui desfazia o cancelamento da clinica e o paciente voltava a
+      // receber lembrete; o certo e tentar cancelar la de novo.
+      if (status === "confirmed" && existing.status === "cancelled") syncAppointmentInBackground(existing.id);
       if (Object.keys(data).length) {
         await prisma.appointment.update({ where: { id: existing.id }, data });
         result.updated++;

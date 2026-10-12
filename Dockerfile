@@ -13,4 +13,5 @@ ENV NODE_ENV=production
 EXPOSE 3010
 HEALTHCHECK --interval=30s --timeout=20s --start-period=120s --retries=6 \
   CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || 3010) + '/health').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"
-CMD ["npm", "start"]
+# node direto (PID 1) pra receber o SIGTERM do deploy e terminar os atendimentos em andamento
+CMD ["node", "scripts/start.mjs"]

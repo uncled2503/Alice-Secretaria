@@ -12,7 +12,7 @@ import { prisma } from "../db/client.js";
 // do que mandar mensagem sem sentido e queimar o numero).
 // ---------------------------------------------------------------------------
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 60_000, maxRetries: 1 });
 const MODEL = process.env.OPENAI_RECONTACT_MODEL ?? process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
 export interface JudgeInput {

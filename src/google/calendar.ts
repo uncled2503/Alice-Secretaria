@@ -63,21 +63,27 @@ function stateSecret(): string {
   return process.env.SESSION_SECRET ?? "";
 }
 
-export function buildState(clinicId: string): string {
+// O state expira (STATE_TTL_MS): antes valia pra sempre, entao uma URL de consentimento guardada (historico, print) podia
+// ser reaproveitada depois pra ligar OUTRA conta do Google a esta clinica.
+const STATE_TTL_MS = 15 * 60_000;
+
+export function buildState(clinicId: string, now = Date.now()): string {
   const nonce = crypto.randomBytes(8).toString("hex");
-  const payload = `${clinicId}.${nonce}`;
+  const payload = `${clinicId}.${now.toString(36)}.${nonce}`;
   const sig = crypto.createHmac("sha256", stateSecret()).update(payload).digest("base64url");
   return `${payload}.${sig}`;
 }
 
-export function readState(state: string): string | null {
+export function readState(state: string, now = Date.now()): string | null {
   const parts = String(state ?? "").split(".");
-  if (parts.length !== 3) return null;
-  const [clinicId, nonce, sig] = parts;
-  const expected = crypto.createHmac("sha256", stateSecret()).update(`${clinicId}.${nonce}`).digest("base64url");
+  if (parts.length !== 4) return null;
+  const [clinicId, issuedAt, nonce, sig] = parts;
+  const expected = crypto.createHmac("sha256", stateSecret()).update(`${clinicId}.${issuedAt}.${nonce}`).digest("base64url");
   const a = Buffer.from(sig);
   const b = Buffer.from(expected);
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  const issued = parseInt(issuedAt, 36);
+  if (!Number.isFinite(issued) || now - issued > STATE_TTL_MS || issued - now > 60_000) return null;
   return clinicId;
 }
 

@@ -50,6 +50,7 @@ export function startRenewalJob(): void {
           scheduledAt: { lte: cutoff, gte: floor },
           ...(procedureFilter.length ? { procedureId: { in: procedureFilter } } : {}),
           renewalSent: { none: { ruleId: rule.id } },
+          patient: { optedOut: false }, // quem pediu pra parar nao recebe mensagem automatica
         },
         include: { patient: true, procedure: true, professional: true },
         take: MAX_PER_TICK,
@@ -76,9 +77,9 @@ export function startRenewalJob(): void {
         });
 
         try {
-          await sendText(appt.clinicId, appt.patient.phone, text);
+          const outcome = await sendText(appt.clinicId, appt.patient.phone, text);
           await prisma.renewalSent.create({ data: { appointmentId: appt.id, ruleId: rule.id } });
-          await recordAutomatedMessage(appt.patientId, text, rule.name || "Renovação automática");
+          if (outcome === "sent") await recordAutomatedMessage(appt.patientId, text, rule.name || "Renovação automática");
         } catch (err) {
           console.error(`Falha ao enviar renovacao (regra ${rule.id}) para ${appt.patient.phone}:`, err);
         }

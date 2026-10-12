@@ -38,8 +38,9 @@ export async function sendAppointmentConfirmationToPatient(appointmentId: string
   const text = `Oi${firstName ? `, ${firstName}` : ""}! Confirmando seu horário: ${appt.procedure.name}${withWho} em ${when}.`;
 
   try {
-    await sendText(appt.clinicId, appt.patient.phone, text);
-    await recordAutomatedMessage(appt.patientId, text, "Confirmação de agendamento");
+    const outcome = await sendText(appt.clinicId, appt.patient.phone, text);
+    // "blocked" (plano gratis) ou "duplicate": nada saiu, entao nao grava no chat como se tivesse saido.
+    if (outcome === "sent") await recordAutomatedMessage(appt.patientId, text, "Confirmação de agendamento");
   } catch (err) {
     console.error(`Falha ao enviar confirmação de agendamento para ${appt.patient.phone}:`, err);
     // So essa chamada unica tenta - sem cron, sem retry, sem varrer historico

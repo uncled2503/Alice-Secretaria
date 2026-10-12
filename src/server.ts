@@ -22,7 +22,8 @@ import { startCeBookingPullJob } from "./clinicaexperts/pull.js";
 import { startUnansweredJob } from "./crm/unanswered.js";
 import { startPhoneContactsJob } from "./crm/phoneContacts.js";
 import { startBroadcastJob } from "./crm/broadcast.js";
-import { startUazapiWebhookWorker } from "./uazapi/client.js";
+import { startUazapiWebhookWorker, shutdownUazapiWorker } from "./uazapi/client.js";
+import { startBackupJob } from "./maintenance/backupJob.js";
 import { apiRouter } from "./api/routes.js";
 import { externalApiRouter } from "./api/external/router.js";
 import { readStaffSession, clearSessionCookie } from "./api/staffSession.js";
@@ -39,7 +40,9 @@ app.use(compression());
 // injeta X-Forwarded-For/Proto. Sem isto o Express ignora esses headers e o
 // express-rate-limit reclama (ERR_ERL_UNEXPECTED_X_FORWARDED_FOR) e passa a
 // contar todo mundo pelo mesmo IP. "1" = confia so no primeiro hop (o proxy).
-app.set("trust proxy", 1);
+// Quantos proxies existem na frente da Alice (EasyPanel/Traefik = 1). Se houver mais um (ex.: Cloudflare), ajuste
+// TRUST_PROXY_HOPS=2; com o valor errado todo mundo parece vir do mesmo IP e o limite de login vale pro mundo inteiro.
+app.set("trust proxy", Math.max(0, Number(process.env.TRUST_PROXY_HOPS ?? 1)) || 1);
 
 // O painel ainda usa estilos inline para componentes dinamicos, por isso
 // style-src permite unsafe-inline. Scripts continuam restritos aos arquivos
@@ -224,6 +227,7 @@ app.use(
   "/api",
   apiRateLimit,
   async (req, res, next) => {
+    try {
     req.staff = readStaffSession(req.headers.cookie);
     const isUazapiWebhook = req.method === "POST" && req.path.startsWith("/uazapi/webhook/");
     const isPublicPath = PUBLIC_API_PATHS.has(req.path) || isUazapiWebhook;
@@ -270,6 +274,10 @@ app.use(
     }
 
     next();
+    } catch (err) {
+      // Express 4 nao captura rejeicao de middleware async: sem isto, banco indisponivel = requisicao pendurada ate o timeout.
+      next(err);
+    }
   },
   apiRouter
 );
@@ -312,7 +320,7 @@ process.on("uncaughtException", (err) => console.error("[process] uncaughtExcept
 
 const port = Number(process.env.PORT ?? 3000);
 await enableWalMode(); // antes de abrir o servidor e iniciar os jobs: o banco esta livre
-app.listen(port, () => {
+const httpServer = app.listen(port, () => {
   console.log(`Alice rodando na porta ${port}`);
   startReminderJob();
   startPostProcedureJob();
@@ -331,4 +339,24 @@ app.listen(port, () => {
   startUnansweredJob();
   startPhoneContactsJob();
   startUazapiWebhookWorker().catch((err) => console.error("Falha ao iniciar fila de webhooks UAZAPI:", err));
+  startBackupJob();
 });
+
+// Deploy/restart (SIGTERM): para de aceitar conexao, deixa os eventos de WhatsApp em andamento terminarem (ate 20 s) e
+// devolve pra fila o que nao deu tempo. Sem isto o container era morto no meio de uma resposta e a mensagem ficava presa.
+let shuttingDown = false;
+async function gracefulShutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] ${signal} recebido: finalizando com calma...`);
+  httpServer.close();
+  try {
+    await shutdownUazapiWorker(20_000);
+  } catch (err) {
+    console.error("[shutdown] falha ao finalizar a fila:", err);
+  }
+  await prisma.$disconnect().catch(() => undefined);
+  process.exit(0);
+}
+process.on("SIGTERM", () => void gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => void gracefulShutdown("SIGINT"));

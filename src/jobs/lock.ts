@@ -31,13 +31,24 @@ export async function acquireJobLock(name: string, ttlMs = DEFAULT_TTL_MS, now =
   }
 }
 
-export function scheduleLocked(name: string, expression: string, fn: () => unknown | Promise<unknown>, opts: { ttlMs?: number } = {}): void {
-  cron.schedule(expression, async () => {
-    try {
-      if (!(await acquireJobLock(name, opts.ttlMs))) return;
-      await fn();
-    } catch (err) {
-      console.error(`[tarefa ${name}] falhou:`, err);
-    }
-  });
+export function scheduleLocked(name: string, expression: string, fn: () => unknown | Promise<unknown>, opts: { ttlMs?: number; timezone?: string } = {}): void {
+  const ttl = opts.ttlMs ?? DEFAULT_TTL_MS;
+  cron.schedule(
+    expression,
+    async () => {
+      let renew: NodeJS.Timeout | undefined;
+      try {
+        if (!(await acquireJobLock(name, ttl))) return;
+        // Renova a concessao enquanto a tarefa roda: uma rodada mais longa que o TTL (ex.: envios com pausa) deixava outra
+        // copia do servidor pegar a mesma tarefa no meio.
+        renew = setInterval(() => void acquireJobLock(name, ttl).catch(() => undefined), Math.max(30_000, Math.floor(ttl / 3)));
+        await fn();
+      } catch (err) {
+        console.error(`[tarefa ${name}] falhou:`, err);
+      } finally {
+        if (renew) clearInterval(renew);
+      }
+    },
+    opts.timezone ? { timezone: opts.timezone } : undefined,
+  );
 }

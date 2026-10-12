@@ -9,12 +9,13 @@ import {
   connectClinic,
   disconnectClinic,
   getStatus,
-  getProfilePicUrl,
+  getProfilePicUrlCached,
   triggerHistoryImport,
   getUazapiConfig,
   saveUazapiConfig,
   reapplyWebhook,
   verifyWebhookSignature,
+  rotateWebhookSignature,
   enqueueWebhook,
   getMediaDebug,
 } from "../uazapi/client.js";
@@ -69,7 +70,7 @@ import {
 } from "../google/calendar.js";
 import { notifyStaff } from "../crm/notify.js";
 import { sendAppointmentConfirmationToPatient } from "../crm/appointmentMessages.js";
-import { hashPassword, verifyPassword } from "./passwords.js";
+import { hashPassword, verifyPasswordAsync } from "./passwords.js";
 import { createSessionCookie, clearSessionCookie } from "./staffSession.js";
 
 export const apiRouter = Router();
@@ -80,7 +81,8 @@ export const apiRouter = Router();
 apiRouter.post(
   "/uazapi/webhook/:clinicId/:signature",
   asyncRoute(async (req, res) => {
-    if (!verifyWebhookSignature(req.params.clinicId, req.params.signature)) {
+    const webhookClinic = await prisma.clinic.findUnique({ where: { id: req.params.clinicId }, select: { webhookVersion: true } });
+    if (!webhookClinic || !verifyWebhookSignature(req.params.clinicId, req.params.signature, webhookClinic.webhookVersion)) {
       res.status(401).json({ error: "Assinatura de webhook invalida" });
       return;
     }
@@ -166,6 +168,44 @@ function assertClinicAccess(req: Request, res: Response, resourceClinicId: strin
     return false;
   }
   return true;
+}
+
+// Data vinda do cliente (query/body): null se vazia ou invalida. "new Date('abc')" nao lanca - vira Invalid Date e
+// estourava mais adiante como 500 (ou pior, gravava lixo).
+function parseDateParam(value: unknown): Date | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function isValidTimezone(tz: unknown): boolean {
+  if (typeof tz !== "string" || !tz.trim()) return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Dos ids recebidos, so os que pertencem a clinica (um id de OUTRA clinica nunca pode ser ligado a esta).
+async function idsOfClinic(model: "procedure" | "professional", clinicId: string, ids: unknown): Promise<string[]> {
+  if (!Array.isArray(ids)) return [];
+  const wanted = ids.filter((x): x is string => typeof x === "string");
+  if (!wanted.length) return [];
+  const rows =
+    model === "procedure"
+      ? await prisma.procedure.findMany({ where: { clinicId, id: { in: wanted } }, select: { id: true } })
+      : await prisma.professional.findMany({ where: { clinicId, id: { in: wanted } }, select: { id: true } });
+  return rows.map((r) => r.id);
+}
+
+// Rotas de manutencao pontual (incidentes antigos): ficam desligadas em producao a menos que
+// ENABLE_MAINTENANCE_ENDPOINTS=1 - sao destrutivas e foram escritas pra um caso especifico.
+function maintenanceEnabled(res: Response): boolean {
+  if (process.env.ENABLE_MAINTENANCE_ENDPOINTS === "1") return true;
+  res.status(404).json({ error: "Rota de manutenção desligada (defina ENABLE_MAINTENANCE_ENDPOINTS=1 no servidor para usar)." });
+  return false;
 }
 
 // Liga/desliga o atendimento da Alice na clinica (botao do menu lateral). Qualquer
@@ -410,6 +450,44 @@ apiRouter.put(
     ] as const) {
       if (value !== undefined && (!Number.isInteger(value) || value < 0 || value > 59)) {
         res.status(400).json({ error: `${label} invalido (use 0-59)` });
+        return;
+      }
+    }
+
+    if (timezone !== undefined && !isValidTimezone(timezone)) {
+      res.status(400).json({ error: "timezone invalido (ex.: America/Sao_Paulo)" });
+      return;
+    }
+    for (const [label, value, min, max] of [
+      ["workStartHour", workStartHour, 0, 23],
+      ["workEndHour", workEndHour, 1, 24],
+      ["lunchStartHour", lunchStartHour, 0, 23],
+      ["lunchEndHour", lunchEndHour, 0, 24],
+    ] as const) {
+      if (value !== undefined && value !== null && (!Number.isInteger(value) || value < min || value > max)) {
+        res.status(400).json({ error: `${label} invalido (use ${min}-${max})` });
+        return;
+      }
+    }
+    if (workDays !== undefined && !/^([0-6](,[0-6])*)?$/.test(String(workDays))) {
+      res.status(400).json({ error: "workDays invalido (use dias de 0 a 6 separados por virgula)" });
+      return;
+    }
+    for (const [label, value] of [["name", name], ["whatsappPhone", whatsappPhone], ["assistantName", b.assistantName]] as const) {
+      if (value !== undefined && typeof value !== "string") {
+        res.status(400).json({ error: `${label} invalido` });
+        return;
+      }
+    }
+    for (const [label, value] of [
+      ["splitMaxMessages", b.splitMaxMessages],
+      ["splitThresholdChars", b.splitThresholdChars],
+      ["replyDelaySeconds", b.replyDelaySeconds],
+      ["npsHoursAfter", b.npsHoursAfter],
+      ["npsThreshold", b.npsThreshold],
+    ] as const) {
+      if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value))) {
+        res.status(400).json({ error: `${label} invalido` });
         return;
       }
     }
@@ -795,9 +873,39 @@ apiRouter.delete(
       prisma.clinicLocation.deleteMany({ where: { clinicId } }),
       prisma.staffUser.deleteMany({ where: { clinicId } }),
       prisma.uazapiWebhookEvent.deleteMany({ where: { clinicId } }),
+      // FKs RESTRICT: sem estas, a exclusao forcada falhava (e revertia tudo) em qualquer clinica com Meta, aprendizado, Google ou Clinica Experts.
+      prisma.metaEvent.deleteMany({ where: { clinicId } }),
+      prisma.metaConfig.deleteMany({ where: { clinicId } }),
+      prisma.learningInsight.deleteMany({ where: { clinicId } }),
+      prisma.teachingSuggestion.deleteMany({ where: { clinicId } }),
+      prisma.googleCalendarAccount.deleteMany({ where: { clinicId } }),
+      prisma.clinicaExpertsAccount.deleteMany({ where: { clinicId } }),
       prisma.clinic.delete({ where: { id: clinicId } }),
     ]);
     res.json({ ok: true });
+  })
+);
+
+// Troca a assinatura da URL do webhook da UAZAPI desta clinica (use se a URL vazou em log de proxy). A URL antiga
+// deixa de valer. So admin.
+apiRouter.post(
+  "/clinics/:id/rotate-webhook",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    try {
+      await rotateWebhookSignature(req.params.id);
+      await logActivity({
+        clinicId: req.params.id,
+        type: "clinic_updated",
+        area: "clinica",
+        title: "Assinatura do webhook trocada",
+        description: "A URL de recebimento de mensagens do WhatsApp foi renovada.",
+        actorName: req.staff?.name ?? null,
+      });
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Falha ao trocar a assinatura do webhook" });
+    }
   })
 );
 
@@ -985,6 +1093,7 @@ apiRouter.post(
   "/clinics/lisboa-servicos",
   asyncRoute(async (req, res) => {
     if (!requireAdmin(req, res)) return;
+    if (!maintenanceEnabled(res)) return;
     const clinic = await prisma.clinic.findFirst({ where: { name: "Lisboa Beauty Center" } });
     if (!clinic) {
       res.status(404).json({ error: "Clínica Lisboa não encontrada (aplique primeiro a configuração da Lisboa)." });
@@ -1016,6 +1125,7 @@ apiRouter.post(
   "/clinics/setup-isac-followup",
   asyncRoute(async (req, res) => {
     if (!requireAdmin(req, res)) return;
+    if (!maintenanceEnabled(res)) return;
     const result = await setupIsacFollowup();
     await logActivity({
       clinicId: result.clinicId,
@@ -1246,9 +1356,9 @@ apiRouter.get(
   asyncRoute(async (req, res) => {
     const clinic = await getClinic(req);
     const { start, end } = req.query as { start?: string; end?: string };
-    const endDate = end ? new Date(end) : new Date();
-    const startDate = start ? new Date(start) : new Date(endDate.getTime() - 30 * 24 * 60 * 60_000);
-    if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+    const endDate = end ? parseDateParam(end) : new Date();
+    const startDate = start ? parseDateParam(start) : endDate ? new Date(endDate.getTime() - 30 * 24 * 60 * 60_000) : null;
+    if (!startDate || !endDate) {
       res.status(400).json({ error: "start/end invalidos" });
       return;
     }
@@ -1261,8 +1371,12 @@ apiRouter.get(
   asyncRoute(async (req, res) => {
     const clinic = await getClinic(req);
     const { start, end } = req.query as { start?: string; end?: string };
-    const startDate = start ? new Date(start) : new Date(Date.now() - 30 * 24 * 60 * 60_000);
-    const endDate = end ? new Date(end) : new Date();
+    const startDate = start ? parseDateParam(start) : new Date(Date.now() - 30 * 24 * 60 * 60_000);
+    const endDate = end ? parseDateParam(end) : new Date();
+    if (!startDate || !endDate) {
+      res.status(400).json({ error: "start/end invalidos" });
+      return;
+    }
 
     // Numeros REAIS (ver crm/realStats.ts): so o que a Alice de fato fez. No plano
     // gratis a Alice nao atende - a agenda e o chat sao manuais - entao la os
@@ -1624,7 +1738,7 @@ apiRouter.post(
         lunchStartMinute: lunchStartMinute ?? 0,
         lunchEndHour: lunchEndHour ?? null,
         lunchEndMinute: lunchEndMinute ?? 0,
-        ...(procedureIds ? { procedures: { connect: procedureIds.map((id) => ({ id })) } } : {}),
+        ...(procedureIds ? { procedures: { connect: (await idsOfClinic("procedure", clinic.id, procedureIds)).map((id) => ({ id })) } } : {}),
       },
       include: { procedures: { select: { id: true, name: true } } },
     });
@@ -1681,7 +1795,7 @@ apiRouter.put(
         ...(lunchStartMinute !== undefined ? { lunchStartMinute } : {}),
         ...(lunchEndHour !== undefined ? { lunchEndHour: lunchEndHour ?? null } : {}),
         ...(lunchEndMinute !== undefined ? { lunchEndMinute } : {}),
-        ...(procedureIds !== undefined ? { procedures: { set: procedureIds.map((id) => ({ id })) } } : {}),
+        ...(procedureIds !== undefined ? { procedures: { set: (await idsOfClinic("procedure", existing.clinicId, procedureIds)).map((id) => ({ id })) } } : {}),
       },
       include: { procedures: { select: { id: true, name: true } } },
     });
@@ -1746,6 +1860,8 @@ apiRouter.delete(
 
     await prisma.$transaction([
       prisma.message.deleteMany({ where: { conversation: { patientId: id } } }),
+      prisma.followUpSent.deleteMany({ where: { conversation: { patientId: id } } }), // FK RESTRICT: sem isto excluir falhava se algum recontato "uma vez" ja saiu
+      prisma.birthdaySent.deleteMany({ where: { patientId: id } }), // idem (aniversario ja enviado)
       prisma.conversation.deleteMany({ where: { patientId: id } }),
       prisma.reminderSent.deleteMany({ where: { appointment: { patientId: id } } }),
       prisma.postProcedureSent.deleteMany({ where: { appointment: { patientId: id } } }),
@@ -1766,7 +1882,7 @@ apiRouter.get(
     const conversations = await prisma.conversation.findMany({
       where: { patient: { clinicId: clinic.id }, archived: onlyArchived },
       orderBy: { lastMessageAt: "desc" },
-      ...(onlyArchived ? { take: 200 } : {}),
+      take: onlyArchived ? 200 : 400, // as 400 conversas mais recentes (o painel e atualizado a cada poucos segundos)
       include: {
         patient: { include: { tags: { include: { tag: { select: { id: true, label: true, color: true } } } } } },
         // So texto e tipo: o anexo (foto/audio em base64) NAO pode vir junto, senao cada
@@ -1775,8 +1891,7 @@ apiRouter.get(
       },
     });
 
-    const withAvatars = await Promise.all(
-      conversations.map(async (c) => ({
+    const withAvatars = conversations.map((c) => ({
         id: c.id,
         status: c.status,
         humanTakeover: c.humanTakeover,
@@ -1789,14 +1904,13 @@ apiRouter.get(
           name: c.patient.name,
           phone: c.patient.phone,
           birthDate: c.patient.birthDate,
-          avatarUrl: await getProfilePicUrl(clinic.id, c.patient.phone),
+          avatarUrl: getProfilePicUrlCached(clinic.id, c.patient.phone),
           tags: c.patient.tags.map((pt) => pt.tag),
         },
         lastMessage: c.messages[0]?.mediaType
           ? mediaPreviewLabel(c.messages[0].mediaType)
           : c.messages[0]?.content ?? null,
-      }))
-    );
+    }));
 
     res.json(withAvatars);
   })
@@ -2132,7 +2246,7 @@ apiRouter.put(
     const patient = await prisma.patient.findUniqueOrThrow({ where: { id: req.params.id } });
     if (!assertClinicAccess(req, res, patient.clinicId)) return;
 
-    const { name, birthDate, email, cpf, notes, tagIds, estimatedValue, leadTemperature, assignedToId, nextActionAt, nextActionNote, active, hasPrescription } = req.body as {
+    const { name, birthDate, email, cpf, notes, tagIds, estimatedValue, leadTemperature, assignedToId, nextActionAt, nextActionNote, active, hasPrescription, optedOut } = req.body as {
       name?: string;
       birthDate?: string | null;
       email?: string | null;
@@ -2146,6 +2260,7 @@ apiRouter.put(
       nextActionNote?: string | null;
       active?: boolean;
       hasPrescription?: boolean;
+      optedOut?: boolean;
     };
 
     const LEAD_TEMPERATURES = new Set(["frio", "morno", "quente"]);
@@ -2216,8 +2331,19 @@ apiRouter.put(
         ...(nextActionNote !== undefined ? { nextActionNote: nextActionNote?.trim() || null } : {}),
         ...(active !== undefined ? { active } : {}),
         ...(hasPrescription !== undefined ? { hasPrescription } : {}),
+        ...(optedOut !== undefined && optedOut !== patient.optedOut ? { optedOut: !!optedOut, optedOutAt: optedOut ? new Date() : null } : {}),
       },
     });
+    if (optedOut !== undefined && !!optedOut !== patient.optedOut) {
+      void logActivity({
+        clinicId: patient.clinicId,
+        patientId: patient.id,
+        type: optedOut ? "patient_opted_out" : "patient_opted_in",
+        area: "atendimento",
+        title: optedOut ? "Mensagens automáticas desligadas para este contato" : "Mensagens automáticas religadas para este contato",
+        actorName: req.staff?.name ?? null,
+      });
+    }
 
     // Timeline do card: um evento so, resumindo o que mudou nos campos
     // comerciais (nome/tag/notas ja tem seu proprio historico implicito).
@@ -2246,7 +2372,7 @@ apiRouter.put(
       });
     }
 
-    res.json({ id: updated.id, name: updated.name, birthDate: updated.birthDate, active: updated.active, hasPrescription: updated.hasPrescription });
+    res.json({ id: updated.id, name: updated.name, birthDate: updated.birthDate, active: updated.active, hasPrescription: updated.hasPrescription, optedOut: updated.optedOut });
   })
 );
 
@@ -2557,10 +2683,16 @@ apiRouter.get(
       start?: string; end?: string; professionalId?: string; status?: string; source?: string;
     };
 
+    const rangeStart = start ? parseDateParam(start) : null;
+    const rangeEnd = end ? parseDateParam(end) : null;
+    if ((start && !rangeStart) || (end && !rangeEnd)) {
+      res.status(400).json({ error: "start/end invalidos" });
+      return;
+    }
     const appointments = await prisma.appointment.findMany({
       where: {
         clinicId: clinic.id,
-        ...(start && end ? { scheduledAt: { gte: new Date(start), lte: new Date(end) } } : {}),
+        ...(rangeStart && rangeEnd ? { scheduledAt: { gte: rangeStart, lte: rangeEnd } } : {}),
         ...(professionalId ? { professionalId } : {}),
         ...(status ? { status } : {}),
         ...(source ? { source } : {}),
@@ -2603,7 +2735,19 @@ apiRouter.post(
       return;
     }
 
+    const startDate = parseDateParam(scheduledAt);
+    if (!startDate) {
+      res.status(400).json({ error: "scheduledAt invalido (use data/hora ISO)" });
+      return;
+    }
     const clinic = await getClinic(req);
+    // Valida procedimento/profissional ANTES de criar o contato (antes um agendamento recusado deixava o contato criado/renomeado).
+    const [ownProcedure] = await idsOfClinic("procedure", clinic.id, [procedureId]);
+    const [ownProfessional] = professionalId ? await idsOfClinic("professional", clinic.id, [professionalId]) : [];
+    if (!ownProcedure || (professionalId && !ownProfessional)) {
+      res.status(422).json({ error: "procedimento ou profissional invalido para esta clinica" });
+      return;
+    }
     const phone = patientPhone.replace(/\D/g, "");
     const patient = await prisma.patient.upsert({
       where: { clinicId_phone: { clinicId: clinic.id, phone } },
@@ -2624,7 +2768,7 @@ apiRouter.post(
       patientId: patient.id,
       procedureId,
       professionalId: professionalId || null,
-      startUtc: new Date(scheduledAt),
+      startUtc: startDate,
       source: source && VALID_SOURCE.includes(source) ? source : "presencial",
       enforceHours: false,
     });
@@ -2682,32 +2826,57 @@ apiRouter.put(
       return;
     }
 
-    // Remarcar precisa revalidar o horario novo (feriado, bloqueio, conflito,
-    // fora do expediente) - sem isso, editar a data no painel escrevia direto
-    // no banco sem checar nada, e dava pra arrastar dois pacientes pro mesmo
-    // horario. ignoreAppointmentId exclui o proprio agendamento do "ocupado",
-    // senao remarcar pra perto do horario ATUAL dele conflitaria com ele mesmo.
-    if (scheduledAt !== undefined) {
-      const newStart = new Date(scheduledAt);
-      if (newStart.getTime() !== existing.scheduledAt.getTime()) {
-        const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: existing.clinicId } });
-        const resolvedProcedureId = procedureId ?? existing.procedureId;
-        const resolvedProfessionalId = professionalId !== undefined ? professionalId : existing.professionalId;
-        const wc = wallClockInZone(newStart, clinic.timezone || "America/Sao_Paulo");
-        const check = await checkSpecificTime(
-          clinic.id,
-          resolvedProcedureId,
-          { year: wc.year, month: wc.month, day: wc.day, hour: wc.hour, minute: wc.minute },
-          {
-            professionalIds: resolvedProfessionalId ? [resolvedProfessionalId] : [],
-            ignoreAppointmentId: existing.id,
-            enforceHours: false,
-          },
-        );
-        if (!check.available) {
-          res.status(409).json({ error: SLOT_REASON_PT[check.reason ?? "conflict"] });
-          return;
-        }
+    // Procedimento/profissional so podem ser DESTA clinica (antes aceitava o id de qualquer clinica).
+    if (procedureId !== undefined) {
+      const [ok] = await idsOfClinic("procedure", existing.clinicId, [procedureId]);
+      if (!ok) {
+        res.status(400).json({ error: "procedimento invalido para esta clinica" });
+        return;
+      }
+    }
+    if (professionalId) {
+      const [ok] = await idsOfClinic("professional", existing.clinicId, [professionalId]);
+      if (!ok) {
+        res.status(400).json({ error: "profissional invalido para esta clinica" });
+        return;
+      }
+    }
+    const parsedNewStart = scheduledAt !== undefined ? parseDateParam(scheduledAt) : null;
+    if (scheduledAt !== undefined && !parsedNewStart) {
+      res.status(400).json({ error: "scheduledAt invalido (use data/hora ISO)" });
+      return;
+    }
+
+    // Revalidar o horario (feriado, bloqueio, conflito) quando o agendamento CONTINUA ocupando a agenda e algo que
+    // decide a ocupacao mudou: data/hora, procedimento (duracao), profissional ou reativacao de um cancelado.
+    // Antes so a data era conferida: trocar o profissional ou reativar um cancelado podia sobrepor outro paciente.
+    // ignoreAppointmentId exclui o proprio agendamento do "ocupado", senao remarcar pra perto do horario ATUAL
+    // dele conflitaria com ele mesmo.
+    const finalStatus = status ?? existing.status;
+    const finalStart = parsedNewStart ?? existing.scheduledAt;
+    const finalProcedureId = procedureId ?? existing.procedureId;
+    const finalProfessionalId = professionalId !== undefined ? professionalId || null : existing.professionalId;
+    const occupancyChanged =
+      finalStart.getTime() !== existing.scheduledAt.getTime() ||
+      finalProcedureId !== existing.procedureId ||
+      finalProfessionalId !== existing.professionalId ||
+      (finalStatus === "confirmed" && existing.status !== "confirmed");
+    if (finalStatus === "confirmed" && finalStart.getTime() > Date.now() && occupancyChanged) {
+      const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: existing.clinicId } });
+      const wc = wallClockInZone(finalStart, clinic.timezone || "America/Sao_Paulo");
+      const check = await checkSpecificTime(
+        clinic.id,
+        finalProcedureId,
+        { year: wc.year, month: wc.month, day: wc.day, hour: wc.hour, minute: wc.minute },
+        {
+          professionalIds: finalProfessionalId ? [finalProfessionalId] : [],
+          ignoreAppointmentId: existing.id,
+          enforceHours: false,
+        },
+      );
+      if (!check.available) {
+        res.status(409).json({ error: SLOT_REASON_PT[check.reason ?? "conflict"] });
+        return;
       }
     }
 
@@ -2716,7 +2885,7 @@ apiRouter.put(
       data: {
         ...(procedureId !== undefined ? { procedureId } : {}),
         ...(professionalId !== undefined ? { professionalId: professionalId || null } : {}),
-        ...(scheduledAt !== undefined ? { scheduledAt: new Date(scheduledAt) } : {}),
+        ...(parsedNewStart ? { scheduledAt: parsedNewStart } : {}),
         ...(status !== undefined ? { status } : {}),
         ...(source !== undefined ? { source: source || null } : {}),
         ...(patientConfirmed !== undefined
@@ -2734,13 +2903,17 @@ apiRouter.put(
     const patientLabel = existing.patient.name ?? existing.patient.phone;
     const actorName = req.staff?.name ?? null;
     // Horario que ficou livre (cancelamento ou remarcacao) -> oferece pra lista de espera.
-    const freeUpSlot = () =>
-      offerFreedSlotToWaitlist({
+    // So oferece se o horario liberado ainda vai acontecer e estava ocupado (cancelar um atendimento ja passado/concluido
+    // nao abre vaga nenhuma - antes oferecia "abriu uma vaga em quinta 02/10" dias depois).
+    const freeUpSlot = async () => {
+      if (existing.status !== "confirmed" || existing.scheduledAt.getTime() <= Date.now()) return;
+      await offerFreedSlotToWaitlist({
         clinicId: existing.clinicId,
         procedureId: existing.procedureId,
         professionalId: existing.professionalId,
         freedAt: existing.scheduledAt,
       });
+    };
 
     // Status, confirmacao de presenca e remarcacao sao eixos INDEPENDENTES: o
     // formulario de edicao do painel manda todos os campos juntos numa unica
@@ -2800,7 +2973,7 @@ apiRouter.put(
     // Guarda contra "cancelled": o cancelamento acima ja oferece o horario
     // antigo pra lista de espera - nao faz sentido avisar "remarcado" pra um
     // agendamento que acabou de ser cancelado no mesmo request.
-    if (appointment.status !== "cancelled" && scheduledAt !== undefined && new Date(scheduledAt).getTime() !== existing.scheduledAt.getTime()) {
+    if (appointment.status !== "cancelled" && parsedNewStart && parsedNewStart.getTime() !== existing.scheduledAt.getTime()) {
       await notifyStaff(
         existing.clinicId,
         "reschedule",
@@ -2883,10 +3056,15 @@ apiRouter.post(
     }
 
     const clinic = await getClinic(req);
+    const [ownBlockProfessional] = professionalId ? await idsOfClinic("professional", clinic.id, [professionalId]) : [];
+    if (professionalId && !ownBlockProfessional) {
+      res.status(400).json({ error: "profissional invalido para esta clinica" });
+      return;
+    }
     const block = await prisma.scheduleBlock.create({
       data: {
         clinicId: clinic.id,
-        professionalId: professionalId || null,
+        professionalId: ownBlockProfessional ?? null,
         startsAt: start,
         endsAt: end,
         reason: (reason || "").slice(0, 200),
@@ -2946,6 +3124,12 @@ apiRouter.post(
       return;
     }
     const clinic = await getClinic(req);
+    const [ownProcedure] = procedureId ? await idsOfClinic("procedure", clinic.id, [procedureId]) : [];
+    const [ownProfessional] = professionalId ? await idsOfClinic("professional", clinic.id, [professionalId]) : [];
+    if ((procedureId && !ownProcedure) || (professionalId && !ownProfessional)) {
+      res.status(400).json({ error: "procedimento ou profissional invalido para esta clinica" });
+      return;
+    }
     const phone = patientPhone.replace(/\D/g, "");
     const patient = await prisma.patient.upsert({
       where: { clinicId_phone: { clinicId: clinic.id, phone } },
@@ -2956,8 +3140,8 @@ apiRouter.post(
       data: {
         clinicId: clinic.id,
         patientId: patient.id,
-        procedureId: procedureId || null,
-        professionalId: professionalId || null,
+        procedureId: ownProcedure ?? null,
+        professionalId: ownProfessional ?? null,
         preferredNote: (preferredNote || "").slice(0, 200),
       },
       include: {
@@ -3482,6 +3666,11 @@ apiRouter.post(
       return;
     }
 
+    const scheduledForDate = parseDateParam(scheduledFor);
+    if (!scheduledForDate) {
+      res.status(400).json({ error: "scheduledFor invalido (use data/hora ISO)" });
+      return;
+    }
     const clinic = await getClinic(req);
     if (targetStage) {
       const stages = await getFunnelStages(clinic.id);
@@ -3517,7 +3706,7 @@ apiRouter.post(
         targetStage: targetStage || null,
         targetMode,
         targetConfig,
-        scheduledFor: new Date(scheduledFor),
+        scheduledFor: scheduledForDate,
       },
     });
 
@@ -3703,10 +3892,12 @@ apiRouter.post(
 apiRouter.get(
   "/google/callback",
   asyncRoute(async (req, res) => {
-    const back = (status: string) => res.redirect(`/?google=${status}`);
+    const back = (status: string) => res.redirect(`/admin/?google=${status}`); // o painel mora em /admin (a raiz e a landing)
 
     const clinicId = readGoogleState(String(req.query.state ?? ""));
     if (!clinicId) return back("estado_invalido");
+    // O retorno tem que vir da MESMA sessao que iniciou: conta de outra clinica nao liga o Google nesta.
+    if (req.staff && req.staff.role !== "admin" && req.staff.clinicId !== clinicId) return back("estado_invalido");
     if (req.query.error) return back("acesso_negado");
 
     const code = String(req.query.code ?? "");
@@ -3837,6 +4028,7 @@ apiRouter.post(
   "/clinica-experts/remove-copies",
   asyncRoute(async (req, res) => {
     if (!requireAdmin(req, res)) return;
+    if (!maintenanceEnabled(res)) return;
     const clinic = await getClinic(req);
     const { dryRun } = (req.body ?? {}) as { dryRun?: boolean };
     const ref = await prisma.clinic.findFirst({ where: { name: { contains: "Lisboa" }, id: { not: clinic.id } }, select: { id: true } });
@@ -3866,6 +4058,7 @@ apiRouter.post(
   "/clinica-experts/undo-import",
   asyncRoute(async (req, res) => {
     if (!requireAdmin(req, res)) return;
+    if (!maintenanceEnabled(res)) return;
     const clinic = await getClinic(req);
     const { dryRun, since } = (req.body ?? {}) as { dryRun?: boolean; since?: string };
     const sinceDate = since ? new Date(since) : undefined;
@@ -4606,8 +4799,8 @@ apiRouter.post(
     // Verifica a senha mesmo quando o usuario nao existe (contra um dummy hash),
     // pra nao vazar por tempo de resposta quais usuarios existem.
     const passwordOk = staff
-      ? verifyPassword(password, staff.passwordHash)
-      : (verifyPassword(password, DUMMY_HASH), false);
+      ? await verifyPasswordAsync(password, staff.passwordHash)
+      : (await verifyPasswordAsync(password, DUMMY_HASH), false);
     if (!staff || !passwordOk) {
       res.status(401).json({ error: "Usuario ou senha invalidos" });
       return;

@@ -208,8 +208,8 @@ export function startReminderJob(): void {
           continue;
         }
         try {
-          await sendText(appt.clinicId, appt.patient.phone, text);
-          await recordAutomatedMessage(appt.patientId, text, "Lembrete de consulta");
+          const outcome = await sendText(appt.clinicId, appt.patient.phone, text);
+          if (outcome === "sent") await recordAutomatedMessage(appt.patientId, text, "Lembrete de consulta");
         } catch (err) {
           console.error(`Falha ao enviar lembrete (regra ${rule.id}) para ${appt.patient.phone}:`, err);
           if (isPermanentSendError(err)) continue; // numero sem WhatsApp: mantem a reserva, nao insiste

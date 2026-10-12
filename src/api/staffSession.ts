@@ -58,7 +58,14 @@ function parseCookies(header: string | undefined): Record<string, string> {
   for (const part of header.split(";")) {
     const idx = part.indexOf("=");
     if (idx === -1) continue;
-    out[part.slice(0, idx).trim()] = decodeURIComponent(part.slice(idx + 1).trim());
+    const raw = part.slice(idx + 1).trim();
+    let value = raw;
+    try {
+      value = decodeURIComponent(raw);
+    } catch {
+      /* cookie de OUTRO sistema com "%" invalido: ignora o valor em vez de derrubar a requisicao */
+    }
+    out[part.slice(0, idx).trim()] = value;
   }
   return out;
 }

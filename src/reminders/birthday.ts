@@ -41,6 +41,7 @@ export function startBirthdayJob(): void {
         where: {
           clinicId: rule.clinicId,
           birthDate: { not: null },
+          optedOut: false, // quem pediu pra parar nao recebe mensagem automatica
           birthdaySent: { none: { ruleId: rule.id, year } },
         },
       });
@@ -64,9 +65,9 @@ export function startBirthdayJob(): void {
         });
 
         try {
-          await sendText(rule.clinicId, patient.phone, text);
+          const outcome = await sendText(rule.clinicId, patient.phone, text);
           await prisma.birthdaySent.create({ data: { patientId: patient.id, ruleId: rule.id, year } });
-          await recordAutomatedMessage(patient.id, text, rule.name || "Aniversário automático");
+          if (outcome === "sent") await recordAutomatedMessage(patient.id, text, rule.name || "Aniversário automático");
         } catch (err) {
           console.error(`Falha ao enviar aniversario (regra ${rule.id}) para ${patient.phone}:`, err);
         }

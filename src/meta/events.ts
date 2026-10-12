@@ -183,6 +183,9 @@ export async function enqueueStageChange(params: {
   // estimado" que já estava salvo no card (pode ser uma estimativa antiga
   // e sem relação com o valor real fechado agora).
   saleValue?: number;
+  // Movimento feito pela IA: o card muda e o CRMStageChanged segue, mas a Alice nao gera "Purchase" sozinha (poluiria a
+  // otimizacao dos anuncios com compras que ninguem da equipe confirmou).
+  aiDriven?: boolean;
 }): Promise<void> {
   try {
     const config = await prisma.metaConfig.findUnique({ where: { clinicId: params.clinicId } });
@@ -266,7 +269,7 @@ export async function enqueueStageChange(params: {
     // aqui: esse campo e o "valor estimado" editavel a qualquer momento no
     // card - podia ficar uma estimativa velha e sem relacao mandada como se
     // fosse o valor real fechado agora.
-    if (config.stageWon && params.newStageId === config.stageWon) {
+    if (config.stageWon && params.newStageId === config.stageWon && !params.aiDriven) {
       await enqueue({
         clinicId: params.clinicId,
         eventName: "Purchase",

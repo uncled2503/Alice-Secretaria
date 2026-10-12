@@ -1,9 +1,12 @@
 import crypto, { timingSafeEqual } from "crypto";
+import dns from "dns/promises";
+import net from "net";
 import OpenAI from "openai";
 import { toFile } from "openai";
 import { prisma } from "../db/client.js";
 import { recordIncomingMessage, generateReply, recordOutgoingFromDevice } from "../ai/alice.js";
 import { isFreePlan } from "../crm/plan.js";
+import { isOptOutRequest, applyOptOut, OPTOUT_CONFIRMATION } from "../crm/optout.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -59,7 +62,7 @@ const AVATAR_TTL_MS = 6 * 60 * 60 * 1000;
 const STATUS_TTL_MS = 4_000;
 const avatarCache = new Map<string, { url: string | null; fetchedAt: number }>();
 const statusCache = new Map<string, { status: UazapiConnectionStatus; fetchedAt: number }>();
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 60_000, maxRetries: 1 });
 let webhookWorkerRunning = false;
 
 function record(value: unknown): JsonRecord | null {
@@ -246,13 +249,15 @@ function publicBaseUrl(): string {
   return normalizeHttpsBaseUrl(value);
 }
 
-export function webhookSignature(clinicId: string): string {
-  return crypto.createHmac("sha256", webhookSecret()).update(clinicId).digest("hex");
+// version 0 = assinatura original (so o id da clinica); a partir da 1a rotacao entra a versao no HMAC.
+export function webhookSignature(clinicId: string, version = 0): string {
+  const data = version > 0 ? `${clinicId}:v${version}` : clinicId;
+  return crypto.createHmac("sha256", webhookSecret()).update(data).digest("hex");
 }
 
-export function verifyWebhookSignature(clinicId: string, signature: string): boolean {
+export function verifyWebhookSignature(clinicId: string, signature: string, version = 0): boolean {
   try {
-    const expected = Buffer.from(webhookSignature(clinicId), "utf8");
+    const expected = Buffer.from(webhookSignature(clinicId, version), "utf8");
     const received = Buffer.from(signature, "utf8");
     return expected.length === received.length && timingSafeEqual(expected, received);
   } catch {
@@ -260,8 +265,9 @@ export function verifyWebhookSignature(clinicId: string, signature: string): boo
   }
 }
 
-async function configureWebhook(clinicId: string, credentials: UazapiCredentials): Promise<void> {
-  const url = `${publicBaseUrl()}/api/uazapi/webhook/${encodeURIComponent(clinicId)}/${webhookSignature(clinicId)}`;
+async function configureWebhook(clinicId: string, credentials: UazapiCredentials, versionOverride?: number): Promise<void> {
+  const version = versionOverride ?? (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { webhookVersion: true } }))?.webhookVersion ?? 0;
+  const url = `${publicBaseUrl()}/api/uazapi/webhook/${encodeURIComponent(clinicId)}/${webhookSignature(clinicId, version)}`;
   await request(credentials, "/webhook", {
     method: "POST",
     body: JSON.stringify({
@@ -340,6 +346,16 @@ export async function reapplyWebhook(clinicId: string): Promise<void> {
   await configureWebhook(clinicId, credentials);
 }
 
+// Troca a assinatura que vai na URL do webhook (ex.: a URL vazou em log de proxy). Primeiro configura a UAZAPI com a
+// assinatura nova; so depois grava a versao - se a UAZAPI recusar, a URL antiga continua valendo.
+export async function rotateWebhookSignature(clinicId: string): Promise<void> {
+  const credentials = await clinicCredentials(clinicId);
+  const current = (await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { webhookVersion: true } })).webhookVersion;
+  const next = current + 1;
+  await configureWebhook(clinicId, credentials, next);
+  await prisma.clinic.update({ where: { id: clinicId }, data: { webhookVersion: next } });
+}
+
 export async function connectClinic(clinicId: string): Promise<void> {
   const credentials = await clinicCredentials(clinicId);
   // O webhook (recepcao de mensagens) depende de PUBLIC_BASE_URL/UAZAPI_WEBHOOK_SECRET
@@ -400,19 +416,34 @@ export function hasUnresolvedPlaceholder(text: string): string | null {
 // (duas rodadas de automacao, dois servidores no ar na troca de versao...).
 const recentSends = new Map<string, number>();
 const DUPLICATE_WINDOW_MS = 10 * 60_000;
+function sendKey(clinicId: string, phone: string, text: string): string {
+  return `${clinicId}|${phone.replace(/\D/g, "")}|${text.trim().replace(/\s+/g, " ")}`;
+}
+
 export function isDuplicateSend(clinicId: string, phone: string, text: string, now = Date.now()): boolean {
   if (text.trim().length < 40) return false;
   for (const [k, at] of recentSends) if (now - at > DUPLICATE_WINDOW_MS) recentSends.delete(k);
-  const key = `${clinicId}|${phone.replace(/\D/g, "")}|${text.trim().replace(/\s+/g, " ")}`;
+  const key = sendKey(clinicId, phone, text);
   if (recentSends.has(key)) return true;
   recentSends.set(key, now);
   return false;
 }
 
+// O envio falhou: o texto NAO saiu, entao a proxima tentativa (ex.: o proximo ciclo do cron) nao pode ser
+// barrada como "duplicada".
+export function forgetSend(clinicId: string, phone: string, text: string): void {
+  recentSends.delete(sendKey(clinicId, phone, text));
+}
+
 const placeholderAlerted = new Map<string, number>();
 
-export async function sendText(clinicId: string, phone: string, text: string, opts: { manual?: boolean; alice?: boolean } = {}): Promise<void> {
-  if (await automatedSendBlocked(clinicId, opts.manual === true)) return;
+// "sent" = saiu pelo WhatsApp. "blocked" = plano gratis (nada automatico sai). "duplicate" = o mesmo texto ja saiu
+// ha pouco para o mesmo numero. Quem grava a mensagem no chat so deve fazer isso quando o resultado e "sent".
+export type SendOutcome = "sent" | "blocked" | "duplicate";
+
+export async function sendText(clinicId: string, phone: string, text: string, opts: { manual?: boolean; alice?: boolean } = {}): Promise<SendOutcome> {
+  if (await automatedSendBlocked(clinicId, opts.manual === true)) return "blocked";
+  let reservedDuplicateKey = false;
   if (opts.manual !== true) {
     const missing = hasUnresolvedPlaceholder(text);
     if (missing) {
@@ -425,45 +456,95 @@ export async function sendText(clinicId: string, phone: string, text: string, op
       }
       throw new Error(`Mensagem bloqueada: campo sem preencher ${missing}`);
     }
-    if (isDuplicateSend(clinicId, phone, text)) {
-      // Mostra o inicio do texto e quem chamou: sem isso o log so dizia "duplicado" e nao dava pra achar a origem.
-      const caller = (new Error().stack ?? "").split("\n").slice(2, 5).map((l) => l.trim().replace(/^at /, "").replace(/\(.*[\\/]/, "(")).join(" < ");
-      console.warn(`[uazapi] envio duplicado descartado para ${phone.slice(-4)}: "${text.trim().replace(/\s+/g, " ").slice(0, 60)}" [${caller}]`);
-      return;
-    }
-    // Automacao (nao a conversa da Alice, que ja grava a resposta antes de enviar): olha o
-    // BANCO - se outra rodada/processo ja mandou exatamente este texto, nao manda de novo.
-    if (opts.alice !== true && text.trim().length >= 40) {
-      const already = await prisma.message.findFirst({
-        where: { role: "assistant", content: text, createdAt: { gte: new Date(Date.now() - DUPLICATE_WINDOW_MS) }, conversation: { patient: { clinicId, phone } } },
-        select: { id: true },
-      });
-      if (already) {
-        console.warn(`[uazapi] envio duplicado (ja registrado no chat) descartado para ${phone.slice(-4)}`);
-        return;
+    // A conversa da Alice NAO passa pela trava de duplicados: ela ja tem a propria (uma resposta por vez por
+    // conversa + descarte de resposta repetida em generateReply). Aqui a trava barrava uma resposta legitima
+    // igual a anterior (ex.: o paciente pergunta o endereco duas vezes) e o paciente ficava sem resposta.
+    if (opts.alice !== true) {
+      if (isDuplicateSend(clinicId, phone, text)) {
+        // Mostra o inicio do texto e quem chamou: sem isso o log so dizia "duplicado" e nao dava pra achar a origem.
+        const caller = (new Error().stack ?? "").split("\n").slice(2, 5).map((l) => l.trim().replace(/^at /, "").replace(/\(.*[\\/]/, "(")).join(" < ");
+        console.warn(`[uazapi] envio duplicado descartado para ${phone.slice(-4)}: "${text.trim().replace(/\s+/g, " ").slice(0, 60)}" [${caller}]`);
+        return "duplicate";
+      }
+      reservedDuplicateKey = text.trim().length >= 40;
+      // Automacao: olha o BANCO - se outra rodada/processo ja mandou exatamente este texto, nao manda de novo.
+      if (text.trim().length >= 40) {
+        const already = await prisma.message.findFirst({
+          where: { role: "assistant", content: text, createdAt: { gte: new Date(Date.now() - DUPLICATE_WINDOW_MS) }, conversation: { patient: { clinicId, phone } } },
+          select: { id: true },
+        });
+        if (already) {
+          console.warn(`[uazapi] envio duplicado (ja registrado no chat) descartado para ${phone.slice(-4)}`);
+          return "duplicate";
+        }
       }
     }
   }
-  const [credentials, config] = await Promise.all([
-    clinicCredentials(clinicId),
-    prisma.clinic.findUnique({
-      where: { id: clinicId },
-      select: { splitLongMessages: true, splitMaxMessages: true, splitThresholdChars: true },
-    }),
-  ]);
-  // Confirmacao, lembrete, recontato etc. vao SEMPRE numa mensagem so; so a conversa da Alice quebra em bolhas.
-  const parts = opts.alice === true && config?.splitLongMessages && text.length > config.splitThresholdChars
-    ? splitMessage(text, Math.max(config.splitMaxMessages, 1))
-    : [text];
+  try {
+    const [credentials, config] = await Promise.all([
+      clinicCredentials(clinicId),
+      prisma.clinic.findUnique({
+        where: { id: clinicId },
+        select: { splitLongMessages: true, splitMaxMessages: true, splitThresholdChars: true },
+      }),
+    ]);
+    // Confirmacao, lembrete, recontato etc. vao SEMPRE numa mensagem so; so a conversa da Alice quebra em bolhas.
+    const parts = opts.alice === true && config?.splitLongMessages && text.length > config.splitThresholdChars
+      ? splitMessage(text, Math.max(config.splitMaxMessages, 1))
+      : [text];
 
-  for (let index = 0; index < parts.length; index++) {
-    const delay = Math.min(3500, 500 + parts[index].length * 25);
-    await request(credentials, "/send/text", {
-      method: "POST",
-      body: JSON.stringify({ number: phone.replace(/\D/g, ""), text: parts[index], delay, async: false }),
-    });
-    if (index < parts.length - 1) await new Promise((resolve) => setTimeout(resolve, 1000 + Math.random() * 2000));
+      for (let index = 0; index < parts.length; index++) {
+        const delay = Math.min(3500, 500 + parts[index].length * 25);
+        await request(credentials, "/send/text", {
+          method: "POST",
+          body: JSON.stringify({ number: phone.replace(/\D/g, ""), text: parts[index], delay, async: false }),
+        });
+        if (index < parts.length - 1) await new Promise((resolve) => setTimeout(resolve, 1000 + Math.random() * 2000));
+      }
+
+  } catch (err) {
+    if (reservedDuplicateKey) forgetSend(clinicId, phone, text); // nao saiu: a proxima tentativa nao e duplicata
+    throw err;
   }
+  return "sent";
+}
+
+// Envia a resposta da Alice e atualiza o estado de entrega da mensagem que generateReply gravou como "pending".
+// Se o envio falhar a mensagem fica "failed" (o painel mostra) e o erro sobe: o evento do webhook volta pra fila e a
+// proxima tentativa reenvia ESTA resposta em vez de gerar outra.
+async function deliverAliceReply(clinicId: string, phone: string, conversationId: string, reply: string): Promise<void> {
+  const pending = await prisma.message.findFirst({
+    where: { conversationId, role: "assistant", authorName: null, content: reply, deliveryStatus: { in: ["pending", "failed"] } },
+    orderBy: { createdAt: "desc" },
+    select: { id: true },
+  });
+  try {
+    await sendText(clinicId, phone, reply, { alice: true });
+    if (pending) await prisma.message.update({ where: { id: pending.id }, data: { deliveryStatus: "sent" } });
+  } catch (err) {
+    if (pending) await prisma.message.update({ where: { id: pending.id }, data: { deliveryStatus: "failed" } }).catch(() => undefined);
+    throw err;
+  }
+}
+
+// Reenvia a ultima resposta da Alice que nao chegou (deliveryStatus "failed"), se ainda for a ultima fala da conversa.
+// true = havia uma resposta pendente de entrega (enviada ou nao); false = nada a reenviar.
+async function resendFailedAliceReply(clinicId: string, phone: string, conversationId: string): Promise<boolean> {
+  const failed = await prisma.message.findFirst({
+    where: { conversationId, role: "assistant", authorName: null, deliveryStatus: "failed" },
+    orderBy: { createdAt: "desc" },
+  });
+  if (!failed) return false;
+  const later = await prisma.message.findFirst({
+    where: { conversationId, createdAt: { gt: failed.createdAt }, role: { in: ["assistant", "human"] } },
+    select: { id: true },
+  });
+  if (later) {
+    await prisma.message.update({ where: { id: failed.id }, data: { deliveryStatus: null } }); // superada por outra fala: nao reenvia
+    return false;
+  }
+  await deliverAliceReply(clinicId, phone, conversationId, failed.content);
+  return true;
 }
 
 export type OutgoingMediaKind = "image" | "video" | "document" | "audio" | "ptt";
@@ -491,6 +572,21 @@ export async function sendMedia(
   await request(credentials, "/send/media", { method: "POST", body: JSON.stringify(body) });
 }
 
+// Versao pra listas: NUNCA espera a rede. Devolve o que estiver em cache (ou null) e, se faltar, busca em segundo plano
+// (poucas por vez) pra aparecer na proxima atualizacao. Antes a lista de conversas esperava uma chamada a UAZAPI por
+// contato sem foto em cache, a cada atualizacao do painel.
+const avatarInFlight = new Set<string>();
+export function getProfilePicUrlCached(clinicId: string, phone: string): string | null {
+  const cacheKey = `${clinicId}:${phone}`;
+  const cached = avatarCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < AVATAR_TTL_MS) return cached.url;
+  if (!avatarInFlight.has(cacheKey) && avatarInFlight.size < 4) {
+    avatarInFlight.add(cacheKey);
+    void getProfilePicUrl(clinicId, phone).finally(() => avatarInFlight.delete(cacheKey));
+  }
+  return cached?.url ?? null;
+}
+
 export async function getProfilePicUrl(clinicId: string, phone: string): Promise<string | null> {
   const cacheKey = `${clinicId}:${phone}`;
   const cached = avatarCache.get(cacheKey);
@@ -507,6 +603,7 @@ export async function getProfilePicUrl(clinicId: string, phone: string): Promise
   } catch {
     url = null;
   }
+  if (avatarCache.size > 5000) avatarCache.clear(); // cresce com cada contato: limite simples
   avatarCache.set(cacheKey, { url, fetchedAt: Date.now() });
   return url;
 }
@@ -728,9 +825,58 @@ function toDataUri(encoded: string, mimeHint?: string): string | null {
   return `data:${mimeHint || "application/octet-stream"};base64,${base64}`;
 }
 
+// IP que nunca e destino legitimo de midia do WhatsApp: loopback, rede privada, link-local (metadados de nuvem),
+// CGNAT etc. Evita que um webhook forjado faca o servidor buscar enderecos internos (SSRF).
+export function isPrivateIp(ip: string): boolean {
+  const v = net.isIP(ip);
+  if (v === 4) {
+    const [a, b] = ip.split(".").map(Number);
+    return (
+      a === 0 || a === 10 || a === 127 || a >= 224 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 192 && b === 0) ||
+      (a === 198 && (b === 18 || b === 19))
+    );
+  }
+  if (v === 6) {
+    const low = ip.toLowerCase();
+    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(low);
+    if (mapped) return isPrivateIp(mapped[1]);
+    return low === "::" || low === "::1" || low.startsWith("fc") || low.startsWith("fd") || /^fe[89ab]/.test(low) || low.startsWith("ff");
+  }
+  return true; // nao e IP valido
+}
+
+async function assertPublicHttpsUrl(raw: string): Promise<URL> {
+  const url = new URL(raw);
+  if (url.protocol !== "https:") throw new Error("URL de midia precisa ser HTTPS");
+  if (url.username || url.password) throw new Error("URL de midia invalida");
+  const addresses = net.isIP(url.hostname) ? [{ address: url.hostname }] : await dns.lookup(url.hostname, { all: true });
+  if (!addresses.length || addresses.some((a) => isPrivateIp(a.address))) throw new Error("URL de midia aponta para endereco interno");
+  return url;
+}
+
+// fetch que so vai pra hosts publicos e revalida a cada redirecionamento (maximo 3).
+async function safeFetch(rawUrl: string): Promise<Response> {
+  let current = rawUrl;
+  for (let hop = 0; hop <= 3; hop++) {
+    const url = await assertPublicHttpsUrl(current);
+    const r = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    if (r.status >= 300 && r.status < 400 && r.headers.get("location")) {
+      current = new URL(r.headers.get("location")!, url).toString();
+      continue;
+    }
+    return r;
+  }
+  throw new Error("redirecionamentos demais");
+}
+
 async function urlToDataUri(url: string, fallbackMime = "application/octet-stream"): Promise<string | null> {
   try {
-    const r = await fetch(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    const r = await safeFetch(url);
     if (!r.ok) return null;
     const buf = Buffer.from(await r.arrayBuffer());
     if (buf.length > (MEDIA_MAX_BYTES * 3) / 4) return null;
@@ -851,7 +997,7 @@ function scheduleGroupedReply(clinicId: string, phone: string, conversationId: s
       .then((reply) => {
         // Um novo agrupamento comecou enquanto gerava -> nao envia esta.
         if (pendingReplies.has(key)) return;
-        if (reply) return sendText(clinicId, phone, reply, { alice: true });
+        if (reply) return deliverAliceReply(clinicId, phone, conversationId, reply);
       })
       .catch((err) => console.error("[reply-group] falha ao gerar/enviar:", err));
   }, wait);
@@ -867,17 +1013,43 @@ export function bumpTypingWait(clinicId: string, phone: string, extraMs: number)
   scheduleGroupedReply(clinicId, phone, e.conversationId, extraMs, e.imageDataUrl);
 }
 
-async function handleQueuedPayload(clinicId: string, body: unknown): Promise<void> {
+// Evento reprocessado depois de mais que isso: a mensagem entra no chat, mas a Alice NAO responde sozinha (a resposta
+// seria de uma conversa velha); a conversa fica "nao lida" pra equipe.
+const STALE_REPLY_MS = 30 * 60_000;
+
+async function findRecordedMessage(clinicId: string, externalId: string) {
+  return prisma.message.findFirst({
+    where: { externalId, conversation: { patient: { clinicId } } },
+    select: { conversationId: true, conversation: { select: { humanTakeover: true } } },
+  });
+}
+
+async function handleQueuedPayload(clinicId: string, body: unknown, ageMs = 0): Promise<void> {
   // Plano grátis: o lead ainda entra (recordIncomingMessage cria contato +
   // evento Lead + atribuicao), mas a Alice nao responde e nao gastamos
   // transcricao de audio.
   const planClinic = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { plan: true } });
   const freePlan = isFreePlan(planClinic?.plan);
+  const stale = ageMs > STALE_REPLY_MS;
 
   for (const incoming of parseWebhookPayload(body)) {
     let text = incoming.text ?? null;
     let imageDataUrl: string | undefined;
     let media: { type: "image" | "video" | "document" | "audio"; dataUrl: string; name?: string } | undefined;
+
+    // REPROCESSAMENTO: este evento ja foi (pelo menos em parte) tratado numa tentativa anterior. Nao grava a mensagem
+    // de novo nem baixa/transcreve midia outra vez: so garante que o paciente receba a resposta.
+    const already = await findRecordedMessage(clinicId, incoming.externalId);
+    if (already) {
+      if (incoming.fromMe || freePlan || already.conversation.humanTakeover || stale) continue;
+      // 1) existe resposta gravada que nao chegou ao paciente: reenvia ESSA (nao gera outra)
+      if (await resendFailedAliceReply(clinicId, incoming.phone, already.conversationId)) continue;
+      // 2) a mensagem foi gravada mas a resposta nunca foi gerada (falha/queda no meio): gera agora.
+      //    generateReply nao responde de novo se a ultima fala da conversa ja e da Alice.
+      const late = await generateReply(already.conversationId, {});
+      if (late) await deliverAliceReply(clinicId, incoming.phone, already.conversationId, late);
+      continue;
+    }
 
     // Mensagem que SAIU deste WhatsApp sem passar pela Alice nem pelo painel -
     // a clínica respondeu direto pelo celular ou pelo WhatsApp Web. So resolve
@@ -895,6 +1067,7 @@ async function handleQueuedPayload(clinicId: string, body: unknown): Promise<voi
         patientName: incoming.pushName,
         text: text ?? "",
         media,
+        externalId: incoming.externalId,
       });
       continue;
     }
@@ -929,8 +1102,22 @@ async function handleQueuedPayload(clinicId: string, body: unknown): Promise<voi
       imageDataUrl,
       media,
       referral: incoming.referral,
+      externalId: incoming.externalId,
     });
     if (!recorded) continue;
+
+    // Pediu pra PARAR de receber mensagem: liga o optedOut (nenhuma automacao manda mais nada) e confirma. Nao passa
+    // pelo modelo - e uma resposta fixa.
+    if (text && !recorded.probableEcho && isOptOutRequest(text)) {
+      await applyOptOut(clinicId, recorded.patientId);
+      if (!freePlan && !recorded.humanTakeover) {
+        await prisma.message.create({
+          data: { conversationId: recorded.conversationId, role: "assistant", content: OPTOUT_CONFIRMATION, deliveryStatus: "pending" },
+        });
+        await deliverAliceReply(clinicId, incoming.phone, recorded.conversationId, OPTOUT_CONFIRMATION);
+      }
+      continue;
+    }
 
     // Plano grátis: a Alice nao atende. A conversa e sempre da equipe e entra
     // como "nao lida" pra alguem responder na mao.
@@ -945,13 +1132,21 @@ async function handleQueuedPayload(clinicId: string, body: unknown): Promise<voi
     if (recorded.humanTakeover) continue;
     if (recorded.probableEcho) continue;
 
+    if (stale) {
+      await prisma.conversation.update({
+        where: { id: recorded.conversationId },
+        data: { handoffPending: true, handoffReason: "mensagem recebida com atraso (falha no processamento)" },
+      });
+      continue;
+    }
+
     if (recorded.replyDelayMs > 0) {
       scheduleGroupedReply(clinicId, incoming.phone, recorded.conversationId, recorded.replyDelayMs, imageDataUrl);
       continue;
     }
 
     const reply = await generateReply(recorded.conversationId, { imageDataUrl });
-    if (reply) await sendText(clinicId, incoming.phone, reply, { alice: true });
+    if (reply) await deliverAliceReply(clinicId, incoming.phone, recorded.conversationId, reply);
   }
 }
 
@@ -1008,49 +1203,171 @@ export async function enqueueWebhook(clinicId: string, body: unknown): Promise<"
   return "queued";
 }
 
-export async function processUazapiWebhookQueue(): Promise<void> {
-  if (webhookWorkerRunning) return;
-  webhookWorkerRunning = true;
+// --- Fila de webhooks ------------------------------------------------------------------------------------
+// - Clinicas diferentes processam em paralelo (ate MAX_PARALLEL); dentro de UMA clinica a ordem e preservada (um
+//   evento por vez). Antes era uma fila unica global: uma chamada lenta travava o atendimento de todas as clinicas.
+// - Cada evento tem prazo (EVENT_TIMEOUT_MS): se estourar vira "failed" e volta pra fila.
+// - "processing" abandonado (container reiniciado no meio) e devolvido pra fila por uma varredura periodica
+//   (STALE_PROCESSING_MS) e no boot - antes so voltava no boot e so se tivesse mais de 5 min, entao o evento de
+//   um deploy ficava preso pra sempre.
+// - Reprocessar um evento e seguro: a mensagem do paciente tem externalId (nao duplica) e a resposta que nao saiu e reenviada.
+const MAX_PARALLEL = 4;
+const EVENT_TIMEOUT_MS = 150_000;
+const STALE_PROCESSING_MS = 180_000; // maior que EVENT_TIMEOUT_MS: um evento vivo nunca e confundido com um abandonado
+const MAX_ATTEMPTS = 3;
+const activeClinics = new Set<string>();
+const activeEventIds = new Set<string>();
+let webhookRerun = false;
+let shuttingDown = false;
+
+async function processWebhookEvent(event: { id: string; clinicId: string; payload: string; createdAt: Date }): Promise<void> {
+  activeEventIds.add(event.id);
   try {
-    while (true) {
-      const event = await prisma.uazapiWebhookEvent.findFirst({
-        where: { status: { in: ["pending", "failed"] }, attempts: { lt: 3 } },
-        orderBy: { createdAt: "asc" },
-      });
-      if (!event) break;
-      // RESERVA atomica: so uma copia do servidor processa cada evento. Antes era "ler e depois
-      // marcar": duas copias pegavam o mesmo evento e a Alice respondia duas vezes.
-      const claimed = await prisma.uazapiWebhookEvent.updateMany({
-        where: { id: event.id, status: event.status },
-        data: { status: "processing", attempts: { increment: 1 }, error: null },
-      });
-      if (claimed.count !== 1) continue; // outra copia pegou
-      try {
-        await handleQueuedPayload(event.clinicId, JSON.parse(event.payload));
-        await prisma.uazapiWebhookEvent.update({ where: { id: event.id }, data: { status: "done" } });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        await prisma.uazapiWebhookEvent.update({ where: { id: event.id }, data: { status: "failed", error: message.slice(0, 1000) } });
-        console.error(`[UAZAPI] Evento ${event.id} falhou:`, error);
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("tempo esgotado processando o evento")), EVENT_TIMEOUT_MS);
+    });
+    try {
+      await Promise.race([handleQueuedPayload(event.clinicId, JSON.parse(event.payload), Date.now() - event.createdAt.getTime()), timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    await prisma.uazapiWebhookEvent.update({ where: { id: event.id }, data: { status: "done" } });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await prisma.uazapiWebhookEvent
+      .update({ where: { id: event.id }, data: { status: "failed", error: message.slice(0, 1000) } })
+      .catch(() => undefined);
+    console.error(`[UAZAPI] Evento ${event.id} falhou:`, error);
+  } finally {
+    activeEventIds.delete(event.id);
+  }
+}
+
+export async function processUazapiWebhookQueue(): Promise<void> {
+  if (webhookWorkerRunning) {
+    webhookRerun = true; // chegou evento novo enquanto o worker corre: ele varre de novo antes de parar
+    return;
+  }
+  webhookWorkerRunning = true;
+  const running = new Set<Promise<void>>();
+  try {
+    do {
+      webhookRerun = false;
+      while (!shuttingDown) {
+        let started = 0;
+        if (running.size < MAX_PARALLEL) {
+          const busy = [...activeClinics];
+          const events = await prisma.uazapiWebhookEvent.findMany({
+            where: {
+              status: { in: ["pending", "failed"] },
+              attempts: { lt: MAX_ATTEMPTS },
+              ...(busy.length ? { clinicId: { notIn: busy } } : {}),
+            },
+            orderBy: { createdAt: "asc" },
+            take: MAX_PARALLEL * 4,
+          });
+          for (const event of events) {
+            if (running.size >= MAX_PARALLEL) break;
+            if (activeClinics.has(event.clinicId)) continue; // um por clinica: preserva a ordem das mensagens
+            // RESERVA atomica: so uma copia do servidor processa cada evento.
+            const claimed = await prisma.uazapiWebhookEvent.updateMany({
+              where: { id: event.id, status: event.status },
+              data: { status: "processing", attempts: { increment: 1 }, error: null },
+            });
+            if (claimed.count !== 1) continue; // outra copia pegou
+            activeClinics.add(event.clinicId);
+            const task: Promise<void> = processWebhookEvent(event).finally(() => {
+              activeClinics.delete(event.clinicId);
+              running.delete(task);
+            });
+            running.add(task);
+            started++;
+          }
+        }
+        if (running.size === 0 && started === 0) break; // nada pendente e nada em andamento
+        if (started === 0 || running.size >= MAX_PARALLEL) await Promise.race(running);
+      }
+    } while (webhookRerun && !shuttingDown);
+  } finally {
+    await Promise.allSettled([...running]);
+    webhookWorkerRunning = false;
+  }
+}
+
+// Reenvia respostas da Alice que ficaram "failed" (o envio falhou e nenhum evento vai reprocessar, ex.: resposta
+// agrupada por replyDelaySeconds). So as dos ultimos 30 min e que ainda sao a ultima fala da conversa.
+async function retryFailedAliceReplies(): Promise<void> {
+  const failed = await prisma.message.findMany({
+    where: { role: "assistant", authorName: null, deliveryStatus: "failed", createdAt: { gte: new Date(Date.now() - STALE_REPLY_MS) } },
+    select: { conversationId: true, conversation: { select: { humanTakeover: true, patient: { select: { clinicId: true, phone: true } } } } },
+    take: 20,
+  });
+  const seen = new Set<string>();
+  for (const m of failed) {
+    if (seen.has(m.conversationId)) continue;
+    seen.add(m.conversationId);
+    if (m.conversation.humanTakeover) continue;
+    try {
+      await resendFailedAliceReply(m.conversation.patient.clinicId, m.conversation.patient.phone, m.conversationId);
+    } catch (err) {
+      if (isPermanentSendError(err)) {
+        // numero sem WhatsApp: nao adianta insistir
+        await prisma.message.updateMany({ where: { conversationId: m.conversationId, deliveryStatus: "failed" }, data: { deliveryStatus: "failed_permanent" } });
+      } else {
+        console.error("[UAZAPI] reenvio de resposta falhou:", err instanceof Error ? err.message : err);
       }
     }
-  } finally {
-    webhookWorkerRunning = false;
+  }
+}
+
+let lastCleanupAt = 0;
+
+// Roda a cada minuto: devolve eventos abandonados, reprocessa os que falharam, reenvia respostas que nao chegaram
+// e (1x por hora) limpa tabelas que so cresciam.
+export async function maintainUazapiQueue(): Promise<void> {
+  if (shuttingDown) return;
+  await prisma.uazapiWebhookEvent.updateMany({
+    where: { status: "processing", updatedAt: { lt: new Date(Date.now() - STALE_PROCESSING_MS) }, id: { notIn: [...activeEventIds] } },
+    data: { status: "pending" },
+  });
+  await processUazapiWebhookQueue();
+  await retryFailedAliceReplies();
+
+  if (Date.now() - lastCleanupAt > 3_600_000) {
+    lastCleanupAt = Date.now();
+    const day = 24 * 60 * 60_000;
+    await prisma.uazapiWebhookEvent.deleteMany({ where: { status: "done", createdAt: { lt: new Date(Date.now() - 7 * day) } } });
+    await prisma.uazapiWebhookEvent.deleteMany({ where: { status: "failed", attempts: { gte: MAX_ATTEMPTS }, createdAt: { lt: new Date(Date.now() - 30 * day) } } });
+    await prisma.apiIdempotencyKey.deleteMany({ where: { createdAt: { lt: new Date(Date.now() - 7 * day) } } });
   }
 }
 
 export async function startUazapiWebhookWorker(): Promise<void> {
   await resetStaleHistoryImports();
-  // So devolve pra fila o que ficou TRAVADO (sem atividade ha mais de 5 min). Antes toda copia que
-  // iniciava reabria os eventos que a outra copia estava processando naquele instante.
+  // No boot esta copia ainda nao processou nada: o que estiver "processing" ha mais de 90 s e de uma copia que
+  // caiu/foi substituida. (Na troca de versao a copia antiga pode estar viva ainda: 90 s cobre um evento normal.)
   await prisma.uazapiWebhookEvent.updateMany({
-    where: { status: "processing", updatedAt: { lt: new Date(Date.now() - 5 * 60_000) } },
+    where: { status: "processing", updatedAt: { lt: new Date(Date.now() - 90_000) } },
     data: { status: "pending" },
   });
-  await prisma.uazapiWebhookEvent.deleteMany({
-    where: { status: "done", createdAt: { lt: new Date(Date.now() - 7 * 24 * 60 * 60_000) } },
-  });
   await processUazapiWebhookQueue();
+  setInterval(() => {
+    maintainUazapiQueue().catch((err) => console.error("[UAZAPI] manutencao da fila falhou:", err));
+  }, 60_000).unref();
+}
+
+// SIGTERM (deploy): para de pegar eventos novos, espera os em andamento ate graceMs e devolve pra fila os que nao deram tempo.
+export async function shutdownUazapiWorker(graceMs = 20_000): Promise<void> {
+  shuttingDown = true;
+  const deadline = Date.now() + graceMs;
+  while (webhookWorkerRunning && Date.now() < deadline) await new Promise((r) => setTimeout(r, 200));
+  if (activeEventIds.size) {
+    await prisma.uazapiWebhookEvent.updateMany({
+      where: { id: { in: [...activeEventIds] }, status: "processing" },
+      data: { status: "pending", attempts: { decrement: 1 } },
+    });
+  }
 }
 
 interface ImportStats {

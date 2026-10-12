@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 60_000, maxRetries: 1 });
 const MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
 // Base de conhecimento do assistente de ajuda do painel do CLIENTE (a clinica).

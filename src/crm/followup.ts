@@ -97,7 +97,14 @@ async function runFollowUpCheckInner(): Promise<void> {
   const judgedByClinic = new Map<string, number>();
 
   const conversations = await prisma.conversation.findMany({
-    where: { status: "active", humanTakeover: false, patient: { clinic: { ...PAID_CLINIC_WHERE, aliceActive: true } } }, // Alice pausada = sem recontato
+    where: {
+      status: "active",
+      humanTakeover: false,
+      // So conversas com atividade nos ultimos 60 dias: a cascata (silencio + 3 dias de tolerancia) ja se resolveu
+      // bem antes disso. Sem este corte o job carregava TODAS as conversas ativas de todas as clinicas a cada 15 min.
+      lastMessageAt: { gte: new Date(Date.now() - 60 * 24 * 3_600_000) },
+      patient: { optedOut: false, clinic: { ...PAID_CLINIC_WHERE, aliceActive: true } }, // Alice pausada = sem recontato; quem pediu pra parar nao recebe
+    },
     include: {
       patient: { include: { clinic: { select: { importStatus: true } } } },
       messages: { where: { role: "user" }, orderBy: { createdAt: "desc" }, take: 1, select: { content: true, createdAt: true } },
@@ -225,7 +232,8 @@ async function runFollowUpCheckInner(): Promise<void> {
     if (claimed.count !== 1) continue;
 
     try {
-      await sendText(clinicId, conversation.patient.phone, text);
+      const outcome = await sendText(clinicId, conversation.patient.phone, text);
+      if (outcome !== "sent") continue; // plano gratis ou texto duplicado: nada saiu, nao grava no chat (a reserva fica: nao insiste)
     } catch (err) {
       console.error(`Falha ao enviar recontato para ${conversation.patient.phone}:`, err);
       // Numero sem WhatsApp: nao adianta insistir - mantem a reserva (este recontato fica pulado).
@@ -262,7 +270,5 @@ async function runFollowUpCheckInner(): Promise<void> {
 
 // Roda a cada 15min - agora que os recontatos podem ter janela em minutos.
 export function startFollowUpJob(): void {
-  scheduleLocked("recontato", "*/15 * * * *", () => {
-    runFollowUpCheck().catch((err) => console.error("Erro no job de recontato:", err));
-  });
+  scheduleLocked("recontato", "*/15 * * * *", () => runFollowUpCheck().catch((err) => console.error("Erro no job de recontato:", err)));
 }

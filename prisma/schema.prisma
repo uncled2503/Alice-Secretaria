@@ -37,6 +37,7 @@ model Clinic {
   // ao navegador; fica restrito ao backend e aos backups protegidos do banco.
   uazapiBaseUrl String?
   uazapiToken   String?   @unique
+  webhookVersion Int      @default(0) // sobe a cada rotacao da assinatura do webhook (0 = assinatura original, sem versao)
 
   // Como a Alice se apresenta no atendimento ao paciente. Ela NUNCA se
   // identifica como IA/assistente virtual - so como:
@@ -524,6 +525,7 @@ model Patient {
   prescriptionReminders PrescriptionReminder[]
 
   @@unique([clinicId, phone])
+  @@index([clinicId, createdAt])
 }
 
 // Lembrete de renovacao de receita: a equipe escolhe uma data e escreve a
@@ -588,6 +590,7 @@ model Conversation {
   followUpSent      FollowUpSent[]
 
   @@index([archived, lastMessageAt])
+  @@index([patientId])
 }
 
 // Cascata de recontato: dispara mensagens automaticas quando o paciente fica
@@ -785,7 +788,13 @@ model Message {
   mediaUrl       String?      // data URI do anexo (para mostrar no painel)
   mediaName      String?      // nome do arquivo (documentos)
   authorName     String?      // nome do atendente logado que enviou/transferiu (null = Alice, ou ninguem logado)
+  externalId     String?      // id da mensagem no WhatsApp (so mensagens recebidas): evita gravar duas vezes quando o webhook e reprocessado
+  deliveryStatus String?      // so respostas da Alice: pending (gravada, ainda nao enviada) | sent | failed. null = nao se aplica / legado
   createdAt      DateTime     @default(now())
+
+  @@index([conversationId, createdAt])
+  @@index([role, createdAt])
+  @@index([externalId])
 }
 
 model Appointment {
@@ -810,6 +819,9 @@ model Appointment {
   reminders      ReminderSent[]
   postProcedureSent PostProcedureSent[]
   renewalSent    RenewalSent[]
+
+  @@index([clinicId, scheduledAt])
+  @@index([patientId, scheduledAt])
 }
 
 // Conexao da clinica com o Google Agenda (OAuth). Uma por clinica.

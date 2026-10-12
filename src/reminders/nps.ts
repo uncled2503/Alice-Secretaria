@@ -3,6 +3,9 @@ import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 import { getClinicTemplateInfo } from "../crm/template.js";
 import { FREE_PLAN } from "../crm/plan.js";
+import { isWithinClinicHours } from "../crm/openHours.js";
+
+const MAX_PER_TICK = 10; // por clinica a cada rodada (15 min)
 
 const DEFAULT_MESSAGE =
   "Oi {primeiro_nome}! Passando so pra saber como foi sua experiencia com a gente. Numa escala de 0 a 10, o quanto voce recomendaria a {unidade} pra um amigo?";
@@ -15,22 +18,34 @@ export function startNpsJob(): void {
   scheduleLocked("pesquisa-satisfacao", "*/15 * * * *", async () => {
     const clinics = await prisma.clinic.findMany({
       where: { npsEnabled: true, plan: { not: FREE_PLAN } },
-      select: { id: true, npsHoursAfter: true, npsMessage: true, name: true },
+      select: { id: true, npsHoursAfter: true, npsMessage: true, name: true, timezone: true, workDays: true, workStartHour: true, workEndHour: true, hoursByDay: true },
     });
 
     for (const clinic of clinics) {
+      // So pergunta dentro do expediente da clinica (antes mandava de madrugada).
+      if (!isWithinClinicHours(clinic, new Date())) continue;
       const now = Date.now();
       const cutoff = new Date(now - clinic.npsHoursAfter * 3_600_000);
       const floor = new Date(now - 5 * 24 * 3_600_000);
 
+      // Ja perguntados ficam de fora da consulta (senao o teto por rodada seria gasto com eles).
+      const surveyed = await prisma.satisfactionSurvey.findMany({
+        where: { clinicId: clinic.id, appointmentId: { not: null }, askedAt: { gte: floor } },
+        select: { appointmentId: true },
+      });
+      const surveyedIds = surveyed.map((s) => s.appointmentId as string);
+
       const due = await prisma.appointment.findMany({
         where: {
           clinicId: clinic.id,
+          ...(surveyedIds.length ? { id: { notIn: surveyedIds } } : {}),
           status: "completed",
           scheduledAt: { lte: cutoff, gte: floor },
           patient: { optedOut: false },
         },
         include: { patient: true },
+        orderBy: { scheduledAt: "asc" },
+        take: MAX_PER_TICK, // ligar o NPS pela 1a vez nao dispara os ultimos 5 dias de uma vez: o resto sai nas proximas rodadas
       });
       if (due.length === 0) continue;
 
@@ -51,7 +66,8 @@ export function startNpsJob(): void {
           .trim();
 
         try {
-          await sendText(clinic.id, appt.patient.phone, text);
+          const outcome = await sendText(clinic.id, appt.patient.phone, text);
+          if (outcome !== "sent") continue;
         } catch (err) {
           console.error(`NPS: falha ao enviar para ${appt.patient.phone}:`, err);
           continue;

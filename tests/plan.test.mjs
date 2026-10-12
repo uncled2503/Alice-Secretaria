@@ -30,6 +30,8 @@ test("freePlanBlocksPath bloqueia automacoes e devolver-pra-Alice", () => {
   assert.equal(freePlanBlocksPath("POST", "/learning-insights/x"), true);
   assert.equal(freePlanBlocksPath("POST", "/nps"), true);
   assert.equal(freePlanBlocksPath("POST", "/api-keys"), true);
+  assert.equal(freePlanBlocksPath("POST", "/teach-alice"), true);
+  assert.equal(freePlanBlocksPath("POST", "/learning/abc/approve"), true);
 });
 
 test("freePlanBlocksPath NAO bloqueia a agenda manual e o catalogo", () => {

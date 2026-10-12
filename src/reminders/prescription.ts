@@ -45,9 +45,9 @@ export function startPrescriptionReminderJob(): void {
         });
 
         try {
-          await sendText(clinic.id, reminder.patient.phone, text);
+          const outcome = await sendText(clinic.id, reminder.patient.phone, text);
           await prisma.prescriptionReminder.update({ where: { id: reminder.id }, data: { sentAt: new Date() } });
-          await recordAutomatedMessage(reminder.patientId, text, "Renovação de receita");
+          if (outcome === "sent") await recordAutomatedMessage(reminder.patientId, text, "Renovação de receita");
         } catch (err) {
           console.error(`Falha ao enviar lembrete de receita (${reminder.id}) para ${reminder.patient.phone}:`, err);
           await notifyStaff(

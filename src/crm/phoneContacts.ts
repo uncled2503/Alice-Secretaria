@@ -29,13 +29,26 @@ export async function runSavePhoneContacts(): Promise<number> {
       select: { id: true },
     });
     for (const clinic of clinics) {
-      const candidates = await prisma.patient.findMany({
-        where: { clinicId: clinic.id, name: { not: null } },
-        select: { id: true, name: true, phone: true, phoneContactName: true },
+      const select = { id: true, name: true, phone: true, phoneContactName: true } as const;
+      // 1) Quem ainda NAO foi salvo (filtrado no banco: antes a consulta pegava sempre os 120 mais novos, ja salvos, e a
+      //    base antiga nunca era processada).
+      const unsaved = await prisma.patient.findMany({
+        where: { clinicId: clinic.id, name: { not: null }, phoneContactName: null },
+        select,
         orderBy: { createdAt: "desc" },
         take: BATCH * 8,
       });
-      const todo = candidates
+      // 2) Nome que mudou depois de salvo: so olha os mais recentes (nao ha como comparar as duas colunas no banco).
+      const recent = await prisma.patient.findMany({
+        where: { clinicId: clinic.id, name: { not: null }, phoneContactName: { not: null } },
+        select,
+        orderBy: { createdAt: "desc" },
+        take: BATCH * 4,
+      });
+      // Nome sem letras (so emoji/numero): marca como "tratado" pra nao ocupar a fila de nao-salvos pra sempre.
+      const unusableIds = unsaved.filter((p) => !usableContactName(p.name)).map((p) => p.id);
+      if (unusableIds.length) await prisma.patient.updateMany({ where: { id: { in: unusableIds } }, data: { phoneContactName: "" } });
+      const todo = [...unsaved, ...recent]
         .map((p) => ({ ...p, contactName: usableContactName(p.name) }))
         .filter((p) => p.contactName && p.phoneContactName !== p.contactName)
         .slice(0, BATCH);

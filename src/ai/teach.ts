@@ -3,7 +3,7 @@ import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { prisma } from "../db/client.js";
 import { RULE_CATEGORIES } from "./rules.js";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 60_000, maxRetries: 1 });
 const MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
 const RULE_CATEGORY_IDS = RULE_CATEGORIES.map((c) => c.id);

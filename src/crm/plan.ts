@@ -55,6 +55,8 @@ const BLOCKED_WRITE_ONLY = [
   "/briefing",
   "/learning-insights",
   "/nps",
+  "/learning", // aprovar/rejeitar aprendizado da Alice
+  "/teach-alice", // ensinar a Alice (gera regra/FAQ/roteiro - a Alice nao atende no plano gratis)
   "/api-keys",
 ];
 

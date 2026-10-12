@@ -22,7 +22,22 @@ export interface RealActivity {
   activeConversations: Set<string>; // conversas com resposta da Alice ou mensagem ao vivo do contato
 }
 
+// O painel pede isso a cada poucos segundos e cada pedido lia TODAS as mensagens do periodo: guarda o resultado por
+// ~1 min (janelas arredondadas a 5 min, pois o fim do periodo muda a cada requisicao).
+const activityCache = new Map<string, { at: number; value: RealActivity }>();
+const ACTIVITY_TTL_MS = 60_000;
+
 export async function realActivity(clinicId: string, start: Date, end: Date): Promise<RealActivity> {
+  const key = `${clinicId}|${Math.floor(start.getTime() / 300_000)}|${Math.floor(end.getTime() / 300_000)}`;
+  const hit = activityCache.get(key);
+  if (hit && Date.now() - hit.at < ACTIVITY_TTL_MS) return hit.value;
+  const value = await computeRealActivity(clinicId, start, end);
+  if (activityCache.size > 200) activityCache.clear();
+  activityCache.set(key, { at: Date.now(), value });
+  return value;
+}
+
+async function computeRealActivity(clinicId: string, start: Date, end: Date): Promise<RealActivity> {
   const [aliceRows, inboundRows] = await Promise.all([
     prisma.message.findMany({
       where: { role: "assistant", authorName: null, createdAt: { gte: start, lte: end }, conversation: { patient: { clinicId } } },

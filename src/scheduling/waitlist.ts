@@ -41,7 +41,8 @@ export async function offerFreedSlotToWaitlist(params: {
       `Oi ${firstName}! Abriu uma vaga para ${procedureName} em ${formatInZone(freedAt, tz)} aqui na ${info.name}. ` +
       `Quer que eu reserve esse horario pra voce? Me responde por aqui que eu confirmo.`;
 
-    await sendText(clinicId, entry.patient.phone, text.replace(/\s+/g, " ").trim());
+    const outcome = await sendText(clinicId, entry.patient.phone, text.replace(/\s+/g, " ").trim());
+    if (outcome !== "sent") return; // nada saiu: o paciente continua esperando a proxima vaga
 
     await prisma.waitlistEntry.update({
       where: { id: entry.id },

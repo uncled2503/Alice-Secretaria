@@ -16,6 +16,7 @@ interface MoveOpts {
   note?: string; // motivo, aparece no historico
   allowFromTerminal?: boolean; // deixa mover mesmo saindo de ganho/perdido
   saleValue?: number; // preenchido ao arrastar pro "Venda ganha" - vira o value do Purchase na Meta
+  aiDriven?: boolean; // a Alice (IA) que moveu: nao dispara Purchase na Meta (conversao so com decisao humana)
 }
 
 async function applyMove(
@@ -69,6 +70,7 @@ async function applyMove(
       newStageName: targetLabel,
       actorName: opts.actorName ?? null,
       saleValue: opts.saleValue,
+      aiDriven: opts.aiDriven,
     }).catch((err) => console.error("[meta] enqueueStageChange:", err));
   }
 }

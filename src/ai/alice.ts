@@ -28,7 +28,7 @@ import { checkAtendimentoLimit } from "../crm/usage.js";
 import { isFreePlan } from "../crm/plan.js";
 import type { Procedure } from "@prisma/client";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 60_000, maxRetries: 1 });
 // gpt-4o-mini por padrao: conversa de qualificacao/agendamento nao precisa do
 // modelo mais caro. Troque via OPENAI_MODEL se a qualidade exigir.
 const MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
@@ -621,6 +621,7 @@ async function runTool(
     // movimentacao e o funil ficar desatualizado.
     const result = await movePatientToStage(clinicId, patientId, String(input.stage_id ?? ""), {
       note: input.reason ? String(input.reason).slice(0, 200) : "atualizado pela Alice no atendimento",
+      aiDriven: true, // a Alice move o card, mas nao gera evento de compra (Purchase) na Meta sozinha
     });
     if (!result.ok) return JSON.stringify({ atualizado: false, motivo: result.error });
     return JSON.stringify({ atualizado: true, etapa: result.label });
@@ -1028,7 +1029,7 @@ Atenda pelo proprio WhatsApp oficial do negocio de forma humanizada, calorosa e 
 
 COMO VOCE SE APRESENTA (regra fixa, vale pra toda conversa):
 ${personaInstruction(clinic)}
-NUNCA se apresente nem se descreva como IA, inteligencia artificial, assistente virtual, atendimento automatico, bot, robo, sistema ou programa, e nao use linguagem robotica. Se perguntarem diretamente se e um robo, responda de forma leve e humana e siga ajudando normalmente.
+NUNCA se apresente nem se descreva como IA, inteligencia artificial, assistente virtual, atendimento automatico, bot, robo, sistema ou programa, e nao use linguagem robotica. Se perguntarem DIRETAMENTE se e um robo ou IA, nunca negue nem desvie: responda com leveza e honestidade que e a assistente virtual da equipe e siga ajudando.
 
 Seu trabalho:
 1. Entender o que o cliente procura e ajudar usando SOMENTE o que esta cadastrado abaixo (catalogo, FAQ, mensagens prontas, roteiros, regras).
@@ -1049,7 +1050,7 @@ ${openingStyleLine}
 
 COMO VOCE SE APRESENTA (regra fixa, vale pra toda conversa):
 ${personaInstruction(clinic)}
-NUNCA se apresente nem se descreva como IA, inteligencia artificial, assistente virtual, secretaria virtual, atendimento automatico, bot, robo, sistema ou programa, e nao use linguagem robotica ("processando", "de acordo com meu sistema", etc.). Se perguntarem diretamente se e um robo ou atendimento automatico, nao entre nesse assunto: responda de forma leve e humana (ex: "Sou eu que cuido do atendimento aqui pela ${clinic.name} 😊 me conta como posso te ajudar") e siga ajudando normalmente.
+NUNCA se apresente nem se descreva como IA, inteligencia artificial, assistente virtual, secretaria virtual, atendimento automatico, bot, robo, sistema ou programa, e nao use linguagem robotica ("processando", "de acordo com meu sistema", etc.). Se perguntarem DIRETAMENTE se e um robo, IA ou atendimento automatico, nunca negue nem desvie: responda com leveza e honestidade que e a assistente virtual da equipe, que pode chamar uma pessoa se preferirem, e siga ajudando.
 
 Seu trabalho:
 1. Entender o interesse do paciente e qualificar (procedimento desejado, se e novo paciente).
@@ -1093,8 +1094,9 @@ export async function recordIncomingMessage(params: {
   imageDataUrl?: string;
   media?: { type: "image" | "video" | "document" | "audio"; dataUrl: string; name?: string };
   referral?: IncomingReferral;
+  externalId?: string; // id da mensagem no WhatsApp: guardado na mensagem pra o reprocessamento do webhook nao gravar duas vezes
 }): Promise<RecordedMessage | null> {
-  const { clinicId, patientPhone, patientName, text, imageDataUrl, media, referral } = params;
+  const { clinicId, patientPhone, patientName, text, imageDataUrl, media, referral, externalId } = params;
   const trimmed = text.trim();
   const mediaPlaceholder: Record<string, string> = { image: "[imagem]", video: "[vídeo]", audio: "[áudio]", document: "[arquivo]" };
   const storedContent = trimmed || (media ? mediaPlaceholder[media.type] : imageDataUrl ? "[imagem]" : "");
@@ -1102,7 +1104,7 @@ export async function recordIncomingMessage(params: {
 
   const existing = await prisma.patient.findUnique({
     where: { clinicId_phone: { clinicId, phone: patientPhone } },
-    select: { id: true, metaFbc: true },
+    select: { id: true, metaFbc: true, name: true },
   });
   const attribution =
     referral && (!existing || !existing.metaFbc)
@@ -1116,7 +1118,7 @@ export async function recordIncomingMessage(params: {
       : {};
 
   const patient = existing
-    ? await prisma.patient.update({ where: { id: existing.id }, data: { name: patientName, ...attribution } })
+    ? await prisma.patient.update({ where: { id: existing.id }, data: { ...(existing.name ? {} : { name: patientName }), ...attribution } }) // o nome que a equipe (ou a propria pessoa) ja definiu nao e sobrescrito pelo apelido do WhatsApp
     : await prisma.patient.create({ data: { clinicId, phone: patientPhone, name: patientName, ...attribution } });
 
   if (!existing) {
@@ -1125,7 +1127,7 @@ export async function recordIncomingMessage(params: {
   }
 
   let conversation = await prisma.conversation.findFirst({
-    where: { patientId: patient.id, status: { in: ["active", "qualified"] } },
+    where: { patientId: patient.id, status: { in: ["active", "qualified", "scheduled"] } }, // "scheduled" tambem: senao cada agendamento abria uma conversa nova e a Alice perdia o historico
     orderBy: { createdAt: "desc" },
   });
   // Sem conversa aberta: se o contato tem uma conversa ARQUIVADA (ex: histórico
@@ -1165,6 +1167,7 @@ export async function recordIncomingMessage(params: {
       conversationId: conversation.id,
       role: "user",
       content: storedContent,
+      ...(externalId ? { externalId } : {}),
       ...(media
         ? { mediaType: media.type, mediaUrl: media.dataUrl, mediaName: media.name ?? null }
         : imageDataUrl
@@ -1254,8 +1257,9 @@ export async function recordOutgoingFromDevice(params: {
   patientName?: string;
   text: string;
   media?: { type: "image" | "video" | "document" | "audio"; dataUrl: string; name?: string };
+  externalId?: string;
 }): Promise<RecordedDeviceMessage | null> {
-  const { clinicId, patientPhone, patientName, text, media } = params;
+  const { clinicId, patientPhone, patientName, text, media, externalId } = params;
   const mediaPlaceholder: Record<string, string> = { image: "[imagem]", video: "[vídeo]", audio: "[áudio]", document: "[arquivo]" };
   const storedContent = text.trim() || (media ? mediaPlaceholder[media.type] : "");
   if (!storedContent) return null;
@@ -1274,7 +1278,7 @@ export async function recordOutgoingFromDevice(params: {
   }
 
   let conversation = await prisma.conversation.findFirst({
-    where: { patientId: patient.id, status: { in: ["active", "qualified"] } },
+    where: { patientId: patient.id, status: { in: ["active", "qualified", "scheduled"] } }, // "scheduled" tambem: senao cada agendamento abria uma conversa nova e a Alice perdia o historico
     orderBy: { createdAt: "desc" },
   });
   if (!conversation) {
@@ -1297,6 +1301,7 @@ export async function recordOutgoingFromDevice(params: {
       conversationId: conversation.id,
       role: "human",
       content: storedContent,
+      ...(externalId ? { externalId } : {}),
       authorName: DEVICE_AUTHOR_LABEL,
       ...(media ? { mediaType: media.type, mediaUrl: media.dataUrl, mediaName: media.name ?? null } : {}),
     },
@@ -1449,7 +1454,7 @@ async function generateReplyUnlocked(
   // novo - passa direto pra equipe. Conversas ja em andamento continuam.
   const usageClinic = await prisma.clinic.findUnique({
     where: { id: clinicId },
-    select: { id: true, plan: true, aliceActive: true, silentHandoff: true, handoffOnPrice: true, humanizedTone: true, softSell: true, conversationLimitOverride: true, usageMonth: true, usageCount: true, usageLimitNotified: true },
+    select: { id: true, plan: true, businessType: true, aliceActive: true, silentHandoff: true, handoffOnPrice: true, humanizedTone: true, softSell: true, conversationLimitOverride: true, usageMonth: true, usageCount: true, usageLimitNotified: true },
   });
   // Alice PAUSADA pela clinica (botao "Alice atendendo"): nao responde. A conversa
   // fica como "nao lida" pra equipe, sem virar atendimento humano (quando a Alice
@@ -1489,7 +1494,8 @@ async function generateReplyUnlocked(
   // da conversa - inclusive sem ver o horario que acabou de ser combinado.
   const history = (
     await prisma.message.findMany({
-      where: { conversationId },
+      // Mensagens de sistema (resumo de transferencia, avisos internos) NAO entram: antes eram enviadas ao modelo como se a Alice as tivesse dito.
+      where: { conversationId, role: { in: ["user", "assistant", "human"] } },
       orderBy: { createdAt: "desc" },
       take: 30,
       select: { id: true, role: true, content: true, authorName: true, createdAt: true }, // sem o anexo em base64
@@ -1512,9 +1518,29 @@ async function generateReplyUnlocked(
       if (usageClinic.silentHandoff) return "";
       const c = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { handoffPhrase: true } });
       const phrase = c?.handoffPhrase?.trim() || "Vou pedir pra uma pessoa da equipe continuar com você por aqui e te passar os valores.";
-      await prisma.message.create({ data: { conversationId: conversation.id, role: "assistant", content: phrase } });
+      await prisma.message.create({ data: { conversationId: conversation.id, role: "assistant", content: phrase, deliveryStatus: "pending" } });
       await prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: new Date() } });
       return phrase;
+    }
+  }
+
+  // URGENCIA clinica (falta de ar, sangramento intenso, reacao alergica...): resposta FIXA e imediata, SEM esperar o
+  // modelo, em qualquer clinica (antes so valia com o "modo silencioso" ligado). Orienta procurar emergencia e a
+  // equipe e avisada.
+  if (usageClinic && usageClinic.businessType !== "geral") {
+    const lastUserText = history.filter((m) => m.role === "user").at(-1)?.content ?? "";
+    if (URGENT_RE.test(normalizeReply(lastUserText))) {
+      try {
+        await runTool(clinicId, patient.id, conversation.id, "transfer_to_human", {
+          reason: "URGENCIA: possivel intercorrencia",
+          summary: `Mensagem do paciente: "${String(lastUserText).slice(0, 300)}".`,
+        });
+      } catch (err) {
+        console.error("[urgencia] falha ao sinalizar a equipe:", err);
+      }
+      await prisma.message.create({ data: { conversationId: conversation.id, role: "assistant", content: URGENT_TEXT, deliveryStatus: "pending" } });
+      await prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: new Date() } });
+      return URGENT_TEXT;
     }
   }
 
@@ -1682,7 +1708,7 @@ async function generateReplyUnlocked(
   // Pergunta DIRETA se e robo/IA/pessoa: resposta fixa e HONESTA. O modelo as vezes desvia
   // ("sou eu que cuido do atendimento"), o que nao nega nem diz a verdade.
   const lastUserNorm = normalizeReply(history.filter((m) => m.role === "user").at(-1)?.content ?? "");
-  if (usageClinic?.humanizedTone && !didTransfer && ASKS_IF_BOT_RE.test(lastUserNorm)) {
+  if (!didTransfer && ASKS_IF_BOT_RE.test(lastUserNorm)) { // vale pra todas as clinicas: perguntou direto, a resposta e honesta
     const ident = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { name: true, assistantName: true } });
     finalText = `Sou a ${ident?.assistantName || "Alice"}, assistente virtual da equipe da ${ident?.name ?? "clínica"}. 😊 Posso te ajudar por aqui com informações e agendamentos; se preferir falar com uma pessoa da equipe, é só me dizer!`;
   }
@@ -1728,7 +1754,7 @@ async function generateReplyUnlocked(
     const clinicTz = (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { timezone: true } }))?.timezone || "America/Sao_Paulo";
     finalText = fixRelativeDayLabels(finalText, new Date(), clinicTz); // "quinta (amanha)" numa quinta vira "quinta (hoje)"
     await prisma.message.create({
-      data: { conversationId: conversation.id, role: "assistant", content: finalText },
+      data: { conversationId: conversation.id, role: "assistant", content: finalText, deliveryStatus: "pending" }, // vira "sent"/"failed" depois do envio (uazapi/client.ts)
     });
   }
   await prisma.conversation.update({

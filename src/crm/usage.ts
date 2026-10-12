@@ -17,8 +17,9 @@ const PLAN_CONVERSATION_LIMIT: Record<string, number> = {
   prestige: 0,
 };
 
+// O mes vira na meia-noite de Brasilia (antes era UTC: o contador zerava as 21h do ultimo dia do mes).
 export function monthKey(d = new Date()): string {
-  return d.toISOString().slice(0, 7); // "2026-09"
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit" }).format(d).slice(0, 7); // "2026-09"
 }
 
 // 0 = ilimitado. Override tem prioridade (0 no override = liberar geral).

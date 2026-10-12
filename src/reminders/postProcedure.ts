@@ -41,6 +41,7 @@ export function startPostProcedureJob(): void {
           scheduledAt: { lte: cutoff, gte: floor },
           ...(procedureFilter.length ? { procedureId: { in: procedureFilter } } : {}),
           postProcedureSent: { none: { ruleId: rule.id } },
+          patient: { optedOut: false }, // quem pediu pra parar nao recebe mensagem automatica
         },
         include: { patient: true, procedure: true, professional: true },
         take: MAX_PER_TICK,
@@ -71,8 +72,8 @@ export function startPostProcedureJob(): void {
           continue; // reserva atomica: outro processo ja pegou
         }
         try {
-          await sendText(appt.clinicId, appt.patient.phone, text);
-          await recordAutomatedMessage(appt.patientId, text, rule.name || "Pós-procedimento automático");
+          const outcome = await sendText(appt.clinicId, appt.patient.phone, text);
+          if (outcome === "sent") await recordAutomatedMessage(appt.patientId, text, rule.name || "Pós-procedimento automático");
         } catch (err) {
           if (isPermanentSendError(err)) {
             // Numero sem WhatsApp: mantem a reserva (nao tenta de novo a cada 15 min) e avisa a equipe uma vez.

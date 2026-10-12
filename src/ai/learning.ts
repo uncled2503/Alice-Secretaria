@@ -15,7 +15,7 @@ import { FREE_PLAN } from "../crm/plan.js";
 // insight pra ClinicFaq / CustomRule de verdade (ou aposenta a regra alvo).
 // ---------------------------------------------------------------------------
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 60_000, maxRetries: 1 });
 // Analise vale um modelo melhor (roda 1x/dia, poucas chamadas).
 const MODEL = process.env.OPENAI_LEARNING_MODEL ?? process.env.OPENAI_BRIEFING_MODEL ?? "gpt-4o";
 

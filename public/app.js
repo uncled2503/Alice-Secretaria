@@ -417,7 +417,7 @@ async function bootApp() {
   handleGoogleReturn();
   await refreshAll();
   loadArchivedConversations().catch(() => {}); // popula o contador "Arquivadas"
-  if (!state.pollHandle) state.pollHandle = setInterval(refreshAll, 5000);
+  if (!state.pollHandle) state.pollHandle = setInterval(() => { if (!document.hidden) refreshAll(); }, 5000);
 }
 
 async function checkAuthAndBoot() {
@@ -1283,6 +1283,12 @@ async function loadMessages(conversationId, { forceScroll = false } = {}) {
     const bodyText = m.mediaUrl && /^\[(imagem|arquivo|foto|v[ií]deo|áudio|audio)\]$/i.test((m.content || "").trim()) ? "" : m.content;
     if (bodyText) bubble.insertBefore(el("span", { class: "msg-text" }, [bodyText]), bubble.querySelector(".msg-time"));
     if (m.authorName) bubble.prepend(el("div", { class: "msg-author" }, [m.authorName]));
+    // Resposta da Alice que o WhatsApp nao entregou (o sistema tenta de novo por alguns minutos).
+    if (m.deliveryStatus === "failed" || m.deliveryStatus === "failed_permanent") {
+      bubble.appendChild(el("div", { class: "msg-failed", style: "color:#dc2626;font-size:0.72rem;margin-top:0.2rem" }, [
+        m.deliveryStatus === "failed" ? "⚠ Não foi enviada — tentando de novo" : "⚠ Não foi enviada (número sem WhatsApp?)",
+      ]));
+    }
     box.appendChild(bubble);
   }
   paintIcons(box);
@@ -1579,6 +1585,7 @@ async function openContactPanel(patient) {
   document.getElementById("cp-f-cpf").value = dossier.patient.cpf ?? "";
   document.getElementById("cp-f-birth").value = dossier.patient.birthDate ? String(dossier.patient.birthDate).slice(0, 10) : "";
   document.getElementById("cp-f-active").checked = dossier.patient.active !== false;
+  document.getElementById("cp-f-opted-out").checked = !!dossier.patient.optedOut;
   document.getElementById("cp-f-notes").value = dossier.patient.notes ?? "";
   document.getElementById("cp-f-has-prescription").checked = !!dossier.patient.hasPrescription;
   document.getElementById("cp-prescription-block").hidden = !dossier.patient.hasPrescription;
@@ -1642,6 +1649,7 @@ document.getElementById("cp-save").addEventListener("click", async () => {
       nextActionNote: document.getElementById("cp-f-next-note").value.trim(),
       active: document.getElementById("cp-f-active").checked,
       hasPrescription: document.getElementById("cp-f-has-prescription").checked,
+      optedOut: document.getElementById("cp-f-opted-out").checked,
     }),
   });
   status.textContent = "Salvo.";
@@ -2007,6 +2015,7 @@ const APPT_SOURCE = {
   whatsapp: { label: "WhatsApp", icon: '<path d="M12 2a10 10 0 0 0-8.6 15l-1.3 4.6 4.8-1.3A10 10 0 1 0 12 2z"/>' },
   instagram: { label: "Instagram", icon: '<rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17" cy="7" r="1"/>' },
   presencial: { label: "Presencial", icon: '<rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8"/>' },
+  api: { label: "API / site", icon: '<path d="M8 9l-4 3 4 3M16 9l4 3-4 3M13 6l-2 12"/>' },
   telefone: { label: "Telefone", icon: '<path d="M4 4h4l2 5-3 2a12 12 0 0 0 6 6l2-3 5 2v4a2 2 0 0 1-2 2A18 18 0 0 1 2 6a2 2 0 0 1 2-2z"/>' },
 };
 
@@ -3767,11 +3776,16 @@ function loadPersonalize() {
 
 async function refreshAll() {
   const activeTab = document.querySelector(".nav-item.active")?.dataset.tab;
+  // Dashboard, contatos e quadro do CRM sao pesados no servidor (leem a base inteira): so recarregam a cada ciclo na
+  // propria aba; nas outras, a cada ~30 s (outras telas usam esses dados). As conversas sao leves e atualizam sempre.
+  state._tick = (state._tick || 0) + 1;
+  const full = state._tick % 6 === 1;
+  const need = (tab) => full || activeTab === tab;
   // allSettled: uma aba com erro nao pode travar as outras de carregar.
   await Promise.allSettled([
-    loadDashboard(),
-    loadContacts(),
-    loadCrmBoard(),
+    need("dashboard") ? loadDashboard() : Promise.resolve(),
+    need("contacts") ? loadContacts() : Promise.resolve(),
+    need("crm") ? loadCrmBoard() : Promise.resolve(),
     loadConversations(),
     state.chatFilter === "archived" ? loadArchivedConversations() : Promise.resolve(),
     // Agenda so recarrega em background quando esta aberta - evita resetar
@@ -4341,7 +4355,7 @@ function renderStateMap(byState) {
 // --- Relatórios ---
 state.reportDays = 30;
 const BRL = (n) => (n || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
-const SRC_LABEL = { whatsapp: "WhatsApp", instagram: "Instagram", presencial: "Presencial", telefone: "Telefone", nao_informado: "Não informado" };
+const SRC_LABEL = { whatsapp: "WhatsApp", instagram: "Instagram", presencial: "Presencial", telefone: "Telefone", api: "API / site", nao_informado: "Não informado" };
 
 function rpBars(containerId, rows) {
   const box = document.getElementById(containerId);
@@ -7099,6 +7113,7 @@ function goToTab(tab) {
   document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
   document.getElementById(`tab-${tab}`).classList.add("active");
+  if (typeof refreshAll === "function" && state.pollHandle) refreshAll(); // a aba nova carrega na hora (o ciclo so recarrega a aba aberta)
   const activeNav = document.querySelector(`.nav-item[data-tab="${tab}"]`);
   const title = document.getElementById("mobile-topbar-title");
   if (activeNav && title) title.textContent = navItemLabel(activeNav);

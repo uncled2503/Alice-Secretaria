@@ -2,6 +2,11 @@ import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 import { PAID_CLINIC_WHERE } from "./plan.js";
+import { isWithinClinicHours } from "./openHours.js";
+import { wallClockInZone } from "../scheduling/time.js";
+import { nationalHolidayOn, parseHolidayOpen } from "../scheduling/holidays.js";
+import { recordAutomatedMessage } from "./conversationLog.js";
+import type { Clinic } from "@prisma/client";
 
 // Envia aos poucos pra nao estourar limite de taxa do WhatsApp e nao
 // disparar centenas de mensagens de uma vez so (risco real de banimento).
@@ -46,13 +51,21 @@ async function getBroadcastClinicInfo(clinicId: string): Promise<BroadcastClinic
   return { name: clinic.name, primaryLocation: { name: location.name, fullAddress: parts } };
 }
 
-// Hora local da CLINICA, nao do servidor. Sem isso, uma clinica configurada
-// pra 8h-18h dispara campanha nos horarios errados sempre que a VPS roda num
-// fuso diferente do dela (ex: servidor em UTC == 21h em Brasilia).
-function isWithinBusinessHours(timeZone: string, workStartHour: number, workEndHour: number): boolean {
-  const hour = Number(new Intl.DateTimeFormat("en-US", { timeZone, hourCycle: "h23", hour: "2-digit" }).format(new Date()));
-  return hour >= workStartHour && hour < workEndHour;
+// Hora local da CLINICA, nao do servidor, e so em dia de atendimento que nao seja feriado fechado. Sem isso, uma
+// clinica configurada pra 8h-18h dispara campanha nos horarios errados sempre que a VPS roda num fuso diferente do
+// dela (ex: servidor em UTC == 21h em Brasilia), e disparava no domingo/feriado porque so a hora era conferida.
+function isSendingAllowed(clinic: Clinic): boolean {
+  if (!isWithinClinicHours(clinic, new Date())) return false;
+  if (clinic.closedOnHolidays) {
+    const wc = wallClockInZone(new Date(), clinic.timezone || "America/Sao_Paulo");
+    const holiday = nationalHolidayOn(wc.year, wc.month, wc.day);
+    if (holiday && !parseHolidayOpen(clinic.holidayOpen).has(holiday)) return false;
+  }
+  return true;
 }
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+let broadcastRunning = false;
 
 // Reativacao de base: quem fez um procedimento (concluido) ha mais de N meses e
 // nao tem consulta futura, exceto quem optou por nao receber.
@@ -109,6 +122,7 @@ async function activateDueCampaigns(): Promise<void> {
         const patients = await prisma.patient.findMany({
           where: {
             clinicId: campaign.clinicId,
+            optedOut: false, // quem pediu pra parar nao recebe campanha
             ...(campaign.targetStage ? { funnelStage: campaign.targetStage } : {}),
           },
           select: { id: true },
@@ -123,7 +137,9 @@ async function activateDueCampaigns(): Promise<void> {
       }
     }
 
-    await prisma.broadcastCampaign.update({ where: { id: campaign.id }, data: { status: "sending" } });
+    // Sem nenhum destinatario (ex.: reativacao sem ninguem elegivel): nao fica "enviando" pra sempre.
+    const total = await prisma.broadcastRecipient.count({ where: { campaignId: campaign.id } });
+    await prisma.broadcastCampaign.update({ where: { id: campaign.id }, data: { status: total === 0 ? "completed" : "sending" } });
   }
 }
 
@@ -132,7 +148,7 @@ async function sendNextBatch(): Promise<void> {
 
   for (const campaign of sendingCampaigns) {
     const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: campaign.clinicId } });
-    if (!isWithinBusinessHours(clinic.timezone, clinic.workStartHour, clinic.workEndHour)) continue;
+    if (!isSendingAllowed(clinic)) continue;
 
     const pending = await prisma.broadcastRecipient.findMany({
       where: { campaignId: campaign.id, status: "pending" },
@@ -142,31 +158,31 @@ async function sendNextBatch(): Promise<void> {
     if (pending.length === 0) continue;
 
     const clinicInfo = await getBroadcastClinicInfo(clinic.id);
-    for (const recipient of pending) {
+    for (let i = 0; i < pending.length; i++) {
+      const recipient = pending[i];
+      // Pediu pra parar (ou foi marcado assim depois da campanha ser montada): pula sem enviar.
+      if (recipient.patient.optedOut) {
+        await prisma.broadcastRecipient.update({ where: { id: recipient.id }, data: { status: "skipped" } });
+        continue;
+      }
       const text = renderTemplate(campaign.message, recipient.patient.name, recipient.patient.phone, clinicInfo);
       try {
-        await sendText(clinic.id, recipient.patient.phone, text);
+        const outcome = await sendText(clinic.id, recipient.patient.phone, text);
         await prisma.broadcastRecipient.update({
           where: { id: recipient.id },
-          data: { status: "sent", sentAt: new Date() },
+          data: { status: outcome === "sent" ? "sent" : "skipped", sentAt: new Date() },
         });
         // Reativacao: registra a mensagem na conversa do paciente pra Alice ter
         // contexto quando ele responder (as outras campanhas nao precisam disso).
-        if (campaign.targetMode === "reactivation") {
-          let conv = await prisma.conversation.findFirst({
-            where: { patientId: recipient.patientId, status: { in: ["active", "qualified", "scheduled"] } },
-            orderBy: { createdAt: "desc" },
-          });
-          if (!conv) conv = await prisma.conversation.create({ data: { patientId: recipient.patientId } });
-          await prisma.message.create({
-            data: { conversationId: conv.id, role: "assistant", content: text, authorName: "Reativação de base" },
-          });
-          await prisma.conversation.update({ where: { id: conv.id }, data: { status: "active", lastMessageAt: new Date(), lastFollowUpOrder: 0 } });
+        if (outcome === "sent" && campaign.targetMode === "reactivation") {
+          await recordAutomatedMessage(recipient.patientId, text, "Reativação de base");
         }
       } catch (err) {
         console.error(`Falha ao enviar broadcast para ${recipient.patient.phone}:`, err);
         await prisma.broadcastRecipient.update({ where: { id: recipient.id }, data: { status: "failed" } });
       }
+      // Pausa aleatoria entre um envio e outro (rajada de dezenas de mensagens iguais e o padrao que o WhatsApp bloqueia).
+      if (i < pending.length - 1) await sleep(4000 + Math.random() * 6000);
     }
 
     const stillPending = await prisma.broadcastRecipient.count({
@@ -179,13 +195,18 @@ async function sendNextBatch(): Promise<void> {
 }
 
 export async function runBroadcastTick(): Promise<void> {
-  await activateDueCampaigns();
-  await sendNextBatch();
+  // Um lote com pausas pode passar de 5 min: nao deixa a rodada seguinte comecar por cima (enviaria os mesmos destinatarios de novo).
+  if (broadcastRunning) return;
+  broadcastRunning = true;
+  try {
+    await activateDueCampaigns();
+    await sendNextBatch();
+  } finally {
+    broadcastRunning = false;
+  }
 }
 
 // A cada 5 minutos: ativa campanhas que chegaram na hora e manda o proximo lote.
 export function startBroadcastJob(): void {
-  scheduleLocked("disparos-em-massa", "*/5 * * * *", () => {
-    runBroadcastTick().catch((err) => console.error("Erro no job de mensagens programadas:", err));
-  });
+  scheduleLocked("disparos-em-massa", "*/5 * * * *", () => runBroadcastTick().catch((err) => console.error("Erro no job de mensagens programadas:", err)));
 }

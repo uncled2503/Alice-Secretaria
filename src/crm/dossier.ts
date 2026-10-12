@@ -147,6 +147,7 @@ export async function patientDossier(clinicId: string, patientId: string) {
       createdAt: patient.createdAt,
       active: patient.active,
       hasPrescription: patient.hasPrescription,
+      optedOut: patient.optedOut,
       prescriptionReminders: patient.prescriptionReminders.map((r) => ({ id: r.id, date: r.date, message: r.message, sentAt: r.sentAt })),
       tags: patient.tags.map((pt) => ({ id: pt.tag.id, label: pt.tag.label, color: pt.tag.color })),
       estimatedValue: patient.estimatedValue,

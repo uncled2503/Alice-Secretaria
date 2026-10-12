@@ -21,7 +21,7 @@ import { FREE_PLAN } from "./plan.js";
 // conversa gera ~1 chamada, em vez de uma por mensagem.
 // ---------------------------------------------------------------------------
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 60_000, maxRetries: 1 });
 const MODEL = process.env.OPENAI_CRM_MODEL ?? process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
 const QUIET_MINUTES = 10; // conversa precisa estar parada ha esse tanto

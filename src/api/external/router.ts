@@ -11,6 +11,7 @@ import { findAvailableSlots, checkSpecificTime, createBooking, professionalsForP
 import { formatInZone, wallClockInZone } from "../../scheduling/time.js";
 import { offerFreedSlotToWaitlist } from "../../scheduling/waitlist.js";
 import { pushAppointmentInBackground, removeAppointmentInBackground } from "../../integrations/calendarSync.js";
+import { isFreePlan } from "../../crm/plan.js";
 
 export const externalApiRouter = Router();
 externalApiRouter.use((_req, res, next) => {
@@ -42,9 +43,19 @@ function wrap(handler: (req: Request, res: Response) => Promise<unknown>): Reque
 // ---------------------------------------------------------------------------
 const authenticate: RequestHandler = (req, res, next) => {
   resolveApiKey(req.headers.authorization)
-    .then((key) => {
+    .then(async (key) => {
       if (!key) {
         res.status(401).json({ error: { code: "unauthorized", message: "Chave de API ausente ou inválida." } });
+        return;
+      }
+      // Clinica bloqueada (inadimplencia) ou no plano gratis: a chave deixa de funcionar, igual ao painel.
+      const clinic = await prisma.clinic.findUnique({ where: { id: key.clinicId }, select: { active: true, plan: true } });
+      if (!clinic || !clinic.active) {
+        res.status(403).json({ error: { code: "clinic_blocked", message: "Conta bloqueada temporariamente. Entre em contato com o suporte." } });
+        return;
+      }
+      if (isFreePlan(clinic.plan)) {
+        res.status(403).json({ error: { code: "plan_not_allowed", message: "A API externa não está disponível no plano Grátis." } });
         return;
       }
       req.apiKey = key;
@@ -181,9 +192,11 @@ externalApiRouter.get(
     const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
     const cursor = String(req.query.cursor ?? "").trim();
 
+    // "phone contains ''" casa com TODO mundo: so entra na busca por telefone quando o termo tem digitos.
+    const searchDigits = search.replace(/\D/g, "");
     const where = {
       clinicId: clinicId(req),
-      ...(search ? { OR: [{ name: { contains: search } }, { phone: { contains: search.replace(/\D/g, "") } }] } : {}),
+      ...(search ? { OR: [{ name: { contains: search } }, ...(searchDigits ? [{ phone: { contains: searchDigits } }] : [])] } : {}),
     };
     const rows = await prisma.patient.findMany({
       where,
@@ -481,6 +494,7 @@ externalApiRouter.post(
       procedureId: b.procedure_id,
       professionalId: b.professional_id ?? null,
       startUtc: start,
+      source: "api", // nao conta como agendamento feito pela Alice nos numeros do painel
     });
     if (!booking.ok) {
       const map: Record<string, string> = {
@@ -528,6 +542,10 @@ externalApiRouter.patch(
 
     if (b.status && !["confirmed", "completed", "cancelled"].includes(b.status)) {
       fail(422, "invalid_request", 'status deve ser "confirmed", "completed" ou "cancelled".');
+    }
+    if (b.professional_id) {
+      const own = await prisma.professional.findFirst({ where: { id: b.professional_id, clinicId: c.id }, select: { id: true } });
+      if (!own) fail(422, "invalid_request", "professional_id não pertence a esta clínica.");
     }
     let start: Date | undefined;
     if (b.start !== undefined) {
@@ -578,7 +596,7 @@ externalApiRouter.patch(
       });
       const upcoming = await prisma.appointment.findFirst({ where: { patientId: existing.patientId, status: "confirmed", scheduledAt: { gte: new Date() } } });
       if (!upcoming) await movePatientToRecovery(c.id, existing.patientId, { note: "agendamento cancelado via API" });
-      await offerFreedSlotToWaitlist({ clinicId: c.id, procedureId: existing.procedureId, professionalId: existing.professionalId, freedAt: existing.scheduledAt });
+      if (existing.status === "confirmed" && existing.scheduledAt.getTime() > Date.now()) await offerFreedSlotToWaitlist({ clinicId: c.id, procedureId: existing.procedureId, professionalId: existing.professionalId, freedAt: existing.scheduledAt });
     } else {
       pushAppointmentInBackground(updated.id);
       if (b.status === "completed" && existing.status !== "completed") {
@@ -595,7 +613,7 @@ externalApiRouter.patch(
           clinicId: c.id, patientId: existing.patientId, type: "appointment_rescheduled", area: "agenda",
           title: "Agendamento remarcado (API externa)", description: `${patientLabel} — ${updated.procedure.name} agora em ${label}.`, actorName,
         });
-        await offerFreedSlotToWaitlist({ clinicId: c.id, procedureId: existing.procedureId, professionalId: existing.professionalId, freedAt: existing.scheduledAt });
+        if (existing.status === "confirmed" && existing.scheduledAt.getTime() > Date.now()) await offerFreedSlotToWaitlist({ clinicId: c.id, procedureId: existing.procedureId, professionalId: existing.professionalId, freedAt: existing.scheduledAt });
         void sendAppointmentConfirmationToPatient(updated.id);
       }
     }

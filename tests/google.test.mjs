@@ -35,6 +35,13 @@ test("state assinado volta pra clinica certa e rejeita adulteracao", () => {
   assert.equal(google.readState("clinica123"), null);
 });
 
+test("state expira em 15 minutos", () => {
+  const t0 = Date.now();
+  const state = google.buildState("clinica123", t0);
+  assert.equal(google.readState(state, t0 + 14 * 60_000), "clinica123");
+  assert.equal(google.readState(state, t0 + 16 * 60_000), null);
+});
+
 test("sem chave de criptografia a integracao fica desligada, com motivo claro", () => {
   const key = process.env.META_ENCRYPTION_KEY;
   delete process.env.META_ENCRYPTION_KEY;
