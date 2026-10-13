@@ -116,6 +116,7 @@ export async function removeCopiesOfClinic(fromId: string, referenceId: string, 
   if (apptIdsToDelete.length) {
     await prisma.reminderSent.deleteMany({ where: { appointmentId: { in: apptIdsToDelete } } });
     await prisma.postProcedureSent.deleteMany({ where: { appointmentId: { in: apptIdsToDelete } } });
+    await prisma.preProcedureSent.deleteMany({ where: { appointmentId: { in: apptIdsToDelete } } });
     await prisma.renewalSent.deleteMany({ where: { appointmentId: { in: apptIdsToDelete } } });
     await prisma.appointment.deleteMany({ where: { id: { in: apptIdsToDelete } } });
   }

@@ -529,7 +529,7 @@ export async function sendText(clinicId: string, phone: string, text: string, op
 // Envia a resposta da Alice e atualiza o estado de entrega da mensagem que generateReply gravou como "pending".
 // Se o envio falhar a mensagem fica "failed" (o painel mostra) e o erro sobe: o evento do webhook volta pra fila e a
 // proxima tentativa reenvia ESTA resposta em vez de gerar outra.
-async function deliverAliceReply(clinicId: string, phone: string, conversationId: string, reply: string): Promise<void> {
+export async function deliverAliceReply(clinicId: string, phone: string, conversationId: string, reply: string): Promise<void> {
   const pending = await prisma.message.findFirst({
     where: { conversationId, role: "assistant", authorName: null, content: reply, deliveryStatus: { in: ["pending", "failed"] } },
     orderBy: { createdAt: "desc" },

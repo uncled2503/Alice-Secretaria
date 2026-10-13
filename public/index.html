@@ -1347,6 +1347,13 @@
               <label class="checkbox-row"><input type="checkbox" id="as-silent-handoff" /> Quando não souber responder, ficar em silêncio (sem avisar que vai transferir)</label>
               <p class="hint" style="margin-top:0">Ligado: a Alice não escreve "vou encaminhar para a equipe". A conversa fica como não lida no Chat e a equipe responde. Em urgência clínica ela ainda orienta procurar emergência.</p>
 
+              <div class="broadcast-form-row">
+                <label>Se a equipe assumiu e demorar, a Alice volta a atender depois de (minutos)
+                  <input id="as-human-return" type="number" min="0" max="240" value="0" />
+                </label>
+              </div>
+              <p class="hint" style="margin-top:0">Quando uma pessoa da equipe assume a conversa e a cliente continua escrevendo, mas ninguém responde nesse tempo, a Alice volta sozinha, pede desculpa pela demora e responde. Não vale para urgência/reação clínica, e mensagens como "ok" ou "obrigada" não contam. <strong>0 = desligado.</strong></p>
+
               <label class="checkbox-row"><input type="checkbox" id="as-first-short" /> Primeira resposta curta a contatos novos (se apresenta e faz uma pergunta)</label>
               <p class="hint" style="margin-top:0">Ligado: no primeiro contato a Alice não despeja informação. Ela se apresenta e pergunta o nome ou o que a pessoa quer melhorar, e só explica depois que a pessoa responder.</p>
 

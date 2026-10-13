@@ -5,6 +5,7 @@ import { notifyStaff } from "./notify.js";
 import { wallClockInZone, zonedWallClockToUtc } from "../scheduling/time.js";
 import { ALICE_BOOKING_SOURCES } from "./realStats.js";
 import { aliceReport, marketingReport } from "./insights.js";
+import { firstOfDayIds } from "../reminders/firstOfDay.js";
 
 // ---------------------------------------------------------------------------
 // RELATORIO DIARIO + AUDITORIA DAS AUTOMACOES (20h, no WhatsApp interno da clinica, evento "daily_report").
@@ -41,6 +42,9 @@ export async function confirmationAudit(clinicId: string, from: Date, to: Date):
     }),
   ]);
   const ruleIds = new Set(rules.map((r) => r.id));
+  // Quem tem varios horarios no dia recebe UMA confirmacao (a do primeiro horario): os demais contam como cobertos.
+  const clinicRow = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { timezone: true } });
+  const firstIds = firstOfDayIds(appts, clinicRow?.timezone || "America/Sao_Paulo");
   return appts.map((a) => {
     const digits = a.patient.phone.replace(/\D/g, "");
     const problems: string[] = [];
@@ -50,7 +54,7 @@ export async function confirmationAudit(clinicId: string, from: Date, to: Date):
       patient: a.patient.name ?? a.patient.phone,
       phone: a.patient.phone,
       startsAt: a.scheduledAt,
-      confirmationSent: ruleIds.size === 0 ? true : a.reminders.some((r) => ruleIds.has(r.ruleId)),
+      confirmationSent: ruleIds.size === 0 || !firstIds.has(a.id) ? true : a.reminders.some((r) => ruleIds.has(r.ruleId)),
       problems,
     };
   });
@@ -60,7 +64,7 @@ export async function buildDailyReport(clinicId: string, tz: string): Promise<st
   const today = dayBounds(tz, 0);
   const tomorrow = dayBounds(tz, 1);
 
-  const [newContacts, createdToday, cancelledToday, noShowToday, audit, hot, unconfirmed, failures] = await Promise.all([
+  const [newContacts, createdToday, cancelledToday, noShowToday, audit, hot, tomorrowAppts, failures] = await Promise.all([
     prisma.patient.count({ where: { clinicId, createdAt: { gte: today.from, lt: today.to } } }),
     prisma.appointment.findMany({ where: { clinicId, createdAt: { gte: today.from, lt: today.to } }, select: { source: true } }),
     prisma.activityLog.count({ where: { clinicId, type: "appointment_cancelled", createdAt: { gte: today.from, lt: today.to } } }),
@@ -73,8 +77,9 @@ export async function buildDailyReport(clinicId: string, tz: string): Promise<st
         appointments: { none: { status: "confirmed", scheduledAt: { gte: new Date() } } },
       },
     }),
+    // todos os de amanha (o filtro "quem ainda nao confirmou" e feito depois, so no PRIMEIRO horario de cada pessoa)
     prisma.appointment.findMany({
-      where: { clinicId, status: "confirmed", patientConfirmed: false, scheduledAt: { gte: tomorrow.from, lt: tomorrow.to } },
+      where: { clinicId, status: "confirmed", scheduledAt: { gte: tomorrow.from, lt: tomorrow.to } },
       include: { patient: { select: { name: true, phone: true } } },
       orderBy: { scheduledAt: "asc" },
     }),
@@ -85,6 +90,9 @@ export async function buildDailyReport(clinicId: string, tz: string): Promise<st
 
   const byAlice = createdToday.filter((a) => (ALICE_BOOKING_SOURCES as readonly string[]).includes(a.source ?? "")).length;
   const missing = audit.filter((a) => !a.confirmationSent);
+  // "Sem resposta de confirmacao": so o primeiro horario do dia de cada pessoa (a confirmacao e uma so por dia).
+  const firstTomorrow = firstOfDayIds(tomorrowAppts, tz);
+  const unconfirmed = tomorrowAppts.filter((a) => firstTomorrow.has(a.id) && !a.patientConfirmed);
   const lines: string[] = [
     "📊 *Resumo do dia*",
     `• Contatos novos: ${newContacts}`,

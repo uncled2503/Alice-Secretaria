@@ -623,6 +623,7 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
     handoffOnPrice: true, // 09/10/2026 (Aline): perguntou o valor -> atendimento humano
     humanizedTone: true, // 09/10/2026 (Aline): atendimento humano e natural
     silentHandoff: true, // idem: o que nao souber responder, fica em silencio pra equipe responder
+    humanReturnMinutes: 15, // 14/10/2026: equipe assumiu e demorou mais de 15 min pra responder -> a Alice volta a atender
     conciseFirstReply: true, // 08/10/2026: contato novo recebe conversa, nao enxurrada de informacao
     quotePrices: false, // 08/10/2026 (Aline): a Alice nao passa valores; a equipe apresenta na avaliacao
     hoursByDay: JSON.stringify({ 6: [8, 15] }), // sabado ate as 15h (so pra automacoes)

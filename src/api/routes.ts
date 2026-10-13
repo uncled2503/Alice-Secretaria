@@ -61,6 +61,7 @@ import { lastPullSkips } from "../clinicaexperts/pull.js";
 import { bookingRiskNote } from "../crm/patientRisk.js";
 import { marketingReport, aliceReport } from "../crm/insights.js";
 import { pushAppointmentInBackground, removeAppointmentInBackground } from "../integrations/calendarSync.js";
+import { firstOfDayIds } from "../reminders/firstOfDay.js";
 import { setupIsacFollowup } from "../maintenance/setupIsacFollowup.js";
 import {
   googleConfigured,
@@ -287,6 +288,7 @@ apiRouter.get(
         humanizedTone: true,
         softSell: true,
         handoffOnPrice: true,
+        humanReturnMinutes: true,
         tagLeadOrigin: true,
         leadReactivationDay: true,
         leadReactivationMessage: true,
@@ -403,6 +405,7 @@ apiRouter.put(
       humanizedTone?: boolean;
       softSell?: boolean;
       handoffOnPrice?: boolean;
+      humanReturnMinutes?: number;
       tagLeadOrigin?: boolean;
       leadReactivationDay?: number | null;
       leadReactivationMessage?: string | null;
@@ -501,6 +504,7 @@ apiRouter.put(
       ["splitMaxMessages", b.splitMaxMessages],
       ["splitThresholdChars", b.splitThresholdChars],
       ["replyDelaySeconds", b.replyDelaySeconds],
+      ["humanReturnMinutes", b.humanReturnMinutes],
       ["npsHoursAfter", b.npsHoursAfter],
       ["npsThreshold", b.npsThreshold],
     ] as const) {
@@ -550,6 +554,7 @@ apiRouter.put(
           ...(b.humanizedTone !== undefined ? { humanizedTone: b.humanizedTone } : {}),
           ...(b.softSell !== undefined ? { softSell: b.softSell } : {}),
           ...(b.handoffOnPrice !== undefined ? { handoffOnPrice: b.handoffOnPrice } : {}),
+          ...(b.humanReturnMinutes !== undefined ? { humanReturnMinutes: Math.min(Math.max(Math.round(b.humanReturnMinutes), 0), 240) } : {}),
           ...(b.tagLeadOrigin !== undefined ? { tagLeadOrigin: !!b.tagLeadOrigin } : {}),
           ...(b.leadReactivationDay !== undefined ? { leadReactivationDay: b.leadReactivationDay } : {}),
           ...(b.leadReactivationMessage !== undefined ? { leadReactivationMessage: b.leadReactivationMessage?.trim() || null } : {}),
@@ -863,6 +868,7 @@ apiRouter.delete(
       prisma.followUpSent.deleteMany({ where: { conversation: { patient: { clinicId } } } }),
       prisma.reminderSent.deleteMany({ where: { appointment: { clinicId } } }),
       prisma.postProcedureSent.deleteMany({ where: { appointment: { clinicId } } }),
+      prisma.preProcedureSent.deleteMany({ where: { appointment: { clinicId } } }),
       prisma.renewalSent.deleteMany({ where: { appointment: { clinicId } } }),
       prisma.birthdaySent.deleteMany({ where: { patient: { clinicId } } }),
       prisma.broadcastRecipient.deleteMany({ where: { campaign: { clinicId } } }),
@@ -877,6 +883,7 @@ apiRouter.delete(
       prisma.broadcastCampaign.deleteMany({ where: { clinicId } }),
       prisma.reminderRule.deleteMany({ where: { clinicId } }),
       prisma.postProcedureRule.deleteMany({ where: { clinicId } }),
+      prisma.preProcedureRule.deleteMany({ where: { clinicId } }),
       prisma.renewalRule.deleteMany({ where: { clinicId } }),
       prisma.birthdayRule.deleteMany({ where: { clinicId } }),
       prisma.followUpRule.deleteMany({ where: { clinicId } }),
@@ -1918,6 +1925,7 @@ apiRouter.delete(
       prisma.conversation.deleteMany({ where: { patientId: id } }),
       prisma.reminderSent.deleteMany({ where: { appointment: { patientId: id } } }),
       prisma.postProcedureSent.deleteMany({ where: { appointment: { patientId: id } } }),
+      prisma.preProcedureSent.deleteMany({ where: { appointment: { patientId: id } } }),
       prisma.renewalSent.deleteMany({ where: { appointment: { patientId: id } } }),
       prisma.appointment.deleteMany({ where: { patientId: id } }),
       prisma.broadcastRecipient.deleteMany({ where: { patientId: id } }),
@@ -2161,7 +2169,7 @@ apiRouter.post(
     });
     await prisma.conversation.update({
       where: { id: conversation.id },
-      data: { humanTakeover: true, handoffPending: false, lastMessageAt: new Date() },
+      data: { humanTakeover: true, handoffPending: false, lastMessageAt: new Date(), staffTouchedAt: new Date() },
     });
 
     try {
@@ -2233,7 +2241,7 @@ apiRouter.post(
     });
     await prisma.conversation.update({
       where: { id: conversation.id },
-      data: { humanTakeover: true, handoffPending: false, lastMessageAt: new Date() },
+      data: { humanTakeover: true, handoffPending: false, lastMessageAt: new Date(), staffTouchedAt: new Date() },
     });
 
     try {
@@ -2270,7 +2278,7 @@ apiRouter.post(
       await prisma.message.create({
         data: { conversationId: conversation.id, role: "system", content: "Atendimento transferido para o atendente", authorName },
       });
-      await prisma.conversation.update({ where: { id: conversation.id }, data: { humanTakeover: true, handoffPending: false } });
+      await prisma.conversation.update({ where: { id: conversation.id }, data: { humanTakeover: true, handoffPending: false, staffTouchedAt: new Date() } });
       await notifyStaff(
         conversation.patient.clinicId,
         "human_handoff",
@@ -2309,7 +2317,7 @@ apiRouter.post(
     });
     await prisma.conversation.update({
       where: { id: req.params.id },
-      data: { humanTakeover: false, handoffPending: false },
+      data: { humanTakeover: false, handoffPending: false, staffTouchedAt: null },
     });
     await logActivity({
       clinicId: conversation.patient.clinicId,
@@ -3148,6 +3156,7 @@ apiRouter.delete(
     await prisma.$transaction([
       prisma.reminderSent.deleteMany({ where: { appointmentId: req.params.id } }),
       prisma.postProcedureSent.deleteMany({ where: { appointmentId: req.params.id } }),
+      prisma.preProcedureSent.deleteMany({ where: { appointmentId: req.params.id } }),
       prisma.renewalSent.deleteMany({ where: { appointmentId: req.params.id } }),
       prisma.appointment.delete({ where: { id: req.params.id } }),
     ]);
@@ -3557,6 +3566,64 @@ apiRouter.delete(
     if (!assertClinicAccess(req, res, existing.clinicId)) return;
 
     await prisma.postProcedureRule.delete({ where: { id: req.params.id } });
+    res.json({ ok: true });
+  })
+);
+
+// --- Pre-procedimento (orientacoes de preparo, enviadas logo apos a cliente confirmar o horario) ---
+
+apiRouter.get(
+  "/pre-procedure-rules",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    res.json(await prisma.preProcedureRule.findMany({ where: { clinicId: clinic.id }, orderBy: { createdAt: "asc" } }));
+  })
+);
+
+apiRouter.post(
+  "/pre-procedure-rules",
+  asyncRoute(async (req, res) => {
+    const { name, message, procedureIds } = req.body as { name?: string; message?: string; procedureIds?: string[] };
+    if (!name?.trim() || !message?.trim()) {
+      res.status(400).json({ error: "name e message sao obrigatorios" });
+      return;
+    }
+    const clinic = await getClinic(req);
+    const rule = await prisma.preProcedureRule.create({
+      data: { clinicId: clinic.id, name: name.trim(), message: message.trim(), procedureIds: (procedureIds ?? []).join(",") },
+    });
+    res.json(rule);
+  })
+);
+
+apiRouter.put(
+  "/pre-procedure-rules/:id",
+  asyncRoute(async (req, res) => {
+    const existing = await prisma.preProcedureRule.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, existing.clinicId)) return;
+    const { name, message, procedureIds, active } = req.body as { name?: string; message?: string; procedureIds?: string[]; active?: boolean };
+    const rule = await prisma.preProcedureRule.update({
+      where: { id: req.params.id },
+      data: {
+        ...(name !== undefined ? { name: name.trim() } : {}),
+        ...(message !== undefined ? { message: message.trim() } : {}),
+        ...(procedureIds !== undefined ? { procedureIds: procedureIds.join(",") } : {}),
+        ...(active !== undefined ? { active } : {}),
+      },
+    });
+    res.json(rule);
+  })
+);
+
+apiRouter.delete(
+  "/pre-procedure-rules/:id",
+  asyncRoute(async (req, res) => {
+    const existing = await prisma.preProcedureRule.findUniqueOrThrow({ where: { id: req.params.id } });
+    if (!assertClinicAccess(req, res, existing.clinicId)) return;
+    await prisma.$transaction([
+      prisma.preProcedureSent.deleteMany({ where: { ruleId: req.params.id } }),
+      prisma.preProcedureRule.delete({ where: { id: req.params.id } }),
+    ]);
     res.json({ ok: true });
   })
 );
@@ -4144,11 +4211,14 @@ apiRouter.get(
         ? `${r.dayOffset === 1 ? "dia anterior" : "mesmo dia"} ${r.sendHour}h${r.sendEndHour != null ? `-${r.sendEndHour}h` : ""}${r.parentRuleId ? " (cobrança de quem não confirmou)" : ""}`
         : `${r.hoursBefore}h antes`;
 
+    // Uma confirmacao por pessoa por dia: so o primeiro horario dispara; os demais ficam cobertos por ele.
+    const firstIds = firstOfDayIds(appts, tz);
     const items = appts.map((a) => {
       const digits = a.patient.phone.replace(/\D/g, "");
       const problems: string[] = [];
       if (a.patient.optedOut) problems.push("pediu para não receber mensagens");
       if (!/^55\d{10,11}$/.test(digits)) problems.push("telefone fora do padrão (55 + DDD + número)");
+      const coveredByFirst = !firstIds.has(a.id);
       return {
         id: a.id,
         patient: a.patient.name ?? a.patient.phone,
@@ -4158,9 +4228,10 @@ apiRouter.get(
         bookedAt: a.createdAt,
         source: a.source,
         problems,
+        coveredByFirst, // true = a pessoa tem horario antes no mesmo dia: a confirmacao do primeiro horario cobre este
         reminders: rules.map((r) => {
           const sent = a.reminders.find((x) => x.ruleId === r.id);
-          return { rule: label(r), sent: !!sent, sentAt: sent?.sentAt ?? null };
+          return { rule: label(r), sent: coveredByFirst ? true : !!sent, sentAt: sent?.sentAt ?? null };
         }),
       };
     });

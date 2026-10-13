@@ -145,6 +145,7 @@ export async function undoCeImport(clinicId: string, opts: { dryRun: boolean; si
   if (junkIds.length) {
     await prisma.reminderSent.deleteMany({ where: { appointmentId: { in: junkIds } } });
     await prisma.postProcedureSent.deleteMany({ where: { appointmentId: { in: junkIds } } });
+    await prisma.preProcedureSent.deleteMany({ where: { appointmentId: { in: junkIds } } });
     await prisma.renewalSent.deleteMany({ where: { appointmentId: { in: junkIds } } });
     await prisma.appointment.deleteMany({ where: { id: { in: junkIds } } });
   }

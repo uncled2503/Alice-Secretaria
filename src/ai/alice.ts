@@ -29,6 +29,11 @@ import { tagNewLead } from "../crm/leadTag.js";
 import { recordIntentSignals } from "../crm/intent.js";
 import { handoffCard } from "../crm/handoffCard.js";
 import { findRepetitions, removeSentences, askedAgain, conversationMemory } from "./repetition.js";
+import { buildPreProcedureText } from "../reminders/preProcedure.js";
+
+// Orientacao de PRE-procedimento que sai como resposta da Alice logo apos a cliente confirmar o horario (por conversa).
+// A ferramenta de confirmar preenche; generateReplyUnlocked usa o texto exato (nao deixa o modelo reescrever).
+const pendingPreProcedure = new Map<string, string>();
 import { reportsProcedureReaction, REACTION_HANDOFF_REASON, REACTION_TEXT, REACTION_WINDOW_DAYS } from "./safety.js";
 import { bookingRiskNote } from "../crm/patientRisk.js";
 import { isFreePlan } from "../crm/plan.js";
@@ -126,13 +131,16 @@ const tools: ChatCompletionTool[] = [
     function: {
       name: "manage_my_appointment",
       description:
-        "Gerencia o proximo agendamento futuro do proprio paciente. Use 'confirm' quando ele confirmar presenca (ex: 'confirmado', 'pode confirmar', 'sim vou'), 'cancel' quando pedir pra cancelar, 'reschedule' quando pedir pra remarcar (informe new_date e new_time).",
+        "Gerencia os agendamentos futuros do proprio paciente. Use 'confirm' quando ele confirmar presenca (ex: 'confirmado', 'pode confirmar', 'sim vou' - confirma todos os horarios do dia), 'cancel' quando pedir pra cancelar (tira da agenda), 'reschedule' quando pedir pra remarcar (informe new_date e new_time). Se ele tiver MAIS DE UM agendamento, para cancelar/remarcar informe qual com appointment_date (+ appointment_time), ou all_that_day=true pra cancelar todos os horarios do dia; sem isso a ferramenta devolve a lista e voce pergunta qual.",
       parameters: {
         type: "object",
         properties: {
           action: { type: "string", enum: ["confirm", "cancel", "reschedule"] },
           new_date: { type: "string", description: "So para reschedule: AAAA-MM-DD no fuso da clinica." },
           new_time: { type: "string", description: "So para reschedule: HH:MM em 24h." },
+          appointment_date: { type: "string", description: "Qual agendamento (quando ha mais de um): AAAA-MM-DD do agendamento atual, como vem na lista de agendamentos." },
+          appointment_time: { type: "string", description: "Qual agendamento (quando ha varios no mesmo dia): HH:MM do agendamento atual." },
+          all_that_day: { type: "boolean", description: "So para cancel: true = cancelar TODOS os horarios do dia de appointment_date." },
         },
         required: ["action"],
       },
@@ -513,50 +521,119 @@ async function runTool(
 
   if (name === "manage_my_appointment") {
     const action = String(input.action ?? "");
-    const appt = await prisma.appointment.findFirst({
+    const upcoming = await prisma.appointment.findMany({
       where: { patientId, status: "confirmed", scheduledAt: { gte: new Date() } },
       orderBy: { scheduledAt: "asc" },
+      take: 10,
       include: { procedure: true, professional: true, patient: true },
     });
-    if (!appt) return JSON.stringify({ ok: false, motivo: "nao encontrei um agendamento futuro pra esse paciente" });
+    if (upcoming.length === 0) return JSON.stringify({ ok: false, motivo: "nao encontrei um agendamento futuro pra esse paciente" });
 
-    const label = formatDateTimeInZone(appt.scheduledAt, tz);
-    const who = patientLabelOf(appt.patient);
+    const pad2 = (n: number) => String(n).padStart(2, "0");
+    const hhmmOf = (d: Date) => {
+      const wc = wallClockInZone(d, tz);
+      return `${pad2(wc.hour)}:${pad2(wc.minute)}`;
+    };
+    const describe = (a: (typeof upcoming)[number]) => ({
+      quando: formatDateTimeInZone(a.scheduledAt, tz),
+      procedimento: a.procedure.name,
+      appointment_date: isoDateInZone(a.scheduledAt, tz),
+      appointment_time: hhmmOf(a.scheduledAt),
+    });
+    const who = patientLabelOf(upcoming[0].patient);
+
+    // QUAL agendamento? O paciente pode ter varios (ex.: 3 procedimentos no mesmo dia). Sem indicacao, vale o proximo; mas
+    // pra CANCELAR/REMARCAR com mais de um, a Alice precisa perguntar qual - antes cancelava o primeiro sem perguntar.
+    const dayWanted = String(input.appointment_date ?? "").trim();
+    const timeWanted = String(input.appointment_time ?? "").trim().replace(/^(\d):/, "0$1:");
+    let candidates = upcoming;
+    if (dayWanted) candidates = candidates.filter((a) => isoDateInZone(a.scheduledAt, tz) === dayWanted);
+    if (timeWanted) candidates = candidates.filter((a) => hhmmOf(a.scheduledAt) === timeWanted);
+    if (candidates.length === 0) {
+      return JSON.stringify({ ok: false, motivo: "nao encontrei agendamento nesse dia/horario", agendamentos: upcoming.map(describe) });
+    }
+    const askWhich = () =>
+      JSON.stringify({
+        ok: false,
+        motivo: "o paciente tem mais de um agendamento: preciso saber qual",
+        agendamentos: candidates.map(describe),
+        instrucao:
+          "Pergunte QUAL agendamento (ou se sao todos do dia) e chame a ferramenta de novo informando appointment_date e appointment_time (ou all_that_day=true pra cancelar todos os horarios daquele dia). Nao escolha por conta propria.",
+      });
 
     if (action === "confirm") {
-      await prisma.appointment.update({
-        where: { id: appt.id },
+      // A confirmacao e uma so por dia: confirma TODOS os horarios do dia do agendamento escolhido (o lembrete so cita o primeiro).
+      const day = isoDateInZone(candidates[0].scheduledAt, tz);
+      const group = upcoming.filter((a) => isoDateInZone(a.scheduledAt, tz) === day);
+      await prisma.appointment.updateMany({
+        where: { id: { in: group.map((a) => a.id) } },
         data: { patientConfirmed: true, confirmedAt: new Date() },
       });
-      await notifyStaff(clinicId, "confirmed", `Presenca confirmada: ${who} - ${appt.procedure.name} em ${label}.`);
+      const label = formatDateTimeInZone(group[0].scheduledAt, tz);
+      const procs = group.map((a) => a.procedure.name).join(", ");
+      await notifyStaff(clinicId, "confirmed", `Presenca confirmada: ${who} - ${procs} em ${label}${group.length > 1 ? ` (${group.length} horarios no dia)` : ""}.`);
       await logActivity({
         clinicId, type: "appointment_confirmed", area: "agenda",
         title: "Presença confirmada pelo paciente",
-        description: `${who} — ${appt.procedure.name} em ${label}.`, actorName: null,
+        description: `${who} — ${procs} em ${label}.`, actorName: null,
       });
-      return JSON.stringify({ ok: true, confirmado: label });
+      // Orientacao de preparo (pre-procedimento): sai como a resposta desta confirmacao, com o texto exato da clinica.
+      let preparo = false;
+      try {
+        const pre = await buildPreProcedureText(group);
+        if (pre) {
+          pendingPreProcedure.set(conversationId, pre);
+          preparo = true;
+        }
+      } catch (err) {
+        console.error("[pre-procedimento] falha ao montar a mensagem:", err);
+      }
+      return JSON.stringify({
+        ok: true,
+        confirmado: label,
+        horarios_confirmados: group.length,
+        ...(preparo ? { orientacoes_de_preparo: "O sistema envia sozinho, como resposta, a mensagem de agradecimento com as orientacoes de preparo. Nao escreva as orientacoes; responda so uma frase curta." } : {}),
+      });
     }
 
     if (action === "cancel") {
-      await prisma.appointment.update({ where: { id: appt.id }, data: { status: "cancelled" } });
-      removeAppointmentInBackground(appt.id);
-      await notifyStaff(clinicId, "cancel", `Agendamento cancelado pelo paciente: ${who} - ${appt.procedure.name} em ${label}.`);
-      await logActivity({
-        clinicId, type: "appointment_cancelled", area: "agenda",
-        title: "Agendamento cancelado pelo paciente",
-        description: `${who} — ${appt.procedure.name} em ${label}.`, actorName: null,
-      });
+      let targets: typeof upcoming;
+      if (input.all_that_day === true) {
+        const day = isoDateInZone(candidates[0].scheduledAt, tz);
+        targets = upcoming.filter((a) => isoDateInZone(a.scheduledAt, tz) === day);
+      } else if (candidates.length === 1) {
+        targets = candidates;
+      } else {
+        return askWhich();
+      }
+
+      for (const appt of targets) {
+        await prisma.appointment.update({ where: { id: appt.id }, data: { status: "cancelled" } });
+        removeAppointmentInBackground(appt.id); // tira do Google Agenda e do Clinica Experts
+        await logActivity({
+          clinicId, type: "appointment_cancelled", area: "agenda",
+          title: "Agendamento cancelado pelo paciente",
+          description: `${who} — ${appt.procedure.name} em ${formatDateTimeInZone(appt.scheduledAt, tz)}.`, actorName: null,
+        });
+      }
+      const labels = targets.map((a) => `${a.procedure.name} em ${formatDateTimeInZone(a.scheduledAt, tz)}`);
+      await notifyStaff(clinicId, "cancel", `Agendamento cancelado pelo paciente: ${who} - ${labels.join("; ")}.`);
       await movePatientToRecovery(clinicId, patientId, { note: "cancelou o agendamento" });
-      await offerFreedSlotToWaitlist({
-        clinicId,
-        procedureId: appt.procedureId,
-        professionalId: appt.professionalId,
-        freedAt: appt.scheduledAt,
+      for (const appt of targets) {
+        await offerFreedSlotToWaitlist({ clinicId, procedureId: appt.procedureId, professionalId: appt.professionalId, freedAt: appt.scheduledAt });
+      }
+      return JSON.stringify({
+        ok: true,
+        cancelado: labels.join("; "),
+        removido_da_agenda: true,
+        instrucao:
+          "Confirme em UMA frase que o horario foi cancelado e OFERECA reagendar: pergunte se ela quer remarcar e qual dia/periodo fica melhor (use check_availability pra oferecer horarios reais). Se ela disser que nao quer remarcar agora, respeite e deixe a porta aberta, sem insistir.",
       });
-      return JSON.stringify({ ok: true, cancelado: label });
     }
 
     if (action === "reschedule") {
+      if (candidates.length > 1) return askWhich();
+      const appt = candidates[0];
       const requested = parseRequestedDateTime(input.new_date, input.new_time);
       if (!requested) return JSON.stringify({ ok: false, motivo: "preciso da nova data e hora (new_date e new_time)" });
 
@@ -907,7 +984,7 @@ AGENDAMENTO PELA EQUIPE: voce NAO agenda, NAO remarca, NAO cancela e NAO oferece
     const [yy, mm, dd] = isoDateInZone(new Date(), tzNow).split("-").map(Number);
     const startOfToday = zonedWallClockToUtc(tzNow, yy, mm, dd, 0, 0);
     const talkedToday = await prisma.message.count({
-      where: { role: "assistant", createdAt: { gte: startOfToday }, conversation: { patientId: ctx.patientId } },
+      where: { role: { in: ["assistant", "human"] }, createdAt: { gte: startOfToday }, conversation: { patientId: ctx.patientId } },
     });
     if (talkedToday > 0) {
       continuityLine = `\nCONTINUIDADE: voce JA conversou com esta pessoa HOJE. NAO se apresente de novo, NAO diga "aqui e a ${a}", NAO repita boas-vindas nem pergunte "como posso ajudar hoje?" como se fosse o primeiro contato. Se ela mandar so um cumprimento ("ola", "oi"), responda curto e retome de onde pararam (ex.: "Oi de novo! Pode falar, em que posso te ajudar?"), sem se reapresentar.`;
@@ -976,7 +1053,10 @@ AGENDAMENTO PELA EQUIPE: voce NAO agenda, NAO remarca, NAO cancela e NAO oferece
     const list = upcoming.length
       ? upcoming.map((a) => `- ${formatInZone(a.scheduledAt, tzAppt)} - ${a.procedure.name}${a.professional ? ` (com ${a.professional.name})` : ""}`).join("\n")
       : "(nenhum agendamento futuro registrado)";
-    apptLine = `\nAGENDAMENTOS REAIS DESTE PACIENTE (unica fonte de verdade para dia e horario):\n${list}\nSobre dia/horario de agendamento: use SOMENTE esta lista. Se o paciente citar um horario diferente do da lista, duvidar do horario ("nao e as 15h?") ou pedir para mudar, NAO concorde, NAO corrija e NAO invente: diga que vai confirmar com a equipe e chame transfer_to_human com o horario que ele citou e o que consta aqui. Nunca confirme um horario que nao esteja na lista. Se a lista estiver vazia, nao ha agendamento registrado: nao diga que esta agendado, encaminhe para a equipe.`;
+    const preSafety = upcoming.length
+      ? `\nPRE-PROCEDIMENTO (seguranca): se a paciente relatar uso recente de medicamento, alteracao de saude, gestacao, amamentacao, reacao alergica ou qualquer duvida clinica ANTES do procedimento, NAO improvise orientacao: chame transfer_to_human com o resumo e diga que a equipe responsavel vai orientar.`
+      : "";
+    apptLine = `${preSafety}\nAGENDAMENTOS REAIS DESTE PACIENTE (unica fonte de verdade para dia e horario):\n${list}\nSobre dia/horario de agendamento: use SOMENTE esta lista. Se o paciente citar um horario diferente do da lista, duvidar do horario ("nao e as 15h?") ou pedir para mudar, NAO concorde, NAO corrija e NAO invente: diga que vai confirmar com a equipe e chame transfer_to_human com o horario que ele citou e o que consta aqui. Nunca confirme um horario que nao esteja na lista. Se a lista estiver vazia, nao ha agendamento registrado: nao diga que esta agendado, encaminhe para a equipe.`;
   }
 
   const dayNow = new Date();
@@ -1109,7 +1189,9 @@ FERIADOS PROXIMOS: ${holidayItems.join("; ")}. Se a pessoa perguntar se funciona
 - Nunca invente nem omita horario que a ferramenta devolveu.
 - Nunca confirme, prometa ou invente um horario sem passar pelas ferramentas.
 - NUNCA escreva que a consulta esta "confirmada", "agendada" ou "reservada" sem ter chamado book_appointment e recebido "agendado: true" nesta mesma resposta. Escrever a mensagem de confirmacao NAO agenda nada - sem a ferramenta, o horario nao existe na agenda e a equipe nao fica sabendo.
-- Se o paciente confirmar presenca numa consulta ja marcada, cancelar ou pedir pra remarcar, use manage_my_appointment.${clinic.conciseFirstReply ? "\n- ANTES de oferecer dias e horarios, se a ficha acima nao trouxer a preferencia, pergunte se ela prefere manha, tarde ou noite e quais dias da semana costumam ser melhores; depois ofereca so horarios compativeis." : ""}${professionalsBlock}`;
+- Se o paciente confirmar presenca numa consulta ja marcada, cancelar ou pedir pra remarcar, use manage_my_appointment.
+- CANCELAMENTO: se o paciente pedir pra cancelar, chame manage_my_appointment com action "cancel" (isso tira o horario da agenda e libera a vaga) - nao diga que cancelou sem chamar. Se ele tiver mais de um agendamento, pergunte QUAL (ou se sao todos) antes de cancelar. Depois de cancelar, OFERECA reagendar em uma frase ("quer que eu veja outro horario pra voce?"), sem insistir se ele disser que nao.
+- CONFIRMACAO: a clinica manda UMA confirmacao por dia (a do primeiro horario). Se o paciente responder confirmando, chame manage_my_appointment com action "confirm": isso confirma todos os horarios do dia.${clinic.conciseFirstReply ? "\n- ANTES de oferecer dias e horarios, se a ficha acima nao trouxer a preferencia, pergunte se ela prefere manha, tarde ou noite e quais dias da semana costumam ser melhores; depois ofereca so horarios compativeis." : ""}${professionalsBlock}`;
 
   const allStages = await getFunnelStages(clinicId);
   const stagesBlock = allStages.length
@@ -1434,6 +1516,7 @@ export async function recordOutgoingFromDevice(params: {
     data: {
       humanTakeover: true,
       handoffPending: false,
+      staffTouchedAt: new Date(), // a equipe agiu: base do "Alice volta se a equipe demorar"
       lastMessageAt: new Date(),
       ...(conversation.archived ? { archived: false } : {}),
       ...(conversation.status === "closed" ? { status: "active" } : {}),
@@ -1550,7 +1633,7 @@ const replyLocks = new Map<string, Promise<unknown>>();
 
 export function generateReply(
   conversationId: string,
-  opts: { imageDataUrl?: string; guardAgainstNewerThan?: Date } = {},
+  opts: { imageDataUrl?: string; guardAgainstNewerThan?: Date; resumedAfterStaffDelay?: boolean } = {},
 ): Promise<string> {
   const prev = replyLocks.get(conversationId) ?? Promise.resolve();
   const run = prev.catch(() => undefined).then(() => generateReplyUnlocked(conversationId, opts));
@@ -1573,7 +1656,7 @@ export function isRecentDuplicate(text: string, recentAliceReplies: string[]): b
 
 async function generateReplyUnlocked(
   conversationId: string,
-  opts: { imageDataUrl?: string; guardAgainstNewerThan?: Date } = {},
+  opts: { imageDataUrl?: string; guardAgainstNewerThan?: Date; resumedAfterStaffDelay?: boolean } = {},
 ): Promise<string> {
   const conversation = await prisma.conversation.findUnique({
     where: { id: conversationId },
@@ -1761,6 +1844,15 @@ async function generateReplyUnlocked(
     });
   }
 
+  // A equipe estava atendendo e demorou: a Alice retoma (job de src/crm/humanReturn.ts).
+  if (opts.resumedAfterStaffDelay) {
+    messages.push({
+      role: "system",
+      content:
+        "RETOMADA DO ATENDIMENTO: uma pessoa da equipe estava atendendo esta conversa e a cliente ficou esperando uma resposta; agora VOCE esta retomando. Comece com UMA frase curta pedindo desculpa pela demora (ex.: \"Desculpa a demora!\"), sem se reapresentar, e responda o que ela mandou. As falas anteriores da equipe no historico foram escritas por uma pessoa: continue de onde ela parou, sem contradizer nem repetir o que a equipe ja disse. Se o assunto so a equipe resolve (negociacao, caso clinico), diga que ja avisou a equipe e chame transfer_to_human.",
+    });
+  }
+
   // LEMBRETE FINAL (ultima mensagem do modelo, onde ele mais presta atencao): responda SO o que a pessoa acabou de mandar.
   // O modelo tinha o habito de re-responder perguntas antigas (valor, endereco, aviso de marca-passo) dentro de cada
   // resposta nova e fechar todas com a mesma pergunta.
@@ -1781,6 +1873,7 @@ async function generateReplyUnlocked(
   let finalText = "";
   let didTransfer = false;
   const toolsUsed: string[] = [];
+  pendingPreProcedure.delete(conversation.id); // sobra de uma tentativa anterior que falhou
   for (let turn = 0; turn < 6; turn++) {
     const response = await openai.chat.completions.create({
       model: MODEL,
@@ -1813,6 +1906,12 @@ async function generateReplyUnlocked(
     }
   }
 
+  // Orientacao de preparo (pre-procedimento): o texto da clinica, exato, no lugar da resposta do modelo (que so confirmou).
+  const preText = pendingPreProcedure.get(conversation.id);
+  pendingPreProcedure.delete(conversation.id);
+  const fixedReply = !!preText && !didTransfer;
+  if (fixedReply) finalText = preText as string;
+
   // Re-checa o estado da conversa DEPOIS de gerar a resposta.
   const after = await prisma.conversation.findUnique({
     where: { id: conversation.id },
@@ -1837,7 +1936,7 @@ async function generateReplyUnlocked(
 
   // Primeira resposta a um contato novo ficou longa (enxurrada de informacao): reescreve
   // curta - apresentacao + UMA pergunta. Vale mesmo se o modelo ignorar a instrucao.
-  if (!didTransfer && finalText.trim() && (finalText.length > FIRST_REPLY_MAX_CHARS || (finalText.match(/\?/g) ?? []).length > 1) && !history.some((m) => m.role === "assistant")) {
+  if (!didTransfer && !fixedReply && finalText.trim() && (finalText.length > FIRST_REPLY_MAX_CHARS || (finalText.match(/\?/g) ?? []).length > 1) && !history.some((m) => m.role === "assistant")) {
     const conciseOn = (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { conciseFirstReply: true, name: true, assistantName: true } })) ?? null;
     if (conciseOn?.conciseFirstReply) {
       const shortText = await shortenFirstReply(finalText, history.filter((m) => m.role === "user").map((m) => m.content).slice(-3), conciseOn.name, conciseOn.assistantName || "Alice");
@@ -1847,7 +1946,7 @@ async function generateReplyUnlocked(
 
   // SEM INSISTIR EM AVALIACAO (clinicas com "soft sell"): se ja ofereceu e a pessoa nao falou de
   // agendar, a resposta nao pode oferecer de novo. Reescreve tirando a oferta.
-  if (usageClinic?.softSell && !didTransfer && finalText.trim()) {
+  if (usageClinic?.softSell && !didTransfer && !fixedReply && finalText.trim()) {
     const prevOffers = history.filter((m) => m.role === "assistant" && !m.authorName && /avalia/i.test(m.content)).length;
     const lastUserForPitch = normalizeReply(history.filter((m) => m.role === "user").at(-1)?.content ?? "");
     if (prevOffers >= 1 && EVAL_PITCH_RE.test(normalizeReply(finalText)) && !SCHEDULING_INTENT_RE.test(lastUserForPitch)) {
@@ -1860,7 +1959,7 @@ async function generateReplyUnlocked(
   // REPETICAO POR FRASE: a resposta repete frases que a Alice ja disse nas ultimas mensagens (re-responde pergunta antiga,
   // fecha com a mesma pergunta). Reescreve respondendo so ao que a pessoa mandou agora; se a reescrita falhar, corta as
   // frases repetidas. Nao mexe quando a pessoa REPETIU a propria pergunta (ai repetir e legitimo).
-  if (!didTransfer && finalText.trim()) {
+  if (!didTransfer && !fixedReply && finalText.trim()) {
     const userTexts = history.filter((m) => m.role === "user").map((m) => m.content);
     const lastUserText = userTexts.at(-1) ?? "";
     if (trailingUser.length && !askedAgain(lastUserText, userTexts.slice(0, -1))) {

@@ -6,6 +6,7 @@ import { PAID_CLINIC_WHERE } from "../crm/plan.js";
 import type { ReminderRule } from "@prisma/client";
 import { recordAutomatedMessage } from "../crm/conversationLog.js";
 import { isoDateInZone, zonedWallClockToUtc } from "../scheduling/time.js";
+import { localDayBounds } from "./firstOfDay.js";
 
 const EARLIEST_SEND_HOUR = 7; // nunca manda lembrete antes das 7h (hora local da clinica)
 const SEND_TOLERANCE_MS = 40 * 60_000; // janela de disparo apos o horario previsto (cron roda a cada 15min)
@@ -144,6 +145,30 @@ export async function selectDueAppointments(rule: ReminderRule, now: Date, tz: s
       if (sinceBooking === 0) keep.push(appt);
     }
     due = keep;
+  }
+
+  // UMA mensagem por pessoa por dia: se ela tem outro horario no MESMO dia que vem antes (ou que ja recebeu esta regra),
+  // este fica coberto pela confirmacao do primeiro horario e nao recebe outra.
+  if (!rule.parentRuleId && due.length) {
+    const first: typeof due = [];
+    for (const appt of due) {
+      const { start, end } = localDayBounds(appt.scheduledAt, tz);
+      const covered = await prisma.appointment.findFirst({
+        where: {
+          clinicId: rule.clinicId,
+          patientId: appt.patientId,
+          id: { not: appt.id },
+          scheduledAt: { gte: start, lt: end },
+          OR: [
+            { reminders: { some: { ruleId: rule.id } } },
+            { status: "confirmed", OR: [{ scheduledAt: { lt: appt.scheduledAt } }, { scheduledAt: appt.scheduledAt, id: { lt: appt.id } }] },
+          ],
+        },
+        select: { id: true },
+      });
+      if (!covered) first.push(appt);
+    }
+    due = first;
   }
 
   if (rule.parentRuleId) {

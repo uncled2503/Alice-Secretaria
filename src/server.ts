@@ -27,6 +27,7 @@ import { startBackupJob } from "./maintenance/backupJob.js";
 import { startHotLeadJobs } from "./crm/hotLeads.js";
 import { startDailyReportJob } from "./crm/dailyReport.js";
 import { startLeadReactivationJob } from "./crm/leadReactivation.js";
+import { startHumanReturnJob } from "./crm/humanReturn.js";
 import { apiRouter } from "./api/routes.js";
 import { externalApiRouter } from "./api/external/router.js";
 import { readStaffSession, clearSessionCookie } from "./api/staffSession.js";
@@ -350,6 +351,7 @@ const httpServer = app.listen(port, () => {
   startHotLeadJobs();
   startDailyReportJob();
   startLeadReactivationJob();
+  startHumanReturnJob();
 });
 
 // Deploy/restart (SIGTERM): para de aceitar conexao, deixa os eventos de WhatsApp em andamento terminarem (ate 20 s) e

@@ -43,6 +43,7 @@ const BLOCKED_ALL_METHODS: RegExp[] = [/^\/conversations\/[^/]+\/resume$/];
 const BLOCKED_WRITE_ONLY = [
   "/reminder-rules",
   "/post-procedure-rules",
+  "/pre-procedure-rules",
   "/renewal-rules",
   "/birthday-rules",
   "/followup-rules",

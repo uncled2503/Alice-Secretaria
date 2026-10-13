@@ -3715,6 +3715,7 @@ function loadAliceSettings() {
   document.getElementById("as-handoff-price").checked = !!c.handoffOnPrice;
   document.getElementById("as-save-contacts").checked = !!c.saveContactsToPhone;
   document.getElementById("as-silent-handoff").checked = !!c.silentHandoff;
+  document.getElementById("as-human-return").value = c.humanReturnMinutes ?? 0;
   document.getElementById("as-nps").checked = !!c.npsEnabled;
   document.getElementById("as-nps-hours").value = c.npsHoursAfter ?? 24;
   document.getElementById("as-nps-threshold").value = c.npsThreshold ?? 9;
@@ -3761,6 +3762,7 @@ document.getElementById("alice-settings-form").addEventListener("submit", async 
     handoffOnPrice: document.getElementById("as-handoff-price").checked,
     saveContactsToPhone: document.getElementById("as-save-contacts").checked,
     silentHandoff: document.getElementById("as-silent-handoff").checked,
+    humanReturnMinutes: Number(document.getElementById("as-human-return").value) || 0,
     npsEnabled: document.getElementById("as-nps").checked,
     npsHoursAfter: Number(document.getElementById("as-nps-hours").value) || 24,
     npsThreshold: Number(document.getElementById("as-nps-threshold").value),
