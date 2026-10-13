@@ -4,6 +4,7 @@ import { sendText } from "../uazapi/client.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js";
 import { PAID_CLINIC_WHERE } from "../crm/plan.js";
 import { recordAutomatedMessage } from "../crm/conversationLog.js";
+import { wallClockInZone } from "../scheduling/time.js";
 
 const DAY_MS = 24 * 60 * 60_000;
 const MAX_DAYS = 2 * 365; // limite de 2 anos
@@ -30,10 +31,16 @@ function intervalDays(value: number, unit: string): number | null {
 // filtro de procedimentos (procedureIds vazio = todos).
 export function startRenewalJob(): void {
   scheduleLocked("renovacao", "0 */6 * * *", async () => {
-    const rules = await prisma.renewalRule.findMany({ where: { active: true, clinic: PAID_CLINIC_WHERE } });
+    const rules = await prisma.renewalRule.findMany({
+      where: { active: true, clinic: PAID_CLINIC_WHERE },
+      include: { clinic: { select: { timezone: true } } },
+    });
     const clinicInfoCache = new Map<string, Awaited<ReturnType<typeof getClinicTemplateInfo>>>();
 
     for (const rule of rules) {
+      // O job roda de 6 em 6h em UTC (21h, 3h, 9h e 15h em Brasilia): convite de renovacao so entre 8h e 20h na clinica.
+      const localHour = wallClockInZone(new Date(), rule.clinic.timezone || "America/Sao_Paulo").hour;
+      if (localHour < 8 || localHour >= 20) continue;
       const days = intervalDays(rule.intervalValue, rule.intervalUnit);
       if (days === null) {
         console.error(`[renovacao] regra ${rule.id} com intervalUnit invalido ("${rule.intervalUnit}"; esperado months/years) - pulando`);
@@ -46,7 +53,9 @@ export function startRenewalJob(): void {
       const due = await prisma.appointment.findMany({
         where: {
           clinicId: rule.clinicId,
-          ...(rule.onlyIfCompleted ? { status: "completed" } : { status: { not: "cancelled" } }),
+          // "Fez o procedimento": concluido (ou agendado que ja passou sem ser marcado - a recepcao nem sempre marca). Quem
+          // faltou ou cancelou nao fez, entao nao recebe "ja faz 4 meses desde o seu Botox".
+          ...(rule.onlyIfCompleted ? { status: "completed" } : { status: { in: ["confirmed", "completed"] } }),
           scheduledAt: { lte: cutoff, gte: floor },
           ...(procedureFilter.length ? { procedureId: { in: procedureFilter } } : {}),
           renewalSent: { none: { ruleId: rule.id } },
@@ -64,6 +73,14 @@ export function startRenewalJob(): void {
       const clinicInfo = clinicInfoCache.get(rule.clinicId)!;
 
       for (const appt of due) {
+        // Ja tem novo agendamento (ou ja voltou) para o mesmo procedimento: nao manda a renovacao. Olha qualquer atendimento
+        // confirmado/concluido DEPOIS deste, do mesmo procedimento (ou do mesmo grupo da regra, ex.: varios tipos de preenchimento).
+        const groupIds = procedureFilter.length ? procedureFilter : [appt.procedureId];
+        const later = await prisma.appointment.count({
+          where: { patientId: appt.patientId, status: { in: ["confirmed", "completed"] }, scheduledAt: { gt: appt.scheduledAt }, procedureId: { in: groupIds } },
+        });
+        if (later > 0) continue;
+
         const text = renderMessageTemplate(rule.message, {
           patientName: appt.patient.name,
           patientPhone: appt.patient.phone,
