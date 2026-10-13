@@ -52,6 +52,7 @@ import { seedTeste } from "../maintenance/seedTeste.js";
 import { seedDiamondClinic } from "../maintenance/seedDiamondClinic.js";
 import { seedLisboa } from "../maintenance/seedLisboa.js";
 import { applyLisboaServicos } from "../maintenance/applyLisboaServicos.js";
+import { applyLisboaDescritivos } from "../maintenance/applyLisboaDescritivos.js";
 import { connectAccount, disconnectAccount, ceStatusFor } from "../clinicaexperts/client.js";
 import { syncCatalog } from "../clinicaexperts/sync.js";
 import { undoCeImport } from "../clinicaexperts/undo.js";
@@ -1110,6 +1111,33 @@ apiRouter.post(
       description: `${c.procedures} procedimentos, ${c.professionals} profissionais, ${c.faqs} FAQ, ${c.activeRules} regras, ${c.playbooks} roteiros.`,
       actorName: req.staff?.name ?? null,
     });
+    res.json(result);
+  })
+);
+
+// Aplica os descritivos comerciais da Lisboa (so descricao vazia, casamento por nome exato). dryRun (padrao) so mostra a previa. So admin.
+apiRouter.post(
+  "/clinics/lisboa-descritivos",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    if (!maintenanceEnabled(res)) return;
+    const clinic = await prisma.clinic.findFirst({ where: { name: "Lisboa Beauty Center" } });
+    if (!clinic) {
+      res.status(404).json({ error: "Clínica Lisboa não encontrada (aplique primeiro a configuração da Lisboa)." });
+      return;
+    }
+    const { dryRun } = (req.body ?? {}) as { dryRun?: boolean };
+    const result = await applyLisboaDescritivos(clinic.id, { dryRun: dryRun !== false });
+    if (!result.dryRun) {
+      await logActivity({
+        clinicId: clinic.id,
+        type: "briefing_applied",
+        area: "clinica",
+        title: "Descritivos comerciais dos procedimentos aplicados",
+        description: `${result.filled} procedimentos receberam descrição; ${result.alreadyFilled} já tinham e ficaram como estavam; ${result.unmatched.length} descritivos sem procedimento com o mesmo nome.`,
+        actorName: req.staff?.name ?? null,
+      });
+    }
     res.json(result);
   })
 );

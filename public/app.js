@@ -5824,6 +5824,33 @@ Não altera duração, valor nem o que já foi escrito.`;
   }
 });
 
+document.getElementById("btn-lisboa-descritivos").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const out = document.getElementById("seed-lisboa-result");
+  const post = (dryRun) => api("/clinics/lisboa-descritivos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dryRun }) });
+  btn.disabled = true;
+  try {
+    const p = await post(true);
+    const semMatch = p.unmatched.slice(0, 15).join("; ");
+    const msg = `Aplicar os descritivos comerciais dos procedimentos?
+
+• ${p.matched} de ${p.total} descritivos casaram com procedimentos da clínica (nome igual)
+• ${p.filled} procedimentos vão receber a descrição (só os que estão com a descrição vazia)
+• ${p.alreadyFilled} já tinham descrição e ficam como estão
+• ${p.unmatched.length} descritivos SEM procedimento com o mesmo nome${semMatch ? ": " + semMatch + (p.unmatched.length > 15 ? "…" : "") : ""}
+• Não carregados (documento pede validação da equipe): ${p.pending.join(", ")}
+
+Não altera duração, valor nem o que já foi escrito.`;
+    if (!p.filled) { showError("Nada a atualizar: nenhum procedimento casou ou todos já têm descrição."); return; }
+    if (!(await showConfirm(msg))) return;
+    const r = await post(false);
+    out.textContent = `Descritivos aplicados: ${r.filled} procedimentos receberam descrição; ${r.alreadyFilled} já tinham; ${r.unmatched.length} sem procedimento com o mesmo nome.`;
+    out.hidden = false;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 document.getElementById("btn-seed-teste").addEventListener("click", async (e) => {
   const btn = e.currentTarget;
   const out = document.getElementById("seed-teste-result");

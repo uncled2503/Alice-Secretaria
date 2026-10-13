@@ -1138,6 +1138,12 @@ FERIADOS PROXIMOS: ${holidayItems.join("; ")}. Se a pessoa perguntar se funciona
       ? ""
       : `\nLOCALIZACAO: nao ha endereco cadastrado na ficha. Se perguntarem onde fica e a resposta nao estiver no FAQ, nas mensagens prontas ou nas regras abaixo, NAO invente: o nome da clinica nao e a cidade nem o bairro. Diga que vai confirmar o endereco certinho com a equipe e chame transfer_to_human.`;
 
+  // Descritivos comerciais (Lisboa): quando os procedimentos trazem "Pergunta para continuar a conversa", a Alice explica em
+  // etapas, sem prometer resultado, e continua com a pergunta - nunca encerra so explicando.
+  const explainLine = clinic.procedures.some((p) => p.description?.includes("Pergunta para continuar a conversa:"))
+    ? `\nCOMO EXPLICAR PROCEDIMENTOS: use a "Descricao" do procedimento. NAO mande o texto inteiro de uma vez: explique em 2 ou 3 frases e va aprofundando conforme a cliente demonstrar interesse (o que e -> o que pode ajudar a melhorar -> personalizacao/avaliacao -> pergunta). Depois de explicar, faca a "Pergunta para continuar a conversa" daquele procedimento (ou uma equivalente sobre a queixa dela), sem repetir uma pergunta que ja fez; nunca encerre so explicando. Nao prometa resultado nem use "vai eliminar", "garantido", "sem risco" ou "resultado certo". Se perguntarem qual e o melhor para ela, a escolha depende de avaliacao individual. Medicamento, contraindicacao, gestacao/amamentacao, intercorrencia, reacao, dor ou duvida clinica: chame transfer_to_human. Nao defina numero de sessoes, dosagem, ml nem intervalo sem informacao cadastrada. Protocolo proprio da clinica so pode ser descrito conforme a descricao cadastrada. Se a Descricao disser que a Alice nao deve orientar (medicamento de prescricao), nao explique nem ofereca: encaminhe para a equipe. Quando houver interesse, o proximo passo e oferecer avaliacao ou horarios disponiveis, de forma natural e sem pressao.`
+    : "";
+
   const templatesBlock = clinic.messageTemplates.length
     ? `\n\nMensagens prontas${isGeneric ? "" : " da clinica"} (reaproveite quando fizer sentido; ${"{"}modo exato${"}"} = enviar o texto exatamente como esta, so trocando as variaveis):\n${clinic.messageTemplates
         .map((t) => `- ${t.name}${t.whenToUse ? ` (usar quando: ${t.whenToUse})` : ""} [${t.mode === "exact" ? "modo exato" : "adaptar tom"}]:\n  "${t.body}"`)
@@ -1256,7 +1262,7 @@ Seu trabalho:
 2. Manter a etapa do paciente no funil atualizada (update_crm_stage) conforme a conversa avanca.
 3. Checar disponibilidade real (check_specific_time / check_availability) antes de falar de qualquer data.
 4. Confirmar o horario escolhido com o paciente e so entao usar book_appointment.
-5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${locationLine}${evalPitchLine}${firstContactLine}${discoveryLine}${adLine}${profileLine}${objectionLine}${dateLine}${holidayLine}${apptLine}${teamBooksLine}${continuityLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${silentLine}${humanLine}${noRepeatLine}
+5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${locationLine}${explainLine}${evalPitchLine}${firstContactLine}${discoveryLine}${adLine}${profileLine}${objectionLine}${dateLine}${holidayLine}${apptLine}${teamBooksLine}${continuityLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${silentLine}${humanLine}${noRepeatLine}
 
 Procedimentos oferecidos pela clinica:
 ${procedureList || "(nenhum procedimento cadastrado ainda)"}
