@@ -12,6 +12,7 @@ import { formatInZone, wallClockInZone } from "../../scheduling/time.js";
 import { offerFreedSlotToWaitlist } from "../../scheduling/waitlist.js";
 import { pushAppointmentInBackground, removeAppointmentInBackground } from "../../integrations/calendarSync.js";
 import { isFreePlan } from "../../crm/plan.js";
+import { bookingRiskNote } from "../../crm/patientRisk.js";
 
 export const externalApiRouter = Router();
 externalApiRouter.use((_req, res, next) => {
@@ -513,7 +514,7 @@ externalApiRouter.post(
     // Mesma trilha de automacoes que a Alice e o painel disparam ao criar um
     // agendamento - sem isso, um agendamento feito pela API externa (site
     // proprio, ERP, n8n) nao avisava a equipe nem movia o lead no funil.
-    await notifyStaff(c.id, "new_appointment", `Novo agendamento (via API): ${patient.name ?? patient.phone} - ${booking.procedureName} em ${booking.label}.`);
+    await notifyStaff(c.id, "new_appointment", `Novo agendamento (via API): ${patient.name ?? patient.phone} - ${booking.procedureName} em ${booking.label}.${await bookingRiskNote(patient.id)}`);
     void sendAppointmentConfirmationToPatient(booking.appointmentId);
     await movePatientToKind(c.id, patient.id, "avaliacao_agendada", { note: "agendado via API externa" });
     await logActivity({

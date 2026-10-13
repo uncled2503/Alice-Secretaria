@@ -58,6 +58,8 @@ import { undoCeImport } from "../clinicaexperts/undo.js";
 import { removeCopiesOfClinic } from "../clinicaexperts/removeCopies.js";
 import { invalidateCeCache } from "../clinicaexperts/availability.js";
 import { lastPullSkips } from "../clinicaexperts/pull.js";
+import { bookingRiskNote } from "../crm/patientRisk.js";
+import { marketingReport, aliceReport } from "../crm/insights.js";
 import { pushAppointmentInBackground, removeAppointmentInBackground } from "../integrations/calendarSync.js";
 import { setupIsacFollowup } from "../maintenance/setupIsacFollowup.js";
 import {
@@ -1356,6 +1358,38 @@ apiRouter.get(
   })
 );
 
+// Conversao por anuncio/campanha: contatos -> agendaram -> compareceram -> venda. Marca campanha com muito contato e pouco agendamento.
+apiRouter.get(
+  "/reports/marketing",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const { start, end } = req.query as { start?: string; end?: string };
+    const endDate = end ? parseDateParam(end) : new Date();
+    const startDate = start ? parseDateParam(start) : endDate ? new Date(endDate.getTime() - 30 * 24 * 60 * 60_000) : null;
+    if (!startDate || !endDate) {
+      res.status(400).json({ error: "start/end invalidos" });
+      return;
+    }
+    res.json(await marketingReport(clinic.id, startDate, endDate));
+  })
+);
+
+// Desempenho da Alice: agendamentos feitos por ela (confirmaram/compareceram/venda), transferencias por motivo e falhas.
+apiRouter.get(
+  "/reports/alice",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const { start, end } = req.query as { start?: string; end?: string };
+    const endDate = end ? parseDateParam(end) : new Date();
+    const startDate = start ? parseDateParam(start) : endDate ? new Date(endDate.getTime() - 30 * 24 * 60 * 60_000) : null;
+    if (!startDate || !endDate) {
+      res.status(400).json({ error: "start/end invalidos" });
+      return;
+    }
+    res.json(await aliceReport(clinic.id, startDate, endDate));
+  })
+);
+
 apiRouter.get(
   "/reports",
   asyncRoute(async (req, res) => {
@@ -2326,7 +2360,7 @@ apiRouter.put(
     const patient = await prisma.patient.findUniqueOrThrow({ where: { id: req.params.id } });
     if (!assertClinicAccess(req, res, patient.clinicId)) return;
 
-    const { name, birthDate, email, cpf, notes, tagIds, estimatedValue, leadTemperature, assignedToId, nextActionAt, nextActionNote, active, hasPrescription, optedOut } = req.body as {
+    const { name, birthDate, email, cpf, notes, tagIds, estimatedValue, leadTemperature, assignedToId, nextActionAt, nextActionNote, active, hasPrescription, optedOut, noInterest, callbackAt, callbackNote } = req.body as {
       name?: string;
       birthDate?: string | null;
       email?: string | null;
@@ -2341,6 +2375,9 @@ apiRouter.put(
       active?: boolean;
       hasPrescription?: boolean;
       optedOut?: boolean;
+      noInterest?: boolean;
+      callbackAt?: string | null;
+      callbackNote?: string | null;
     };
 
     const LEAD_TEMPERATURES = new Set(["frio", "morno", "quente"]);
@@ -2370,6 +2407,15 @@ apiRouter.put(
           return;
         }
         parsedNextActionAt = d;
+      }
+    }
+    // Retorno combinado ("me chama dia 20"): data/hora ISO ou null pra cancelar.
+    let parsedCallback: Date | null | undefined;
+    if (callbackAt !== undefined) {
+      parsedCallback = callbackAt ? parseDateParam(callbackAt) : null;
+      if (callbackAt && !parsedCallback) {
+        res.status(400).json({ error: "callbackAt invalido (use data/hora ISO)" });
+        return;
       }
     }
     let parsedBirth: Date | null | undefined;
@@ -2412,6 +2458,8 @@ apiRouter.put(
         ...(active !== undefined ? { active } : {}),
         ...(hasPrescription !== undefined ? { hasPrescription } : {}),
         ...(optedOut !== undefined && optedOut !== patient.optedOut ? { optedOut: !!optedOut, optedOutAt: optedOut ? new Date() : null } : {}),
+        ...(noInterest !== undefined && !!noInterest !== patient.noInterest ? { noInterest: !!noInterest, noInterestAt: noInterest ? new Date() : null } : {}),
+        ...(parsedCallback !== undefined ? { callbackAt: parsedCallback, callbackNote: parsedCallback ? callbackNote?.trim() || null : null } : {}),
       },
     });
     if (optedOut !== undefined && !!optedOut !== patient.optedOut) {
@@ -2860,7 +2908,7 @@ apiRouter.post(
     await notifyStaff(
       clinic.id,
       "new_appointment",
-      `Novo agendamento: ${patient.name ?? patient.phone} - ${booking.procedureName} em ${booking.label}.`
+      `Novo agendamento: ${patient.name ?? patient.phone} - ${booking.procedureName} em ${booking.label}.${await bookingRiskNote(patient.id)}`
     );
     // Agendamento manual (recepcao/medico direto na Agenda) nao passa por
     // nenhuma conversa - sem isso, so a equipe ficava sabendo e o paciente

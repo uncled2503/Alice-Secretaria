@@ -515,6 +515,22 @@ model Patient {
   conversationSummary String?  // resumo curto do que o paciente falou
   crmSummaryAt       DateTime? // quando o resumo foi gerado (compara com lastMessageAt)
 
+  // Perfil comercial (preenchido pelo robo de resumo + sinais de intencao da conversa). So o que a pessoa disse.
+  urgency             String?   // agora | este_mes | depois (quando pretende fazer)
+  objections          String?   // preco,medo,dor,tempo,indecisao (separadas por virgula)
+  refusedProcedures   String?   // procedimentos que ela disse que NAO quer (separados por virgula) - nao oferecer de novo
+  preferredProfessional String? // profissional preferida
+  preferredPeriod     String?   // manha | tarde | noite
+  preferredDays       String?   // dias da semana que funcionam (texto livre curto)
+  askedPriceAt        DateTime? // sinais de intencao: ultima vez que perguntou valor / parcelamento / horario
+  askedInstallmentsAt DateTime?
+  askedScheduleAt     DateTime?
+  hotAlertedAt        DateTime? // quando a equipe foi avisada de "lead quente parado" (uma vez por sinal)
+  noInterest          Boolean   @default(false) // disse que nao tem (mais) interesse: sem recontato nem campanha
+  noInterestAt        DateTime?
+  callbackAt          DateTime? // pediu pra retomar numa data ("me chama depois do dia 20")
+  callbackNote        String?
+
   conversations Conversation[]
   appointments  Appointment[]
   broadcastRecipients BroadcastRecipient[]

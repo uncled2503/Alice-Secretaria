@@ -103,7 +103,14 @@ async function runFollowUpCheckInner(): Promise<void> {
       // So conversas com atividade nos ultimos 60 dias: a cascata (silencio + 3 dias de tolerancia) ja se resolveu
       // bem antes disso. Sem este corte o job carregava TODAS as conversas ativas de todas as clinicas a cada 15 min.
       lastMessageAt: { gte: new Date(Date.now() - 60 * 24 * 3_600_000) },
-      patient: { optedOut: false, clinic: { ...PAID_CLINIC_WHERE, aliceActive: true } }, // Alice pausada = sem recontato; quem pediu pra parar nao recebe
+      // Alice pausada = sem recontato; quem pediu pra parar OU disse que nao tem interesse nao recebe; quem pediu pra ser
+      // chamada numa data futura espera essa data (o retorno combinado cuida dela - ver hotLeads.ts).
+      patient: {
+        optedOut: false,
+        noInterest: false,
+        OR: [{ callbackAt: null }, { callbackAt: { lte: new Date() } }],
+        clinic: { ...PAID_CLINIC_WHERE, aliceActive: true },
+      },
     },
     include: {
       patient: { include: { clinic: { select: { importStatus: true } } } },

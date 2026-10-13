@@ -3,6 +3,7 @@ import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
 import { FREE_PLAN } from "./plan.js";
+import { formatDayInZone, isoDateInZone, zonedWallClockToUtc } from "../scheduling/time.js";
 
 // ---------------------------------------------------------------------------
 // RESUMO DO LEAD NO CRM
@@ -52,6 +53,35 @@ const saveTool: ChatCompletionTool = {
           description:
             "Resumo em TERCEIRA PESSOA e texto corrido, como quem conta o caso pra um colega. Nunca copie as frases da pessoa nem escreva em primeira pessoa. Inclua queixa, ha quanto tempo, o que ja tentou, duvidas, objecoes e se demonstrou interesse em agendar.",
         },
+        urgencia: {
+          type: "string",
+          enum: ["agora", "este_mes", "depois", ""],
+          description: "Quando a PESSOA disse que pretende fazer: 'agora' (quer comecar ja/essa semana), 'este_mes', 'depois' (mais pra frente, vai pensar, sem data). Vazio se ela nao falou nada sobre prazo.",
+        },
+        objecoes: {
+          type: "string",
+          description: "Objecoes que a pessoa levantou, separadas por virgula, usando SO estas palavras: preco, medo, dor, tempo, indecisao. Vazio se nenhuma.",
+        },
+        procedimentos_recusados: {
+          type: "string",
+          description: "Procedimentos que a pessoa disse CLARAMENTE que nao quer fazer (ex.: 'nao quero botox'), separados por virgula. Vazio se nenhum.",
+        },
+        profissional_preferida: { type: "string", description: "Profissional que a pessoa pediu/prefere atender com. Vazio se nao disse." },
+        periodo_preferido: {
+          type: "string",
+          enum: ["manha", "tarde", "noite", ""],
+          description: "Periodo do dia que a pessoa disse que prefere pra ser atendida. Vazio se nao disse.",
+        },
+        dias_preferidos: { type: "string", description: "Dias da semana que a pessoa disse que funcionam (texto curto, ex.: 'terca e quinta'). Vazio se nao disse." },
+        sem_interesse: {
+          type: "boolean",
+          description: "true SOMENTE se a pessoa disse de forma clara que NAO tem (mais) interesse / nao quer mais. Duvida ou 'vou pensar' NAO e falta de interesse.",
+        },
+        retorno_data: {
+          type: "string",
+          description: "Data (AAAA-MM-DD) em que a PESSOA pediu pra ser chamada de novo (ex.: 'me chama depois do dia 20', 'mes que vem', 'sexta'). Resolva a data usando o dia de hoje informado no inicio da conversa. Vazio se ela nao pediu.",
+        },
+        retorno_motivo: { type: "string", description: "Em poucas palavras, o que ela pediu (ex.: 'depois do dia 20, vai receber o salario'). Vazio se nao ha retorno." },
       },
       required: [],
     },
@@ -75,18 +105,54 @@ EXEMPLOS DE RESUMO BOM:
 EXEMPLO DE RESUMO RUIM (nunca faca assim - e copia das falas, em primeira pessoa):
 "Vi o video de voces no instagram. Meu peso, ja tentei de tudo. Ta caro pra mim agora."
 
+PERFIL COMERCIAL (preencha SO com o que a PESSOA disse; na duvida, deixe vazio): urgencia (quando pretende fazer), objecoes (preco, medo, dor, tempo, indecisao), procedimentos que ela recusou, profissional/periodo/dias que prefere, sem_interesse (so se ela disse claramente que nao quer mais) e retorno_data (quando ela pediu pra ser chamada de novo; use o dia de hoje que vem no inicio da conversa pra resolver 'depois do dia 20', 'mes que vem', 'sexta').
+
 Chame sempre a ferramenta salvar_resumo.`;
 
 interface Summary {
   contactReason: string;
   interestNote: string;
   conversationSummary: string;
+  // Perfil comercial (so o que a pessoa disse)
+  urgency: string;
+  objections: string;
+  refusedProcedures: string;
+  preferredProfessional: string;
+  preferredPeriod: string;
+  preferredDays: string;
+  noInterest: boolean;
+  callbackDate: string; // AAAA-MM-DD ou ""
+  callbackNote: string;
+}
+
+const URGENCY = new Set(["agora", "este_mes", "depois"]);
+const PERIODS = new Set(["manha", "tarde", "noite"]);
+const OBJECTIONS = new Set(["preco", "medo", "dor", "tempo", "indecisao"]);
+
+// Normaliza o que o modelo devolveu: so valores conhecidos entram.
+export function cleanObjections(raw: string): string {
+  // sem acento ("preço" -> "preco"): o modelo as vezes devolve com acento mesmo pedindo sem
+  const norm = (x: string) => x.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "").trim();
+  return [...new Set(raw.split(/[,;]/).map(norm).filter((x) => OBJECTIONS.has(x)))].join(",");
+}
+
+// "AAAA-MM-DD" -> instante (10h no fuso da clinica), ou null se invalida/no passado.
+export function callbackInstant(date: string, timeZone: string, now = new Date()): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date.trim());
+  if (!m) return null;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  const at = zonedWallClockToUtc(timeZone, y, mo, d, 10, 0);
+  if (Number.isNaN(at.getTime())) return null;
+  if (at.getTime() <= now.getTime()) return null; // data que ja passou: nao ha o que agendar
+  if (at.getTime() > now.getTime() + 400 * 24 * 3_600_000) return null; // mais de ~13 meses: provavelmente erro
+  return at;
 }
 
 const clean = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 
 // Le uma conversa e devolve o resumo. null = nao deu pra resumir.
-async function summarizeConversation(conversationId: string): Promise<Summary | null> {
+async function summarizeConversation(conversationId: string, todayLabel: string): Promise<Summary | null> {
   const messages = await prisma.message.findMany({
     where: { conversationId, role: { in: ["user", "assistant", "human"] } },
     orderBy: { createdAt: "desc" },
@@ -108,7 +174,9 @@ async function summarizeConversation(conversationId: string): Promise<Summary | 
     model: MODEL,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: transcript },
+      { role: "user", content: `Hoje e ${todayLabel}.
+
+${transcript}` },
     ],
     tools: [saveTool],
     tool_choice: { type: "function", function: { name: "salvar_resumo" } },
@@ -128,6 +196,15 @@ async function summarizeConversation(conversationId: string): Promise<Summary | 
     contactReason: clean(raw.motivo_contato),
     interestNote: clean(raw.procedimento_interesse),
     conversationSummary: clean(raw.resumo_conversa),
+    urgency: URGENCY.has(clean(raw.urgencia)) ? clean(raw.urgencia) : "",
+    objections: cleanObjections(clean(raw.objecoes)),
+    refusedProcedures: clean(raw.procedimentos_recusados).slice(0, 200),
+    preferredProfessional: clean(raw.profissional_preferida).slice(0, 80),
+    preferredPeriod: PERIODS.has(clean(raw.periodo_preferido)) ? clean(raw.periodo_preferido) : "",
+    preferredDays: clean(raw.dias_preferidos).slice(0, 80),
+    noInterest: raw.sem_interesse === true,
+    callbackDate: clean(raw.retorno_data),
+    callbackNote: clean(raw.retorno_motivo).slice(0, 160),
   };
 }
 
@@ -140,6 +217,8 @@ export async function runLeadSummaryJob(clinicId: string): Promise<LeadSummaryRu
   const quietBefore = new Date(Date.now() - QUIET_MINUTES * 60_000);
   const since = new Date(Date.now() - LOOKBACK_HOURS * 3_600_000);
 
+  const clinicRow = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { timezone: true } });
+  const tz = clinicRow?.timezone || "America/Sao_Paulo";
   const conversations = await prisma.conversation.findMany({
     where: { patient: { clinicId }, lastMessageAt: { gte: since, lte: quietBefore } },
     orderBy: { lastMessageAt: "desc" },
@@ -159,7 +238,7 @@ export async function runLeadSummaryJob(clinicId: string): Promise<LeadSummaryRu
   let updated = 0;
   for (const conversation of due) {
     try {
-      const summary = await summarizeConversation(conversation.id);
+      const summary = await summarizeConversation(conversation.id, `${formatDayInZone(new Date(), tz)} (${isoDateInZone(new Date(), tz)})`);
       // Marca como processado mesmo quando nao deu resumo, pra nao tentar de
       // novo a cada rodada a mesma conversa vazia.
       const data: Record<string, unknown> = { crmSummaryAt: new Date() };
@@ -170,6 +249,23 @@ export async function runLeadSummaryJob(clinicId: string): Promise<LeadSummaryRu
         if (summary.interestNote) data.interestNote = summary.interestNote;
         if (summary.conversationSummary) data.conversationSummary = summary.conversationSummary;
         if (summary.contactReason || summary.interestNote || summary.conversationSummary) updated += 1;
+
+        // Perfil comercial: tambem so preenche (nunca apaga o que ja se sabia).
+        if (summary.urgency) data.urgency = summary.urgency;
+        if (summary.objections) data.objections = summary.objections;
+        if (summary.refusedProcedures) data.refusedProcedures = summary.refusedProcedures;
+        if (summary.preferredProfessional) data.preferredProfessional = summary.preferredProfessional;
+        if (summary.preferredPeriod) data.preferredPeriod = summary.preferredPeriod;
+        if (summary.preferredDays) data.preferredDays = summary.preferredDays;
+        if (summary.noInterest) {
+          data.noInterest = true;
+          data.noInterestAt = new Date();
+        }
+        const callbackAt = summary.callbackDate ? callbackInstant(summary.callbackDate, tz) : null;
+        if (callbackAt) {
+          data.callbackAt = callbackAt;
+          data.callbackNote = summary.callbackNote || null;
+        }
       }
       await prisma.patient.update({ where: { id: conversation.patient.id }, data });
     } catch (err) {

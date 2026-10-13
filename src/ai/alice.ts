@@ -26,6 +26,9 @@ import { enqueueLead, enqueueSchedule } from "../meta/events.js";
 import { ctwaClidToFbc } from "../meta/userData.js";
 import { checkAtendimentoLimit } from "../crm/usage.js";
 import { tagNewLead } from "../crm/leadTag.js";
+import { recordIntentSignals } from "../crm/intent.js";
+import { handoffCard } from "../crm/handoffCard.js";
+import { bookingRiskNote } from "../crm/patientRisk.js";
 import { isFreePlan } from "../crm/plan.js";
 import type { Procedure } from "@prisma/client";
 
@@ -323,18 +326,20 @@ async function runTool(
       where: { id: conversationId },
       data: { humanTakeover: true, handoffReason: reason, handoffPending: true },
     });
+    // Ficha pra quem assume: origem do lead, interesse, objetivo, prazo, objecoes e o que a pessoa ja sinalizou.
+    const ficha = patient ? handoffCard(patient) : "";
     await prisma.message.create({
       data: {
         conversationId,
         role: "system",
-        content: `Atendimento transferido pela Alice. Motivo: ${reason}.${summary ? `\n\nResumo:\n${summary}` : ""}`,
+        content: `Atendimento transferido pela Alice. Motivo: ${reason}.${ficha ? `\n\nFicha:\n${ficha}` : ""}${summary ? `\n\nResumo:\n${summary}` : ""}`,
         authorName: null,
       },
     });
     await notifyStaff(
       clinicId,
       "human_handoff",
-      `Atendimento transferido pela Alice: ${who}\nMotivo: ${reason}.${summary ? `\n\n${summary}` : ""}`,
+      `Atendimento transferido pela Alice: ${who}\nMotivo: ${reason}.${ficha ? `\n\n${ficha}` : ""}${summary ? `\n\n${summary}` : ""}`,
     );
     await logActivity({
       clinicId,
@@ -490,7 +495,7 @@ async function runTool(
     await notifyStaff(
       clinicId,
       "new_appointment",
-      `Novo agendamento (via Alice): ${patientLabelOf(patient)} - ${booking.procedureName}${withPro} em ${whenLabel}.`,
+      `Novo agendamento (via Alice): ${patientLabelOf(patient)} - ${booking.procedureName}${withPro} em ${whenLabel}.${await bookingRiskNote(patientId)}`,
     );
     await logActivity({
       clinicId,
@@ -572,7 +577,7 @@ async function runTool(
         data: { scheduledAt: new Date(check.requestedIso), patientConfirmed: false, confirmedAt: null },
       });
       pushAppointmentInBackground(appt.id); // move o evento no Google pro horario novo
-      await notifyStaff(clinicId, "reschedule", `Agendamento remarcado pelo paciente: ${who} - ${appt.procedure.name} agora em ${check.requestedLabel}.`);
+      await notifyStaff(clinicId, "reschedule", `Agendamento remarcado pelo paciente: ${who} - ${appt.procedure.name} agora em ${check.requestedLabel}.${await bookingRiskNote(patientId)}`);
       await logActivity({
         clinicId, type: "appointment_rescheduled", area: "agenda",
         title: "Agendamento remarcado pelo paciente",
@@ -917,6 +922,41 @@ AGENDAMENTO PELA EQUIPE: voce NAO agenda, NAO remarca, NAO cancela e NAO oferece
     if (ad) adLine = `\nORIGEM: este paciente chegou por um ANUNCIO (${ad}). Identifique o procedimento ou oferta desse anuncio pelo nome dele e retome-o na conversa (ex.: "Vi que voce veio pelo nosso anuncio de ..."), sem contradizer a oferta. Se o nome do anuncio nao deixar claro o procedimento, pergunte qual o interesse.${adPriceHint}`;
   }
 
+  // Ficha comercial e historico da pessoa: cliente ja atendida (nao e lead novo), o que ela ja recusou, preferencias e o
+  // que ja se sabe (prazo, objecoes). So entra o que existe; a Alice nao pergunta de novo o que ja esta aqui.
+  let profileLine = "";
+  if (ctx.patientId) {
+    const pf = await prisma.patient.findUnique({
+      where: { id: ctx.patientId },
+      select: { urgency: true, objections: true, refusedProcedures: true, preferredProfessional: true, preferredPeriod: true, preferredDays: true },
+    });
+    const pastVisits = await prisma.appointment.findMany({
+      where: { clinicId, patientId: ctx.patientId, status: { in: ["completed", "confirmed"] }, scheduledAt: { lt: new Date() } },
+      orderBy: { scheduledAt: "desc" },
+      take: 3,
+      select: { scheduledAt: true, procedure: { select: { name: true } } },
+    });
+    const parts: string[] = [];
+    if (pastVisits.length) {
+      const last = pastVisits[0];
+      parts.push(
+        `CLIENTE JA ATENDIDA: ja esteve na clinica (ultimo atendimento: ${formatDateTimeInZone(last.scheduledAt, clinic.timezone || "America/Sao_Paulo").slice(0, 10)} - ${last.procedure.name}${pastVisits.length > 1 ? `; ${pastVisits.length}+ visitas` : ""}). NAO trate como lead novo: nao se apresente do zero nem explique tudo como se fosse o primeiro contato; pergunte como foi a experiencia e facilite a continuidade (proxima sessao, reavaliacao ou outro objetivo).`,
+      );
+    }
+    if (pf?.refusedProcedures) parts.push(`PROCEDIMENTOS QUE ELA JA DISSE QUE NAO QUER: ${pf.refusedProcedures}. Nao ofereca nem sugira de novo.`);
+    const prefs = [
+      pf?.preferredProfessional ? `profissional ${pf.preferredProfessional}` : "",
+      pf?.preferredPeriod ? `periodo ${pf.preferredPeriod}` : "",
+      pf?.preferredDays ? `dias ${pf.preferredDays}` : "",
+    ].filter(Boolean);
+    if (prefs.length) parts.push(`PREFERENCIAS JA CONHECIDAS: ${prefs.join(", ")}. Use ao oferecer horarios e nao pergunte de novo.`);
+    const known = [pf?.urgency ? `prazo (${pf.urgency.replace("_", " ")})` : "", pf?.objections ? `objecoes (${pf.objections})` : ""].filter(Boolean);
+    if (known.length) parts.push(`JA SE SABE: ${known.join("; ")}.`);
+    if (parts.length) profileLine = `\n${parts.join("\n")}`;
+  }
+  // Objecoes: sempre com as orientacoes APROVADAS da clinica (regras/FAQ), nunca inventando.
+  const objectionLine = `\nOBJECOES (preco, medo, dor, falta de tempo, indecisao): acolha a objecao, responda com as orientacoes aprovadas cadastradas (regras, FAQ, mensagens prontas) e conduza ao proximo passo. Sem orientacao cadastrada, nao invente desconto, garantia nem argumento clinico: seja honesta e ofereca a avaliacao ou chame a equipe.`;
+
   // Agendamentos REAIS do paciente: unica fonte de verdade pra dia/horario. Sem
   // isso a Alice "confirmava" o horario que o paciente sugeria (ou o que lembrava
   // de uma mensagem antiga) mesmo quando a agenda dizia outra coisa.
@@ -971,7 +1011,7 @@ FERIADOS PROXIMOS: ${holidayItems.join("; ")}. Se a pessoa perguntar se funciona
 
   // ABERTURA EM ETAPAS (clinicas com "primeira resposta curta"): descobrir antes de explicar.
   const discoveryLine = clinic.conciseFirstReply
-    ? `\nABERTURA DO ATENDIMENTO (descubra ANTES de explicar, UMA pergunta por mensagem, sem formulario): (1) o nome, se ainda nao souber; (2) se a pessoa JA CONHECE ou JA FEZ o procedimento; (3) o que ela quer melhorar / qual a queixa (ex.: qual regiao incomoda, o que quer melhorar na pele). So depois dessas respostas explique o procedimento, de forma CURTA e comercial (no maximo 3 frases), e termine com uma pergunta que leve ao proximo passo. Nao repita informacao que ja deu. Se ela perguntar algo direto no meio (preco, endereco, horario), responda e retome as perguntas que faltam.`
+    ? `\nABERTURA DO ATENDIMENTO (descubra ANTES de explicar, UMA pergunta por mensagem, sem formulario): (1) o nome, se ainda nao souber; (2) se a pessoa JA CONHECE ou JA FEZ o procedimento; (3) o que ela quer melhorar / qual a queixa (ex.: qual regiao incomoda, o que quer melhorar na pele); (4) quando pretende fazer (agora, este mes ou mais pra frente) - pergunte com naturalidade, sem pressionar. So depois dessas respostas explique o procedimento, de forma CURTA e comercial (no maximo 3 frases), e termine com uma pergunta que leve ao proximo passo. Nao repita informacao que ja deu. Se ela perguntar algo direto no meio (preco, endereco, horario), responda e retome as perguntas que faltam.`
     : "";
 
   let surveyLine = "";
@@ -1039,7 +1079,7 @@ FERIADOS PROXIMOS: ${holidayItems.join("; ")}. Se a pessoa perguntar se funciona
 - Nunca invente nem omita horario que a ferramenta devolveu.
 - Nunca confirme, prometa ou invente um horario sem passar pelas ferramentas.
 - NUNCA escreva que a consulta esta "confirmada", "agendada" ou "reservada" sem ter chamado book_appointment e recebido "agendado: true" nesta mesma resposta. Escrever a mensagem de confirmacao NAO agenda nada - sem a ferramenta, o horario nao existe na agenda e a equipe nao fica sabendo.
-- Se o paciente confirmar presenca numa consulta ja marcada, cancelar ou pedir pra remarcar, use manage_my_appointment.${professionalsBlock}`;
+- Se o paciente confirmar presenca numa consulta ja marcada, cancelar ou pedir pra remarcar, use manage_my_appointment.${clinic.conciseFirstReply ? "\n- ANTES de oferecer dias e horarios, se a ficha acima nao trouxer a preferencia, pergunte se ela prefere manha, tarde ou noite e quais dias da semana costumam ser melhores; depois ofereca so horarios compativeis." : ""}${professionalsBlock}`;
 
   const allStages = await getFunnelStages(clinicId);
   const stagesBlock = allStages.length
@@ -1101,7 +1141,7 @@ Seu trabalho:
 2. Manter a etapa do paciente no funil atualizada (update_crm_stage) conforme a conversa avanca.
 3. Checar disponibilidade real (check_specific_time / check_availability) antes de falar de qualquer data.
 4. Confirmar o horario escolhido com o paciente e so entao usar book_appointment.
-5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${evalPitchLine}${firstContactLine}${discoveryLine}${adLine}${dateLine}${holidayLine}${apptLine}${teamBooksLine}${continuityLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${silentLine}${humanLine}${noRepeatLine}
+5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${evalPitchLine}${firstContactLine}${discoveryLine}${adLine}${profileLine}${objectionLine}${dateLine}${holidayLine}${apptLine}${teamBooksLine}${continuityLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${silentLine}${humanLine}${noRepeatLine}
 
 Procedimentos oferecidos pela clinica:
 ${procedureList || "(nenhum procedimento cadastrado ainda)"}
@@ -1225,6 +1265,13 @@ export async function recordIncomingMessage(params: {
   // disso faz sentido pra uma mensagem que nem era realmente nova. Sem essa
   // trava, cada eco reabria a conversa e reacendia o aviso de handoff sozinho.
   if (!probableEcho) {
+    // Sinais de intencao (perguntou valor/parcelamento/horario, "quero fazer"): esquenta o lead e alimenta o alerta de
+    // lead quente parado.
+    void recordIntentSignals(clinicId, patient.id, storedContent);
+    // Disse "sem interesse" ha mais de 1 dia e voltou a escrever: volta a poder receber recontato.
+    void prisma.patient
+      .updateMany({ where: { id: patient.id, noInterest: true, noInterestAt: { lt: new Date(Date.now() - 24 * 3_600_000) } }, data: { noInterest: false, noInterestAt: null } })
+      .catch(() => undefined);
     await prisma.conversation.update({
       where: { id: conversation.id },
       data: {

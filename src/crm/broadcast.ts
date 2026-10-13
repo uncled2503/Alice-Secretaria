@@ -67,6 +67,16 @@ function isSendingAllowed(clinic: Clinic): boolean {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 let broadcastRunning = false;
 
+// Comparacao tolerante entre o nome do procedimento e o que a pessoa disse que recusou ("botox" x "Aplicacao de Botox").
+export function refusalKey(s: string): string {
+  return s.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "").replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
+}
+export function refusedAny(refused: string | null, chosenKeys: string[]): boolean {
+  if (!refused) return false;
+  const items = refused.split(",").map(refusalKey).filter((x) => x.length >= 3);
+  return items.some((r) => chosenKeys.some((c) => c.includes(r) || r.includes(c)));
+}
+
 // Reativacao de base: quem fez um procedimento (concluido) ha mais de N meses e
 // nao tem consulta futura, exceto quem optou por nao receber.
 async function reactivationRecipients(clinicId: string, config: string | null): Promise<string[]> {
@@ -93,14 +103,25 @@ async function reactivationRecipients(clinicId: string, config: string | null): 
   const candidateIds = [...lastByPatient].filter(([, last]) => last < cutoff).map(([id]) => id);
   if (candidateIds.length === 0) return [];
 
-  const [upcoming, optedOut] = await Promise.all([
+  const [upcoming, blocked, chosen] = await Promise.all([
     prisma.appointment.findMany({
       where: { clinicId, status: "confirmed", scheduledAt: { gte: now }, patientId: { in: candidateIds } },
       select: { patientId: true },
     }),
-    prisma.patient.findMany({ where: { id: { in: candidateIds }, optedOut: true }, select: { id: true } }),
+    // pediu pra parar OU disse que nao tem interesse (ou recusou algum procedimento: filtrado abaixo)
+    prisma.patient.findMany({
+      where: { id: { in: candidateIds } },
+      select: { id: true, optedOut: true, noInterest: true, refusedProcedures: true },
+    }),
+    cfg.procedureIds?.length ? prisma.procedure.findMany({ where: { clinicId, id: { in: cfg.procedureIds } }, select: { name: true } }) : Promise.resolve([]),
   ]);
-  const skip = new Set([...upcoming.map((u) => u.patientId), ...optedOut.map((p) => p.id)]);
+  const skip = new Set(upcoming.map((u) => u.patientId));
+  const chosenNames = chosen.map((c) => refusalKey(c.name));
+  for (const p of blocked) {
+    if (p.optedOut || p.noInterest) skip.add(p.id);
+    // Campanha de um procedimento que a pessoa disse que NAO quer: nao oferece de novo.
+    else if (chosenNames.length && refusedAny(p.refusedProcedures, chosenNames)) skip.add(p.id);
+  }
   return candidateIds.filter((id) => !skip.has(id));
 }
 
@@ -123,6 +144,7 @@ async function activateDueCampaigns(): Promise<void> {
           where: {
             clinicId: campaign.clinicId,
             optedOut: false, // quem pediu pra parar nao recebe campanha
+            noInterest: false, // nem quem disse que nao tem interesse
             ...(campaign.targetStage ? { funnelStage: campaign.targetStage } : {}),
           },
           select: { id: true },
@@ -161,7 +183,7 @@ async function sendNextBatch(): Promise<void> {
     for (let i = 0; i < pending.length; i++) {
       const recipient = pending[i];
       // Pediu pra parar (ou foi marcado assim depois da campanha ser montada): pula sem enviar.
-      if (recipient.patient.optedOut) {
+      if (recipient.patient.optedOut || recipient.patient.noInterest) {
         await prisma.broadcastRecipient.update({ where: { id: recipient.id }, data: { status: "skipped" } });
         continue;
       }

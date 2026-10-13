@@ -1562,7 +1562,27 @@ function renderLeadSummary(patient) {
   const text = document.getElementById("cp-lead-text");
   const when = document.getElementById("cp-lead-when");
 
-  const has = patient.contactReason || patient.interestNote || patient.conversationSummary;
+  // Perfil comercial (o que a Alice ja sabe: prazo, objecoes, recusas, preferencias, retorno combinado, sinais).
+  const URGENCY = { agora: "quer fazer agora", este_mes: "quer fazer este mês", depois: "quer fazer mais pra frente" };
+  const PERIOD = { manha: "manhã", tarde: "tarde", noite: "noite" };
+  const OBJ = { preco: "preço", medo: "medo", dor: "dor", tempo: "falta de tempo", indecisao: "indecisão" };
+  const profile = [];
+  if (patient.urgency && URGENCY[patient.urgency]) profile.push("Prazo: " + URGENCY[patient.urgency]);
+  const objections = (patient.objections || "").split(",").map((o) => OBJ[o.trim()]).filter(Boolean);
+  if (objections.length) profile.push("Objeções: " + objections.join(", "));
+  if (patient.refusedProcedures) profile.push("Já recusou: " + patient.refusedProcedures);
+  const prefs = [patient.preferredProfessional && "profissional " + patient.preferredProfessional, patient.preferredPeriod && "período " + (PERIOD[patient.preferredPeriod] || patient.preferredPeriod), patient.preferredDays && "dias " + patient.preferredDays].filter(Boolean);
+  if (prefs.length) profile.push("Preferências: " + prefs.join(" · "));
+  if (patient.askedInstallmentsAt) profile.push("Perguntou o parcelamento");
+  else if (patient.askedPriceAt) profile.push("Perguntou o valor");
+  if (patient.askedScheduleAt) profile.push("Pediu horário");
+  if (patient.callbackAt) profile.push("Retorno combinado: " + new Date(patient.callbackAt).toLocaleDateString("pt-BR") + (patient.callbackNote ? " (" + patient.callbackNote + ")" : ""));
+  if (patient.noInterest) profile.push("Disse que não tem interesse");
+  const profileEl = document.getElementById("cp-lead-profile");
+  profileEl.textContent = profile.join("\n");
+  profileEl.hidden = !profile.length;
+
+  const has = patient.contactReason || patient.interestNote || patient.conversationSummary || profile.length;
   box.hidden = !has;
   if (!has) return;
 
@@ -1600,6 +1620,7 @@ async function openContactPanel(patient) {
   document.getElementById("cp-f-birth").value = dossier.patient.birthDate ? String(dossier.patient.birthDate).slice(0, 10) : "";
   document.getElementById("cp-f-active").checked = dossier.patient.active !== false;
   document.getElementById("cp-f-opted-out").checked = !!dossier.patient.optedOut;
+  document.getElementById("cp-f-no-interest").checked = !!dossier.patient.noInterest;
   document.getElementById("cp-f-notes").value = dossier.patient.notes ?? "";
   document.getElementById("cp-f-has-prescription").checked = !!dossier.patient.hasPrescription;
   document.getElementById("cp-prescription-block").hidden = !dossier.patient.hasPrescription;
@@ -1664,6 +1685,7 @@ document.getElementById("cp-save").addEventListener("click", async () => {
       active: document.getElementById("cp-f-active").checked,
       hasPrescription: document.getElementById("cp-f-has-prescription").checked,
       optedOut: document.getElementById("cp-f-opted-out").checked,
+      noInterest: document.getElementById("cp-f-no-interest").checked,
     }),
   });
   status.textContent = "Salvo.";

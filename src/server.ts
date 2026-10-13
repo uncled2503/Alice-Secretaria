@@ -24,6 +24,8 @@ import { startPhoneContactsJob } from "./crm/phoneContacts.js";
 import { startBroadcastJob } from "./crm/broadcast.js";
 import { startUazapiWebhookWorker, shutdownUazapiWorker } from "./uazapi/client.js";
 import { startBackupJob } from "./maintenance/backupJob.js";
+import { startHotLeadJobs } from "./crm/hotLeads.js";
+import { startDailyReportJob } from "./crm/dailyReport.js";
 import { apiRouter } from "./api/routes.js";
 import { externalApiRouter } from "./api/external/router.js";
 import { readStaffSession, clearSessionCookie } from "./api/staffSession.js";
@@ -344,6 +346,8 @@ const httpServer = app.listen(port, () => {
   startPhoneContactsJob();
   startUazapiWebhookWorker().catch((err) => console.error("Falha ao iniciar fila de webhooks UAZAPI:", err));
   startBackupJob();
+  startHotLeadJobs();
+  startDailyReportJob();
 });
 
 // Deploy/restart (SIGTERM): para de aceitar conexao, deixa os eventos de WhatsApp em andamento terminarem (ate 20 s) e

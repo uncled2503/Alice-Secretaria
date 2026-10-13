@@ -1,7 +1,7 @@
 import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 
-export type NotifyEvent = "new_appointment" | "reschedule" | "cancel" | "human_handoff" | "confirmed" | "automation_failed";
+export type NotifyEvent = "new_appointment" | "reschedule" | "cancel" | "human_handoff" | "confirmed" | "automation_failed" | "daily_report" | "hot_lead";
 
 // "automation_failed" e um alerta critico de saude do sistema (falha ao
 // mandar mensagem automatica), nao um evento de negocio - manda sempre que
