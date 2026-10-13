@@ -1081,7 +1081,9 @@ async function handleQueuedPayload(clinicId: string, body: unknown, ageMs = 0): 
       await recordOutgoingFromDevice({
         clinicId,
         patientPhone: incoming.phone,
-        patientName: incoming.pushName,
+        // NAO usa o pushName: em mensagem enviada pela clinica ele e o nome do PROPRIO numero da clinica ("Lisboa Beauty
+        // Center"), que virava o nome da paciente e era salvo assim na agenda do celular.
+        patientName: undefined,
         text: text ?? "",
         media,
         externalId: incoming.externalId,

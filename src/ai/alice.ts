@@ -28,7 +28,8 @@ import { checkAtendimentoLimit } from "../crm/usage.js";
 import { tagNewLead } from "../crm/leadTag.js";
 import { recordIntentSignals } from "../crm/intent.js";
 import { handoffCard } from "../crm/handoffCard.js";
-import { findRepetitions, removeSentences, askedAgain, conversationMemory } from "./repetition.js";
+import { findRepetitions, removeSentences, askedAgain, conversationMemory, splitSentences } from "./repetition.js";
+import { announcesAction, brokenPromise, PROMISE_NUDGE } from "./promises.js";
 import { buildPreProcedureText } from "../reminders/preProcedure.js";
 
 // Orientacao de PRE-procedimento que sai como resposta da Alice logo apos a cliente confirmar o horario (por conversa).
@@ -1188,6 +1189,8 @@ FERIADOS PROXIMOS: ${holidayItems.join("; ")}. Se a pessoa perguntar se funciona
 - Se o paciente ja disser o dia que quer ("pode ser quinta?"), pule direto pro passo 2. Se ele ja disser dia E hora, use check_specific_time.
 - Nunca invente nem omita horario que a ferramenta devolveu.
 - Nunca confirme, prometa ou invente um horario sem passar pelas ferramentas.
+- VOCE NAO "VOLTA DEPOIS": cada resposta e uma rodada so. Nunca escreva "um instante", "so vou confirmar", "vou verificar e ja volto" nem "vou agendar" sem fazer: chame a ferramenta AGORA e responda com o resultado real na mesma mensagem. Nunca diga "esta agendado" antes de book_appointment devolver "agendado: true"; e nunca afirme um horario e depois o contrario - se nao tem certeza, chame check_specific_time antes de falar.
+- VARIOS PROCEDIMENTOS NA MESMA VISITA (ex.: massagem + outro tratamento): agende um apos o outro (o segundo comeca quando o primeiro termina, somando as duracoes), diga a sequencia com o horario exato de cada um e so confirme depois de book_appointment dar certo para CADA um.
 - NUNCA escreva que a consulta esta "confirmada", "agendada" ou "reservada" sem ter chamado book_appointment e recebido "agendado: true" nesta mesma resposta. Escrever a mensagem de confirmacao NAO agenda nada - sem a ferramenta, o horario nao existe na agenda e a equipe nao fica sabendo.
 - Se o paciente confirmar presenca numa consulta ja marcada, cancelar ou pedir pra remarcar, use manage_my_appointment.
 - CANCELAMENTO: se o paciente pedir pra cancelar, chame manage_my_appointment com action "cancel" (isso tira o horario da agenda e libera a vaga) - nao diga que cancelou sem chamar. Se ele tiver mais de um agendamento, pergunte QUAL (ou se sao todos) antes de cancelar. Depois de cancelar, OFERECA reagendar em uma frase ("quer que eu veja outro horario pra voce?"), sem insistir se ele disser que nao.
@@ -1873,6 +1876,8 @@ async function generateReplyUnlocked(
   let finalText = "";
   let didTransfer = false;
   const toolsUsed: string[] = [];
+  let bookedOk = false; // book_appointment devolveu agendado:true nesta rodada
+  let promiseNudged = false;
   pendingPreProcedure.delete(conversation.id); // sobra de uma tentativa anterior que falhou
   for (let turn = 0; turn < 6; turn++) {
     const response = await openai.chat.completions.create({
@@ -1886,7 +1891,17 @@ async function generateReplyUnlocked(
     const choice = response.choices[0].message;
     finalText = choice.content ?? "";
 
-    if (!choice.tool_calls || choice.tool_calls.length === 0) break;
+    if (!choice.tool_calls || choice.tool_calls.length === 0) {
+      // Anunciou "um instante, vou agendar/verificar" (ou disse "agendado") e encerrou sem chamar a ferramenta: manda fazer AGORA.
+      if (!promiseNudged && canBook && !didTransfer && turn < 5 && brokenPromise(finalText, bookedOk)) {
+        promiseNudged = true;
+        console.warn(`[promessa] resposta anunciou acao sem executar - reforcando (conv ${conversation.id}): ${finalText.slice(0, 120)}`);
+        messages.push(choice);
+        messages.push({ role: "system", content: PROMISE_NUDGE });
+        continue;
+      }
+      break;
+    }
 
     messages.push(choice);
 
@@ -1902,8 +1917,15 @@ async function generateReplyUnlocked(
         console.error(`Falha na ferramenta ${toolCall.function.name}:`, err);
         result = "Ocorreu um erro ao executar essa acao. Nao invente o resultado; peca desculpas e diga que vai confirmar com a equipe.";
       }
+      if (toolCall.function.name === "book_appointment" && result.includes('"agendado":true')) bookedOk = true;
       messages.push({ role: "tool", tool_call_id: toolCall.id, content: result });
     }
+  }
+
+  // Se mesmo depois do reforco a resposta ainda promete ("um instante", "ja volto"), corta a promessa: ela nao tem como voltar.
+  if (canBook && !didTransfer && finalText.trim() && announcesAction(finalText)) {
+    const kept = removeSentences(finalText, splitSentences(finalText).filter((s) => announcesAction(s)));
+    if (kept.length >= 15) finalText = kept;
   }
 
   // Orientacao de preparo (pre-procedimento): o texto da clinica, exato, no lugar da resposta do modelo (que so confirmou).
