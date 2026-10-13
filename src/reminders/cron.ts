@@ -44,6 +44,30 @@ export function inReminderWindow(
   return now.getTime() >= from && now.getTime() < to;
 }
 
+// PURO: agendamento criado DEPOIS que a janela de confirmacao do dia dele ja tinha fechado (ex.: marcado as 15h pra
+// amanha, e a confirmacao do dia seguinte sai das 8h as 11h de hoje). Sem isto ele nunca recebia confirmacao nenhuma. Sai
+// assim que possivel, dentro de 8h-20h e com pelo menos 2h de folga antes do atendimento. So vale pra regras de "dia
+// anterior" (dayOffset >= 1): a confirmacao do proprio dia nao precisa de reposicao.
+export const LATE_CATCHUP_MIN_LEAD_MS = 2 * 3_600_000;
+export function isLateCatchUp(
+  appt: { scheduledAt: Date; createdAt: Date },
+  w: { dayOffset: number; sendEndHour: number },
+  now: Date,
+  timeZone: string,
+): boolean {
+  if (w.dayOffset < 1) return false;
+  const windowEnd = fixedReminderTime(appt.scheduledAt, w.dayOffset, w.sendEndHour, 0, timeZone).getTime();
+  if (appt.createdAt.getTime() < windowEnd) return false; // criado a tempo: vale so a janela normal
+  if (now.getTime() < windowEnd) return false;
+  if (appt.scheduledAt.getTime() - now.getTime() < LATE_CATCHUP_MIN_LEAD_MS) return false;
+  const hour = Number(new Intl.DateTimeFormat("en-US", { timeZone, hourCycle: "h23", hour: "2-digit" }).format(now));
+  return hour >= 8 && hour < 20;
+}
+
+// Cobranca ("nao confirmou") so depois de um intervalo minimo desde a mensagem-mae: sem isto quem recebeu a confirmacao
+// de reposicao as 15h30 ja recebia a cobranca das 17h, 1h30 depois.
+export const CHILD_MIN_GAP_MS = 3 * 3_600_000;
+
 // Mudanca de janela/pausa AGENDADA numa regra (ex.: "a partir de amanha"):
 // guardada em ReminderRule.scheduledChange e aplicada sozinha quando a data chega.
 export interface ScheduledChange {
@@ -90,9 +114,16 @@ export async function selectDueAppointments(rule: ReminderRule, now: Date, tz: s
     },
     include: { patient: true, procedure: true, professional: true, reminders: { where: { ruleId: rule.parentRuleId ?? "-" }, select: { sentAt: true } } },
   });
+  const lateIds = new Set<string>();
   let due = candidates.filter((appt) => {
     if (rule.dayOffset != null && rule.sendHour != null && rule.sendEndHour != null) {
-      return inReminderWindow(appt.scheduledAt, now, { dayOffset: rule.dayOffset, sendHour: rule.sendHour, sendMinute: rule.sendMinute, sendEndHour: rule.sendEndHour }, tz);
+      if (inReminderWindow(appt.scheduledAt, now, { dayOffset: rule.dayOffset, sendHour: rule.sendHour, sendMinute: rule.sendMinute, sendEndHour: rule.sendEndHour }, tz)) return true;
+      // reposicao pra quem foi agendado depois da janela (regra-filha nao repoe: so cobra quem recebeu a mae)
+      if (!rule.parentRuleId && isLateCatchUp(appt, { dayOffset: rule.dayOffset, sendEndHour: rule.sendEndHour }, now, tz)) {
+        lateIds.add(appt.id);
+        return true;
+      }
+      return false;
     }
     const sendAt =
       rule.dayOffset != null && rule.sendHour != null
@@ -103,12 +134,25 @@ export async function selectDueAppointments(rule: ReminderRule, now: Date, tz: s
     return late >= 0 && late <= SEND_TOLERANCE_MS;
   });
 
+  // Reposicao so pra quem NAO recebeu nada desde que foi agendado: se a propria Alice (conversa) ou o painel ja
+  // confirmou o horario com a pessoa, outra "confirmacao" logo em seguida seria repeticao.
+  if (lateIds.size) {
+    const keep: typeof due = [];
+    for (const appt of due) {
+      if (!lateIds.has(appt.id)) { keep.push(appt); continue; }
+      const sinceBooking = await prisma.message.count({ where: { role: "assistant", createdAt: { gte: appt.createdAt }, conversation: { patientId: appt.patientId } } });
+      if (sinceBooking === 0) keep.push(appt);
+    }
+    due = keep;
+  }
+
   if (rule.parentRuleId) {
     // Quem respondeu algo depois da confirmacao nao e cobrado de novo.
     const silent: typeof due = [];
     for (const appt of due) {
       const sentAt = appt.reminders[0]?.sentAt;
       if (!sentAt) continue;
+      if (now.getTime() - sentAt.getTime() < CHILD_MIN_GAP_MS) continue;
       const replies = await prisma.message.count({ where: { role: "user", createdAt: { gt: sentAt }, conversation: { patientId: appt.patientId } } });
       if (replies === 0) silent.push(appt);
     }

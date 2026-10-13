@@ -69,6 +69,10 @@ app.use(helmet({
 app.use((req, res, next) => {
   if (req.method === "POST" && /^\/api\/conversations\/[^/]+\/send-media$/.test(req.path)) {
     express.json({ limit: "15mb" })(req, res, next);
+  } else if ((req.method === "POST" || req.method === "PUT") && /^\/api\/procedures(\/[^/]+)?$/.test(req.path)) {
+    // O cadastro de procedimento leva as FOTOS de resultado (ate 12, em base64) no mesmo JSON: com 4mb nao cabiam nem 3
+    // fotos e o salvar falhava com 413 - por isso as fotos de antes/depois "nao vinculavam".
+    express.json({ limit: "40mb" })(req, res, next);
   } else {
     next();
   }

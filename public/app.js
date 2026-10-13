@@ -4719,18 +4719,55 @@ document.getElementById("pr2-photos-input").addEventListener("change", (e) => {
       showError(`Máximo de ${MAX_PHOTOS} fotos por procedimento.`);
       break;
     }
-    if (file.size > 5 * 1024 * 1024) {
-      showError(`"${file.name}" é maior que 5MB - escolha um arquivo menor.`);
+    if (file.size > 30 * 1024 * 1024) {
+      showError(`"${file.name}" é maior que 30MB - escolha um arquivo menor.`);
       continue;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      pendingProcedurePhotos.push({ dataUrl: reader.result, caption: "" });
-      renderProcedurePhotosGrid();
-    };
-    reader.readAsDataURL(file);
+    // Reduz a foto (lado maior 1600px, JPEG) antes de guardar: uma foto de celular tem 3-6MB e 12 delas estouravam o
+    // limite do envio (o salvar falhava) e inchavam o banco. 1600px sobra pra tela do WhatsApp.
+    compressImageFile(file)
+      .then((dataUrl) => {
+        pendingProcedurePhotos.push({ dataUrl, caption: "" });
+        renderProcedurePhotosGrid();
+      })
+      .catch(() => {
+        // formato que o navegador nao le (ex.: HEIC): so aceita se ja for pequeno
+        if (file.size > 2 * 1024 * 1024) {
+          showError(`"${file.name}" não pôde ser reduzida - converta para JPG ou PNG.`);
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+          pendingProcedurePhotos.push({ dataUrl: reader.result, caption: "" });
+          renderProcedurePhotosGrid();
+        };
+        reader.readAsDataURL(file);
+      });
   }
 });
+
+async function compressImageFile(file, maxSide = 1600, quality = 0.82) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = reject;
+      i.src = url;
+    });
+    const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(img.width * scale));
+    canvas.height = Math.max(1, Math.round(img.height * scale));
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff"; // PNG com transparencia vira JPEG: fundo branco em vez de preto
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", quality);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
 
 document.getElementById("procedure-delete-btn").addEventListener("click", async () => {
   const id = document.getElementById("pr2-id").value;

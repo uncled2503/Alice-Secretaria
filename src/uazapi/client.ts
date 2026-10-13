@@ -435,6 +435,15 @@ export function forgetSend(clinicId: string, phone: string, text: string): void 
   recentSends.delete(sendKey(clinicId, phone, text));
 }
 
+// Celular brasileiro cadastrado com/sem o 9o digito (o 9 foi acrescentado em 2012-2016 e muita agenda ainda tem o
+// numero antigo, ex.: 55 11 9494-4707 em vez de 55 11 99494-4707). Devolve a outra forma do numero, ou null se nao se aplica.
+export function alternateBrazilianMobile(digits: string): string | null {
+  const d = digits.replace(/\D/g, "");
+  if (d.length === 12 && d.startsWith("55") && /^[6-9]/.test(d.slice(4))) return `${d.slice(0, 4)}9${d.slice(4)}`; // sem o 9 -> com o 9
+  if (d.length === 13 && d.startsWith("55") && d[4] === "9") return `${d.slice(0, 4)}${d.slice(5)}`; // com o 9 -> sem o 9
+  return null;
+}
+
 const placeholderAlerted = new Map<string, number>();
 
 // "sent" = saiu pelo WhatsApp. "blocked" = plano gratis (nada automatico sai). "duplicate" = o mesmo texto ja saiu
@@ -493,14 +502,22 @@ export async function sendText(clinicId: string, phone: string, text: string, op
       ? splitMessage(text, Math.max(config.splitMaxMessages, 1))
       : [text];
 
-      for (let index = 0; index < parts.length; index++) {
-        const delay = Math.min(3500, 500 + parts[index].length * 25);
-        await request(credentials, "/send/text", {
-          method: "POST",
-          body: JSON.stringify({ number: phone.replace(/\D/g, ""), text: parts[index], delay, async: false }),
-        });
-        if (index < parts.length - 1) await new Promise((resolve) => setTimeout(resolve, 1000 + Math.random() * 2000));
+    let target = phone.replace(/\D/g, "");
+    for (let index = 0; index < parts.length; index++) {
+      const delay = Math.min(3500, 500 + parts[index].length * 25);
+      const post = (number: string) =>
+        request(credentials, "/send/text", { method: "POST", body: JSON.stringify({ number, text: parts[index], delay, async: false }) });
+      try {
+        await post(target);
+      } catch (err) {
+        // "Nao esta no WhatsApp": antes de desistir, tenta a outra forma do numero (com/sem o 9o digito).
+        const alt = index === 0 && isPermanentSendError(err) ? alternateBrazilianMobile(target) : null;
+        if (!alt) throw err;
+        await post(alt);
+        target = alt;
       }
+      if (index < parts.length - 1) await new Promise((resolve) => setTimeout(resolve, 1000 + Math.random() * 2000));
+    }
 
   } catch (err) {
     if (reservedDuplicateKey) forgetSend(clinicId, phone, text); // nao saiu: a proxima tentativa nao e duplicata

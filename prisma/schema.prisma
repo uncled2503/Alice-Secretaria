@@ -59,6 +59,7 @@ model Clinic {
   softSell             Boolean @default(false) // true = a Alice menciona a avaliacao no maximo UMA vez e nao insiste (nem em resposta de preco); conversa e tira duvidas antes de agendar
   saveContactsToPhone  Boolean @default(false) // true = salva cada paciente com nome na agenda de contatos do celular da clinica (src/crm/phoneContacts.ts)
   handoffOnPrice       Boolean @default(false) // true = assim que o paciente pergunta valor/preco, a conversa vai pra equipe (a Alice nao responde)
+  tagLeadOrigin        Boolean @default(false) // true = todo contato novo ganha a etiqueta "Lead <campanha> | dd/mm/aaaa" no CRM (src/crm/leadTag.ts)
   silentHandoff        Boolean @default(false) // true = quando a Alice nao sabe responder ela FICA EM SILENCIO (a equipe ve a mensagem nao respondida) em vez de avisar que vai transferir
   humanizedTone        Boolean @default(false) // true = escreve como recepcionista de verdade e nao se apresenta como IA por conta propria (se perguntarem direto, nao nega)
   conciseFirstReply    Boolean @default(false) // true = 1a resposta a um contato novo e CURTA: se apresenta e faz UMA pergunta (nome ou o que quer melhorar), sem despejar informacao

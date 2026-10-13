@@ -3,6 +3,7 @@ import { prisma } from "../db/client.js";
 import { ceRequest, dayBoundIso, noteError } from "./client.js";
 import { zonedWallClockToUtc } from "../scheduling/time.js";
 import { syncAppointmentInBackground } from "./sync.js";
+import { notifyStaff } from "../crm/notify.js";
 
 // ---------------------------------------------------------------------------
 // Clinica Experts -> Alice: agendamentos feitos DIRETO no Clinica Experts
@@ -69,16 +70,29 @@ export function parseCeInstant(raw: string, timeZone: string): Date {
   return zonedWallClockToUtc(timeZone, Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5]));
 }
 
+// Reserva do Clinica Experts que NAO virou agendamento na Alice (portanto nao recebe lembrete/confirmacao).
+export interface PullSkip {
+  uuid: string;
+  startsAt: string; // ISO
+  patient: string; // nome ou telefone
+  reason: "sem_telefone" | "procedimento_sem_vinculo";
+  procedureIds: number[]; // ids do Clinica Experts
+}
+
 export interface PullResult {
   created: number;
   updated: number;
   skipped: number;
   skippedNote: string[];
+  skipDetails: PullSkip[];
   error?: string;
 }
 
+// Ultimo resultado da importacao por clinica (so em memoria): alimenta o relatorio de cobertura das confirmacoes.
+export const lastPullSkips = new Map<string, { at: Date; skips: PullSkip[] }>();
+
 export async function pullClinicBookings(clinicId: string): Promise<PullResult> {
-  const result: PullResult = { created: 0, updated: 0, skipped: 0, skippedNote: [] };
+  const result: PullResult = { created: 0, updated: 0, skipped: 0, skippedNote: [], skipDetails: [] };
   const clinic = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { timezone: true } });
   const tz = clinic?.timezone || "America/Sao_Paulo";
 
@@ -141,7 +155,19 @@ export async function pullClinicBookings(clinicId: string): Promise<PullResult> 
 
     const procedure = picked;
     const phone = normalizeCePhone(b.patient?.phone);
-    if (!procedure || !phone) { result.skipped++; result.skippedNote.push(!phone ? "sem telefone" : "procedimento sem vínculo"); continue; } // sem procedimento vinculado ou sem telefone: nada a lembrar
+    if (!procedure || !phone) {
+      // sem procedimento vinculado ou sem telefone: nada a lembrar
+      result.skipped++;
+      result.skippedNote.push(!phone ? "sem telefone" : "procedimento sem vínculo");
+      result.skipDetails.push({
+        uuid: b.uuid,
+        startsAt: when.toISOString(),
+        patient: b.patient?.name?.trim() || b.patient?.phone || "(sem nome)",
+        reason: !phone ? "sem_telefone" : "procedimento_sem_vinculo",
+        procedureIds: (b.procedures ?? []).map((p) => p.id),
+      });
+      continue;
+    }
 
     const professional = b.professional?.uuid ? proByUuid.get(b.professional.uuid) ?? null : null;
 
@@ -172,7 +198,26 @@ export async function pullClinicBookings(clinicId: string): Promise<PullResult> 
     });
     result.created++;
   }
+  lastPullSkips.set(clinicId, { at: new Date(), skips: result.skipDetails });
   return result;
+}
+
+// Aviso diario a equipe: reservas das proximas 48h que NAO entram nas confirmacoes automaticas (sem isso so se
+// descobria quando o paciente reclamava que nao recebeu).
+const skipAlertedOn = new Map<string, string>();
+async function alertSkippedSoon(clinicId: string, skips: PullSkip[]): Promise<void> {
+  const horizon = Date.now() + 48 * 3_600_000;
+  const soon = skips.filter((s) => new Date(s.startsAt).getTime() > Date.now() && new Date(s.startsAt).getTime() <= horizon);
+  if (!soon.length) return;
+  const today = new Date().toISOString().slice(0, 10);
+  if (skipAlertedOn.get(clinicId) === today) return;
+  skipAlertedOn.set(clinicId, today);
+  const lines = soon.slice(0, 8).map((s) => `• ${s.patient} (${s.reason === "sem_telefone" ? "sem telefone" : "procedimento sem vínculo"})`);
+  await notifyStaff(
+    clinicId,
+    "automation_failed",
+    `⚠️ ${soon.length} agendamento(s) de hoje/amanhã do Clínica Experts NÃO vão receber a confirmação automática:\n${lines.join("\n")}${soon.length > 8 ? `\n…e mais ${soon.length - 8}.` : ""}\nCorrija o telefone no Clínica Experts ou vincule o procedimento (Sincronizar catálogo) e confirme com o paciente manualmente.`,
+  );
 }
 
 let running = false;
@@ -186,6 +231,7 @@ export function startCeBookingPullJob(): void {
       for (const a of accounts) {
         try {
           const r = await pullClinicBookings(a.clinicId);
+          if (!r.error) await alertSkippedSoon(a.clinicId, r.skipDetails);
           if (r.error) await noteError(a.clinicId, `Importação da agenda: ${r.error}`);
           else {
             // Reservas sem telefone ou com procedimento nao vinculado NAO recebem lembrete: avisa na tela.

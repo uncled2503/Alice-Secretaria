@@ -24,7 +24,7 @@ import { getFunnelStages, generateStageId } from "../crm/stages.js";
 import { movePatientToKind, movePatientToRecovery, movePatientToStage } from "../crm/stageAutomation.js";
 import { offerFreedSlotToWaitlist } from "../scheduling/waitlist.js";
 import { createBooking, checkSpecificTime, SLOT_REASON_PT } from "../scheduling/slots.js";
-import { wallClockInZone } from "../scheduling/time.js";
+import { wallClockInZone, zonedWallClockToUtc } from "../scheduling/time.js";
 import { upcomingNationalHolidays, parseHolidayOpen } from "../scheduling/holidays.js";
 import { patientDossier } from "../crm/dossier.js";
 import { buildReport } from "../crm/reports.js";
@@ -57,6 +57,7 @@ import { syncCatalog } from "../clinicaexperts/sync.js";
 import { undoCeImport } from "../clinicaexperts/undo.js";
 import { removeCopiesOfClinic } from "../clinicaexperts/removeCopies.js";
 import { invalidateCeCache } from "../clinicaexperts/availability.js";
+import { lastPullSkips } from "../clinicaexperts/pull.js";
 import { pushAppointmentInBackground, removeAppointmentInBackground } from "../integrations/calendarSync.js";
 import { setupIsacFollowup } from "../maintenance/setupIsacFollowup.js";
 import {
@@ -284,6 +285,7 @@ apiRouter.get(
         humanizedTone: true,
         softSell: true,
         handoffOnPrice: true,
+        tagLeadOrigin: true,
         saveContactsToPhone: true,
         whatsappPhone: true,
         timezone: true,
@@ -397,6 +399,7 @@ apiRouter.put(
       humanizedTone?: boolean;
       softSell?: boolean;
       handoffOnPrice?: boolean;
+      tagLeadOrigin?: boolean;
       saveContactsToPhone?: boolean;
       businessType?: string;
       businessLabel?: string | null;
@@ -533,6 +536,7 @@ apiRouter.put(
           ...(b.humanizedTone !== undefined ? { humanizedTone: b.humanizedTone } : {}),
           ...(b.softSell !== undefined ? { softSell: b.softSell } : {}),
           ...(b.handoffOnPrice !== undefined ? { handoffOnPrice: b.handoffOnPrice } : {}),
+          ...(b.tagLeadOrigin !== undefined ? { tagLeadOrigin: !!b.tagLeadOrigin } : {}),
           ...(b.saveContactsToPhone !== undefined ? { saveContactsToPhone: b.saveContactsToPhone } : {}),
           ...(b.businessType !== undefined ? { businessType: b.businessType } : {}),
           ...(b.businessLabel !== undefined ? { businessLabel: b.businessLabel?.trim() || null } : {}),
@@ -4050,6 +4054,63 @@ apiRouter.get(
   asyncRoute(async (req, res) => {
     const clinic = await getClinic(req);
     res.json(await ceStatusFor(clinic.id));
+  })
+);
+
+// Cobertura das confirmacoes: pra cada agendamento de hoje e amanha, quais lembretes/confirmacoes JA SAIRAM e quais
+// faltam (com o motivo provavel), mais as reservas do Clinica Experts que nem viraram agendamento aqui. Serve pra
+// responder "por que fulano nao recebeu?" sem olhar log. Abra em /api/clinica-experts/coverage (logado).
+apiRouter.get(
+  "/clinica-experts/coverage",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const tz = clinic.timezone || "America/Sao_Paulo";
+    const wc = wallClockInZone(new Date(), tz);
+    const from = zonedWallClockToUtc(tz, wc.year, wc.month, wc.day, 0, 0);
+    const to = new Date(from.getTime() + 48 * 3_600_000);
+
+    const [rules, appts] = await Promise.all([
+      prisma.reminderRule.findMany({ where: { clinicId: clinic.id, active: true }, orderBy: { createdAt: "asc" } }),
+      prisma.appointment.findMany({
+        where: { clinicId: clinic.id, status: "confirmed", scheduledAt: { gte: from, lt: to } },
+        orderBy: { scheduledAt: "asc" },
+        include: { patient: true, procedure: true, reminders: true },
+      }),
+    ]);
+    const label = (r: (typeof rules)[number]) =>
+      r.dayOffset != null && r.sendHour != null
+        ? `${r.dayOffset === 1 ? "dia anterior" : "mesmo dia"} ${r.sendHour}h${r.sendEndHour != null ? `-${r.sendEndHour}h` : ""}${r.parentRuleId ? " (cobrança de quem não confirmou)" : ""}`
+        : `${r.hoursBefore}h antes`;
+
+    const items = appts.map((a) => {
+      const digits = a.patient.phone.replace(/\D/g, "");
+      const problems: string[] = [];
+      if (a.patient.optedOut) problems.push("pediu para não receber mensagens");
+      if (!/^55\d{10,11}$/.test(digits)) problems.push("telefone fora do padrão (55 + DDD + número)");
+      return {
+        id: a.id,
+        patient: a.patient.name ?? a.patient.phone,
+        phone: a.patient.phone,
+        procedure: a.procedure.name,
+        startsAt: a.scheduledAt,
+        bookedAt: a.createdAt,
+        source: a.source,
+        problems,
+        reminders: rules.map((r) => {
+          const sent = a.reminders.find((x) => x.ruleId === r.id);
+          return { rule: label(r), sent: !!sent, sentAt: sent?.sentAt ?? null };
+        }),
+      };
+    });
+    const unsent = items.filter((i) => i.reminders.some((r) => !r.sent));
+    res.json({
+      generatedAt: new Date(),
+      appointments: items.length,
+      withPendingReminders: unsent.length,
+      ceSkipped: lastPullSkips.get(clinic.id)?.skips ?? [],
+      ceSkippedCheckedAt: lastPullSkips.get(clinic.id)?.at ?? null,
+      items,
+    });
   })
 );
 

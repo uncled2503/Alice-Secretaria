@@ -25,6 +25,7 @@ import { logActivity } from "../crm/activity.js";
 import { enqueueLead, enqueueSchedule } from "../meta/events.js";
 import { ctwaClidToFbc } from "../meta/userData.js";
 import { checkAtendimentoLimit } from "../crm/usage.js";
+import { tagNewLead } from "../crm/leadTag.js";
 import { isFreePlan } from "../crm/plan.js";
 import type { Procedure } from "@prisma/client";
 
@@ -109,6 +110,7 @@ const tools: ChatCompletionTool[] = [
           date: { type: "string", description: "Alternativa ao start_iso: AAAA-MM-DD do horario combinado, no ano corrente do contexto." },
           time: { type: "string", description: "Alternativa ao start_iso: HH:MM em 24h do horario combinado." },
           professional_id: { type: "string", description: "Opcional: o 'profissional_id' retornado junto com o horario escolhido." },
+          patient_full_name: { type: "string", description: "Nome COMPLETO (nome e sobrenome) do paciente, quando ele informou. Obrigatorio se o sistema disser que o cadastro nao foi localizado." },
         },
         required: ["procedure_name"],
       },
@@ -219,6 +221,11 @@ const tools: ChatCompletionTool[] = [
 // Ferramentas de agenda que ficam indisponiveis quando a clinica pede que o
 // agendamento seja feito pela equipe (Clinic.aliceCanBook = false).
 const BOOKING_TOOLS = new Set(["check_availability", "check_specific_time", "book_appointment", "manage_my_appointment", "join_waitlist"]);
+
+// A clinica usa o Clinica Experts como agenda (a Alice espelha la o que agenda)?
+async function ceConnected(clinicId: string): Promise<boolean> {
+  return (await prisma.clinicaExpertsAccount.count({ where: { clinicId } })) > 0;
+}
 
 async function findProcedure(clinicId: string, name: unknown): Promise<Procedure | null> {
   const raw = String(name ?? "").trim();
@@ -417,6 +424,22 @@ async function runTool(
     const procedure = await findProcedure(clinicId, input.procedure_name);
     if (!procedure) return await procedureNotFoundMessage(clinicId, input.procedure_name);
 
+    // Cadastro nao localizado na agenda da clinica (Clinica Experts) e so o apelido do WhatsApp: pede o nome completo
+    // antes de agendar (o agendamento e o cadastro la saem com o nome certo). Se a pessoa ja informou, grava.
+    const fullNameGiven = String(input.patient_full_name ?? "").replace(/\s+/g, " ").trim().slice(0, 120);
+    const bookingPatient = await prisma.patient.findUnique({ where: { id: patientId }, select: { name: true, ceUuid: true } });
+    const hasSurname = (n: string | null | undefined) => (n ?? "").trim().split(/\s+/).filter(Boolean).length >= 2;
+    if (bookingPatient && !bookingPatient.ceUuid && (await ceConnected(clinicId))) {
+      if (hasSurname(fullNameGiven)) {
+        await prisma.patient.update({ where: { id: patientId }, data: { name: fullNameGiven } });
+      } else if (!hasSurname(bookingPatient.name)) {
+        return JSON.stringify({
+          agendado: false,
+          motivo: "cadastro do paciente nao localizado na agenda: peca o NOME COMPLETO (nome e sobrenome) e chame book_appointment de novo informando patient_full_name",
+        });
+      }
+    }
+
     let professionalId: string | null = input.professional_id ? String(input.professional_id) : null;
     if (!professionalId) {
       const pros = await professionalsForProcedure(clinicId, procedure.id);
@@ -578,8 +601,20 @@ async function runTool(
     const patient = await prisma.patient.findUnique({ where: { id: patientId } });
     if (!patient) return JSON.stringify({ enviado: false, motivo: "paciente nao encontrado" });
 
-    for (const photo of photos) {
-      await sendMedia(clinicId, patient.phone, { dataUrl: photo.dataUrl, kind: "image", caption: photo.caption ?? undefined });
+    let sentCount = 0;
+    try {
+      for (const photo of photos) {
+        await sendMedia(clinicId, patient.phone, { dataUrl: photo.dataUrl, kind: "image", caption: photo.caption ?? undefined });
+        sentCount++;
+        if (sentCount < photos.length) await new Promise((r) => setTimeout(r, 800)); // sem rajada: o WhatsApp entrega em ordem
+      }
+    } finally {
+      // Registra no chat (so o aviso, sem duplicar as imagens no banco): a equipe ve que as fotos foram enviadas.
+      if (sentCount > 0) {
+        await prisma.message.create({
+          data: { conversationId, role: "assistant", content: `📷 ${sentCount} foto(s) de resultado enviada(s): ${procedure.name}`, authorName: null, deliveryStatus: "sent" },
+        });
+      }
     }
     return JSON.stringify({
       enviado: true,
@@ -662,7 +697,7 @@ async function runTool(
       return JSON.stringify({ ok: true, acao: "Agradeça pela sinceridade, pergunte o que pode melhorar e diga que vai passar pra equipe. Se ele reclamar, use transfer_to_human." });
     }
     if (score >= clinic.npsThreshold && clinic.googleReviewUrl?.trim()) {
-      return JSON.stringify({ ok: true, acao: `Agradeça de coração e peça, se puder, uma avaliação neste link: ${clinic.googleReviewUrl.trim()}` });
+      return JSON.stringify({ ok: true, acao: `Agradeça de coração e peça, se puder, uma avaliação neste link: ${clinic.googleReviewUrl.trim()}. Depois, em uma MENSAGEM SEPARADA (nao junto do link), pergunte com carinho se ela teria um amigo(a) ou familiar que gostaria de conhecer o atendimento (indicação).` });
     }
     return JSON.stringify({ ok: true, acao: "Agradeça pelo retorno." });
   }
@@ -679,8 +714,9 @@ const PAYMENT_METHOD_LABELS: Record<string, string> = {
 
 // So passa pro prompt o que a clinica realmente cadastrou - nunca inventa
 // indicacao, beneficio, prazo ou preco que nao veio do banco.
-function describeProcedureForPrompt(p: Procedure, quotePrices = true): string {
+function describeProcedureForPrompt(p: Procedure & { _count?: { photos: number } }, quotePrices = true): string {
   const lines = [`- ${p.name} (${p.durationMin}min)`];
+  if (p._count?.photos) lines.push("  Fotos de resultado (antes/depois): TEM cadastradas - quando a pessoa demonstrar interesse neste procedimento, ofereca ('Posso te enviar alguns resultados?') e, se ela aceitar ou pedir, use send_procedure_photos");
 
   if (!quotePrices) {
     lines.push("  Valor: apresentado pela equipe na avaliacao (NAO informar valor, parcelas nem formas de pagamento)");
@@ -757,7 +793,7 @@ export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: str
   const clinic = await prisma.clinic.findUniqueOrThrow({
     where: { id: clinicId },
     include: {
-      procedures: { include: { professionals: { where: { active: true }, select: { name: true, title: true } } } },
+      procedures: { include: { professionals: { where: { active: true }, select: { name: true, title: true } }, _count: { select: { photos: true } } } },
       messageTemplates: { where: { active: true } },
       faqs: { where: { active: true } },
       playbooks: { where: { active: true } },
@@ -875,7 +911,10 @@ AGENDAMENTO PELA EQUIPE: voce NAO agenda, NAO remarca, NAO cancela e NAO oferece
   if (ctx.patientId) {
     const origin = await prisma.patient.findUnique({ where: { id: ctx.patientId }, select: { adName: true, adCampaignName: true, adsetName: true, sourceUrl: true } });
     const ad = [origin?.adName, origin?.adCampaignName].filter(Boolean).join(" / ");
-    if (ad) adLine = `\nORIGEM: este paciente chegou por um ANUNCIO (${ad}). Identifique o procedimento ou oferta desse anuncio pelo nome dele e retome-o na conversa (ex.: "Vi que voce veio pelo nosso anuncio de ..."), sem contradizer a oferta. Se o nome do anuncio nao deixar claro o procedimento, pergunte qual o interesse.`;
+    const adPriceHint = clinic.quotePrices
+      ? " VALOR: se o nome/texto do anuncio ja traz um valor ou condicao (ex.: 'R$ 99', '3 sessoes por ...'), informe EXATAMENTE esse valor/condicao quando perguntarem - nao troque por outro, nao some desconto e nao invente oferta. Se o anuncio nao traz valor, use so os valores cadastrados."
+      : "";
+    if (ad) adLine = `\nORIGEM: este paciente chegou por um ANUNCIO (${ad}). Identifique o procedimento ou oferta desse anuncio pelo nome dele e retome-o na conversa (ex.: "Vi que voce veio pelo nosso anuncio de ..."), sem contradizer a oferta. Se o nome do anuncio nao deixar claro o procedimento, pergunte qual o interesse.${adPriceHint}`;
   }
 
   // Agendamentos REAIS do paciente: unica fonte de verdade pra dia/horario. Sem
@@ -929,6 +968,11 @@ FERIADOS PROXIMOS: ${holidayItems.join("; ")}. Se a pessoa perguntar se funciona
       firstContactLine = `\nPRIMEIRA RESPOSTA A UM CONTATO NOVO (regra rigida desta clinica): responda em UMA unica mensagem, com NO MAXIMO 2 frases curtas. Se apresente ("Oi! Aqui e a ${a}, da equipe ${clinic.name}") e faca UMA unica pergunta para comecar a conversa: se nao souber o nome, pergunte o nome; ou pergunte o que a pessoa gostaria de melhorar hoje, de forma especifica ao assunto dela (gordura/medidas: qual regiao; pele: o que gostaria de melhorar na pele; rosto/harmonizacao: o que a incomoda; e assim por diante). NAO explique o procedimento, NAO descreva beneficios, NAO fale de avaliacao gratuita, de valores nem de agendamento, NAO mande mais de uma mensagem. Mesmo que ela venha de anuncio, so reconheca o assunto em poucas palavras ("vi que voce veio pelo anuncio de peeling") e pergunte. So passe a informacoes depois que ela responder.`;
     }
   }
+
+  // ABERTURA EM ETAPAS (clinicas com "primeira resposta curta"): descobrir antes de explicar.
+  const discoveryLine = clinic.conciseFirstReply
+    ? `\nABERTURA DO ATENDIMENTO (descubra ANTES de explicar, UMA pergunta por mensagem, sem formulario): (1) o nome, se ainda nao souber; (2) se a pessoa JA CONHECE ou JA FEZ o procedimento; (3) o que ela quer melhorar / qual a queixa (ex.: qual regiao incomoda, o que quer melhorar na pele). So depois dessas respostas explique o procedimento, de forma CURTA e comercial (no maximo 3 frases), e termine com uma pergunta que leve ao proximo passo. Nao repita informacao que ja deu. Se ela perguntar algo direto no meio (preco, endereco, horario), responda e retome as perguntas que faltam.`
+    : "";
 
   let surveyLine = "";
   if (ctx.patientId) {
@@ -1057,7 +1101,7 @@ Seu trabalho:
 2. Manter a etapa do paciente no funil atualizada (update_crm_stage) conforme a conversa avanca.
 3. Checar disponibilidade real (check_specific_time / check_availability) antes de falar de qualquer data.
 4. Confirmar o horario escolhido com o paciente e so entao usar book_appointment.
-5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${evalPitchLine}${firstContactLine}${adLine}${dateLine}${holidayLine}${apptLine}${teamBooksLine}${continuityLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${silentLine}${humanLine}${noRepeatLine}
+5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${evalPitchLine}${firstContactLine}${discoveryLine}${adLine}${dateLine}${holidayLine}${apptLine}${teamBooksLine}${continuityLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${silentLine}${humanLine}${noRepeatLine}
 
 Procedimentos oferecidos pela clinica:
 ${procedureList || "(nenhum procedimento cadastrado ainda)"}
@@ -1124,6 +1168,8 @@ export async function recordIncomingMessage(params: {
   if (!existing) {
     void logActivity({ clinicId, patientId: patient.id, type: "patient_created", area: "crm", title: "Card criado" });
     void enqueueLead(clinicId, patient.id).catch((err) => console.error("[meta] enqueueLead:", err));
+    // Etiqueta de origem + data ("Lead Lavieen | 12/10/2026"), nas clinicas que ligaram isso.
+    void tagNewLead(clinicId, patient.id, { adName: referral?.adName, adCampaignName: referral?.adCampaignName, fromAd: !!referral });
   }
 
   let conversation = await prisma.conversation.findFirst({
