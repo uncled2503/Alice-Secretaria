@@ -28,7 +28,7 @@ import { checkAtendimentoLimit } from "../crm/usage.js";
 import { tagNewLead } from "../crm/leadTag.js";
 import { recordIntentSignals } from "../crm/intent.js";
 import { handoffCard } from "../crm/handoffCard.js";
-import { repeatedSentences, removeSentences, askedAgain } from "./repetition.js";
+import { findRepetitions, removeSentences, askedAgain, conversationMemory } from "./repetition.js";
 import { reportsProcedureReaction, REACTION_HANDOFF_REASON, REACTION_TEXT, REACTION_WINDOW_DAYS } from "./safety.js";
 import { bookingRiskNote } from "../crm/patientRisk.js";
 import { isFreePlan } from "../crm/plan.js";
@@ -823,7 +823,8 @@ export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: str
 
   // Trava anti-loop: o modelo (gpt-4o-mini) as vezes trava repetindo a mesma
   // resposta. Isso e reforcado no prompt e checado de novo no codigo.
-  const noRepeatLine = `\nNAO SE REPITA: nunca reenvie uma resposta que voce ja mandou nesta conversa, nem uma variacao da mesma frase. Responda SEMPRE a ultima mensagem do cliente - se ele fez uma pergunta nova (ex: "da pra mandar um cartao junto?", "entrega de manha?"), responda ESSA pergunta, sem voltar pro assunto anterior. Se voce ja explicou tudo o que sabia e o cliente continua sem avancar, NAO repita: use transfer_to_human. Cada resposta sua tem que acrescentar algo novo.
+  const noRepeatLine = `\nLEIA A CONVERSA ANTES DE RESPONDER: o historico acima e tudo o que ja foi dito. Veja o que voce ja informou e o que ja perguntou e CONTINUE de onde parou, como uma pessoa que acompanha a conversa. Nunca repita informacao (valor, endereco, horarios, avisos) nem a pergunta de fechamento que ja apareceu; so volte a um assunto se a pessoa pedir de novo.
+NAO SE REPITA: nunca reenvie uma resposta que voce ja mandou nesta conversa, nem uma variacao da mesma frase. Responda SEMPRE a ultima mensagem do cliente - se ele fez uma pergunta nova (ex: "da pra mandar um cartao junto?", "entrega de manha?"), responda ESSA pergunta, sem voltar pro assunto anterior. Se voce ja explicou tudo o que sabia e o cliente continua sem avancar, NAO repita: use transfer_to_human. Cada resposta sua tem que acrescentar algo novo.
 NAO FIQUE SE DESPEDINDO: se voce ja se despediu ou disse "fico a disposicao"/"e so chamar" nesta conversa e o cliente so respondeu com um agradecimento ou confirmacao sem pedir nada novo (ex: "obrigado", "valeu", "ok", "de nada", um emoji), a conversa ja terminou - NAO mande mais uma mensagem de despedida. Um atendimento bom sabe ficar em silencio quando ja resolveu tudo.`;
 
   // Tres coisas que entregam na hora que do outro lado tem um robo, mesmo
@@ -842,7 +843,7 @@ NAO FIQUE SE DESPEDINDO: se voce ja se despediu ou disse "fico a disposicao"/"e 
 - Reflita o que a pessoa disse: ao recomendar, retome a propria queixa dela com as palavras dela (se ela disse "minha barriga nao sai de jeito nenhum", fale sobre isso, nao em generico "temos otimos procedimentos"). Isso mostra que voce ouviu de verdade.
 - Conecte a solucao a dor especifica: explique COMO o procedimento/protocolo resolve exatamente o que ela contou, gerando desejo pela transformacao antes de qualquer numero.
 - Fale como gente, nao como script: varie a forma de perguntar e recomendar, reaja ao que a pessoa realmente escreveu em vez de encadear perguntas genericas sempre na mesma ordem. Respostas robotizadas, sem nenhuma reacao genuina ao que foi dito, nao convertem.
-- So depois de qualificar e gerar valor, conduza pro proximo passo de forma ativa: ofereca horario voce mesma ("consigo quinta as 15h ou sexta as 10h, qual fica melhor?"). Nunca encerre sem um proximo passo.
+- So depois de qualificar e gerar valor, conduza pro proximo passo de forma ativa: ofereca horario voce mesma ("consigo quinta as 15h ou sexta as 10h, qual fica melhor?"). Conduza ao proximo passo com uma pergunta NOVA a cada resposta, nunca a mesma que ja fez; se a pessoa so tirou uma duvida e voce ja respondeu, responda e pare, sem forcar pergunta.
 - Contorne objecao de preco reconectando com o beneficio especifico pra dor dela (nao com desconto que nao existe) e o parcelamento, quando cadastrado.
 Tudo isso sem quebrar regra nenhuma: nao invente valor, prazo, garantia nem urgencia que nao seja real.`;
 
@@ -1035,6 +1036,27 @@ FERIADOS PROXIMOS: ${holidayItems.join("; ")}. Se a pessoa perguntar se funciona
 
   const isGeneric = clinic.businessType === "geral";
 
+  // Endereco da clinica: sem isto a Alice inventava a localizacao a partir do NOME da clinica ("Estamos localizados em Lisboa").
+  const locations = await prisma.clinicLocation.findMany({ where: { clinicId, active: true }, orderBy: { order: "asc" }, take: 4 });
+  const locationText = locations
+    .map((l) =>
+      [
+        l.name,
+        [[l.street, l.number].filter(Boolean).join(", "), l.complement, l.neighborhood, [l.city, l.state].filter(Boolean).join("/")].filter(Boolean).join(" - "),
+        l.zipCode ? `CEP ${l.zipCode}` : "",
+        l.googleMapsUrl ? `mapa: ${l.googleMapsUrl}` : "",
+        l.arrivalInstructions ? `como chegar: ${l.arrivalInstructions}` : "",
+      ]
+        .filter(Boolean)
+        .join(" | "),
+    )
+    .join("\n  ");
+  const locationLine = locations.length
+    ? `\nLOCALIZACAO (use SO isto quando perguntarem onde fica / como chegar; nunca invente endereco, bairro ou cidade):\n  ${locationText}`
+    : isGeneric
+      ? ""
+      : `\nLOCALIZACAO: nao ha endereco cadastrado na ficha. Se perguntarem onde fica e a resposta nao estiver no FAQ, nas mensagens prontas ou nas regras abaixo, NAO invente: o nome da clinica nao e a cidade nem o bairro. Diga que vai confirmar o endereco certinho com a equipe e chame transfer_to_human.`;
+
   const templatesBlock = clinic.messageTemplates.length
     ? `\n\nMensagens prontas${isGeneric ? "" : " da clinica"} (reaproveite quando fizer sentido; ${"{"}modo exato${"}"} = enviar o texto exatamente como esta, so trocando as variaveis):\n${clinic.messageTemplates
         .map((t) => `- ${t.name}${t.whenToUse ? ` (usar quando: ${t.whenToUse})` : ""} [${t.mode === "exact" ? "modo exato" : "adaptar tom"}]:\n  "${t.body}"`)
@@ -1128,7 +1150,7 @@ Seu trabalho:
 2. Manter a etapa do cliente no funil atualizada (update_crm_stage) conforme a conversa avanca.
 3. Nunca invente estoque, prazo de entrega, status de pedido, preco ou politica que nao estejam cadastrados. Nesses casos, mande a pessoa ver no site (link da peca ou da colecao) ou, se precisar mesmo de uma pessoa, use transfer_to_human - nunca mande link de WhatsApp.
 4. Conduzir o cliente ate a compra: recomendar, mandar o link certo e levar pro proximo passo (esse e o objetivo).
-5. Termine sempre com um proximo passo claro: um link, uma opcao ou uma pergunta.${sellerLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${genericHandoffLine}${noRepeatLine}${catalogBlock}${stagesBlock}${templatesBlock}${faqBlock}${playbookBlock}
+5. Quando fizer sentido, termine com um proximo passo claro (um link, uma opcao ou uma pergunta), sempre diferente do que voce ja disse e perguntou antes.${sellerLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${genericHandoffLine}${noRepeatLine}${locationLine}${catalogBlock}${stagesBlock}${templatesBlock}${faqBlock}${playbookBlock}
 
 Responda sempre em portugues do Brasil, em mensagens curtas como quem digita no WhatsApp. ${GRAMMAR_REMINDER}${await getActiveRulesPrompt(clinicId)}`;
   }
@@ -1149,7 +1171,7 @@ Seu trabalho:
 2. Manter a etapa do paciente no funil atualizada (update_crm_stage) conforme a conversa avanca.
 3. Checar disponibilidade real (check_specific_time / check_availability) antes de falar de qualquer data.
 4. Confirmar o horario escolhido com o paciente e so entao usar book_appointment.
-5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${evalPitchLine}${firstContactLine}${discoveryLine}${adLine}${profileLine}${objectionLine}${dateLine}${holidayLine}${apptLine}${teamBooksLine}${continuityLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${silentLine}${humanLine}${noRepeatLine}
+5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${locationLine}${evalPitchLine}${firstContactLine}${discoveryLine}${adLine}${profileLine}${objectionLine}${dateLine}${holidayLine}${apptLine}${teamBooksLine}${continuityLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${silentLine}${humanLine}${noRepeatLine}
 
 Procedimentos oferecidos pela clinica:
 ${procedureList || "(nenhum procedimento cadastrado ainda)"}
@@ -1719,8 +1741,13 @@ async function generateReplyUnlocked(
     }
   }
 
-  // Historico de respostas da Alice, pra detectar (e cortar) repeticao.
+  // Historico de respostas da Alice (e da equipe), pra detectar (e cortar) repeticao.
   const priorAssistant = history.filter((m) => m.role === "assistant").map((m) => m.content);
+  const priorReplies = history.filter((m) => m.role !== "user").map((m) => m.content);
+  // Mensagens novas da pessoa (ainda sem resposta) e as que ela mandou antes (ja respondidas).
+  const trailingUser: string[] = [];
+  for (let i = history.length - 1; i >= 0 && history[i].role === "user"; i--) trailingUser.unshift(history[i].content);
+  const answeredUser = history.slice(0, history.length - trailingUser.length).filter((m) => m.role === "user").map((m) => m.content);
   const lastAssistant = priorAssistant.at(-1) ?? "";
   const alreadyRepeatingInHistory =
     priorAssistant.length >= 2 &&
@@ -1738,12 +1765,12 @@ async function generateReplyUnlocked(
   // O modelo tinha o habito de re-responder perguntas antigas (valor, endereco, aviso de marca-passo) dentro de cada
   // resposta nova e fechar todas com a mesma pergunta.
   {
-    const trailing: string[] = [];
-    for (let i = history.length - 1; i >= 0 && history[i].role === "user"; i--) trailing.unshift(history[i].content);
+    const trailing = trailingUser;
     if (trailing.length) {
+      const memory = conversationMemory(priorReplies, answeredUser);
       messages.push({
         role: "system",
-        content: `LEMBRETE FINAL: ${trailing.length > 1 ? "as mensagens novas da pessoa (ainda sem resposta) sao" : "a mensagem nova da pessoa e"}: ${trailing.map((t) => `"${t.slice(0, 300)}"`).join(" + ")}. Responda SOMENTE a isso, UMA vez${trailing.length > 1 ? ", juntando as mensagens numa resposta so" : ""}. O que ela perguntou ANTES ja foi respondido nas mensagens anteriores: NAO responda de novo, NAO repita valores, endereco, horarios, avisos nem frases que voce ja disse, e NAO feche com a mesma pergunta das mensagens anteriores (mude a pergunta ou so responda e pare). Fale como uma pessoa conversando: curto, direto, natural.`,
+        content: `${memory ? memory + "\n\n" : ""}LEMBRETE FINAL: ${trailing.length > 1 ? "as mensagens novas da pessoa (ainda sem resposta) sao" : "a mensagem nova da pessoa e"}: ${trailing.map((t) => `"${t.slice(0, 300)}"`).join(" + ")}. Responda SOMENTE a isso, UMA vez${trailing.length > 1 ? ", juntando as mensagens numa resposta so" : ""}. O que ela perguntou ANTES ja foi respondido nas mensagens anteriores: NAO responda de novo, NAO repita valores, endereco, horarios, avisos nem frases que voce ja disse, e NAO feche com a mesma pergunta das mensagens anteriores (mude a pergunta ou so responda e pare). Fale como uma pessoa conversando: curto, direto, natural, continuando a conversa de onde ela parou.`,
       });
     }
   }
@@ -1753,6 +1780,7 @@ async function generateReplyUnlocked(
 
   let finalText = "";
   let didTransfer = false;
+  const toolsUsed: string[] = [];
   for (let turn = 0; turn < 6; turn++) {
     const response = await openai.chat.completions.create({
       model: MODEL,
@@ -1772,6 +1800,7 @@ async function generateReplyUnlocked(
     for (const toolCall of choice.tool_calls) {
       if (toolCall.type !== "function") continue;
       if (toolCall.function.name === "transfer_to_human") didTransfer = true;
+      toolsUsed.push(toolCall.function.name);
       let result: string;
       try {
         const input = JSON.parse(toolCall.function.arguments || "{}");
@@ -1834,19 +1863,24 @@ async function generateReplyUnlocked(
   if (!didTransfer && finalText.trim()) {
     const userTexts = history.filter((m) => m.role === "user").map((m) => m.content);
     const lastUserText = userTexts.at(-1) ?? "";
-    if (!askedAgain(lastUserText, userTexts.slice(0, -1))) {
-      const recentAlice = history.filter((m) => m.role === "assistant").slice(-3).map((m) => m.content);
-      const repeated = repeatedSentences(finalText, recentAlice);
+    if (trailingUser.length && !askedAgain(lastUserText, userTexts.slice(0, -1))) {
+      const recentReplies = priorReplies.slice(-8);
+      // Turno de agendamento (ferramentas de agenda): reofertar dias/horarios e perguntar "qual dia?" de novo e normal; nao mexe.
+      const bookingTurn = toolsUsed.some((n) => BOOKING_TOOLS.has(n));
+      const userNow = trailingUser.join(" ");
+      const detect = (t: string) => (bookingTurn ? [] : findRepetitions(t, recentReplies, userNow));
+      const repeated = detect(finalText);
       if (repeated.length) {
         console.warn(`[repeticao] ${repeated.length} frase(s) repetida(s) na resposta (conv ${conversation.id}) - reescrevendo`);
-        const trailingUser: string[] = [];
-        for (let i = history.length - 1; i >= 0 && history[i].role === "user"; i--) trailingUser.unshift(history[i].content);
         const rewritten = await rewriteWithoutRepetition(finalText, trailingUser.join(" / "), repeated, (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { name: true } }))?.name ?? "a clinica");
-        if (rewritten) finalText = rewritten;
-        else {
-          const stripped = removeSentences(finalText, repeated);
-          if (stripped.length >= 15) finalText = stripped;
+        // Confere a reescrita com o MESMO detector; se ainda repetir algo, corta so essas frases.
+        let candidate = rewritten ?? finalText;
+        const stillRepeated = detect(candidate);
+        if (stillRepeated.length) {
+          const stripped = removeSentences(candidate, stillRepeated);
+          if (stripped.length >= 15) candidate = stripped;
         }
+        finalText = candidate;
       }
     }
   }

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { splitSentences, repeatedSentences, removeSentences, askedAgain } = await import("../dist/ai/repetition.js");
+const { splitSentences, repeatedSentences, removeSentences, askedAgain, findRepetitions, conversationMemory } = await import("../dist/ai/repetition.js");
 
 const R1 = "O valor da Hidrolipoclasia depende do protocolo de cada pessoa, e nossa equipe apresenta o investimento. Essa técnica auxilia na redução de medidas localizadas e é ótima para contorno corporal. O que você gostaria de melhorar ou saber mais?";
 
@@ -26,6 +26,41 @@ test("resposta nova de verdade nao e marcada", () => {
 
 test("frase curta repetida (Claro!, Perfeito!) nao conta", () => {
   assert.deepEqual(repeatedSentences("Claro! Perfeito!", ["Claro! Perfeito!"]), []);
+});
+
+test("mesmo assunto com outras palavras (valor) e cortado quando a pessoa perguntou de outra coisa", () => {
+  const draft = "O investimento varia conforme cada caso e a equipe apresenta os valores. Atendemos de segunda a sexta, das 8h às 21h. Qual dia fica melhor?";
+  const found = findRepetitions(draft, [R1], "Quais dias vocês atendem?");
+  assert.deepEqual(found, ["O investimento varia conforme cada caso e a equipe apresenta os valores."]);
+});
+
+test("se a pessoa perguntou o valor de novo, falar do valor e legitimo", () => {
+  const draft = "O investimento varia conforme cada caso e a equipe apresenta os valores.";
+  assert.deepEqual(findRepetitions(draft, [R1], "Quanto custa mesmo?"), []);
+});
+
+test("preco novo (outra ideia) nao e cortado so porque ja falou de valor antes", () => {
+  const draft = "Três sessões saem por R$ 400 no pix.";
+  assert.deepEqual(findRepetitions(draft, [R1], "e se eu fizer mais?"), []);
+});
+
+test("mesma pergunta de fechamento com outras palavras e detectada", () => {
+  const prior = ["Entendi. O que você gostaria de melhorar ou saber mais?"];
+  const found = findRepetitions("Faz sentido. O que você gostaria de saber mais?", prior, "ok");
+  assert.deepEqual(found, ["O que você gostaria de saber mais?"]);
+});
+
+test("pergunta de fechamento nova passa", () => {
+  const prior = ["Entendi. O que você gostaria de melhorar ou saber mais?"];
+  assert.deepEqual(findRepetitions("Faz sentido. Você já fez algum procedimento antes?", prior, "ok"), []);
+});
+
+test("memoria da conversa: o que ja foi dito, perguntado e respondido", () => {
+  const memory = conversationMemory([R1], ["Qual o valor da hidrolipoclasia?", "Também"]);
+  assert.match(memory, /valor\/investimento/);
+  assert.match(memory, /O que você gostaria de melhorar ou saber mais\?/);
+  assert.match(memory, /Qual o valor da hidrolipoclasia\?/);
+  assert.equal(conversationMemory([], []), "");
 });
 
 test("quando a pessoa repete a pergunta, repetir a resposta e legitimo", () => {
