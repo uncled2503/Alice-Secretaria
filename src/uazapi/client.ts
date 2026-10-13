@@ -1162,9 +1162,34 @@ async function handleQueuedPayload(clinicId: string, body: unknown, ageMs = 0): 
       continue;
     }
 
+    // A pessoa costuma mandar a ideia em pedacos ("Qual o valor da hidrolipoclasia" / "Tambem"): respondia cada pedaco
+    // separado e saiam 2 respostas. Espera um instante e, se ja chegou outra mensagem dela na fila, deixa a PROXIMA
+    // (que enxerga as duas) responder uma vez so.
+    await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+    if (await newerIncomingPending(clinicId, incoming.phone, new Date(Date.now() - ageMs))) continue;
+
     const reply = await generateReply(recorded.conversationId, { imageDataUrl });
     if (reply) await deliverAliceReply(clinicId, incoming.phone, recorded.conversationId, reply);
   }
+}
+
+const SETTLE_MS = 2500;
+
+// Existe, na fila, evento MAIS NOVO desta clinica com mensagem (nao enviada por nos) da mesma pessoa?
+async function newerIncomingPending(clinicId: string, phone: string, since: Date): Promise<boolean> {
+  const events = await prisma.uazapiWebhookEvent.findMany({
+    where: { clinicId, status: "pending", createdAt: { gt: since }, payload: { contains: phone } },
+    select: { payload: true },
+    take: 10,
+  });
+  for (const e of events) {
+    try {
+      if (parseWebhookPayload(JSON.parse(e.payload)).some((m) => m.phone === phone && !m.fromMe && (m.text || m.media || m.mediaMessageId))) return true;
+    } catch {
+      /* payload ilegivel: ignora */
+    }
+  }
+  return false;
 }
 
 function webhookExternalId(body: unknown): string {

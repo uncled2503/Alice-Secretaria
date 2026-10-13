@@ -28,6 +28,7 @@ import { checkAtendimentoLimit } from "../crm/usage.js";
 import { tagNewLead } from "../crm/leadTag.js";
 import { recordIntentSignals } from "../crm/intent.js";
 import { handoffCard } from "../crm/handoffCard.js";
+import { repeatedSentences, removeSentences, askedAgain } from "./repetition.js";
 import { reportsProcedureReaction, REACTION_HANDOFF_REASON, REACTION_TEXT, REACTION_WINDOW_DAYS } from "./safety.js";
 import { bookingRiskNote } from "../crm/patientRisk.js";
 import { isFreePlan } from "../crm/plan.js";
@@ -956,7 +957,8 @@ AGENDAMENTO PELA EQUIPE: voce NAO agenda, NAO remarca, NAO cancela e NAO oferece
     if (parts.length) profileLine = `\n${parts.join("\n")}`;
   }
   // Objecoes: sempre com as orientacoes APROVADAS da clinica (regras/FAQ), nunca inventando.
-  const objectionLine = `\nOBJECOES (preco, medo, dor, falta de tempo, indecisao): acolha a objecao, responda com as orientacoes aprovadas cadastradas (regras, FAQ, mensagens prontas) e conduza ao proximo passo. Sem orientacao cadastrada, nao invente desconto, garantia nem argumento clinico: seja honesta e ofereca a avaliacao ou chame a equipe.`;
+  const hasObjection = Boolean(ctx.patientId && (await prisma.patient.findUnique({ where: { id: ctx.patientId }, select: { objections: true } }))?.objections);
+  const objectionLine = !hasObjection ? "" : `\nOBJECOES (preco, medo, dor, falta de tempo, indecisao): acolha a objecao, responda com as orientacoes aprovadas cadastradas (regras, FAQ, mensagens prontas) e conduza ao proximo passo. Sem orientacao cadastrada, nao invente desconto, garantia nem argumento clinico: seja honesta e ofereca a avaliacao ou chame a equipe.`;
 
   // Agendamentos REAIS do paciente: unica fonte de verdade pra dia/horario. Sem
   // isso a Alice "confirmava" o horario que o paciente sugeria (ou o que lembrava
@@ -1011,7 +1013,12 @@ FERIADOS PROXIMOS: ${holidayItems.join("; ")}. Se a pessoa perguntar se funciona
   }
 
   // ABERTURA EM ETAPAS (clinicas com "primeira resposta curta"): descobrir antes de explicar.
-  const discoveryLine = clinic.conciseFirstReply
+  // So nas primeiras respostas da conversa: depois disso as perguntas de descoberta viram interrogatorio e a conversa trava.
+  let earlyStage = false;
+  if (clinic.conciseFirstReply && ctx.patientId) {
+    earlyStage = (await prisma.message.count({ where: { role: "assistant", authorName: null, conversation: { patientId: ctx.patientId } } })) < 4;
+  }
+  const discoveryLine = clinic.conciseFirstReply && earlyStage
     ? `\nABERTURA DO ATENDIMENTO (descubra ANTES de explicar, UMA pergunta por mensagem, sem formulario): (1) o nome, se ainda nao souber; (2) se a pessoa JA CONHECE ou JA FEZ o procedimento; (3) o que ela quer melhorar / qual a queixa (ex.: qual regiao incomoda, o que quer melhorar na pele); (4) quando pretende fazer (agora, este mes ou mais pra frente) - pergunte com naturalidade, sem pressionar. So depois dessas respostas explique o procedimento, de forma CURTA e comercial (no maximo 3 frases), e termine com uma pergunta que leve ao proximo passo. Nao repita informacao que ja deu. Se ela perguntar algo direto no meio (preco, endereco, horario), responda e retome as perguntas que faltam.`
     : "";
 
@@ -1448,6 +1455,28 @@ const URGENT_TEXT =
 export const SAYS_HANDOFF_RE =
   /(vou|irei|iremos|vamos|j[aá] vou)[^.!?]{0,60}(transferir|encaminhar|passar|verificar|confirmar|checar|consultar|repassar)[^.!?]{0,50}(equipe|time|respons[aá]vel|profissional|atendente|setor|colega)|(nossa|a) equipe (vai|ir[aá]|entrar[aá]|retorna|responde)|(aguarde|um instante|s[oó] um momento)[^.!?]{0,40}(equipe|verific)/i;
 
+// Reescreve a resposta tirando as frases que a Alice JA tinha dito: responde so ao que a pessoa mandou agora.
+async function rewriteWithoutRepetition(draft: string, userNow: string, repeated: string[], clinicName: string): Promise<string | null> {
+  try {
+    const res = await openai.chat.completions.create({
+      model: MODEL,
+      temperature: 0.4,
+      messages: [
+        {
+          role: "system",
+          content: `Voce reescreve a resposta de uma secretaria de clinica (${clinicName}) no WhatsApp. O rascunho REPETE frases que ela ja disse nas mensagens anteriores (lista abaixo). Reescreva respondendo APENAS ao que a pessoa perguntou agora, SEM repetir essas frases nem o mesmo assunto, em no maximo 3 frases curtas e naturais. Se o rascunho traz uma informacao NOVA que responde a pergunta atual (ex.: dias e horarios de atendimento), mantenha so ela. Termine, se fizer sentido, com UMA pergunta curta DIFERENTE das anteriores que leve ao proximo passo (ou apenas pare, se a pergunta ja foi respondida). Nao invente nada: use so o que esta no rascunho. Sem markdown, no maximo 1 emoji. Responda SO com a mensagem.\n\nFRASES JA DITAS (nao repetir):\n${repeated.map((r) => `- ${r}`).join("\n")}`,
+        },
+        { role: "user", content: `Mensagem da pessoa agora: ${userNow.slice(0, 500)}\n\nRascunho:\n${draft.slice(0, 1500)}` },
+      ],
+    });
+    const text = res.choices[0]?.message?.content?.trim();
+    return text && text.length >= 10 ? text : null;
+  } catch (err) {
+    console.error("[repeticao] falha ao reescrever:", err);
+    return null;
+  }
+}
+
 // Tira a oferta de avaliacao / pedido de dia e turno de uma resposta que ia insistir nisso.
 async function removeEvaluationPitch(draft: string, patientMessages: string[], clinicName: string): Promise<string | null> {
   try {
@@ -1705,6 +1734,20 @@ async function generateReplyUnlocked(
     });
   }
 
+  // LEMBRETE FINAL (ultima mensagem do modelo, onde ele mais presta atencao): responda SO o que a pessoa acabou de mandar.
+  // O modelo tinha o habito de re-responder perguntas antigas (valor, endereco, aviso de marca-passo) dentro de cada
+  // resposta nova e fechar todas com a mesma pergunta.
+  {
+    const trailing: string[] = [];
+    for (let i = history.length - 1; i >= 0 && history[i].role === "user"; i--) trailing.unshift(history[i].content);
+    if (trailing.length) {
+      messages.push({
+        role: "system",
+        content: `LEMBRETE FINAL: ${trailing.length > 1 ? "as mensagens novas da pessoa (ainda sem resposta) sao" : "a mensagem nova da pessoa e"}: ${trailing.map((t) => `"${t.slice(0, 300)}"`).join(" + ")}. Responda SOMENTE a isso, UMA vez${trailing.length > 1 ? ", juntando as mensagens numa resposta so" : ""}. O que ela perguntou ANTES ja foi respondido nas mensagens anteriores: NAO responda de novo, NAO repita valores, endereco, horarios, avisos nem frases que voce ja disse, e NAO feche com a mesma pergunta das mensagens anteriores (mude a pergunta ou so responda e pare). Fale como uma pessoa conversando: curto, direto, natural.`,
+      });
+    }
+  }
+
   const canBook = (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { aliceCanBook: true } }))?.aliceCanBook ?? true;
   const activeTools = canBook ? tools : tools.filter((t) => !(t.type === "function" && BOOKING_TOOLS.has(t.function.name)));
 
@@ -1782,6 +1825,29 @@ async function generateReplyUnlocked(
       const c3 = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { name: true } });
       const softer = await removeEvaluationPitch(finalText, history.filter((m) => m.role === "user").map((m) => m.content).slice(-3), c3?.name ?? "a clinica");
       if (softer) finalText = softer;
+    }
+  }
+
+  // REPETICAO POR FRASE: a resposta repete frases que a Alice ja disse nas ultimas mensagens (re-responde pergunta antiga,
+  // fecha com a mesma pergunta). Reescreve respondendo so ao que a pessoa mandou agora; se a reescrita falhar, corta as
+  // frases repetidas. Nao mexe quando a pessoa REPETIU a propria pergunta (ai repetir e legitimo).
+  if (!didTransfer && finalText.trim()) {
+    const userTexts = history.filter((m) => m.role === "user").map((m) => m.content);
+    const lastUserText = userTexts.at(-1) ?? "";
+    if (!askedAgain(lastUserText, userTexts.slice(0, -1))) {
+      const recentAlice = history.filter((m) => m.role === "assistant").slice(-3).map((m) => m.content);
+      const repeated = repeatedSentences(finalText, recentAlice);
+      if (repeated.length) {
+        console.warn(`[repeticao] ${repeated.length} frase(s) repetida(s) na resposta (conv ${conversation.id}) - reescrevendo`);
+        const trailingUser: string[] = [];
+        for (let i = history.length - 1; i >= 0 && history[i].role === "user"; i--) trailingUser.unshift(history[i].content);
+        const rewritten = await rewriteWithoutRepetition(finalText, trailingUser.join(" / "), repeated, (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { name: true } }))?.name ?? "a clinica");
+        if (rewritten) finalText = rewritten;
+        else {
+          const stripped = removeSentences(finalText, repeated);
+          if (stripped.length >= 15) finalText = stripped;
+        }
+      }
     }
   }
 
