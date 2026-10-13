@@ -617,6 +617,7 @@
           <button data-sub="channels">Canais</button>
           <button data-sub="broadcasts" data-plan-lock="broadcasts">Mensagens Programadas</button>
           <button data-sub="appt-reminder" class="biz-clinica-only" data-plan-lock="lembrete">Lembrete de Consulta</button>
+          <button data-sub="pre-procedure" class="biz-clinica-only" data-plan-lock="posvenda">Pré-procedimento</button>
           <button data-sub="post-procedure" class="biz-clinica-only" data-plan-lock="posvenda">Pós-procedimento</button>
           <button data-sub="renewal" class="biz-clinica-only" data-plan-lock="posvenda">Renovação</button>
           <button data-sub="birthday" data-plan-lock="posvenda">Aniversário</button>
@@ -918,6 +919,26 @@
               <tbody id="reminder-rules-body"></tbody>
             </table>
             <div id="reminder-rules-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Nenhum lembrete criado.</div>
+          </div>
+        </div>
+
+        <div id="sub-pre-procedure" class="settings-subpanel biz-clinica-only">
+          <div class="list-toolbar">
+            <div>
+              <div class="list-count">Pré-procedimento (<span id="pre-rules-count">0</span>)</div>
+              <p class="hint" style="margin:0.2rem 0 0">Orientações de preparo enviadas pela Alice logo depois que a cliente confirma o horário na conversa. A mensagem deve começar agradecendo a confirmação.</p>
+            </div>
+            <div class="list-toolbar-actions">
+              <input id="pre-rules-search" type="text" placeholder="Buscar pré-procedimento" />
+              <button type="button" id="btn-add-pre-rule" class="btn-brand btn-brand--primary"><span class="nav-icon" data-icon="plus"></span> Nova mensagem</button>
+            </div>
+          </div>
+          <div class="card">
+            <table>
+              <thead><tr><th>Pré-procedimento</th><th>Status</th><th>Procedimentos</th><th>Ação</th></tr></thead>
+              <tbody id="pre-rules-body"></tbody>
+            </table>
+            <div id="pre-rules-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Nenhuma mensagem criada.</div>
           </div>
         </div>
 
@@ -1909,6 +1930,44 @@
           <label class="checkbox-row"><input type="checkbox" id="pp-active" checked /> Ativo</label>
           <div class="modal-actions">
             <button type="button" id="pp-rule-delete-btn" class="btn-cancel" style="display:none">Excluir</button>
+            <button type="submit">Salvar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="pre-rule-overlay" class="modal-overlay" style="display:none">
+      <div class="modal-card modal-card-lg">
+        <div class="modal-header">
+          <h3 id="pre-rule-title">Nova mensagem de pré-procedimento</h3>
+          <button type="button" id="pre-rule-close" class="modal-close">&times;</button>
+        </div>
+        <form id="pre-rule-form">
+          <input type="hidden" id="pre-id" />
+          <label>Nome da automação*
+            <input id="pre-name" type="text" placeholder="Ex.: Pré - Botox" required />
+          </label>
+          <p class="hint" style="margin-top:0">Sai logo depois que a cliente confirma o horário na conversa com a Alice, uma vez por agendamento. Se ela tiver vários procedimentos no mesmo dia, as mensagens se juntam e o agradecimento aparece uma vez só.</p>
+          <label>Procedimentos
+            <div id="pre-procedures-list" class="procedures-checklist"></div>
+          </label>
+          <p class="hint" style="margin-top:0">Deixe vazio para valer para todos os procedimentos.</p>
+          <label>Mensagem*
+            <textarea id="pre-message" rows="8" placeholder="Ex.: Obrigada pela confirmação, {primeiro_nome}! 💗&#10;Antes do seu procedimento, siga estes cuidados..." required></textarea>
+          </label>
+          <div class="payment-methods-grid">
+            <button type="button" class="payment-method-btn pre-var-btn" data-var="{primeiro_nome}">+ Primeiro nome</button>
+            <button type="button" class="payment-method-btn pre-var-btn" data-var="{nome_completo}">+ Nome completo</button>
+            <button type="button" class="payment-method-btn pre-var-btn" data-var="{procedimento}">+ Procedimento</button>
+            <button type="button" class="payment-method-btn pre-var-btn" data-var="{profissional}">+ Profissional</button>
+            <button type="button" class="payment-method-btn pre-var-btn" data-var="{endereco}">+ Endereço</button>
+            <button type="button" class="payment-method-btn pre-var-btn" data-var="{data_hora}">+ Data e hora</button>
+            <button type="button" class="payment-method-btn pre-var-btn" data-var="{unidade}">+ Unidade</button>
+          </div>
+          <p class="hint" style="margin-top:0">Toque numa variável para inserir. Ela será substituída pelos dados reais da cliente no envio.</p>
+          <label class="checkbox-row"><input type="checkbox" id="pre-active" checked /> Ativo</label>
+          <div class="modal-actions">
+            <button type="button" id="pre-rule-delete-btn" class="btn-cancel" style="display:none">Excluir</button>
             <button type="submit">Salvar</button>
           </div>
         </form>

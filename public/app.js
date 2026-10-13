@@ -3247,6 +3247,111 @@ document.getElementById("pp-rule-form").addEventListener("submit", async (e) => 
   await loadPostProcedureRules();
 });
 
+// --- Pré-procedimento (orientações de preparo, enviadas logo após a cliente confirmar o horário) ---
+let allPreRules = [];
+let preProcedureNames = {};
+
+async function loadPreProcedureRules() {
+  const [rules, procedures] = await Promise.all([api("/pre-procedure-rules"), api("/procedures")]);
+  allPreRules = rules;
+  preProcedureNames = Object.fromEntries(procedures.map((p) => [p.id, p.name]));
+  renderPreRules();
+}
+
+function preProceduresLabel(r) {
+  const ids = (r.procedureIds || "").split(",").filter(Boolean);
+  if (!ids.length) return "Todos";
+  const names = ids.map((id) => preProcedureNames[id]).filter(Boolean);
+  return names.length > 2 ? `${names.slice(0, 2).join(", ")} +${names.length - 2}` : names.join(", ") || "—";
+}
+
+function renderPreRules() {
+  const search = document.getElementById("pre-rules-search").value.trim().toLowerCase();
+  const filtered = allPreRules.filter((r) => !search || r.name.toLowerCase().includes(search));
+  document.getElementById("pre-rules-count").textContent = allPreRules.length;
+  document.getElementById("pre-rules-empty").style.display = filtered.length ? "none" : "block";
+
+  const body = document.getElementById("pre-rules-body");
+  body.innerHTML = "";
+  for (const r of filtered) {
+    const editBtn = el("button", { type: "button", class: "btn-icon-plain", title: "Editar" }, [el("span", { class: "nav-icon", "data-icon": "pencil" }, [])]);
+    editBtn.addEventListener("click", () => openPreRuleModal(r));
+    body.appendChild(
+      el("tr", {}, [
+        el("td", {}, [el("div", { style: "font-weight:600" }, [r.name]), el("div", { class: "hint cell-truncate", style: "margin:0.1rem 0 0" }, [r.message])]),
+        el("td", {}, [el("span", { class: `badge ${r.active ? "badge-green" : "badge-neutral"}` }, [r.active ? "Ativa" : "Pausada"])]),
+        el("td", {}, [preProceduresLabel(r)]),
+        el("td", { class: "actions" }, [editBtn]),
+      ])
+    );
+  }
+  paintIcons(body);
+}
+
+document.getElementById("pre-rules-search").addEventListener("input", renderPreRules);
+document.querySelectorAll(".pre-var-btn").forEach((btn) => {
+  btn.addEventListener("click", () => insertAtCursor(document.getElementById("pre-message"), btn.dataset.var));
+});
+
+async function openPreRuleModal(rule) {
+  document.getElementById("pre-rule-title").textContent = rule ? "Editar pré-procedimento" : "Nova mensagem de pré-procedimento";
+  document.getElementById("pre-id").value = rule?.id || "";
+  document.getElementById("pre-name").value = rule?.name || "";
+  document.getElementById("pre-message").value = rule?.message || "";
+  document.getElementById("pre-active").checked = rule ? !!rule.active : true;
+
+  const selectedProcedureIds = new Set((rule?.procedureIds || "").split(",").filter(Boolean));
+  const procedures = await api("/procedures");
+  const list = document.getElementById("pre-procedures-list");
+  list.innerHTML = "";
+  for (const proc of procedures) {
+    const checkbox = el("input", { type: "checkbox", value: proc.id }, []);
+    if (selectedProcedureIds.has(proc.id)) checkbox.checked = true;
+    list.appendChild(el("label", {}, [checkbox, proc.name]));
+  }
+
+  document.getElementById("pre-rule-delete-btn").style.display = rule ? "" : "none";
+  document.getElementById("pre-rule-overlay").style.display = "flex";
+}
+
+function closePreRuleModal() {
+  document.getElementById("pre-rule-overlay").style.display = "none";
+}
+
+document.getElementById("btn-add-pre-rule").addEventListener("click", () => openPreRuleModal(null));
+document.getElementById("pre-rule-close").addEventListener("click", closePreRuleModal);
+document.getElementById("pre-rule-overlay").addEventListener("click", (e) => {
+  if (e.target.id === "pre-rule-overlay") closePreRuleModal();
+});
+
+document.getElementById("pre-rule-delete-btn").addEventListener("click", async () => {
+  const id = document.getElementById("pre-id").value;
+  if (!id || !(await showConfirm("Excluir essa mensagem de pré-procedimento?"))) return;
+  await api(`/pre-procedure-rules/${id}`, { method: "DELETE" });
+  closePreRuleModal();
+  await loadPreProcedureRules();
+});
+
+document.getElementById("pre-rule-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const id = document.getElementById("pre-id").value;
+  const payload = {
+    name: document.getElementById("pre-name").value.trim(),
+    message: document.getElementById("pre-message").value.trim(),
+    active: document.getElementById("pre-active").checked,
+    procedureIds: Array.from(document.querySelectorAll("#pre-procedures-list input:checked")).map((c) => c.value),
+  };
+  if (!payload.name || !payload.message) return;
+
+  if (id) {
+    await api(`/pre-procedure-rules/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  } else {
+    await api("/pre-procedure-rules", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  }
+  closePreRuleModal();
+  await loadPreProcedureRules();
+});
+
 // ======================= HISTÓRICO DE ATIVIDADES =======================
 let activityCursor = null;
 let activityFiltersLoaded = false;
@@ -3863,7 +3968,7 @@ function currentPlan() {
 // Nenhuma aba do topo fica trancada hoje - só sub-abas de automação.
 const PLAN_FREE_BLOCKED_TABS = new Set();
 const PLAN_FREE_BLOCKED_SUBS = new Set([
-  "briefing", "broadcasts", "appt-reminder", "post-procedure", "renewal",
+  "briefing", "broadcasts", "appt-reminder", "pre-procedure", "post-procedure", "renewal",
   "birthday", "followup", "waitlist", "learning", "rules", "external-api",
 ]);
 
@@ -7136,6 +7241,7 @@ const SETTINGS_SUB_LOADERS = {
     loadBroadcasts();
   },
   "appt-reminder": loadReminderRules,
+  "pre-procedure": loadPreProcedureRules,
   "post-procedure": loadPostProcedureRules,
   renewal: loadRenewalRules,
   birthday: loadBirthdayRules,
@@ -7258,6 +7364,7 @@ const TOUR_STEPS = [
 
   { section: "Automações", tab: "settings", sub: "broadcasts", target: "#sub-broadcasts", title: "Mensagens Programadas", desc: "Disparos pontuais para toda a base, para uma etapa do funil ou para contatos escolhidos a dedo. O envio é feito aos poucos e só dentro do horário comercial, para não queimar o número. Use variáveis como {primeiro_nome} para personalizar o texto." },
   { section: "Automações", tab: "settings", sub: "appt-reminder", target: "#sub-appt-reminder", title: "Lembrete de Consulta", desc: "Mensagens automáticas antes do horário marcado (1h, 24h, 48h antes...) para reduzir faltas. É possível manter vários lembretes ativos ao mesmo tempo, em janelas diferentes." },
+  { section: "Automações", tab: "settings", sub: "pre-procedure", target: "#sub-pre-procedure", title: "Pré-procedimento", desc: "Orientações de preparo enviadas logo depois que a cliente confirma o horário. Dá para restringir a procedimentos específicos." },
   { section: "Automações", tab: "settings", sub: "post-procedure", target: "#sub-post-procedure", title: "Pós-procedimento", desc: "Contato de cuidados e acompanhamento até 30 dias depois do atendimento. Dá para restringir a procedimentos específicos e disparar somente quando o atendimento estiver marcado como concluído." },
   { section: "Automações", tab: "settings", sub: "renewal", target: "#sub-renewal", title: "Renovação", desc: "Retoma o contato meses ou anos depois (3 meses, 1 ano, 2 anos...) para reagendar procedimentos com validade, como toxina botulínica. É o que traz o paciente de volta sem você precisar lembrar de cada um." },
   { section: "Automações", tab: "settings", sub: "birthday", target: "#sub-birthday", title: "Aniversário", desc: "Mensagem de parabéns automática no dia, no horário que você escolher. Depende da data de nascimento preenchida no cadastro do contato (você preenche isso pelo cabeçalho da conversa, na aba Chat)." },
