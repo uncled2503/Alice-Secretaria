@@ -395,6 +395,7 @@ model Procedure {
   // conflitando normalmente com procedimentos que nao tem essa flag.
   allowConcurrentBooking Boolean @default(false)
   ceId           Int?      // id do procedimento no Clinica Experts (null = nao vinculado)
+  internalOnly   Boolean   @default(false) // true = existe so pra agendamentos importados do Clinica Experts (retoque, cortesia...): a Alice NAO oferece nem agenda (src/clinicaexperts/autoLink.ts)
 
   appointments  Appointment[]
   professionals Professional[] @relation("ProfessionalProcedures")

@@ -244,8 +244,8 @@ async function findProcedure(clinicId: string, name: unknown): Promise<Procedure
   const raw = String(name ?? "").trim();
   if (!raw) return null;
   return (
-    (await prisma.procedure.findFirst({ where: { clinicId, name: { equals: raw } } })) ??
-    (await prisma.procedure.findFirst({ where: { clinicId, name: { contains: raw } } }))
+    (await prisma.procedure.findFirst({ where: { clinicId, internalOnly: false, name: { equals: raw } } })) ??
+    (await prisma.procedure.findFirst({ where: { clinicId, internalOnly: false, name: { contains: raw } } }))
   );
 }
 
@@ -257,7 +257,7 @@ async function findProcedure(clinicId: string, name: unknown): Promise<Procedure
 // certo em vez de repetir que "nao existe" algo que o paciente nunca pediu.
 async function procedureNotFoundMessage(clinicId: string, rawName: unknown): Promise<string> {
   const raw = String(rawName ?? "").trim();
-  const totalProcedures = await prisma.procedure.count({ where: { clinicId } });
+  const totalProcedures = await prisma.procedure.count({ where: { clinicId, internalOnly: false } });
   if (totalProcedures === 0) {
     return "Esta clinica ainda nao tem procedimentos cadastrados no sistema, entao nao da pra checar disponibilidade automaticamente. Nao invente horario nem diga que nao ha vaga: explique que vai confirmar com a equipe e chame transfer_to_human.";
   }
@@ -877,7 +877,7 @@ export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: str
   const clinic = await prisma.clinic.findUniqueOrThrow({
     where: { id: clinicId },
     include: {
-      procedures: { include: { professionals: { where: { active: true }, select: { name: true, title: true } }, _count: { select: { photos: true } } } },
+      procedures: { where: { internalOnly: false }, include: { professionals: { where: { active: true }, select: { name: true, title: true } }, _count: { select: { photos: true } } } }, // internalOnly (retoque/cortesia importados do CE) a Alice nao oferece
       messageTemplates: { where: { active: true } },
       faqs: { where: { active: true } },
       playbooks: { where: { active: true } },

@@ -4,6 +4,7 @@ import { ceRequest, dayBoundIso, noteError } from "./client.js";
 import { zonedWallClockToUtc } from "../scheduling/time.js";
 import { syncAppointmentInBackground } from "./sync.js";
 import { notifyStaff } from "../crm/notify.js";
+import { listCeProcedures, linkMissingProcedures } from "./autoLink.js";
 
 // ---------------------------------------------------------------------------
 // Clinica Experts -> Alice: agendamentos feitos DIRETO no Clinica Experts
@@ -77,6 +78,7 @@ export interface PullSkip {
   patient: string; // nome ou telefone
   reason: "sem_telefone" | "procedimento_sem_vinculo";
   procedureIds: number[]; // ids do Clinica Experts
+  procedureNames: string[]; // nomes no CE ("#id" quando nao deu pra consultar)
 }
 
 export interface PullResult {
@@ -109,8 +111,9 @@ export async function pullClinicBookings(clinicId: string): Promise<PullResult> 
 
   // Carrega TUDO de uma vez (antes eram ~7 consultas ao banco POR reserva, a cada 10 min - com 1
   // nucleo de CPU isso saturava o servidor).
-  const procRows = await prisma.procedure.findMany({ where: { clinicId, ceId: { not: null } } });
+  let procRows = await prisma.procedure.findMany({ where: { clinicId, ceId: { not: null } } });
   const procByCeId = new Map(procRows.map((p) => [p.ceId as number, p]));
+  const ceNames = new Map<number, string>(); // nome dos procedimentos do CE (so preenchido quando precisou consultar)
   const proRows = await prisma.professional.findMany({ where: { clinicId, ceUuid: { not: null } }, select: { id: true, ceUuid: true } });
   const proByUuid = new Map(proRows.map((p) => [p.ceUuid as string, p]));
   const uuids = bookings.map((b) => b.uuid).filter((u): u is string => !!u);
@@ -118,6 +121,36 @@ export async function pullClinicBookings(clinicId: string): Promise<PullResult> 
     ? await prisma.appointment.findMany({ where: { clinicId, ceBookingUuid: { in: uuids } }, include: { procedure: true } })
     : [];
   const existingByUuid = new Map(existingRows.map((a) => [a.ceBookingUuid as string, a]));
+
+  // Reservas novas e futuras cujo procedimento ainda nao existe aqui (criado no CE depois do ultimo "Sincronizar catalogo", ou
+  // item interno como "Retoque"): cria/vincula so o que falta, em vez de descartar a reserva e deixar a pessoa sem confirmacao.
+  const needCe = new Set<number>();
+  for (const b of bookings) {
+    if (!b.uuid || !b.starts_at || existingByUuid.has(b.uuid)) continue;
+    const st = mapCeStatus(b.status);
+    if (st === "cancelled" || st === "no_show") continue;
+    const at = parseCeInstant(b.starts_at, tz);
+    if (Number.isNaN(at.getTime()) || at.getTime() < Date.now()) continue;
+    if (!normalizeCePhone(b.patient?.phone) || pickProcedure(b, procByCeId)) continue;
+    for (const p of b.procedures ?? []) needCe.add(p.id);
+  }
+  if (needCe.size) {
+    try {
+      const ceProcs = await listCeProcedures(clinicId);
+      if (ceProcs) {
+        for (const p of ceProcs) ceNames.set(p.id, p.name);
+        const linked = await linkMissingProcedures(clinicId, [...needCe], ceProcs);
+        if (linked.created || linked.internal || linked.linked) {
+          console.log(`[clinicaexperts] procedimentos vinculados na importacao: ${linked.created} novo(s), ${linked.internal} interno(s), ${linked.linked} por nome`);
+          procRows = await prisma.procedure.findMany({ where: { clinicId, ceId: { not: null } } });
+          procByCeId.clear();
+          for (const p of procRows) procByCeId.set(p.ceId as number, p);
+        }
+      }
+    } catch (err) {
+      console.error("[clinicaexperts] vincular procedimentos faltantes:", err);
+    }
+  }
 
   const seen = new Set<string>();
   for (const b of bookings) {
@@ -165,6 +198,7 @@ export async function pullClinicBookings(clinicId: string): Promise<PullResult> 
         patient: b.patient?.name?.trim() || b.patient?.phone || "(sem nome)",
         reason: !phone ? "sem_telefone" : "procedimento_sem_vinculo",
         procedureIds: (b.procedures ?? []).map((p) => p.id),
+        procedureNames: (b.procedures ?? []).map((p) => ceNames.get(p.id) ?? `#${p.id}`),
       });
       continue;
     }
@@ -212,7 +246,7 @@ async function alertSkippedSoon(clinicId: string, skips: PullSkip[]): Promise<vo
   const today = new Date().toISOString().slice(0, 10);
   if (skipAlertedOn.get(clinicId) === today) return;
   skipAlertedOn.set(clinicId, today);
-  const lines = soon.slice(0, 8).map((s) => `• ${s.patient} (${s.reason === "sem_telefone" ? "sem telefone" : "procedimento sem vínculo"})`);
+  const lines = soon.slice(0, 8).map((s) => `• ${s.patient} (${s.reason === "sem_telefone" ? "sem telefone" : `procedimento sem vínculo: ${s.procedureNames.join(", ") || "?"}`})`);
   await notifyStaff(
     clinicId,
     "automation_failed",

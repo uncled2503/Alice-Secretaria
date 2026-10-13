@@ -370,7 +370,7 @@ externalApiRouter.get(
   "/procedures",
   requireScope("catalog.read"),
   wrap(async (req, res) => {
-    const rows = await prisma.procedure.findMany({ where: { clinicId: clinicId(req) }, orderBy: { name: "asc" } });
+    const rows = await prisma.procedure.findMany({ where: { clinicId: clinicId(req), internalOnly: false }, orderBy: { name: "asc" } });
     res.json({
       data: rows.map((p) => ({
         id: p.id,
