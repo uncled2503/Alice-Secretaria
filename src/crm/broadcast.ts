@@ -6,6 +6,8 @@ import { isWithinClinicHours } from "./openHours.js";
 import { wallClockInZone } from "../scheduling/time.js";
 import { nationalHolidayOn, parseHolidayOpen } from "../scheduling/holidays.js";
 import { recordAutomatedMessage } from "./conversationLog.js";
+import { MONTH_LEADS_MODE, monthLeadRecipients, firstInterest } from "./leadReactivation.js";
+import { getFunnelStages } from "./stages.js";
 import type { Clinic } from "@prisma/client";
 
 // Envia aos poucos pra nao estourar limite de taxa do WhatsApp e nao
@@ -20,7 +22,8 @@ type BroadcastClinicInfo = {
 // {nome} continua funcionando (campanhas antigas ja usam esse placeholder) -
 // e so um alias de {primeiro_nome}. Endereco/unidade vem da unidade principal
 // da clinica, ja que o paciente nao esta amarrado a uma unidade especifica.
-function renderTemplate(template: string, patientName: string | null, patientPhone: string, clinic: BroadcastClinicInfo): string {
+// {procedimento} = o primeiro interesse conhecido do paciente (anotado pela Alice no resumo do CRM).
+export function renderTemplate(template: string, patientName: string | null, patientPhone: string, clinic: BroadcastClinicInfo, interestNote: string | null = null): string {
   const fullName = patientName?.trim() ?? "";
   const firstName = fullName.split(" ")[0] ?? "";
   const now = new Date();
@@ -29,10 +32,12 @@ function renderTemplate(template: string, patientName: string | null, patientPho
     .replace(/\{nome\}/gi, firstName)
     .replace(/\{primeiro_nome\}/gi, firstName)
     .replace(/\{nome_completo\}/gi, fullName)
+    .replace(/\{procedimento\}/gi, firstInterest(interestNote))
     .replace(/\{telefone\}/gi, patientPhone)
     .replace(/\{endereco\}/gi, clinic.primaryLocation?.fullAddress ?? "")
     .replace(/\{unidade\}/gi, clinic.primaryLocation?.name ?? clinic.name)
     .replace(/\{data_hora\}/gi, now.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }))
+    .replace(/\b(Oi|Olá|Ola),\s*!/gi, "$1!") // sem nome: "Oi, !" vira "Oi!"
     .trim();
 }
 
@@ -139,6 +144,9 @@ async function activateDueCampaigns(): Promise<void> {
       let patientIds: string[];
       if (campaign.targetMode === "reactivation") {
         patientIds = await reactivationRecipients(campaign.clinicId, campaign.targetConfig);
+      } else if (campaign.targetMode === MONTH_LEADS_MODE) {
+        // Leads do mes que ainda nao agendaram nem compraram (ver leadReactivation.ts)
+        patientIds = await monthLeadRecipients(campaign.clinicId, /\{procedimento\}/i.test(campaign.message));
       } else {
         const patients = await prisma.patient.findMany({
           where: {
@@ -180,6 +188,9 @@ async function sendNextBatch(): Promise<void> {
     if (pending.length === 0) continue;
 
     const clinicInfo = await getBroadcastClinicInfo(clinic.id);
+    const needsInterest = /\{procedimento\}/i.test(campaign.message);
+    const wonStageIds =
+      campaign.targetMode === MONTH_LEADS_MODE ? (await getFunnelStages(clinic.id)).filter((st) => st.kind === "ganho").map((st) => st.stageId) : [];
     for (let i = 0; i < pending.length; i++) {
       const recipient = pending[i];
       // Pediu pra parar (ou foi marcado assim depois da campanha ser montada): pula sem enviar.
@@ -187,7 +198,22 @@ async function sendNextBatch(): Promise<void> {
         await prisma.broadcastRecipient.update({ where: { id: recipient.id }, data: { status: "skipped" } });
         continue;
       }
-      const text = renderTemplate(campaign.message, recipient.patient.name, recipient.patient.phone, clinicInfo);
+      // Texto com {procedimento} e sem interesse conhecido: nao faz sentido, pula.
+      if (needsInterest && !firstInterest(recipient.patient.interestNote)) {
+        await prisma.broadcastRecipient.update({ where: { id: recipient.id }, data: { status: "skipped" } });
+        continue;
+      }
+      // Campanha mensal de leads: a campanha leva horas; quem agendou/comprou nesse meio tempo, ou pediu pra ser chamada
+      // mais tarde, ja nao e "lead que nao agendou".
+      if (campaign.targetMode === MONTH_LEADS_MODE) {
+        const booked = await prisma.appointment.count({ where: { patientId: recipient.patientId, status: { in: ["confirmed", "completed", "no_show"] } } });
+        const waiting = recipient.patient.callbackAt && recipient.patient.callbackAt.getTime() > Date.now();
+        if (booked > 0 || waiting || wonStageIds.includes(recipient.patient.funnelStage)) {
+          await prisma.broadcastRecipient.update({ where: { id: recipient.id }, data: { status: "skipped" } });
+          continue;
+        }
+      }
+      const text = renderTemplate(campaign.message, recipient.patient.name, recipient.patient.phone, clinicInfo, recipient.patient.interestNote);
       try {
         const outcome = await sendText(clinic.id, recipient.patient.phone, text);
         await prisma.broadcastRecipient.update({
@@ -196,7 +222,7 @@ async function sendNextBatch(): Promise<void> {
         });
         // Reativacao: registra a mensagem na conversa do paciente pra Alice ter
         // contexto quando ele responder (as outras campanhas nao precisam disso).
-        if (outcome === "sent" && campaign.targetMode === "reactivation") {
+        if (outcome === "sent" && (campaign.targetMode === "reactivation" || campaign.targetMode === MONTH_LEADS_MODE)) {
           await recordAutomatedMessage(recipient.patientId, text, "Reativação de base");
         }
       } catch (err) {

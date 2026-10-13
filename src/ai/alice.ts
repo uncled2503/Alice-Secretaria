@@ -28,6 +28,7 @@ import { checkAtendimentoLimit } from "../crm/usage.js";
 import { tagNewLead } from "../crm/leadTag.js";
 import { recordIntentSignals } from "../crm/intent.js";
 import { handoffCard } from "../crm/handoffCard.js";
+import { reportsProcedureReaction, REACTION_HANDOFF_REASON, REACTION_TEXT, REACTION_WINDOW_DAYS } from "./safety.js";
 import { bookingRiskNote } from "../crm/patientRisk.js";
 import { isFreePlan } from "../crm/plan.js";
 import type { Procedure } from "@prisma/client";
@@ -1634,6 +1635,35 @@ async function generateReplyUnlocked(
       await prisma.message.create({ data: { conversationId: conversation.id, role: "assistant", content: URGENT_TEXT, deliveryStatus: "pending" } });
       await prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: new Date() } });
       return URGENT_TEXT;
+    }
+  }
+
+  // REACAO APOS PROCEDIMENTO: quem foi atendida nos ultimos 21 dias e relata dor intensa, alergia, bolha, queimadura,
+  // secrecao, febre, alteracao de cor... NAO recebe orientacao da Alice: o fluxo automatico para e a equipe assume na hora.
+  if (usageClinic && usageClinic.businessType !== "geral") {
+    const lastUserText = history.filter((m) => m.role === "user").at(-1)?.content ?? "";
+    if (reportsProcedureReaction(normalizeReply(lastUserText))) {
+      const recentVisit = await prisma.appointment.count({
+        where: {
+          clinicId,
+          patientId: patient.id,
+          status: { in: ["completed", "confirmed"] },
+          scheduledAt: { gte: new Date(Date.now() - REACTION_WINDOW_DAYS * 24 * 3_600_000), lt: new Date() },
+        },
+      });
+      if (recentVisit > 0) {
+        try {
+          await runTool(clinicId, patient.id, conversation.id, "transfer_to_human", {
+            reason: REACTION_HANDOFF_REASON,
+            summary: `REAÇÃO RELATADA após atendimento recente. Mensagem da paciente: "${String(lastUserText).slice(0, 300)}". Não houve orientação clínica da Alice. Falar com a paciente com prioridade.`,
+          });
+        } catch (err) {
+          console.error("[reacao] falha ao sinalizar a equipe:", err);
+        }
+        await prisma.message.create({ data: { conversationId: conversation.id, role: "assistant", content: REACTION_TEXT, deliveryStatus: "pending" } });
+        await prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: new Date() } });
+        return REACTION_TEXT;
+      }
     }
   }
 

@@ -288,6 +288,8 @@ apiRouter.get(
         softSell: true,
         handoffOnPrice: true,
         tagLeadOrigin: true,
+        leadReactivationDay: true,
+        leadReactivationMessage: true,
         saveContactsToPhone: true,
         whatsappPhone: true,
         timezone: true,
@@ -402,6 +404,8 @@ apiRouter.put(
       softSell?: boolean;
       handoffOnPrice?: boolean;
       tagLeadOrigin?: boolean;
+      leadReactivationDay?: number | null;
+      leadReactivationMessage?: string | null;
       saveContactsToPhone?: boolean;
       businessType?: string;
       businessLabel?: string | null;
@@ -475,6 +479,14 @@ apiRouter.put(
         return;
       }
     }
+    if (b.leadReactivationDay !== undefined && b.leadReactivationDay !== null && (!Number.isInteger(b.leadReactivationDay) || b.leadReactivationDay < 1 || b.leadReactivationDay > 28)) {
+      res.status(400).json({ error: "leadReactivationDay invalido (use 1 a 28, ou vazio para desligar)" });
+      return;
+    }
+    if (b.leadReactivationMessage !== undefined && b.leadReactivationMessage !== null && typeof b.leadReactivationMessage !== "string") {
+      res.status(400).json({ error: "leadReactivationMessage invalido" });
+      return;
+    }
     if (workDays !== undefined && !/^([0-6](,[0-6])*)?$/.test(String(workDays))) {
       res.status(400).json({ error: "workDays invalido (use dias de 0 a 6 separados por virgula)" });
       return;
@@ -539,6 +551,8 @@ apiRouter.put(
           ...(b.softSell !== undefined ? { softSell: b.softSell } : {}),
           ...(b.handoffOnPrice !== undefined ? { handoffOnPrice: b.handoffOnPrice } : {}),
           ...(b.tagLeadOrigin !== undefined ? { tagLeadOrigin: !!b.tagLeadOrigin } : {}),
+          ...(b.leadReactivationDay !== undefined ? { leadReactivationDay: b.leadReactivationDay } : {}),
+          ...(b.leadReactivationMessage !== undefined ? { leadReactivationMessage: b.leadReactivationMessage?.trim() || null } : {}),
           ...(b.saveContactsToPhone !== undefined ? { saveContactsToPhone: b.saveContactsToPhone } : {}),
           ...(b.businessType !== undefined ? { businessType: b.businessType } : {}),
           ...(b.businessLabel !== undefined ? { businessLabel: b.businessLabel?.trim() || null } : {}),

@@ -5,6 +5,7 @@ import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js
 import { PAID_CLINIC_WHERE } from "../crm/plan.js";
 import { notifyStaff } from "../crm/notify.js";
 import { recordAutomatedMessage } from "../crm/conversationLog.js";
+import { wallClockInZone } from "../scheduling/time.js";
 
 function intervalMs(value: number, unit: string): number {
   const hourMs = 60 * 60_000;
@@ -20,16 +21,28 @@ function intervalMs(value: number, unit: string): number {
 const MAX_OVERDUE_MS = 3 * 24 * 60 * 60_000; // 3 dias de folga alem do prazo da regra
 const MAX_PER_TICK = 30; // teto de seguranca por regra a cada execucao (15min)
 
+// PURO: o atendimento (inicio + duracao) ja terminou ate `limit`?
+export function appointmentEndedBy(appt: { scheduledAt: Date; procedure: { durationMin: number } }, limit: Date): boolean {
+  return appt.scheduledAt.getTime() + appt.procedure.durationMin * 60_000 <= limit.getTime();
+}
+
 // Roda a cada 15min. So dispara uma vez por agendamento por regra (marca em
 // PostProcedureSent), respeitando "so apos concluido" e o filtro de
 // procedimentos (procedureIds vazio = vale pra todos).
 export function startPostProcedureJob(): void {
   scheduleLocked("pos-procedimento", "*/15 * * * *", async () => {
-    const rules = await prisma.postProcedureRule.findMany({ where: { active: true, clinic: PAID_CLINIC_WHERE } });
+    const rules = await prisma.postProcedureRule.findMany({
+      where: { active: true, clinic: PAID_CLINIC_WHERE },
+      include: { clinic: { select: { timezone: true } } },
+    });
     const clinicInfoCache = new Map<string, Awaited<ReturnType<typeof getClinicTemplateInfo>>>();
 
     for (const rule of rules) {
       const now = new Date();
+      // Cuidados pos-procedimento nao saem de noite/madrugada: espera ate as 7h (o que ficou pendente sai no 1o ciclo da manha;
+      // a folga de 3 dias da regra cobre a espera).
+      const localHour = wallClockInZone(now, rule.clinic.timezone || "America/Sao_Paulo").hour;
+      if (localHour >= 21 || localHour < 7) continue;
       const cutoff = new Date(now.getTime() - intervalMs(rule.intervalValue, rule.intervalUnit));
       const floor = new Date(cutoff.getTime() - MAX_OVERDUE_MS);
       const procedureFilter = rule.procedureIds.split(",").filter(Boolean);
@@ -41,11 +54,22 @@ export function startPostProcedureJob(): void {
           scheduledAt: { lte: cutoff, gte: floor },
           ...(procedureFilter.length ? { procedureId: { in: procedureFilter } } : {}),
           postProcedureSent: { none: { ruleId: rule.id } },
-          patient: { optedOut: false }, // quem pediu pra parar nao recebe mensagem automatica
+          patient: {
+            optedOut: false, // quem pediu pra parar nao recebe mensagem automatica
+            // Relatou reacao ao procedimento (a Alice transferiu pra equipe como "REAÇÃO"): o fluxo automatico para.
+            conversations: { none: { handoffReason: { startsWith: "REAÇÃO" }, lastMessageAt: { gte: new Date(now.getTime() - 7 * 24 * 3_600_000) } } },
+          },
         },
         include: { patient: true, procedure: true, professional: true },
         take: MAX_PER_TICK,
       });
+      // Regra em HORAS conta a partir do FIM do atendimento (inicio + duracao): "1h depois" nao pode chegar com a
+      // paciente ainda na cadeira (criolipolise e outros passam de 1h).
+      if (rule.intervalUnit === "hours") {
+        for (let i = due.length - 1; i >= 0; i--) {
+          if (!appointmentEndedBy(due[i], cutoff)) due.splice(i, 1);
+        }
+      }
 
       if (due.length === 0) continue;
 
