@@ -30,6 +30,7 @@ import { recordIntentSignals } from "../crm/intent.js";
 import { handoffCard } from "../crm/handoffCard.js";
 import { findRepetitions, removeSentences, askedAgain, conversationMemory, splitSentences } from "./repetition.js";
 import { announcesAction, brokenPromise, PROMISE_NUDGE } from "./promises.js";
+import { analyzeFlow, complainsAboutBot, type SalesFlow } from "./salesFlow.js";
 import { buildPreProcedureText } from "../reminders/preProcedure.js";
 
 // Orientacao de PRE-procedimento que sai como resposta da Alice logo apos a cliente confirmar o horario (por conversa).
@@ -874,7 +875,7 @@ function personaInstruction(clinic: { name: string; assistantName: string; assis
   return `Voce se apresenta apenas como parte da equipe ${prepLugar(clinic.name)}, sem citar cargo. Ex: "Oi! Aqui e a ${a}, da equipe ${prepLugar(clinic.name)}".${grammar}`;
 }
 
-export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: string } = {}): Promise<string> {
+export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: string; flow?: SalesFlow } = {}): Promise<string> {
   const clinic = await prisma.clinic.findUniqueOrThrow({
     where: { id: clinicId },
     include: {
@@ -916,13 +917,15 @@ NAO FIQUE SE DESPEDINDO: se voce ja se despediu ou disse "fico a disposicao"/"e 
 
   const postureLine = consultivo
     ? `\nPOSTURA CONSULTIVA: conduza como um consultorio, sem pressao comercial. Responda a duvida atual primeiro; so pergunte de novo quando a resposta mudar o proximo passo; se ja respondeu, aguardar e uma acao valida. Nao encerre com pergunta generica so pra manter a conversa. Nao empurre o agendamento - ofereca o caminho da avaliacao quando houver interesse real.`
-    : `\nPOSTURA COMERCIAL (voce e uma vendedora de verdade, nao uma atendente que so informa - sua prioridade e converter, e isso comeca por entender a dor de verdade antes de recomendar qualquer coisa):
-- Descubra a dor antes de falar em procedimento ou preco: faca perguntas genuinas sobre o que incomoda, ha quanto tempo, o que ja tentou e qual seria o resultado ideal. Uma pergunta por vez, como numa conversa de verdade - nunca como um formulario ou um roteiro decorado.
-- Reflita o que a pessoa disse: ao recomendar, retome a propria queixa dela com as palavras dela (se ela disse "minha barriga nao sai de jeito nenhum", fale sobre isso, nao em generico "temos otimos procedimentos"). Isso mostra que voce ouviu de verdade.
-- Conecte a solucao a dor especifica: explique COMO o procedimento/protocolo resolve exatamente o que ela contou, gerando desejo pela transformacao antes de qualquer numero.
-- Fale como gente, nao como script: varie a forma de perguntar e recomendar, reaja ao que a pessoa realmente escreveu em vez de encadear perguntas genericas sempre na mesma ordem. Respostas robotizadas, sem nenhuma reacao genuina ao que foi dito, nao convertem.
-- So depois de qualificar e gerar valor, conduza pro proximo passo de forma ativa: ofereca horario voce mesma ("consigo quinta as 15h ou sexta as 10h, qual fica melhor?"). Conduza ao proximo passo com uma pergunta NOVA a cada resposta, nunca a mesma que ja fez; se a pessoa so tirou uma duvida e voce ja respondeu, responda e pare, sem forcar pergunta.
-- Contorne objecao de preco reconectando com o beneficio especifico pra dor dela (nao com desconto que nao existe) e o parcelamento, quando cadastrado.
+    : `\nPOSTURA COMERCIAL - MAQUINA DE VENDAS CONSULTIVA. Cada mensagem sua tem UM objetivo: levar a cliente ao proximo passo (avaliacao ou agendamento), com naturalidade e sem enrolar. Como:
+- LEIA a conversa inteira antes de responder. Nunca pergunte o que ela ja contou; nunca repita pergunta, informacao ou oferta que voce ja fez.
+- Ela ja disse o que quer? Reconheca com as palavras dela (1 frase), conecte a solucao do catalogo (1 frase) e feche com UMA pergunta concreta rumo ao horario ("Quer que eu veja um horario pra sua avaliacao?"). Ela ainda nao disse? Faca UMA pergunta especifica ao assunto dela (gordura: qual regiao; pele: o que quer melhorar; se veio de anuncio, use o procedimento do anuncio).
+- Pediu avaliacao, horario ou agendar (mesmo com poucas palavras: "prefiro uma avaliacao", "quero marcar")? Pare de qualificar e AGENDE agora (check_availability / check_specific_time). Isso nunca e "insistir".
+- Recusou os horarios ("nenhum deles", "nao posso")? Nao se despeca: pergunte o dia da semana e o periodo que preferem e ofereca outras datas. So desista se ela disser claramente que nao quer mais.
+- Nao fale de valor se ela nao perguntou. Se perguntou, responda direto, em 1 frase, e volte ao proximo passo.
+- Objecao (preco, medo, tempo, indecisao): acolha, reconecte com o resultado que ela quer, use so as orientacoes cadastradas e proponha o proximo passo menor (a avaliacao). Nunca invente desconto, garantia nem urgencia.
+- Mensagens curtas (ate 3 frases), uma pergunta so, tom de WhatsApp, sem formulario, sem repetir a mesma abertura nem a mesma pergunta de fechamento.
+- Nunca diga que "ja tem outro paciente" no horario: diga so que "esse horario nao esta disponivel" e ofereca o mais proximo.
 Tudo isso sem quebrar regra nenhuma: nao invente valor, prazo, garantia nem urgencia que nao seja real.`;
 
   // Vendedora proativa - vale pro modo "geral" (loja/servico). Respeita a
@@ -945,7 +948,7 @@ Tudo isso SEM quebrar as regras cadastradas: nunca invente preco, estoque ou pra
 
   const noPricesLine = clinic.quotePrices
     ? ""
-    : `\nVALORES: voce NAO informa valores, parcelas nem formas de pagamento de procedimento algum. Quando perguntarem preco, diga com naturalidade que o valor depende do protocolo de cada pessoa e que a equipe apresenta o investimento. ${clinic.softSell ? "NAO use a avaliacao como resposta padrao e NAO peca dia e turno: pergunte o que ela quer melhorar ou saber e responda as duvidas sobre o procedimento." : "Reforce que a avaliacao e gratuita e pergunte o melhor dia e turno."} Nao dê faixas nem estimativas.`;
+    : `\nVALORES: voce NAO informa valores, parcelas nem formas de pagamento de procedimento algum, e NUNCA traz o assunto de valor sozinha: so fale disso se a pessoa perguntar. Quando perguntarem, diga em uma frase que o valor depende do protocolo de cada pessoa e que a equipe apresenta o investimento na avaliacao, e volte ao proximo passo. Nao de faixas nem estimativas.`;
   const teamBooksLine = clinic.aliceCanBook
     ? ""
     : `
@@ -962,8 +965,8 @@ AGENDAMENTO PELA EQUIPE: voce NAO agenda, NAO remarca, NAO cancela e NAO oferece
       where: { role: "assistant", authorName: null, content: { contains: "avalia" }, conversation: { patientId: ctx.patientId } },
     });
     evalPitchLine = offers > 0
-      ? `\nSEM INSISTIR EM AVALIACAO: voce JA mencionou a avaliacao nesta conversa (${offers}x). NAO ofereca de novo, NAO fale em dia/turno e NAO tente agendar, a menos que a pessoa peca para agendar ou marcar. Responda o que ela perguntou, com o que esta cadastrado, e continue a conversa com UMA pergunta sobre o interesse dela (o que quer melhorar, o que quer saber). Se ela disse que mora longe, que nao pode vir ou que so quer informacao, respeite: converse por aqui e deixe a porta aberta em uma frase, sem pressionar.`
-      : "\nAVALIACAO: mencione a avaliacao gratuita no MAXIMO UMA vez em toda a conversa, e so depois de responder o que a pessoa quis saber. Nunca termine toda resposta oferecendo avaliacao nem pedindo dia e turno.";
+      ? `\nAVALIACAO: voce JA falou de avaliacao nesta conversa (${offers}x). Se a pessoa ainda nao pediu, nao repita a oferta: aprofunde com informacao util e uma pergunta NOVA. Se ela pedir avaliacao ou agendamento (a qualquer momento, mesmo com poucas palavras), isso e intencao clara: agende na hora, sem mais perguntas de descoberta. Se ela disse que mora longe, que nao pode vir ou que so quer informacao, respeite e deixe a porta aberta em uma frase.`
+      : "\nAVALIACAO: ofereca a avaliacao gratuita quando a conversa ja mostrou interesse, uma vez, e depois de responder o que a pessoa quis saber. Se ela pedir avaliacao ou agendar, agende na hora.";
   }
   const evalFirstLine = clinic.evaluationFirst
     ? `\nAVALIACAO PRIMEIRO: nunca exija que o paciente saiba qual procedimento precisa. Sempre ofereca os dois caminhos ("voce ja tem algo em mente ou prefere uma avaliacao pra o profissional entender seu caso?"). Se ele nao sabe e quer ser avaliado, isso e intencao valida de agendamento - conduza direto, sem listar procedimentos.`
@@ -1089,7 +1092,8 @@ FERIADOS PROXIMOS: ${holidayItems.join("; ")}. Se a pessoa perguntar se funciona
     const priorReplies = await prisma.message.count({
       where: { role: "assistant", authorName: null, conversation: { patientId: ctx.patientId } },
     });
-    if (priorReplies === 0) {
+    // Primeira mensagem ja longa/detalhada (ela contou a queixa): nao vale a regra de "so se apresente e pergunte".
+    if (priorReplies === 0 && !ctx.flow?.statedGoal) {
       firstContactLine = `\nPRIMEIRA RESPOSTA A UM CONTATO NOVO (regra rigida desta clinica): responda em UMA unica mensagem, com NO MAXIMO 2 frases curtas. Se apresente ("Oi! Aqui e a ${a}, da equipe ${clinic.name}") e faca UMA unica pergunta para comecar a conversa: se nao souber o nome, pergunte o nome; ou pergunte o que a pessoa gostaria de melhorar hoje, de forma especifica ao assunto dela (gordura/medidas: qual regiao; pele: o que gostaria de melhorar na pele; rosto/harmonizacao: o que a incomoda; e assim por diante). NAO explique o procedimento, NAO descreva beneficios, NAO fale de avaliacao gratuita, de valores nem de agendamento, NAO mande mais de uma mensagem. Mesmo que ela venha de anuncio, so reconheca o assunto em poucas palavras ("vi que voce veio pelo anuncio de peeling") e pergunte. So passe a informacoes depois que ela responder.`;
     }
   }
@@ -1100,7 +1104,8 @@ FERIADOS PROXIMOS: ${holidayItems.join("; ")}. Se a pessoa perguntar se funciona
   if (clinic.conciseFirstReply && ctx.patientId) {
     earlyStage = (await prisma.message.count({ where: { role: "assistant", authorName: null, conversation: { patientId: ctx.patientId } } })) < 4;
   }
-  const discoveryLine = clinic.conciseFirstReply && earlyStage
+  // Descoberta so enquanto ela NAO contou o que quer e NAO pediu pra agendar (senao vira interrogatorio e perde a venda).
+  const discoveryLine = clinic.conciseFirstReply && earlyStage && !ctx.flow?.statedGoal && ctx.flow?.intent !== "schedule"
     ? `\nABERTURA DO ATENDIMENTO (descubra ANTES de explicar, UMA pergunta por mensagem, sem formulario): (1) o nome, se ainda nao souber; (2) se a pessoa JA CONHECE ou JA FEZ o procedimento; (3) o que ela quer melhorar / qual a queixa (ex.: qual regiao incomoda, o que quer melhorar na pele); (4) quando pretende fazer (agora, este mes ou mais pra frente) - pergunte com naturalidade, sem pressionar. So depois dessas respostas explique o procedimento, de forma CURTA e comercial (no maximo 3 frases), e termine com uma pergunta que leve ao proximo passo. Nao repita informacao que ja deu. Se ela perguntar algo direto no meio (preco, endereco, horario), responda e retome as perguntas que faltam.`
     : "";
 
@@ -1761,6 +1766,27 @@ async function generateReplyUnlocked(
     }
   }
 
+  // RECLAMOU DO ATENDIMENTO AUTOMATICO ("a IA de voces e pessima", "repetitiva", "nao ajuda em nada"): quem responde e uma
+  // pessoa. Continuar tentando so piora (e foi o que aconteceu no caso da Cibele, 13/10).
+  {
+    const lastUserText = history.filter((m) => m.role === "user").at(-1)?.content ?? "";
+    if (complainsAboutBot(lastUserText)) {
+      try {
+        await runTool(clinicId, patient.id, conversation.id, "transfer_to_human", {
+          reason: "Cliente reclamou do atendimento automatico",
+          summary: `A cliente disse: "${String(lastUserText).slice(0, 300)}". Assuma a conversa com atencao e peca desculpas pela experiência.`,
+        });
+      } catch (err) {
+        console.error("[reclamacao] falha ao encaminhar pra equipe:", err);
+      }
+      if (usageClinic?.silentHandoff) return "";
+      const phrase = "Poxa, desculpa por isso! Vou pedir pra uma pessoa da equipe continuar com você por aqui agora. 💗";
+      await prisma.message.create({ data: { conversationId: conversation.id, role: "assistant", content: phrase, deliveryStatus: "pending" } });
+      await prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: new Date() } });
+      return phrase;
+    }
+  }
+
   // URGENCIA clinica (falta de ar, sangramento intenso, reacao alergica...): resposta FIXA e imediata, SEM esperar o
   // modelo, em qualquer clinica (antes so valia com o "modo silencioso" ligado). Orienta procurar emergencia e a
   // equipe e avisada.
@@ -1811,7 +1837,13 @@ async function generateReplyUnlocked(
   }
 
   await enrichPatientFromCe(clinicId, patient); // nome completo/vinculo pelo Clinica Experts (melhor esforco)
-  const system = await buildSystemPrompt(clinicId, { patientId: patient.id });
+  // FLUXO DE VENDA: le a conversa (intencao agora, o que ela ja contou, se recusou horarios) e define a PROXIMA JOGADA. O
+  // prompt desliga as regras que conflitam com ela e a jogada vai na ultima instrucao ao modelo.
+  const trailingNow: string[] = [];
+  for (let i = history.length - 1; i >= 0 && history[i].role === "user"; i--) trailingNow.unshift(history[i].content);
+  const hasBooking = (await prisma.appointment.count({ where: { patientId: patient.id, status: "confirmed", scheduledAt: { gte: new Date() } } })) > 0;
+  const flow = analyzeFlow({ history, trailing: trailingNow, priceAsked: PRICE_ASK_RE.test(normalizeReply(trailingNow.join(" "))), hasBooking });
+  const system = await buildSystemPrompt(clinicId, { patientId: patient.id, flow });
 
   const messages: ChatCompletionMessageParam[] = [
     { role: "system", content: system },
@@ -1871,7 +1903,7 @@ async function generateReplyUnlocked(
       const memory = conversationMemory(priorReplies, answeredUser);
       messages.push({
         role: "system",
-        content: `${memory ? memory + "\n\n" : ""}LEMBRETE FINAL: ${trailing.length > 1 ? "as mensagens novas da pessoa (ainda sem resposta) sao" : "a mensagem nova da pessoa e"}: ${trailing.map((t) => `"${t.slice(0, 300)}"`).join(" + ")}. Responda SOMENTE a isso, UMA vez${trailing.length > 1 ? ", juntando as mensagens numa resposta so" : ""}. O que ela perguntou ANTES ja foi respondido nas mensagens anteriores: NAO responda de novo, NAO repita valores, endereco, horarios, avisos nem frases que voce ja disse, e NAO feche com a mesma pergunta das mensagens anteriores (mude a pergunta ou so responda e pare). Fale como uma pessoa conversando: curto, direto, natural, continuando a conversa de onde ela parou.`,
+        content: `JOGADA AGORA (siga isto): ${flow.nextMove}\n\n${memory ? memory + "\n\n" : ""}LEMBRETE FINAL: ${trailing.length > 1 ? "as mensagens novas da pessoa (ainda sem resposta) sao" : "a mensagem nova da pessoa e"}: ${trailing.map((t) => `"${t.slice(0, 300)}"`).join(" + ")}. Responda SOMENTE a isso, UMA vez${trailing.length > 1 ? ", juntando as mensagens numa resposta so" : ""}. O que ela perguntou ANTES ja foi respondido nas mensagens anteriores: NAO responda de novo, NAO repita valores, endereco, horarios, avisos nem frases que voce ja disse, e NAO feche com a mesma pergunta das mensagens anteriores (mude a pergunta ou so responda e pare). Fale como uma pessoa conversando: curto, direto, natural, continuando a conversa de onde ela parou.`,
       });
     }
   }
@@ -1972,17 +2004,9 @@ async function generateReplyUnlocked(
     }
   }
 
-  // SEM INSISTIR EM AVALIACAO (clinicas com "soft sell"): se ja ofereceu e a pessoa nao falou de
-  // agendar, a resposta nao pode oferecer de novo. Reescreve tirando a oferta.
-  if (usageClinic?.softSell && !didTransfer && !fixedReply && finalText.trim()) {
-    const prevOffers = history.filter((m) => m.role === "assistant" && !m.authorName && /avalia/i.test(m.content)).length;
-    const lastUserForPitch = normalizeReply(history.filter((m) => m.role === "user").at(-1)?.content ?? "");
-    if (prevOffers >= 1 && EVAL_PITCH_RE.test(normalizeReply(finalText)) && !SCHEDULING_INTENT_RE.test(lastUserForPitch)) {
-      const c3 = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { name: true } });
-      const softer = await removeEvaluationPitch(finalText, history.filter((m) => m.role === "user").map((m) => m.content).slice(-3), c3?.name ?? "a clinica");
-      if (softer) finalText = softer;
-    }
-  }
+  // (Removido em 13/10/2026: o filtro "sem insistir em avaliacao" reescrevia a resposta quando a cliente dizia "Prefiro uma
+  // avaliacao" - frase sem as palavras de agendamento da lista -, apagava a oferta e injetava o texto fixo "o valor depende do
+  // protocolo... O que voce gostaria de melhorar?". Quem decide a jogada agora e o fluxo de venda: ver ai/salesFlow.ts.)
 
   // REPETICAO POR FRASE: a resposta repete frases que a Alice ja disse nas ultimas mensagens (re-responde pergunta antiga,
   // fecha com a mesma pergunta). Reescreve respondendo so ao que a pessoa mandou agora; se a reescrita falhar, corta as
