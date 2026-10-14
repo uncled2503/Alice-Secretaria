@@ -5893,6 +5893,23 @@ document.getElementById("btn-lisboa-modelo").addEventListener("click", async (e)
   }
 });
 
+document.getElementById("btn-lisboa-diag").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const out = document.getElementById("seed-lisboa-result");
+  const m = /^\s*(.+?)\s*\|\s*(\d{4}-\d{1,2}-\d{1,2})\s+(\d{1,2}:\d{2})\s*$/.exec(document.getElementById("lisboa-diag-input").value);
+  if (!m) { showError("Use o formato: procedimento | AAAA-MM-DD HH:MM (ex.: Avaliação | 2026-10-16 16:30)"); return; }
+  btn.disabled = true;
+  try {
+    const r = await api("/clinics/lisboa-diagnostico-horario", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ procedure: m[1], date: m[2], time: m[3] }) });
+    if (r.error) { showError(r.error); return; }
+    out.textContent = `${r.procedure} (${r.durationMin} min) em ${r.when}. Expediente da clínica: ${r.clinicHours}\n` + r.professionals.map((p) => `• ${p.name} — ${p.linked ? "vinculado" : "NÃO vinculado ao procedimento (a Alice não olha esta agenda)"} · ${p.hours} · local: ${p.localVerdict} · ${p.ceVerdict}${p.free ? " → LIVRE" : ""}`).join("\n");
+    out.style.whiteSpace = "pre-wrap";
+    out.hidden = false;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 document.getElementById("btn-lisboa-regras-ativas").addEventListener("click", async (e) => {
   const btn = e.currentTarget;
   btn.disabled = true;

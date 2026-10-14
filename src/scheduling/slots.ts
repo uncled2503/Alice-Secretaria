@@ -415,6 +415,38 @@ export async function findAvailableDays(
   return [...byDay.values()].slice(0, maxDays);
 }
 
+// Os horarios livres MAIS PROXIMOS a partir de agora (um por horario, mesmo com varios profissionais livres), em ordem. Hoje vem
+// antes de amanha, que vem antes dos outros dias. Usado na avaliacao: oferecer o que esta mais perto, nao uma lista de dias.
+export async function findNearestSlots(
+  clinicId: string,
+  procedureId: string,
+  opts: { professionalIds?: string[]; limit?: number; daysAhead?: number } = {},
+): Promise<Slot[]> {
+  const procedure = await prisma.procedure.findFirst({ where: { id: procedureId, clinicId } });
+  if (!procedure) return [];
+  const all = await findAvailableSlotsFrom(
+    clinicId,
+    procedure.durationMin,
+    opts.professionalIds ?? [],
+    new Date(),
+    opts.daysAhead ?? 14,
+    60,
+    procedure.allowConcurrentBooking ? procedure.id : undefined,
+  );
+  return dedupeByStart(all).slice(0, opts.limit ?? 3);
+}
+
+// PURO: um slot por horario de inicio (mantem o primeiro).
+export function dedupeByStart<T extends { start: Date }>(slots: T[]): T[] {
+  const seen = new Set<number>();
+  return slots.filter((x) => {
+    const k = x.start.getTime();
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
 // Todos os horarios livres de UM dia especifico (no fuso da clinica). Usado
 // quando o paciente pergunta "quais horarios voces tem na quarta?".
 export async function findAvailableSlotsOnDay(
@@ -700,4 +732,61 @@ export async function createBooking(params: {
   // paciente nao pode esperar o Google pra receber a confirmacao.
   if (result.ok) pushAppointmentInBackground(result.appointmentId);
   return result;
+}
+
+// DIAGNOSTICO (somente leitura, admin): por que um horario aparece como indisponivel? Para cada profissional ATIVO da clinica diz se
+// ele esta vinculado ao procedimento (so os vinculados entram na busca da Alice), o expediente dele, e o veredito do horario com e sem
+// o portao do Clinica Experts. Serve pra achar "a equipe tem vaga e a Alice diz que nao": quase sempre e vinculo ou expediente.
+export interface SlotDiagnosis {
+  procedure: string;
+  durationMin: number;
+  when: string;
+  clinicHours: string;
+  professionals: {
+    name: string;
+    linked: boolean;
+    hours: string;
+    localVerdict: string;
+    ceVerdict: string;
+    free: boolean;
+  }[];
+}
+
+const DOW_PT = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+const hhmm = (min: number) => `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
+const hoursText = (h: ClinicHours) =>
+  `${[...h.workDays].sort().map((d) => DOW_PT[d]).join("/")} ${hhmm(h.workStartMinutes)}-${hhmm(h.workEndMinutes)}${h.lunchStartMinutes != null && h.lunchEndMinutes != null ? ` (almoço ${hhmm(h.lunchStartMinutes)}-${hhmm(h.lunchEndMinutes)})` : ""}`;
+
+export async function diagnoseSlot(
+  clinicId: string,
+  procedureQuery: string,
+  at: { year: number; month: number; day: number; hour: number; minute: number },
+): Promise<SlotDiagnosis | { error: string }> {
+  const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId } });
+  const q = procedureQuery.trim().toLowerCase();
+  const procedures = await prisma.procedure.findMany({ where: { clinicId }, include: { professionals: { select: { id: true } } } });
+  const procedure = procedures.find((p) => p.name.toLowerCase() === q) ?? procedures.find((p) => p.name.toLowerCase().includes(q));
+  if (!procedure) return { error: `Procedimento "${procedureQuery}" não encontrado.` };
+
+  const tz = clinic.timezone || "America/Sao_Paulo";
+  const startUtc = zonedWallClockToUtc(tz, at.year, at.month, at.day, at.hour, at.minute);
+  const linked = new Set(procedure.professionals.map((p) => p.id));
+  const pros = await prisma.professional.findMany({ where: { clinicId, active: true }, orderBy: { createdAt: "asc" } });
+  const out: SlotDiagnosis["professionals"] = [];
+  for (const p of pros) {
+    const hours = resolveHours(clinic, p);
+    const ctx = await loadBusyContext(clinicId, { professionalId: p.id, excludeProcedureId: procedure.allowConcurrentBooking ? procedure.id : undefined });
+    const local = evaluateSlot({ startUtc, durationMin: procedure.durationMin, hours, busy: ctx.busy, blocks: ctx.blocks });
+    const gate = await ceGateFor(clinicId, p, startUtc, 1, tz);
+    const withGate = evaluateSlot({ startUtc, durationMin: procedure.durationMin, hours, busy: ctx.busy, blocks: ctx.blocks, gate });
+    out.push({
+      name: p.name,
+      linked: linked.has(p.id),
+      hours: hoursText(hours),
+      localVerdict: local.ok ? "livre" : SLOT_REASON_PT[local.reason],
+      ceVerdict: !gate ? "sem integração com o Clínica Experts" : gate.covers?.(startUtc.getTime()) ? (withGate.ok ? "CE: livre" : "CE: ocupado") : "CE não respondeu esse dia",
+      free: withGate.ok,
+    });
+  }
+  return { procedure: procedure.name, durationMin: procedure.durationMin, when: formatInZone(startUtc, tz), clinicHours: hoursText(clinicHoursOf(clinic)), professionals: out };
 }

@@ -3,7 +3,7 @@ import type { ChatCompletion, ChatCompletionMessageParam, ChatCompletionTool } f
 import { prisma } from "../db/client.js";
 import { enrichPatientFromCe } from "../clinicaexperts/sync.js";
 import { fixRelativeDayLabels, fixWeekdayDatePairs } from "./relativeDays.js";
-import {
+import { findNearestSlots,
   findAvailableSlots,
   findAvailableSlotsOnDay,
   findAvailableDays,
@@ -399,6 +399,29 @@ async function runTool(
     const professionalIds = await resolveProfessionalIds(clinicId, procedure.id, input.professional_name);
 
     const day = parseRequestedDate(input.date);
+
+    // AVALIACAO (Clinic.evalNearestFirst): em vez de listar dias, devolve os horarios livres MAIS PROXIMOS (hoje, depois amanha).
+    if (!day && clinic.evalNearestFirst && /avalia/i.test(procedure.name)) {
+      const nearest = await findNearestSlots(clinicId, procedure.id, { professionalIds, limit: 3 });
+      if (nearest.length) {
+        const today = isoDateInZone(new Date(), tz);
+        const tomorrow = isoDateInZone(new Date(Date.now() + 86_400_000), tz);
+        return JSON.stringify({
+          procedimento: procedure.name,
+          horarios_mais_proximos: nearest.map((sl) => {
+            const d = isoDateInZone(sl.start, tz);
+            return {
+              iso: sl.start.toISOString(),
+              quando: formatInZone(sl.start, tz),
+              ...(d === today ? { relativo: "hoje" } : d === tomorrow ? { relativo: "amanha" } : {}),
+              ...(sl.professionalName ? { profissional: sl.professionalName, profissional_id: sl.professionalId } : {}),
+            };
+          }),
+          instrucao:
+            "AVALIACAO: ofereca JA estes horarios (sao os mais proximos; hoje e amanha primeiro) em uma frase, sem perguntar o dia antes. Diga 'hoje'/'amanha' quando o campo 'relativo' vier. Se nao servirem, pergunte o dia que ela prefere e chame de novo com 'date'. Pra agendar use o 'iso' exato no book_appointment.",
+        });
+      }
+    }
 
     // Passo 1 (sem "date"): so os DIAS que tem vaga.
     if (!day) {
@@ -1233,7 +1256,7 @@ FERIADOS PROXIMOS: ${holidayItems.join("; ")}. Se a pessoa perguntar se funciona
 - Se o horario pedido NAO estiver livre, diga com naturalidade que aquele horario nao esta disponivel (ex: "esse horario ja esta ocupado") e ofereca as alternativas retornadas, agrupadas por dia (um dia de cada vez, ex: "sexta-feira tenho 9h ou 10h" - nao misture horarios de dias diferentes na mesma frase corrida, vira um paredao confuso). Se o paciente nao gostar das alternativas e quiser esperar uma vaga, use join_waitlist.
 - "procedure_name" e sempre um TRATAMENTO/PROCEDIMENTO, nunca o nome de um profissional. Se o paciente perguntar por vaga citando so o nome de um profissional ("tem vaga com a Dra. Fulana?"), sem dizer qual procedimento, NAO chame a ferramenta ainda: pergunte primeiro qual procedimento ele quer agendar com essa pessoa.
 - AGENDAR E EM DOIS PASSOS - nunca despeje a agenda inteira de uma vez, vira um paredao de texto:
-  0) AVALIACAO (quando as regras da clinica pedirem hoje/amanha): consulte HOJE e AMANHA (check_availability COM "date" de cada um) e ofereca de 2 a 3 horarios entre esses dois dias; so va para outros dias se nao houver vaga ou se ela preferir.
+  0) AVALIACAO: se check_availability SEM "date" devolver "horarios_mais_proximos", ofereca EXATAMENTE esses horarios (hoje e amanha primeiro), sem perguntar o dia antes e sem empurrar para a semana seguinte; so va para outros dias se nao houver vaga hoje nem amanha ou se ela preferir.
   1) DIA primeiro: chame check_availability SEM "date" e ofereca os dias que tem vaga ("consigo quarta, quinta ou sexta - qual fica melhor pra voce?"). Nao cite horario ainda.
   2) HORARIO depois: quando ele escolher o dia, chame check_availability COM o "date" daquele dia e ai sim ofereca os horarios livres (se forem muitos, agrupe por periodo: "de manha tenho 9h e 10h, de tarde 14h e 15h").
 - Se o paciente ja disser o dia que quer ("pode ser quinta?"), pule direto pro passo 2. Se ele ja disser dia E hora, use check_specific_time.

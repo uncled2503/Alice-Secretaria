@@ -134,3 +134,25 @@ test("quem ja tem horario marcado nao recebe as perguntas de descoberta (ja fez 
   assert.match(src, /!ctx\.flow\?\.hasBooking/);
   assert.match(src, /nunca pergunte se ja fez o procedimento/);
 });
+
+test("avaliacao: horarios mais proximos (um por horario, em ordem) e flag so na Lisboa", async () => {
+  const { dedupeByStart } = await import("../dist/scheduling/slots.js");
+  const a = new Date("2026-10-15T21:00:00Z"), b = new Date("2026-10-16T19:30:00Z");
+  const r = dedupeByStart([{ start: a, p: 1 }, { start: a, p: 2 }, { start: b, p: 1 }]);
+  assert.equal(r.length, 2);
+  assert.equal(r[0].p, 1);
+  const sql = fs.readFileSync(new URL("../prisma/migrations/20261014160000_avaliacao_horarios_mais_proximos/migration.sql", import.meta.url), "utf8");
+  assert.match(sql, /"evalNearestFirst" = 1 WHERE "name" = 'Lisboa Beauty Center'/);
+  const src = fs.readFileSync(new URL("../src/ai/alice.ts", import.meta.url), "utf8");
+  assert.match(src, /clinic\.evalNearestFirst && \/avalia\/i\.test\(procedure\.name\)/);
+  assert.match(src, /horarios_mais_proximos/);
+});
+
+test("diagnostico de horario e so admin e somente leitura", () => {
+  const src = fs.readFileSync(new URL("../src/api/routes.ts", import.meta.url), "utf8");
+  const i = src.indexOf('"/clinics/lisboa-diagnostico-horario"');
+  assert.ok(i > 0);
+  const corpo = src.slice(i, i + 900);
+  assert.match(corpo, /requireAdmin/);
+  assert.doesNotMatch(corpo, /\.(update|create|delete)\(/);
+});

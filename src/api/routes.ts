@@ -54,6 +54,7 @@ import { seedLisboa } from "../maintenance/seedLisboa.js";
 import { applyLisboaServicos } from "../maintenance/applyLisboaServicos.js";
 import { applyLisboaDescritivos } from "../maintenance/applyLisboaDescritivos.js";
 import { cleanLisboaRules, listActiveRules } from "../maintenance/cleanLisboaRules.js";
+import { diagnoseSlot } from "../scheduling/slots.js";
 import { connectAccount, disconnectAccount, ceStatusFor } from "../clinicaexperts/client.js";
 import { syncCatalog } from "../clinicaexperts/sync.js";
 import { undoCeImport } from "../clinicaexperts/undo.js";
@@ -1186,6 +1187,27 @@ apiRouter.post(
     await prisma.clinic.update({ where: { id: clinic.id }, data: { aiModel: raw || null } });
     await logActivity({ clinicId: clinic.id, type: "briefing_applied", area: "clinica", title: "Modelo de IA da clínica alterado", description: raw ? `Modelo: ${raw}.` : "Voltou ao modelo padrão do servidor.", actorName: req.staff?.name ?? null });
     res.json({ model: raw || null });
+  })
+);
+
+// Somente leitura: por que a Alice diz que um horario nao esta disponivel? (profissionais, vinculos, expediente, Clinica Experts). So admin.
+apiRouter.post(
+  "/clinics/lisboa-diagnostico-horario",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await prisma.clinic.findFirst({ where: { name: "Lisboa Beauty Center" } });
+    if (!clinic) {
+      res.status(404).json({ error: "Clínica Lisboa não encontrada." });
+      return;
+    }
+    const { procedure, date, time } = (req.body ?? {}) as { procedure?: string; date?: string; time?: string };
+    const d = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(String(date ?? "").trim());
+    const t = /^(\d{1,2}):(\d{2})$/.exec(String(time ?? "").trim());
+    if (!procedure?.trim() || !d || !t) {
+      res.status(400).json({ error: "Informe procedimento, data (AAAA-MM-DD) e hora (HH:MM)." });
+      return;
+    }
+    res.json(await diagnoseSlot(clinic.id, procedure, { year: +d[1], month: +d[2], day: +d[3], hour: +t[1], minute: +t[2] }));
   })
 );
 

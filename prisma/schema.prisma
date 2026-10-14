@@ -61,6 +61,7 @@ model Clinic {
   handoffOnPrice       Boolean @default(false) // true = assim que o paciente pergunta valor/preco, a conversa vai pra equipe (a Alice nao responde)
   leadReactivationDay  Int?    // dia do mes (1-28) em que sai a campanha "Leads do mes" (leads do mes que nao agendaram/compraram); null = desligada (src/crm/leadReactivation.ts)
   leadReactivationMessage String? // texto da campanha mensal; aceita {primeiro_nome} e {procedimento}
+  evalNearestFirst     Boolean @default(false) // true = avaliacao: a Alice oferece SEMPRE os horarios livres mais proximos (hoje/amanha antes de outros dias); ver nearestSlots em scheduling/slots.ts
   aiModel              String? // modelo da OpenAI so desta clinica (admin); null = padrao do servidor (OPENAI_MODEL). Ver chatModelFor em ai/alice.ts
   humanReturnMinutes   Int     @default(0) // > 0 = se a equipe assumiu a conversa, a pessoa escreveu e ninguem respondeu em N min, a Alice volta a atender (src/crm/humanReturn.ts); 0 = desligado
   tagLeadOrigin        Boolean @default(false) // true = todo contato novo ganha a etiqueta "Lead <campanha> | dd/mm/aaaa" no CRM (src/crm/leadTag.ts)
