@@ -53,7 +53,7 @@ import { seedDiamondClinic } from "../maintenance/seedDiamondClinic.js";
 import { seedLisboa } from "../maintenance/seedLisboa.js";
 import { applyLisboaServicos } from "../maintenance/applyLisboaServicos.js";
 import { applyLisboaDescritivos } from "../maintenance/applyLisboaDescritivos.js";
-import { cleanLisboaRules } from "../maintenance/cleanLisboaRules.js";
+import { cleanLisboaRules, listActiveRules } from "../maintenance/cleanLisboaRules.js";
 import { connectAccount, disconnectAccount, ceStatusFor } from "../clinicaexperts/client.js";
 import { syncCatalog } from "../clinicaexperts/sync.js";
 import { undoCeImport } from "../clinicaexperts/undo.js";
@@ -1167,6 +1167,20 @@ apiRouter.post(
       });
     }
     res.json(result);
+  })
+);
+
+// Somente leitura: regras ativas da Lisboa (origem, categoria, texto) pra conferencia. So admin.
+apiRouter.post(
+  "/clinics/lisboa-regras-ativas",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await prisma.clinic.findFirst({ where: { name: "Lisboa Beauty Center" } });
+    if (!clinic) {
+      res.status(404).json({ error: "Clínica Lisboa não encontrada." });
+      return;
+    }
+    res.json({ rules: await listActiveRules(clinic.id) });
   })
 );
 

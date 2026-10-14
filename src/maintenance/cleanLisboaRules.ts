@@ -129,3 +129,9 @@ export async function cleanLisboaRules(clinicId: string, opts: { dryRun: boolean
   }
   return { dryRun: opts.dryRun, changes, summary };
 }
+
+// Somente leitura: as regras ATIVAS da clinica agrupadas por origem (marcador do seed), pra conferir o que realmente esta no banco.
+export async function listActiveRules(clinicId: string): Promise<{ origem: string; category: string; instruction: string }[]> {
+  const rules = await prisma.customRule.findMany({ where: { clinicId, status: "active" }, orderBy: { createdAt: "asc" }, select: { rawInput: true, category: true, instruction: true } });
+  return rules.map((r) => ({ origem: r.rawInput.startsWith("seed:") || r.rawInput.startsWith("(regra") ? r.rawInput : "manual (painel / Ensinar a Alice)", category: r.category, instruction: r.instruction ?? "" }));
+}

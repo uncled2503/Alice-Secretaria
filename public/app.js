@@ -5878,6 +5878,23 @@ ${lines.join("\n\n")}`;
   }
 });
 
+document.getElementById("btn-lisboa-regras-ativas").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  try {
+    const { rules } = await api("/clinics/lisboa-regras-ativas", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const txt = rules.map((r, i) => `#${i + 1} [${r.category}] (${r.origem})\n${r.instruction}`).join("\n\n");
+    const url = URL.createObjectURL(new Blob([`Regras ativas da Lisboa: ${rules.length}\n\n${txt}`], { type: "text/plain;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "regras-ativas-lisboa.txt";
+    link.click();
+    URL.revokeObjectURL(url);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 document.getElementById("btn-seed-teste").addEventListener("click", async (e) => {
   const btn = e.currentTarget;
   const out = document.getElementById("seed-teste-result");
