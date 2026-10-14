@@ -516,9 +516,11 @@ async function runTool(
     }
 
     let professionalId: string | null = input.professional_id ? String(input.professional_id) : null;
+    let candidateProIds: string[] = [];
     if (!professionalId) {
       const pros = await professionalsForProcedure(clinicId, procedure.id);
       if (pros.length === 1) professionalId = pros[0].id;
+      else candidateProIds = pros.map((p) => p.id);
     }
 
     // O "iso" da consulta de disponibilidade nao sobrevive entre turnos (so o
@@ -537,6 +539,15 @@ async function runTool(
         agendado: false,
         motivo: "nao entendi o horario; informe start_iso, ou date (AAAA-MM-DD) e time (HH:MM) do horario combinado",
       });
+    }
+
+    // Varios profissionais fazem o procedimento e a Alice nao informou qual: SEM profissional, o agendamento e validado contra a
+    // agenda da clinica INTEIRA (qualquer paciente de qualquer profissional conta como conflito) e recusava horarios que ela mesma
+    // acabou de oferecer ("nao tem mais disponibilidade"). Escolhe um profissional que esteja realmente livre nesse horario.
+    if (!professionalId && candidateProIds.length > 1) {
+      const wc = wallClockInZone(startUtc, tz);
+      const check = await checkSpecificTime(clinicId, procedure.id, { year: wc.year, month: wc.month, day: wc.day, hour: wc.hour, minute: wc.minute }, { professionalIds: candidateProIds });
+      if (check.available) professionalId = check.availableProfessionals.find((p) => p.id)?.id ?? null;
     }
 
     const booking = await createBooking({

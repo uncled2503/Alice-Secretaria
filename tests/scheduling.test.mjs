@@ -153,12 +153,12 @@ test("contexto de data da Alice sempre traz o ano", () => {
 
 test("tabela de dias da semana casa o nome do dia com a data certa", () => {
   const tabela = upcomingWeekdayTable(SP, 7);
-  for (const parte of tabela.split(", ")) {
-    const [nome, iso] = parte.split(" = ");
-    const [y, m, d] = iso.split("-").map(Number);
-    const wc = wallClockInZone(zonedWallClockToUtc(SP, y, m, d, 12, 0), SP);
+  const itens = [...tabela.matchAll(/(domingo|segunda-feira|terça-feira|quarta-feira|quinta-feira|sexta-feira|sábado)[^=;]*= (\d{4})-(\d{2})-(\d{2})/g)];
+  assert.ok(itens.length >= 7, "a tabela deve listar pelo menos 7 dias");
+  for (const [, nome, y, m, d] of itens) {
+    const wc = wallClockInZone(zonedWallClockToUtc(SP, Number(y), Number(m), Number(d), 12, 0), SP);
     const esperado = ["domingo", "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado"][wc.weekday];
-    assert.equal(nome.replace(/ \((hoje|amanha)\)$/, ""), esperado, `${iso} deveria ser ${esperado}`);
+    assert.equal(nome, esperado, `${y}-${m}-${d} deveria ser ${esperado}`);
   }
 });
 

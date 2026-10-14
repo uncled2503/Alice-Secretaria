@@ -156,3 +156,12 @@ test("diagnostico de horario e so admin e somente leitura", () => {
   assert.match(corpo, /requireAdmin/);
   assert.doesNotMatch(corpo, /\.(update|create|delete)\(/);
 });
+
+test("agendar sem profissional informado escolhe um que esteja livre (nao valida contra a clinica inteira)", () => {
+  const src = fs.readFileSync(new URL("../src/ai/alice.ts", import.meta.url), "utf8");
+  const i = src.indexOf('if (name === "book_appointment")');
+  const corpo = src.slice(i, i + 4500);
+  assert.match(corpo, /candidateProIds/);
+  assert.match(corpo, /checkSpecificTime\(clinicId, procedure\.id, \{ year: wc\.year/);
+  assert.ok(corpo.indexOf("candidateProIds.length > 1") < corpo.indexOf("await createBooking("));
+});
