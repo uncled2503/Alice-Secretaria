@@ -5910,6 +5910,45 @@ document.getElementById("btn-lisboa-diag").addEventListener("click", async (e) =
   }
 });
 
+document.getElementById("btn-lisboa-aniv-ce").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const out = document.getElementById("seed-lisboa-result");
+  const post = (dryRun) => api("/clinics/lisboa-aniversarios-ce", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dryRun }) });
+  btn.disabled = true;
+  try {
+    const p = await post(true);
+    if (p.error) { showError(p.error); return; }
+    const msg = `Importar aniversários do Clínica Experts?\n\n• ${p.read} pacientes lidos no CE\n• ${p.withBirth} com data de nascimento válida (${p.invalidBirth} inválidas ignoradas)\n• ${p.matched} são contatos da Alice\n• ${p.toFill} vão receber a data (a Alice ainda não tinha)\n• ${p.alreadyHad} já tinham e ficam como estão\n• ${p.notInAlice} do CE ainda não são contatos da Alice (não são criados)\n• Campo usado: ${p.birthKey ?? "NENHUM campo de nascimento encontrado"}\n• Campos que o CE devolve: ${p.fieldsSeen.join(", ") || "(nenhum)"}\n\nNão sobrescreve datas já preenchidas.`;
+    if (!p.toFill) { showError(msg + "\n\nNada a preencher."); return; }
+    if (!(await showConfirm(msg))) return;
+    const r = await post(false);
+    out.textContent = `Aniversários: ${r.toFill} data(s) preenchida(s); ${r.alreadyHad} já tinham.`;
+    out.hidden = false;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("btn-lisboa-vincular-proc").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const out = document.getElementById("seed-lisboa-result");
+  const post = (dryRun) => api("/clinics/lisboa-vincular-procedimentos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dryRun }) });
+  btn.disabled = true;
+  try {
+    const p = await post(true);
+    if (p.error) { showError(p.error); return; }
+    const lst = (arr, f, n = 12) => arr.slice(0, n).map(f).join("\n   ") + (arr.length > n ? `\n   …e mais ${arr.length - n}` : "");
+    const msg = `Vincular procedimentos ao Clínica Experts (só nome igual)\n\n• ${p.alreadyLinked} já vinculados\n• ${p.toLink.length} vão ser vinculados agora\n   ${lst(p.toLink, (x) => x.aliceName)}\n• ${p.unmatched.length} SEM igual no CE (revisar)\n   ${lst(p.unmatched, (x) => x.aliceName + (x.suggestions.length ? " → sugestão: " + x.suggestions.join(" | ") : ""))}\n• ${p.ambiguous.length} ambíguos\n• ${p.stale.length} com vínculo antigo (CE inativo/inexistente)\n   ${lst(p.stale, (x) => x.aliceName)}\n• ${p.ceOnly.length} do CE que a Alice não tem\n\nProcedimentos sem vínculo NÃO são agendados pela Alice: ela passa para a equipe lançar.`;
+    if (!p.toLink.length) { showError(msg + "\n\nNada a vincular automaticamente."); return; }
+    if (!(await showConfirm(msg))) return;
+    const r = await post(false);
+    out.textContent = `Procedimentos vinculados: ${r.applied}; sem correspondência: ${r.unmatched.length}; vínculo antigo: ${r.stale.length}.`;
+    out.hidden = false;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 document.getElementById("btn-lisboa-regras-ativas").addEventListener("click", async (e) => {
   const btn = e.currentTarget;
   btn.disabled = true;

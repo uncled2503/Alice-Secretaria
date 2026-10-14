@@ -116,3 +116,9 @@ export function fittingProcedures(complaintTexts: string[], procedures: { name: 
   }
   return out.slice(0, 5);
 }
+
+// Rotulos das regioes citadas no texto ("a papada", "as sobrancelhas"), sem repetir.
+export function areaLabelsIn(text: string): string[] {
+  const t = fold(text);
+  return AREAS.filter((a) => a.re.test(t)).map((a) => a.label);
+}

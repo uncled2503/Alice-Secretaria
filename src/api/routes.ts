@@ -55,6 +55,8 @@ import { applyLisboaServicos } from "../maintenance/applyLisboaServicos.js";
 import { applyLisboaDescritivos } from "../maintenance/applyLisboaDescritivos.js";
 import { cleanLisboaRules, listActiveRules, listAutomations } from "../maintenance/cleanLisboaRules.js";
 import { diagnoseSlot } from "../scheduling/slots.js";
+import { syncBirthdaysFromCe } from "../clinicaexperts/birthdays.js";
+import { auditProcedureLinks } from "../clinicaexperts/procedureLink.js";
 import { connectAccount, disconnectAccount, ceStatusFor } from "../clinicaexperts/client.js";
 import { syncCatalog } from "../clinicaexperts/sync.js";
 import { undoCeImport } from "../clinicaexperts/undo.js";
@@ -1208,6 +1210,44 @@ apiRouter.post(
       return;
     }
     res.json(await diagnoseSlot(clinic.id, procedure, { year: +d[1], month: +d[2], day: +d[3], hour: +t[1], minute: +t[2] }));
+  })
+);
+
+// Aniversarios do Clinica Experts -> contatos da Alice (so preenche o que esta vazio). dryRun (padrao) so conta. So admin.
+apiRouter.post(
+  "/clinics/lisboa-aniversarios-ce",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await prisma.clinic.findFirst({ where: { name: "Lisboa Beauty Center" } });
+    if (!clinic) {
+      res.status(404).json({ error: "Clínica Lisboa não encontrada." });
+      return;
+    }
+    const { dryRun } = (req.body ?? {}) as { dryRun?: boolean };
+    const result = await syncBirthdaysFromCe(clinic.id, { dryRun: dryRun !== false });
+    if (!result.dryRun && !result.error) {
+      await logActivity({ clinicId: clinic.id, type: "briefing_applied", area: "clinica", title: "Aniversários importados do Clínica Experts", description: `${result.toFill} data(s) de nascimento preenchida(s); ${result.alreadyHad} já tinham; ${result.notInAlice} do CE ainda não são contatos da Alice.`, actorName: req.staff?.name ?? null });
+    }
+    res.json(result);
+  })
+);
+
+// Vinculo dos procedimentos da Alice com os do Clinica Experts (so nome igual; o resto vai pra revisao). dryRun (padrao) so mostra. So admin.
+apiRouter.post(
+  "/clinics/lisboa-vincular-procedimentos",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await prisma.clinic.findFirst({ where: { name: "Lisboa Beauty Center" } });
+    if (!clinic) {
+      res.status(404).json({ error: "Clínica Lisboa não encontrada." });
+      return;
+    }
+    const { dryRun } = (req.body ?? {}) as { dryRun?: boolean };
+    const result = await auditProcedureLinks(clinic.id, { dryRun: dryRun !== false });
+    if (!result.dryRun && !result.error) {
+      await logActivity({ clinicId: clinic.id, type: "briefing_applied", area: "clinica", title: "Procedimentos vinculados ao Clínica Experts", description: `${result.applied} vinculado(s) por nome igual; ${result.unmatched.length} sem correspondência; ${result.stale.length} com vínculo antigo.`, actorName: req.staff?.name ?? null });
+    }
+    res.json(result);
   })
 );
 

@@ -3,6 +3,8 @@ import { notifyStaff } from "../crm/notify.js";
 import { formatDateTimeInZone } from "../scheduling/time.js";
 import { ceRequest, dayBoundIso, getAccount, isoWithOffset, noteError } from "./client.js";
 import { invalidateCeCache } from "./availability.js";
+import { birthFieldOf, parseCeBirthDate } from "./birthdays.js";
+import { procKey } from "./procKey.js";
 
 // ---------------------------------------------------------------------------
 // Agendamento da Alice -> Clinica Experts
@@ -68,7 +70,7 @@ export async function enrichPatientFromCe(clinicId: string, patient: { id: strin
     lookedUp.set(patient.id, Date.now());
     const digits = patient.phone.replace(/\D/g, "");
     if (!digits) return;
-    const found = await ceRequest<{ data: { uuid: string; name?: string | null; phone: string | null }[] }>(clinicId, "/patients", { query: { phone: digits, per_page: 5 } });
+    const found = await ceRequest<{ data: { uuid: string; name?: string | null; phone: string | null; [k: string]: unknown }[] }>(clinicId, "/patients", { query: { phone: digits, per_page: 5 } });
     if (!found.ok) return;
     const tail = digits.slice(-8);
     const match = found.data.data?.find((p) => (p.phone ?? "").replace(/\D/g, "").endsWith(tail));
@@ -79,6 +81,9 @@ export async function enrichPatientFromCe(clinicId: string, patient: { id: strin
       where: { id: patient.id },
       data: { ...(patient.ceUuid ? {} : { ceUuid: match.uuid }), ...(needsName ? { name: ceName } : {}) },
     });
+    // Aniversario (para os disparos de parabens): so preenche se a Alice ainda nao tem a data.
+    const birth = parseCeBirthDate(birthFieldOf(match).raw);
+    if (birth) await prisma.patient.updateMany({ where: { id: patient.id, birthDate: null }, data: { birthDate: birth } });
   } catch (err) {
     console.error("[clinicaexperts] enrichPatientFromCe:", err);
   }
@@ -110,7 +115,8 @@ export function syncAppointment(appointmentId: string): Promise<void> {
     if (appt.status !== "confirmed") return;
 
     if (!appt.procedure.ceId || !appt.professional?.ceUuid) {
-      return alertFailure(appt.clinicId, `${label} (procedimento ou profissional sem vínculo com o Clínica Experts; rode "Sincronizar catálogo")`);
+      const faltando = [!appt.procedure.ceId ? `procedimento "${appt.procedure.name}"` : null, !appt.professional?.ceUuid ? (appt.professional ? `profissional ${appt.professional.name}` : "profissional (nenhum definido)") : null].filter(Boolean).join(" e ");
+      return alertFailure(appt.clinicId, `${label} (sem vínculo com o Clínica Experts: ${faltando}; use "Vincular procedimentos" ou "Sincronizar catálogo")`);
     }
     const patientUuid = await ensurePatientUuid(appt.clinicId, appt.patient);
     if (!patientUuid) return alertFailure(appt.clinicId, `${label} (não consegui localizar nem criar o paciente)`);
@@ -292,7 +298,7 @@ export async function syncCatalog(clinicId: string): Promise<CatalogResult> {
   const aliceByCeId = new Map<number, { id: string; hasPros: boolean; fresh: boolean }>();
   for (const p of sellable) {
     const match =
-      existingProcs.find((a) => a.ceId === p.id) ?? existingProcs.find((a) => a.ceId == null && norm(a.name) === norm(p.name));
+      existingProcs.find((a) => a.ceId === p.id) ?? existingProcs.find((a) => a.ceId == null && procKey(a.name) === procKey(p.name));
     if (match) {
       if (match.ceId == null) {
         await prisma.procedure.update({ where: { id: match.id }, data: { ceId: p.id } });

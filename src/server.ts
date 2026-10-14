@@ -19,6 +19,7 @@ import { startLearningJob } from "./ai/learning.js";
 import { startFollowUpJob } from "./crm/followup.js";
 import { startLeadSummaryJob } from "./crm/leadSummary.js";
 import { startCeBookingPullJob } from "./clinicaexperts/pull.js";
+import { startCeBirthdayJob } from "./clinicaexperts/birthdays.js";
 import { startUnansweredJob } from "./crm/unanswered.js";
 import { startPhoneContactsJob } from "./crm/phoneContacts.js";
 import { startBroadcastJob } from "./crm/broadcast.js";
@@ -344,6 +345,7 @@ const httpServer = app.listen(port, () => {
   startLearningJob();
   startLeadSummaryJob();
   startCeBookingPullJob();
+  startCeBirthdayJob();
   startUnansweredJob();
   startPhoneContactsJob();
   startUazapiWebhookWorker().catch((err) => console.error("Falha ao iniciar fila de webhooks UAZAPI:", err));

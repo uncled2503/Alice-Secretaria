@@ -1,4 +1,5 @@
 import { scheduleLocked } from "../jobs/lock.js";
+import { birthFieldOf, parseCeBirthDate } from "./birthdays.js";
 import { prisma } from "../db/client.js";
 import { ceRequest, dayBoundIso, noteError } from "./client.js";
 import { zonedWallClockToUtc } from "../scheduling/time.js";
@@ -237,6 +238,8 @@ export async function pullClinicBookings(clinicId: string): Promise<PullResult> 
       update: { ceUuid: b.patient?.uuid ?? undefined },
       create: { clinicId, phone, name: b.patient?.name?.trim() || null, ceUuid: b.patient?.uuid ?? null },
     });
+    const birth = parseCeBirthDate(birthFieldOf(b.patient).raw); // aniversario do CE (so preenche se a Alice nao tem)
+    if (birth) await prisma.patient.updateMany({ where: { id: patient.id, birthDate: null }, data: { birthDate: birth } });
     await prisma.appointment.create({
       data: {
         clinicId, patientId: patient.id, procedureId: procedure.id, professionalId: professional?.id ?? null,

@@ -36,6 +36,9 @@ import { closingReply, feedbackThanks, isCourtesyOnly, isPositiveFeedback } from
 import { capSlotLines } from "./slotText.js";
 import { absorbToolResult, checkSlotMentions, knownFrom, newSlotState, renderBooked, renderOffer, SLOT_FALLBACK_ASK, SLOT_NUDGE } from "./slotGuard.js";
 import { isJobSeeker } from "./jobSeeker.js";
+import { ceBookingReadiness } from "../clinicaexperts/procedureLink.js";
+import { buildConversationBrief } from "./conversationBrief.js";
+import { analyzeConversation, renderAnalysis } from "./conversationAnalysis.js";
 import { areasIn, findRelevanceMismatch, fittingProcedures, safeReplyForMismatch } from "./relevance.js";
 import { buildPreProcedureText } from "../reminders/preProcedure.js";
 
@@ -75,6 +78,9 @@ export function replySimilarity(a: string, b: string): number {
   for (const w of wa) if (wb.has(w)) inter++;
   return inter / (wa.size + wb.size - inter);
 }
+
+// Quantas mensagens recentes a Alice le antes de responder (pedido da Lisboa: pelo menos 40).
+export const HISTORY_LIMIT = 50;
 
 const REPEAT_SIMILARITY = 0.82; // acima disso conta como "mesma resposta"
 
@@ -599,6 +605,18 @@ async function runTool(
       const wc = wallClockInZone(startUtc, tz);
       const check = await checkSpecificTime(clinicId, procedure.id, { year: wc.year, month: wc.month, day: wc.day, hour: wc.hour, minute: wc.minute }, { professionalIds: candidateProIds });
       if (check.available) professionalId = check.availableProfessionals.find((p) => p.id)?.id ?? null;
+    }
+
+    // Clinica Experts conectado: so agenda se o procedimento e o profissional existem la (senao a reserva nao seria espelhada e o horario
+    // ficaria livre na agenda deles). Tenta vincular por nome; se nao der, passa pra equipe lancar.
+    const readiness = await ceBookingReadiness(clinicId, procedure.id, professionalId);
+    if (!readiness.ok) {
+      console.warn(`[clinicaexperts] agendamento da Alice bloqueado (conv ${conversationId}): ${readiness.reason}`);
+      return JSON.stringify({
+        agendado: false,
+        motivo: `nao foi possivel agendar pela agenda automatica: ${readiness.reason}`,
+        instrucao: "NAO diga que agendou nem que nao ha horario. Chame transfer_to_human com o procedimento, o dia e o horario combinados para a equipe lancar na agenda, e fique em silencio.",
+      });
     }
 
     const booking = await createBooking({
@@ -1807,6 +1825,68 @@ async function createChat(model: string, messages: ChatCompletionMessageParam[],
   }
 }
 
+// LEITURA DA CONVERSA antes de responder: ficha de fatos (deterministica) + segunda leitura curta do modelo com o caminho da melhor
+// resposta. Qualquer falha devolve so o que deu certo (nunca atrapalha o atendimento).
+async function readConversation(p: {
+  clinicId: string;
+  patientId: string;
+  history: { role: string; content: string; authorName: string | null; createdAt: Date }[];
+  trailing: string[];
+  pastVisitCount: number;
+}): Promise<string> {
+  try {
+    const [clinic, patient, upcoming, catalog] = await Promise.all([
+      prisma.clinic.findUnique({ where: { id: p.clinicId }, select: { timezone: true } }),
+      prisma.patient.findUnique({
+        where: { id: p.patientId },
+        select: { name: true, adName: true, objections: true, refusedProcedures: true, preferredPeriod: true, preferredDays: true, preferredProfessional: true, urgency: true, callbackAt: true },
+      }),
+      prisma.appointment.findMany({
+        where: { patientId: p.patientId, status: "confirmed", scheduledAt: { gte: new Date() } },
+        orderBy: { scheduledAt: "asc" },
+        take: 3,
+        include: { procedure: { select: { name: true } }, professional: { select: { name: true } } },
+      }),
+      prisma.procedure.findMany({ where: { clinicId: p.clinicId, internalOnly: false }, select: { name: true, aliases: true } }),
+    ]);
+    const tz = clinic?.timezone || "America/Sao_Paulo";
+    const brief = buildConversationBrief({
+      history: p.history,
+      trailing: p.trailing,
+      now: new Date(),
+      tz,
+      patient: patient ?? { name: null },
+      upcoming: upcoming.map((a) => ({ when: a.scheduledAt, procedure: a.procedure.name, professional: a.professional?.name ?? null })),
+      pastVisits: p.pastVisitCount,
+      catalog,
+    });
+    // Segunda leitura so quando ha conversa suficiente para valer a chamada.
+    let analysisText = "";
+    if (p.history.filter((m) => m.role !== "system").length >= 4) {
+      const analysis = await analyzeConversation(
+        async (system, user) => {
+          const res = await openai.chat.completions.create({
+            model: MODEL,
+            temperature: 0.2,
+            response_format: { type: "json_object" },
+            messages: [
+              { role: "system", content: system },
+              { role: "user", content: user },
+            ],
+          });
+          return res.choices[0]?.message?.content ?? null;
+        },
+        { brief, history: p.history, trailing: p.trailing },
+      );
+      if (analysis) analysisText = "\n\n" + renderAnalysis(analysis);
+    }
+    return brief + analysisText;
+  } catch (err) {
+    console.error("[leitura] falha ao ler a conversa:", err);
+    return "";
+  }
+}
+
 // Uma resposta por vez POR CONVERSA. Sem isso, duas mensagens seguidas do paciente
 // ("Oi boa tarde" + "quanto custa?") geravam duas respostas em paralelo, cada uma
 // sem enxergar a outra, e o paciente recebia a mesma coisa 2 ou 3 vezes.
@@ -1906,7 +1986,7 @@ async function generateReplyUnlocked(
       // Mensagens de sistema (resumo de transferencia, avisos internos) NAO entram: antes eram enviadas ao modelo como se a Alice as tivesse dito.
       where: { conversationId, role: { in: ["user", "assistant", "human"] } },
       orderBy: { createdAt: "desc" },
-      take: 30,
+      take: HISTORY_LIMIT,
       select: { id: true, role: true, content: true, authorName: true, createdAt: true }, // sem o anexo em base64
     })
   ).reverse();
@@ -2152,9 +2232,10 @@ async function generateReplyUnlocked(
     const trailing = trailingUser;
     if (trailing.length) {
       const memory = conversationMemory(priorReplies, answeredUser);
+      const reading = await readConversation({ clinicId, patientId: patient.id, history, trailing, pastVisitCount });
       messages.push({
         role: "system",
-        content: `JOGADA AGORA (siga isto): ${flow.nextMove}\n\n${memory ? memory + "\n\n" : ""}LEMBRETE FINAL: ${trailing.length > 1 ? "as mensagens novas da pessoa (ainda sem resposta) sao" : "a mensagem nova da pessoa e"}: ${trailing.map((t) => `"${t.slice(0, 300)}"`).join(" + ")}. Responda SOMENTE a isso, UMA vez${trailing.length > 1 ? ", juntando as mensagens numa resposta so" : ""}. O que ela perguntou ANTES ja foi respondido nas mensagens anteriores: NAO responda de novo, NAO repita valores, endereco, horarios, avisos nem frases que voce ja disse, e NAO feche com a mesma pergunta das mensagens anteriores (mude a pergunta ou so responda e pare). Fale como uma pessoa conversando: curto, direto, natural, continuando a conversa de onde ela parou.`,
+        content: `${reading ? reading + "\n\n" : ""}JOGADA AGORA (siga isto): ${flow.nextMove}\n\n${memory ? memory + "\n\n" : ""}LEMBRETE FINAL: ${trailing.length > 1 ? "as mensagens novas da pessoa (ainda sem resposta) sao" : "a mensagem nova da pessoa e"}: ${trailing.map((t) => `"${t.slice(0, 300)}"`).join(" + ")}. Responda SOMENTE a isso, UMA vez${trailing.length > 1 ? ", juntando as mensagens numa resposta so" : ""}. O que ela perguntou ANTES ja foi respondido nas mensagens anteriores: NAO responda de novo, NAO repita valores, endereco, horarios, avisos nem frases que voce ja disse, e NAO feche com a mesma pergunta das mensagens anteriores (mude a pergunta ou so responda e pare). Fale como uma pessoa conversando: curto, direto, natural, continuando a conversa de onde ela parou.`,
       });
     }
   }

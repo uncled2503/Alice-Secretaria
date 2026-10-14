@@ -1,6 +1,7 @@
 import { prisma } from "../db/client.js";
 import { ceRequest } from "./client.js";
 import { isInternalProcedure } from "./sync.js";
+import { procKey } from "./procKey.js";
 
 // ---------------------------------------------------------------------------
 // PROCEDIMENTO SEM VINCULO (alerta "N agendamento(s) do Clinica Experts NAO vao receber a confirmacao"): a reserva e de um
@@ -63,7 +64,7 @@ export async function linkMissingProcedures(clinicId: string, ceIds: number[], c
     const cp = ceProcs.find((p) => p.id === id);
     if (!cp || existing.some((a) => a.ceId === id)) continue;
 
-    const sameName = existing.find((a) => a.ceId == null && norm(a.name) === norm(cp.name));
+    const sameName = existing.find((a) => a.ceId == null && procKey(a.name) === procKey(cp.name));
     if (sameName) {
       await prisma.procedure.update({ where: { id: sameName.id }, data: { ceId: id } });
       sameName.ceId = id;
