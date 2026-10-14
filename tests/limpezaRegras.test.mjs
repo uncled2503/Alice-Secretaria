@@ -292,3 +292,31 @@ test("quer agendar algo que nao esta no catalogo (oferta de anuncio): avaliacao 
   const src = fs.readFileSync(new URL("../src/ai/alice.ts", import.meta.url), "utf8");
   assert.match(src, /RESPONDA essa pergunta primeiro e nunca repita a mensagem anterior/);
 });
+
+test("relevancia: nunca indicar procedimento de OUTRA regiao (preenchimento labial para sobrancelha)", async () => {
+  const { findRelevanceMismatch, safeReplyForMismatch, procedureFitsComplaint, areasIn } = await import("../dist/ai/relevance.js");
+  const catalogo = [{ name: "Preenchimento Labial" }, { name: "Botox Facial" }, { name: "Criolipólise Abdômen" }, { name: "Peeling Químico" }, { name: "Drenagem Corporal" }];
+  const resposta = 'Entendi! Para melhorar a aparência da sobrancelha, podemos considerar um procedimento chamado "Preenchimento Labial" que utiliza técnicas injetáveis.';
+  const m = findRelevanceMismatch({ complaintTexts: ["melhorar a aparência da sobrancelha"], reply: resposta, procedures: catalogo });
+  assert.ok(m, "deveria barrar");
+  assert.equal(m.procedure, "Preenchimento Labial");
+  assert.equal(m.complaintLabel, "as sobrancelhas");
+  const segura = safeReplyForMismatch(m, false);
+  assert.doesNotMatch(segura, /Preenchimento|labial/i);
+  assert.match(segura, /sobrancelhas/);
+  assert.match(safeReplyForMismatch(m, true), /o que mais te incomoda/); // avaliacao ja oferecida: conversa, sem insistir
+
+  // casos que NAO devem ser barrados
+  const ok = (queixa, citado) => findRelevanceMismatch({ complaintTexts: [queixa], reply: `Posso indicar o ${citado}.`, procedures: catalogo });
+  assert.equal(ok("quero melhorar a sobrancelha", "Botox Facial"), null); // facial serve a qualquer regiao do rosto
+  assert.equal(ok("gordura na barriga", "Criolipólise Abdômen"), null);
+  assert.equal(ok("manchas na pele", "Peeling Químico"), null); // sem regiao no nome
+  assert.equal(ok("quero um rosto mais jovem", "Botox Facial"), null);
+  assert.equal(ok("estou animada", "Preenchimento Labial"), null); // queixa sem regiao
+  assert.equal(findRelevanceMismatch({ complaintTexts: ["quero aumentar o lábio e arrumar a sobrancelha"], reply: "Preenchimento Labial", procedures: catalogo }), null); // ela citou os dois
+  // barra de verdade
+  assert.ok(ok("rugas no rosto", "Criolipólise Abdômen"));
+  assert.ok(ok("gordura na barriga", "Preenchimento Labial"));
+  assert.ok(ok("flacidez no rosto", "Drenagem Corporal"));
+  assert.equal(procedureFitsComplaint(areasIn("Preenchimento Labial"), areasIn("sobrancelha")), false);
+});

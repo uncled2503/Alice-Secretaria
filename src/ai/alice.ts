@@ -34,6 +34,7 @@ import { analyzeFlow, complainsAboutBot, type SalesFlow } from "./salesFlow.js";
 import { confirmationThanks, isConfirmationReply } from "./confirmation.js";
 import { closingReply, isCourtesyOnly } from "./courtesy.js";
 import { isJobSeeker } from "./jobSeeker.js";
+import { areasIn, findRelevanceMismatch, safeReplyForMismatch } from "./relevance.js";
 import { buildPreProcedureText } from "../reminders/preProcedure.js";
 
 // Orientacao de PRE-procedimento que sai como resposta da Alice logo apos a cliente confirmar o horario (por conversa).
@@ -1001,7 +1002,7 @@ NAO FIQUE SE DESPEDINDO: se voce ja se despediu ou disse "fico a disposicao"/"e 
 - Nao fale de valor se ela nao perguntou. Se perguntou, responda direto, em 1 frase, e volte ao proximo passo.
 - Objecao (preco, medo, tempo, indecisao): acolha, reconecte com o resultado que ela quer, use so as orientacoes cadastradas e proponha o proximo passo menor (a avaliacao). Nunca invente desconto, garantia nem urgencia.
 - Respondeu "nao", "vou pensar" ou "vou me organizar"? NUNCA responda so "ok"/"tudo bem": acolha em meia frase e, se fizer sentido, faca UMA pergunta aberta sobre o motivo (o que ficou pesando?), SEM empurrar avaliacao. Proponha um momento para retomar o contato ("posso te chamar amanha?") e, quando ela disser o dia e o horario, chame schedule_recontact.
-- NAO monte pacote, combo nem junte procedimentos por conta propria, e nao indique tratamento que nao tenha relacao direta com a queixa que ela contou. Indique o procedimento do catalogo que resolve a queixa dela; combo/pacote so se ja estiver cadastrado como condicao vigente ou se ela pedir.
+- NAO monte pacote, combo nem junte procedimentos por conta propria, e nao indique tratamento que nao tenha relacao direta com a queixa que ela contou (NUNCA sugira procedimento de OUTRA regiao do corpo ou do rosto: ex.: preenchimento labial para sobrancelha; sem procedimento cadastrado para aquela regiao, diga que a profissional indica na avaliacao). Indique o procedimento do catalogo que resolve a queixa dela; combo/pacote so se ja estiver cadastrado como condicao vigente ou se ela pedir.
 - Mensagens curtas (ate 3 frases), uma pergunta so, tom de WhatsApp, sem formulario, sem repetir a mesma abertura nem a mesma pergunta de fechamento.
 - Nunca diga que "ja tem outro paciente" no horario: diga so que "esse horario nao esta disponivel" e ofereca o mais proximo.
 Tudo isso sem quebrar regra nenhuma: nao invente valor, prazo, garantia nem urgencia que nao seja real.`;
@@ -2158,6 +2159,20 @@ async function generateReplyUnlocked(
   // esta (ja e velha) - o novo agrupamento vai gerar uma resposta atualizada.
   if (opts.guardAgainstNewerThan && after && after.messages.length > 0) {
     return "";
+  }
+
+  // TRAVA DE RELEVANCIA: a resposta recomenda um procedimento de OUTRA regiao que a da queixa (ex.: "Preenchimento Labial" para sobrancelha).
+  // Troca por uma resposta segura que nao cita procedimento nenhum.
+  if (!didTransfer && !fixedReply && finalText.trim() && usageClinic?.businessType !== "geral") {
+    const userMsgs = history.filter((m) => m.role === "user").map((m) => m.content);
+    let complaintTexts = trailingUser.length ? trailingUser : userMsgs.slice(-1);
+    if (areasIn(complaintTexts.join(" ")).size === 0) complaintTexts = userMsgs.slice(-3);
+    const catalog = await prisma.procedure.findMany({ where: { clinicId, internalOnly: false }, select: { name: true, aliases: true } });
+    const mismatch = findRelevanceMismatch({ complaintTexts, reply: finalText, procedures: catalog });
+    if (mismatch) {
+      console.warn(`[relevancia] indicou "${mismatch.procedure}" para queixa de ${mismatch.complaintLabel} - resposta trocada (conv ${conversation.id}): ${finalText.slice(0, 120)}`);
+      finalText = safeReplyForMismatch(mismatch, flow.evalOffered);
+    }
   }
 
   // Primeira resposta a um contato novo ficou longa (enxurrada de informacao): reescreve

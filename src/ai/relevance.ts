@@ -1,0 +1,102 @@
+// ---------------------------------------------------------------------------
+// TRAVA DE RELEVANCIA (pedido da Lisboa, 14/10/2026): a Alice indicou "Preenchimento Labial" para quem queria melhorar a SOBRANCELHA.
+// A regra no prompt ("nao indique tratamento sem relacao com a queixa") nao bastou. Aqui, depois que o modelo escreveu, conferimos a
+// REGIAO: se a pessoa falou de uma regiao (sobrancelha, abdomen, braco...) e a resposta recomenda um procedimento cujo nome e de OUTRA
+// regiao, a resposta e trocada por uma segura. So olha a regiao que aparece no NOME/apelidos do procedimento (conservador: "Botox facial"
+// serve para qualquer regiao do rosto; "Peeling" sem regiao nunca e barrado).
+// ---------------------------------------------------------------------------
+
+function fold(s: string): string {
+  return s.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
+}
+
+type Area =
+  | "sobrancelha" | "olhos" | "labios" | "nariz" | "testa" | "bochechas" | "queixo" | "pescoco" | "colo" | "maos"
+  | "bracos" | "abdomen" | "coxas" | "gluteos" | "costas" | "seios" | "axilas" | "virilha" | "cabelo"
+  | "rosto" | "corpo";
+
+const AREAS: { area: Area; label: string; re: RegExp }[] = [
+  { area: "sobrancelha", label: "as sobrancelhas", re: /sobrancel/ },
+  { area: "olhos", label: "a região dos olhos", re: /\bolh|olheir|palpebr|cilio|periorbit/ },
+  { area: "labios", label: "os lábios", re: /\blabi|\bboca\b|bigode chines|codigo de barras/ },
+  { area: "nariz", label: "o nariz", re: /\bnariz|nasal|rinomodel/ },
+  { area: "testa", label: "a testa", re: /\btesta|glabela|frontal/ },
+  { area: "bochechas", label: "as bochechas", re: /bochech|malar|zigomat/ },
+  { area: "queixo", label: "o queixo", re: /queixo|\bmento\b|mandibul|papada/ },
+  { area: "pescoco", label: "o pescoço", re: /pescoc|cervical/ },
+  { area: "colo", label: "o colo", re: /\bcolo\b|decote/ },
+  { area: "maos", label: "as mãos", re: /\bmaos?\b/ },
+  { area: "bracos", label: "os braços", re: /\bbracos?\b/ },
+  { area: "abdomen", label: "o abdômen", re: /abdom|barriga|cintura|flanco/ },
+  { area: "coxas", label: "as coxas", re: /\bcoxa|culote|\bperna|panturrilha/ },
+  { area: "gluteos", label: "os glúteos", re: /glute|bumbum|\bbunda/ },
+  { area: "costas", label: "as costas", re: /\bcostas\b/ },
+  { area: "seios", label: "os seios", re: /\bseios?\b|\bmama|\bbusto/ },
+  { area: "axilas", label: "as axilas", re: /axila/ },
+  { area: "virilha", label: "a virilha", re: /virilha|\bintim[ao]|bikini/ },
+  { area: "cabelo", label: "o cabelo", re: /cabel|capilar|couro cabeludo/ },
+  { area: "rosto", label: "o rosto", re: /\brosto|facial|\bface\b/ },
+  { area: "corpo", label: "o corpo", re: /\bcorpo|corporal/ },
+];
+
+const FACE = new Set<Area>(["sobrancelha", "olhos", "labios", "nariz", "testa", "bochechas", "queixo", "rosto"]);
+const BODY = new Set<Area>(["bracos", "abdomen", "coxas", "gluteos", "costas", "seios", "maos", "pescoco", "colo", "corpo"]);
+
+export function areasIn(text: string): Set<Area> {
+  const t = fold(text);
+  return new Set(AREAS.filter((a) => a.re.test(t)).map((a) => a.area));
+}
+
+const labelOf = (a: Area) => AREAS.find((x) => x.area === a)!.label;
+
+// PURO: o procedimento (areas do nome) serve para a queixa (areas citadas pela pessoa)?
+export function procedureFitsComplaint(procAreas: Set<Area>, complaintAreas: Set<Area>): boolean {
+  if (procAreas.size === 0 || complaintAreas.size === 0) return true; // sem regiao no nome ou na queixa: nao ha o que barrar
+  for (const a of procAreas) if (complaintAreas.has(a)) return true;
+  const procFace = [...procAreas].some((a) => FACE.has(a));
+  const procBody = [...procAreas].some((a) => BODY.has(a));
+  const complaintFace = [...complaintAreas].some((a) => FACE.has(a));
+  const complaintBody = [...complaintAreas].some((a) => BODY.has(a));
+  // "Botox facial" serve a qualquer regiao do rosto (e uma queixa de "rosto" aceita procedimento de regiao do rosto); idem corpo.
+  if (procAreas.has("rosto") && complaintFace) return true;
+  if (procAreas.has("corpo") && complaintBody) return true;
+  if (complaintAreas.has("rosto") && procFace) return true;
+  if (complaintAreas.has("corpo") && procBody) return true;
+  return false;
+}
+
+export interface RelevanceMismatch {
+  procedure: string;
+  complaintArea: Area;
+  complaintLabel: string;
+}
+
+// PURO: a resposta cita (pelo nome) algum procedimento do catalogo que e de outra regiao que a da queixa?
+export function findRelevanceMismatch(params: {
+  complaintTexts: string[]; // mensagens da pessoa (as novas; se nao citam regiao, as ultimas)
+  reply: string;
+  procedures: { name: string; aliases?: string | null }[];
+}): RelevanceMismatch | null {
+  const complaint = new Set<Area>();
+  for (const t of params.complaintTexts) for (const a of areasIn(t)) complaint.add(a);
+  if (complaint.size === 0) return null;
+  const replyFolded = fold(params.reply);
+  for (const p of params.procedures) {
+    const name = fold(p.name).trim();
+    if (name.length < 6 || !replyFolded.includes(name)) continue;
+    const procAreas = areasIn(`${p.name} ${p.aliases ?? ""}`);
+    if (!procedureFitsComplaint(procAreas, complaint)) {
+      // regiao "principal" da queixa: a mais especifica (nao rosto/corpo)
+      const specific = [...complaint].find((a) => a !== "rosto" && a !== "corpo") ?? [...complaint][0];
+      return { procedure: p.name, complaintArea: specific, complaintLabel: labelOf(specific) };
+    }
+  }
+  return null;
+}
+
+// Resposta segura no lugar da errada: nao cita procedimento nenhum.
+export function safeReplyForMismatch(m: RelevanceMismatch, evalOffered: boolean): string {
+  return evalOffered
+    ? `Entendi! Para ${m.complaintLabel}, o melhor caminho é a profissional indicar na avaliação. Me conta um pouco mais: o que mais te incomoda aí hoje? 💗`
+    : `Entendi! Para ${m.complaintLabel}, quem indica o melhor caminho é a profissional, na avaliação gratuita. 💗 Quer que eu veja um horário pra você?`;
+}
