@@ -12,10 +12,10 @@ function fold(s: string): string {
 
 // Anuncia uma acao futura que ela nao tem como fazer depois.
 const ANNOUNCE_RE =
-  /\b(um instante|so um instante|um momento|so um momento|vou (agendar|verificar|confirmar|checar|ver|consultar|reservar|marcar)|vou ja|ja volto|ja retorno|ja te (retorno|aviso|confirmo|respondo)|aguarde um|aguarda um)\b/;
+  /\b(um instante|so um instante|um momento|so um momento|vou (agendar|verificar|confirmar|checar|ver|consultar|reservar|marcar)|vou ja|ja volto|ja retorno|ja te (retorno|aviso|confirmo|respondo)|aguarde um|aguarda um|vou fazer (isso|isso agora|ja|agora)|farei isso|ja vou (verificar|fazer|ver|buscar|checar)|vou (buscar|procurar|olhar|dar uma olhada))\b/;
 
 // Afirma que o horario esta agendado/confirmado/marcado.
-const CLAIM_RE = /\b(esta agendad|ficou agendad|foi agendad|agendei|ja agendei|marquei|esta marcad|ficou marcad|esta reservad|reservei)/; // prefixos (agendad[oa]): sem \b no fim
+const CLAIM_RE = /\b(esta agendad|ficou agendad|foi agendad|agendei|ja agendei|marquei|esta marcad|ficou marcad|esta reservad|reservei|conseguimos agendar|consegui agendar|conseguimos marcar|consegui marcar|agendamos)/; // prefixos (agendad[oa]): sem \b no fim
 
 // Anuncio de transferir pra equipe nao e promessa quebrada: e o fluxo de handoff.
 const HANDOFF_RE = /\b(equipe|atendente|colega|responsavel|profissional)\b/;

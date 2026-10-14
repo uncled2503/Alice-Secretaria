@@ -144,7 +144,7 @@ test("avaliacao: horarios mais proximos (um por horario, em ordem) e flag so na 
   const sql = fs.readFileSync(new URL("../prisma/migrations/20261014160000_avaliacao_horarios_mais_proximos/migration.sql", import.meta.url), "utf8");
   assert.match(sql, /"evalNearestFirst" = 1 WHERE "name" = 'Lisboa Beauty Center'/);
   const src = fs.readFileSync(new URL("../src/ai/alice.ts", import.meta.url), "utf8");
-  assert.match(src, /clinic\.evalNearestFirst && \/avalia\/i\.test\(procedure\.name\)/);
+  assert.match(src, /!day && clinic\.evalNearestFirst/);
   assert.match(src, /horarios_mais_proximos/);
 });
 

@@ -10,7 +10,7 @@ function fold(s: string): string {
   return s.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
 }
 
-export type Intent = "schedule" | "decline" | "hesitate" | "price" | "info" | "booked";
+export type Intent = "schedule" | "decline" | "hesitate" | "price" | "info" | "booked" | "returning";
 
 export interface FlowMessage {
   role: string;
@@ -57,10 +57,25 @@ export function statesGoal(messages: string[]): boolean {
   return messages.some((m) => m.length >= 60 || GOAL_RE.test(fold(m)));
 }
 
+// A ultima fala da Alice ofereceu avaliacao/horario/agendamento (e terminou em pergunta)?
+const OFFER_RE = /avalia|horario|agend|marcar|disponibilidade|vaga/;
+const ACCEPT_RE = /^(sim|pode|pode sim|quero|quero sim|claro|com certeza|por favor|pode ser|bora|vamos|ok|isso|isso mesmo|aceito|topo|blz|beleza|gostaria|tenho interesse|tenho sim|pode marcar|pode agendar|fechado|combinado|perfeito|otimo)\b/;
+const REFUSE_RE = /\b(nao|nem|talvez|depois|outra hora|so queria|so estou)\b/;
+const DAYPART_RE = /\b(amanha|hoje|depois de amanha|segunda|terca|quarta|quinta|sexta|sabado|domingo|manha|tarde|noite|folga|de manha|a tarde)\b/;
+
+// PURO: "Sim" (ou "pode", "quero"...) respondendo a uma oferta de avaliacao/horario = ACEITOU: e pedido de agendamento.
+export function acceptsSchedulingOffer(trailing: string, lastAssistant: string): boolean {
+  const t = fold(trailing).replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+  if (!t || t.split(" ").length > 7) return false;
+  if (!OFFER_RE.test(fold(lastAssistant)) || !/\?/.test(lastAssistant)) return false;
+  return ACCEPT_RE.test(t) && !REFUSE_RE.test(t);
+}
+
 // priceAsked: o chamador diz se as mensagens novas perguntam valor (PRICE_ASK_RE vive em alice.ts).
 // hasBooking: ela ja tem agendamento futuro (nao empurra agendamento de novo).
-export function analyzeFlow(input: { history: FlowMessage[]; trailing: string[]; priceAsked: boolean; hasBooking: boolean }): SalesFlow {
+export function analyzeFlow(input: { history: FlowMessage[]; trailing: string[]; priceAsked: boolean; hasBooking: boolean; pastVisits?: boolean }): SalesFlow {
   const { history, trailing, priceAsked, hasBooking } = input;
+  const pastVisits = input.pastVisits === true;
   const userAll = history.filter((m) => m.role === "user").map((m) => m.content);
   const assistant = history.filter((m) => m.role !== "user").map((m) => m.content);
   const lastAssistant = assistant.at(-1) ?? "";
@@ -80,11 +95,19 @@ export function analyzeFlow(input: { history: FlowMessage[]; trailing: string[];
   const softStall = SOFT_STALL_RE.test(trailFold) && !slotsOffered;
   const hesitates = !proposesTime && (hardNo || softStall);
 
+  // "Sim" a uma oferta de horario/avaliacao, ou "amanha estarei de folga" depois de uma oferta: quer agendar (antes a Alice explicava o
+  // procedimento de novo e perguntava "voce ja fez antes?").
+  const lastOffered = OFFER_RE.test(fold(lastAssistant)) && /\?/.test(lastAssistant);
+  const accepted = acceptsSchedulingOffer(trailText, lastAssistant);
+  const gaveAvailability = lastOffered && DAYPART_RE.test(trailFold) && !REFUSE_RE.test(trailFold);
+  const wantsToBook = wantsSchedule(trailText) || accepted || gaveAvailability;
+
   let intent: Intent = "info";
-  if (hasBooking && !wantsSchedule(trailText)) intent = "booked"; // ja agendou: so responde o que perguntou e para
+  if (hasBooking && !wantsToBook) intent = "booked"; // ja agendou: so responde o que perguntou e para
   else if (hesitates) intent = "hesitate";
   else if (declined) intent = "decline";
-  else if (wantsSchedule(trailText) || scheduleAsked) intent = "schedule";
+  else if (wantsToBook || scheduleAsked) intent = "schedule";
+  else if (pastVisits) intent = "returning"; // ja e paciente: nao e lead, nao recebe oferta de avaliacao
   else if (priceAsked) intent = "price";
 
   const noPrice = priceAsked ? "" : " Ela NAO perguntou valor: nao fale de valor, investimento nem parcelas.";
@@ -92,7 +115,11 @@ export function analyzeFlow(input: { history: FlowMessage[]; trailing: string[];
   switch (intent) {
     case "schedule":
       nextMove =
-        "A cliente quer AGENDAR (avaliacao ou procedimento). Va DIRETO ao agendamento, sem perguntas de descoberta e sem repetir o que ja foi dito: se ela ja citou dia/hora, chame check_specific_time; senao chame check_availability e ofereca 2 ou 3 opcoes reais (agrupe por dia; se as regras da clinica pedirem hoje/amanha para avaliacao, comece por esses dois dias). Para 'avaliacao', use o procedimento de avaliacao cadastrado. Se ela respondeu a uma pergunta sua (ex.: a regiao, a queixa), agradeca em meia frase e volte ao agendamento. Se o horario pedido nao esta livre, diga so que 'esse horario nao esta disponivel' (NUNCA cite outro paciente) e ofereca o mais proximo no mesmo dia e nos dias seguintes. Horario combinado: book_appointment. Se o procedimento que ela citou (ou a oferta do anuncio) NAO estiver no catalogo, NAO diga que nao encontrou nem pergunte de novo qual procedimento: agende a AVALIACAO gratuita (a equipe apresenta a oferta na avaliacao, sem prometer valor ou condicao). Se ela fez outra pergunta junto (endereco, valor), responda tambem." +
+        "A cliente quer AGENDAR. Va DIRETO ao agendamento, sem perguntas de descoberta e sem repetir o que ja foi dito (se ela so disse 'sim'/'pode' a uma oferta sua, ACEITOU: ofereca os horarios agora, nao explique o procedimento de novo). " +
+        "QUAL PROCEDIMENTO: se ela quer um procedimento especifico do catalogo (ex.: limpeza de pele, drenagem), agende ESSE procedimento (nome exato do catalogo), nao a avaliacao. A avaliacao gratuita e para quem pediu avaliacao ou ainda nao sabe o que quer; se o procedimento citado ou a oferta do anuncio NAO estiver no catalogo, NAO diga que nao encontrou nem pergunte de novo: agende a AVALIACAO gratuita (a equipe apresenta a oferta, sem prometer valor ou condicao). " +
+        "HORARIOS: chame check_availability (ja devolve os mais proximos) e ofereca NO MAXIMO 3 horarios reais, hoje e amanha primeiro; nunca liste mais de 3. Se ela disse o turno (manha, tarde ou noite), passe period e ofereca so desse turno; se ainda nao disse, pode perguntar UMA vez qual turno prefere. Se ela ja citou dia/hora, chame check_specific_time. " +
+        "Se o horario pedido nao esta livre, diga so que 'esse horario nao esta disponivel' (NUNCA cite outro paciente) e ofereca os mais proximos. " +
+        "NUNCA escreva 'conseguimos agendar', 'agendei' ou 'esta agendado' antes de book_appointment dar certo: ate la voce so OFERECE ('tenho estes horarios'). Horario escolhido: book_appointment. Se ela fez outra pergunta junto (endereco, valor), responda tambem." +
         noPrice;
       break;
     case "decline":
@@ -109,6 +136,11 @@ export function analyzeFlow(input: { history: FlowMessage[]; trailing: string[];
       nextMove =
         "A cliente JA TEM HORARIO MARCADO. O atendimento esta concluido: NAO faca perguntas de descoberta (queixa, regiao, 'o que gostaria de melhorar'), NAO ofereca avaliacao nem outro horario, NAO puxe assunto novo. Responda SO o que ela perguntou, em ate 2 frases, e PARE, sem pergunta no final." +
         (priceAsked ? " Ela perguntou valor: responda conforme a regra de valores desta clinica, em 1 frase." : " Se for so agradecimento ou 'ok', encerre com uma frase curta ('Por nada! Te esperamos') ou nao responda.");
+      break;
+    case "returning":
+      nextMove =
+        "Ela JA E PACIENTE da clinica (ja foi atendida): NAO e lead. NAO ofereca avaliacao gratuita nem pergunte o que ela quer melhorar como se fosse o primeiro contato. Responda so ao que ela disse, curto e caloroso. Se for feedback positivo (ex.: 'estou otima'), agradeca em UMA frase e encerre, sem pergunta. Se ela quiser agendar algo, agende o procedimento que ela pedir." +
+        (priceAsked ? " Ela perguntou valor: responda conforme a regra de valores desta clinica, em 1 frase." : "");
       break;
     case "price":
       nextMove = evalOffered

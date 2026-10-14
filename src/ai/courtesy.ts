@@ -25,3 +25,22 @@ export function closingReply(name: string | null, lastAssistant: string): string
   const first = (name ?? "").trim().split(/\s+/)[0] ?? "";
   return first ? `Por nada, ${first}! 💗` : "Por nada! 💗";
 }
+
+// Resposta POSITIVA a mensagem de acompanhamento pos-procedimento ("estou otima e sem roxinho", "amei", "tudo bem"): so se agradece.
+const POSITIVE_RE = /(estou|esta|tudo|ficou|foi|to|ta)\s+(otim|bem|perfeit|maravilh|tranquil|lind|joia)|sem (dor|roxo|roxinho|incha|inchaco|problema|nada|vermelh)|amei|adorei|gostei|gracas a deus|nada de (dor|incha|roxo)|resultado (lindo|otimo)/;
+const PROBLEM_RE = /\?|\b(dor|doi|doendo|incha\w*|roxo|roxa|vermelh\w*|coceira|ardor|queim\w*|bolha|febre|pus|problema|preocup\w*|incomod\w*|estranho|diferente|nao (gostei|ficou|melhorou|consigo))\b/;
+
+// PURO
+export function isPositiveFeedback(text: string): boolean {
+  const t = normalized(text);
+  if (!t || t.split(" ").length > 20) return false;
+  if (text.includes("?")) return false; // pergunta: nao e so feedback (a normalizacao tira a pontuacao, por isso olha o texto original)
+  // "sem roxinho" / "sem dor" sao positivos: tira esses trechos antes de procurar problema.
+  const withoutNegatedProblem = t.replace(/\bsem (dor|roxo|roxinho|incha\w*|problema\w*|vermelh\w*|nada)\b/g, " ").replace(/\bnada de (dor|incha\w*|roxo)\b/g, " ");
+  return POSITIVE_RE.test(t) && !PROBLEM_RE.test(withoutNegatedProblem);
+}
+
+export function feedbackThanks(name: string | null): string {
+  const first = (name ?? "").trim().split(/\s+/)[0] ?? "";
+  return first ? `Que bom saber, ${first}! 💗 Qualquer dúvida é só chamar.` : "Que bom saber! 💗 Qualquer dúvida é só chamar.";
+}

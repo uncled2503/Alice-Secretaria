@@ -420,20 +420,45 @@ export async function findAvailableDays(
 export async function findNearestSlots(
   clinicId: string,
   procedureId: string,
-  opts: { professionalIds?: string[]; limit?: number; daysAhead?: number } = {},
+  opts: { professionalIds?: string[]; limit?: number; daysAhead?: number; period?: Period | null } = {},
 ): Promise<Slot[]> {
   const procedure = await prisma.procedure.findFirst({ where: { id: procedureId, clinicId } });
   if (!procedure) return [];
+  const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { timezone: true } });
   const all = await findAvailableSlotsFrom(
     clinicId,
     procedure.durationMin,
     opts.professionalIds ?? [],
     new Date(),
     opts.daysAhead ?? 14,
-    60,
+    120,
     procedure.allowConcurrentBooking ? procedure.id : undefined,
   );
-  return dedupeByStart(all).slice(0, opts.limit ?? 3);
+  const inPeriodSlots = filterByPeriod(dedupeByStart(all), clinic.timezone || "America/Sao_Paulo", opts.period);
+  return inPeriodSlots.slice(0, opts.limit ?? 3);
+}
+
+// Turno que a pessoa prefere (a Alice pergunta e oferece so os horarios desse turno).
+export type Period = "manha" | "tarde" | "noite";
+
+// PURO: o turno de uma hora cheia (manha ate 11h59, tarde 12h-17h59, noite 18h em diante).
+export function periodOfHour(hour: number): Period {
+  return hour < 12 ? "manha" : hour < 18 ? "tarde" : "noite";
+}
+
+// PURO: so os horarios do turno pedido (sem turno = todos).
+export function filterByPeriod<T extends { start: Date }>(slots: T[], timeZone: string, period?: Period | null): T[] {
+  if (!period) return slots;
+  return slots.filter((x) => periodOfHour(wallClockInZone(x.start, timeZone).hour) === period);
+}
+
+// PURO: ate N horarios espalhados pelo dia (primeiro, do meio e ultimo) em vez dos N primeiros: a pessoa ve opcoes de verdade.
+export function pickSpread<T>(slots: T[], max = 3): T[] {
+  if (slots.length <= max) return slots;
+  if (max === 1) return [slots[0]];
+  const idx = new Set<number>();
+  for (let i = 0; i < max; i++) idx.add(Math.round((i * (slots.length - 1)) / (max - 1)));
+  return [...idx].sort((a, b) => a - b).map((i) => slots[i]);
 }
 
 // PURO: um slot por horario de inicio (mantem o primeiro).
@@ -571,7 +596,7 @@ export async function checkSpecificTime(
       const key = `${s.start.getTime()}:${s.professionalId ?? ""}`;
       return !seen.has(key) && seen.add(key);
     })
-    .slice(0, 4)
+    .slice(0, 3)
     .map((s) => ({
       iso: s.start.toISOString(),
       label: formatInZone(s.start, tz),

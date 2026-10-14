@@ -12,7 +12,7 @@ function fold(s: string): string {
 
 type Area =
   | "sobrancelha" | "olhos" | "labios" | "nariz" | "testa" | "bochechas" | "queixo" | "pescoco" | "colo" | "maos"
-  | "bracos" | "abdomen" | "coxas" | "gluteos" | "costas" | "seios" | "axilas" | "virilha" | "cabelo"
+  | "papada" | "bracos" | "abdomen" | "coxas" | "gluteos" | "costas" | "seios" | "axilas" | "virilha" | "cabelo"
   | "rosto" | "corpo";
 
 const AREAS: { area: Area; label: string; re: RegExp }[] = [
@@ -22,7 +22,8 @@ const AREAS: { area: Area; label: string; re: RegExp }[] = [
   { area: "nariz", label: "o nariz", re: /\bnariz|nasal|rinomodel/ },
   { area: "testa", label: "a testa", re: /\btesta|glabela|frontal/ },
   { area: "bochechas", label: "as bochechas", re: /bochech|malar|zigomat/ },
-  { area: "queixo", label: "o queixo", re: /queixo|\bmento\b|mandibul|papada/ },
+  { area: "queixo", label: "o queixo", re: /queixo|\bmento\b|mandibul/ },
+  { area: "papada", label: "a papada", re: /papada/ },
   { area: "pescoco", label: "o pescoço", re: /pescoc|cervical/ },
   { area: "colo", label: "o colo", re: /\bcolo\b|decote/ },
   { area: "maos", label: "as mãos", re: /\bmaos?\b/ },
@@ -39,7 +40,7 @@ const AREAS: { area: Area; label: string; re: RegExp }[] = [
   { area: "corpo", label: "o corpo", re: /\bcorpo|corporal/ },
 ];
 
-const FACE = new Set<Area>(["sobrancelha", "olhos", "labios", "nariz", "testa", "bochechas", "queixo", "rosto"]);
+const FACE = new Set<Area>(["sobrancelha", "olhos", "labios", "nariz", "testa", "bochechas", "queixo", "papada", "rosto"]);
 const BODY = new Set<Area>(["bracos", "abdomen", "coxas", "gluteos", "costas", "seios", "maos", "pescoco", "colo", "corpo"]);
 
 export function areasIn(text: string): Set<Area> {
@@ -53,6 +54,7 @@ const labelOf = (a: Area) => AREAS.find((x) => x.area === a)!.label;
 export function procedureFitsComplaint(procAreas: Set<Area>, complaintAreas: Set<Area>): boolean {
   if (procAreas.size === 0 || complaintAreas.size === 0) return true; // sem regiao no nome ou na queixa: nao ha o que barrar
   for (const a of procAreas) if (complaintAreas.has(a)) return true;
+  if ((procAreas.has("queixo") || procAreas.has("papada")) && (complaintAreas.has("queixo") || complaintAreas.has("papada"))) return true; // mesma regiao
   const procFace = [...procAreas].some((a) => FACE.has(a));
   const procBody = [...procAreas].some((a) => BODY.has(a));
   const complaintFace = [...complaintAreas].some((a) => FACE.has(a));
@@ -99,4 +101,18 @@ export function safeReplyForMismatch(m: RelevanceMismatch, evalOffered: boolean)
   return evalOffered
     ? `Entendi! Para ${m.complaintLabel}, o melhor caminho é a profissional indicar na avaliação. Me conta um pouco mais: o que mais te incomoda aí hoje? 💗`
     : `Entendi! Para ${m.complaintLabel}, quem indica o melhor caminho é a profissional, na avaliação gratuita. 💗 Quer que eu veja um horário pra você?`;
+}
+
+// PURO: procedimentos do catalogo que SERVEM a queixa (a regiao do nome bate com a regiao da queixa). Usado para a Alice indicar so esses.
+export function fittingProcedures(complaintTexts: string[], procedures: { name: string; aliases?: string | null }[]): string[] {
+  const complaint = new Set<Area>();
+  for (const t of complaintTexts) for (const a of areasIn(t)) complaint.add(a);
+  if (complaint.size === 0) return [];
+  const out: string[] = [];
+  for (const p of procedures) {
+    const procAreas = areasIn(`${p.name} ${p.aliases ?? ""}`);
+    if (procAreas.size === 0 || !procedureFitsComplaint(procAreas, complaint)) continue;
+    if ([...procAreas].some((a) => complaint.has(a) || (a === "queixo" && complaint.has("papada")) || (a === "papada" && complaint.has("queixo")))) out.push(p.name);
+  }
+  return out.slice(0, 5);
 }

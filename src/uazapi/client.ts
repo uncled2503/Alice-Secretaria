@@ -529,16 +529,46 @@ export async function sendText(clinicId: string, phone: string, text: string, op
 // Envia a resposta da Alice e atualiza o estado de entrega da mensagem que generateReply gravou como "pending".
 // Se o envio falhar a mensagem fica "failed" (o painel mostra) e o erro sobe: o evento do webhook volta pra fila e a
 // proxima tentativa reenvia ESTA resposta em vez de gerar outra.
+// Falha de rede em que o WhatsApp PODE ter entregado a mensagem (a resposta e que se perdeu). Reenviar nesse caso causava a mesma resposta
+// 6 vezes seguidas (caso da Elaine, 14/10): nao reenvia, so registra.
+export function isAmbiguousSendError(err: unknown): boolean {
+  const name = err instanceof Error ? err.name : "";
+  const msg = err instanceof Error ? err.message : String(err);
+  return /^(TimeoutError|AbortError)$/.test(name) || /timed? ?out|aborted|socket hang up|ECONNRESET|UND_ERR_(HEADERS|BODY)_TIMEOUT/i.test(msg);
+}
+
+export const BURST_DUPLICATE_MS = 3 * 60_000;
+
 export async function deliverAliceReply(clinicId: string, phone: string, conversationId: string, reply: string): Promise<void> {
   const pending = await prisma.message.findFirst({
     where: { conversationId, role: "assistant", authorName: null, content: reply, deliveryStatus: { in: ["pending", "failed"] } },
     orderBy: { createdAt: "desc" },
     select: { id: true },
   });
+  // Esta mesma resposta JA foi entregue ha pouco (outra linha, mesmo texto): nao manda de novo.
+  const alreadySent = await prisma.message.findFirst({
+    where: {
+      conversationId, role: "assistant", authorName: null, content: reply, deliveryStatus: "sent",
+      createdAt: { gte: new Date(Date.now() - BURST_DUPLICATE_MS) },
+      ...(pending ? { id: { not: pending.id } } : {}),
+    },
+    select: { id: true },
+  });
+  if (alreadySent) {
+    console.warn(`[uazapi] resposta repetida da Alice descartada (conv ${conversationId}): "${reply.trim().replace(/\s+/g, " ").slice(0, 60)}"`);
+    if (pending) await prisma.message.update({ where: { id: pending.id }, data: { deliveryStatus: null } }).catch(() => undefined);
+    return;
+  }
   try {
     await sendText(clinicId, phone, reply, { alice: true });
     if (pending) await prisma.message.update({ where: { id: pending.id }, data: { deliveryStatus: "sent" } });
   } catch (err) {
+    if (isAmbiguousSendError(err)) {
+      // Pode ter chegado: marca como enviada e NAO deixa o reenvio automatico repetir.
+      console.warn(`[uazapi] envio sem confirmacao (conv ${conversationId}), nao vai reenviar: ${err instanceof Error ? err.message : err}`);
+      if (pending) await prisma.message.update({ where: { id: pending.id }, data: { deliveryStatus: "sent" } }).catch(() => undefined);
+      return;
+    }
     if (pending) await prisma.message.update({ where: { id: pending.id }, data: { deliveryStatus: "failed" } }).catch(() => undefined);
     throw err;
   }

@@ -3,7 +3,7 @@ import type { ChatCompletion, ChatCompletionMessageParam, ChatCompletionTool } f
 import { prisma } from "../db/client.js";
 import { enrichPatientFromCe } from "../clinicaexperts/sync.js";
 import { fixRelativeDateLabels, fixRelativeDayLabels, fixWeekdayDatePairs } from "./relativeDays.js";
-import { findNearestSlots,
+import { pickSpread, filterByPeriod, findNearestSlots,
   findAvailableSlots,
   findAvailableSlotsOnDay,
   findAvailableDays,
@@ -32,9 +32,11 @@ import { findRepetitions, removeSentences, askedAgain, conversationMemory, split
 import { announcesAction, brokenPromise, PROMISE_NUDGE } from "./promises.js";
 import { analyzeFlow, complainsAboutBot, type SalesFlow } from "./salesFlow.js";
 import { confirmationThanks, isConfirmationReply } from "./confirmation.js";
-import { closingReply, isCourtesyOnly } from "./courtesy.js";
+import { closingReply, feedbackThanks, isCourtesyOnly, isPositiveFeedback } from "./courtesy.js";
+import { capSlotLines } from "./slotText.js";
+import { absorbToolResult, checkSlotMentions, knownFrom, newSlotState, renderBooked, renderOffer, SLOT_FALLBACK_ASK, SLOT_NUDGE } from "./slotGuard.js";
 import { isJobSeeker } from "./jobSeeker.js";
-import { areasIn, findRelevanceMismatch, safeReplyForMismatch } from "./relevance.js";
+import { areasIn, findRelevanceMismatch, fittingProcedures, safeReplyForMismatch } from "./relevance.js";
 import { buildPreProcedureText } from "../reminders/preProcedure.js";
 
 // Orientacao de PRE-procedimento que sai como resposta da Alice logo apos a cliente confirmar o horario (por conversa).
@@ -89,6 +91,7 @@ const tools: ChatCompletionTool[] = [
           procedure_name: { type: "string", description: "Nome do procedimento, deve bater com um dos cadastrados na clinica." },
           date: { type: "string", description: "Opcional: AAAA-MM-DD do dia escolhido, pra listar os horarios livres dele. Use o ano corrente do contexto e o calendario dos proximos dias - nunca assuma um ano de memoria. Omita pra ver primeiro quais dias tem vaga." },
           professional_name: { type: "string", description: "Opcional: nome do profissional, se o paciente escolheu um." },
+          period: { type: "string", enum: ["manha", "tarde", "noite"], description: "Opcional: turno que a pessoa prefere (manha, tarde ou noite). Com ele so voltam horarios desse turno." },
         },
         required: ["procedure_name"],
       },
@@ -272,6 +275,15 @@ async function findProcedure(clinicId: string, name: unknown): Promise<Procedure
   );
 }
 
+// A pessoa JA tem uma avaliacao marcada (futura)? A Alice nao agenda avaliacao em cima de avaliacao.
+async function futureEvaluation(patientId: string) {
+  return prisma.appointment.findFirst({
+    where: { patientId, status: "confirmed", scheduledAt: { gte: new Date() }, procedure: { name: { contains: "avalia" } } },
+    orderBy: { scheduledAt: "asc" },
+    select: { scheduledAt: true },
+  });
+}
+
 // Mensagem de erro quando o procedimento nao bate com nada cadastrado. O
 // modelo as vezes joga o nome de um PROFISSIONAL nesse campo (ex.: paciente
 // so citou "Dra. Fulana", sem dizer qual tratamento) — nesses casos "nao
@@ -404,18 +416,32 @@ async function runTool(
     const procedure = await findProcedure(clinicId, input.procedure_name);
     if (!procedure) return await procedureNotFoundMessage(clinicId, input.procedure_name);
 
+    // Avaliacao em cima de avaliacao: ja tem uma marcada.
+    if (/avalia/i.test(procedure.name)) {
+      const dup = await futureEvaluation(patientId);
+      if (dup) {
+        return JSON.stringify({
+          disponivel: false,
+          motivo: `esta pessoa JA tem uma avaliacao marcada (${formatDateTimeInZone(dup.scheduledAt, tz)}). NAO ofereca nem agende outra avaliacao: diga o horario que ela ja tem e pergunte se precisa remarcar ou de mais alguma coisa.`,
+        });
+      }
+    }
+
     const professionalIds = await resolveProfessionalIds(clinicId, procedure.id, input.professional_name);
-
     const day = parseRequestedDate(input.date);
+    const period = ["manha", "tarde", "noite"].includes(String(input.period ?? "")) ? (String(input.period) as "manha" | "tarde" | "noite") : null;
+    const periodPt = period === "manha" ? "da manha" : period === "tarde" ? "da tarde" : period === "noite" ? "da noite" : "";
 
-    // AVALIACAO (Clinic.evalNearestFirst): em vez de listar dias, devolve os horarios livres MAIS PROXIMOS (hoje, depois amanha).
-    if (!day && clinic.evalNearestFirst && /avalia/i.test(procedure.name)) {
-      const nearest = await findNearestSlots(clinicId, procedure.id, { professionalIds, limit: 3 });
+    // Clinica com "horarios mais proximos" (Clinic.evalNearestFirst): em vez de listar dias, devolve ATE 3 horarios livres MAIS PROXIMOS
+    // (hoje, depois amanha), so do turno pedido quando ela disse o turno.
+    if (!day && clinic.evalNearestFirst) {
+      const nearest = await findNearestSlots(clinicId, procedure.id, { professionalIds, limit: 3, period });
       if (nearest.length) {
         const today = isoDateInZone(new Date(), tz);
         const tomorrow = isoDateInZone(new Date(Date.now() + 86_400_000), tz);
         return JSON.stringify({
           procedimento: procedure.name,
+          ...(period ? { turno: period } : {}),
           horarios_mais_proximos: nearest.map((sl) => {
             const d = isoDateInZone(sl.start, tz);
             return {
@@ -426,8 +452,11 @@ async function runTool(
             };
           }),
           instrucao:
-            "AVALIACAO: ofereca JA estes horarios (sao os mais proximos; hoje e amanha primeiro) em uma frase, sem perguntar o dia antes. Diga 'hoje'/'amanha' quando o campo 'relativo' vier. Se nao servirem, pergunte o dia que ela prefere e chame de novo com 'date'. Pra agendar use o 'iso' exato no book_appointment.",
+            "Ofereca JA estes horarios (NO MAXIMO 3, sao os mais proximos; hoje e amanha primeiro) em uma frase, sem perguntar o dia antes e SEM dizer que ja agendou. Diga 'hoje'/'amanha' SO quando o campo 'relativo' vier; senao use o dia da semana e a data como estao em 'quando'. Se nao servirem, pergunte o dia ou o turno que ela prefere e chame de novo com 'date' ou 'period'. Pra agendar use o 'iso' exato no book_appointment.",
         });
+      }
+      if (period) {
+        return JSON.stringify({ procedimento: procedure.name, horarios: [], observacao: `Nenhum horario livre ${periodPt} nas proximas duas semanas. Pergunte se outro turno serve.` });
       }
     }
 
@@ -445,24 +474,29 @@ async function runTool(
       });
     }
 
-    // Passo 2 (com "date"): os horarios livres do dia escolhido.
-    const slots = await findAvailableSlotsOnDay(clinicId, procedure.id, day, { professionalIds });
+    // Passo 2 (com "date"): os horarios livres do dia escolhido (ate 3 espalhados pelo dia quando a clinica pede o limite).
+    let slots = await findAvailableSlotsOnDay(clinicId, procedure.id, day, { professionalIds });
+    if (period) slots = filterByPeriod(slots, tz, period);
     if (slots.length === 0) {
       return JSON.stringify({
         procedimento: procedure.name,
         horarios: [],
-        observacao: "Nenhum horario livre nesse dia. Chame de novo sem 'date' pra ver quais dias tem vaga e ofereca outro dia.",
+        observacao: period
+          ? `Nenhum horario livre ${periodPt} nesse dia. Pergunte se outro turno ou outro dia serve.`
+          : "Nenhum horario livre nesse dia. Chame de novo sem 'date' pra ver quais dias tem vaga e ofereca outro dia.",
       });
     }
+    const offered = clinic.evalNearestFirst ? pickSpread(slots, 3) : slots;
     return JSON.stringify({
       procedimento: procedure.name,
       dia: formatDayInZone(slots[0].start, tz),
-      horarios: slots.map((s) => ({
+      horarios: offered.map((s) => ({
         iso: s.start.toISOString(),
         quando: formatInZone(s.start, tz),
         ...(s.professionalName ? { profissional: s.professionalName, profissional_id: s.professionalId } : {}),
       })),
-      instrucao: "Pra agendar, use o 'iso' exato do horario escolhido no book_appointment - nao recalcule a data.",
+      ...(offered.length < slots.length ? { ha_mais_horarios: true } : {}),
+      instrucao: "Ofereca NO MAXIMO 3 horarios. Pra agendar, use o 'iso' exato do horario escolhido no book_appointment - nao recalcule a data.",
     });
   }
 
@@ -506,6 +540,15 @@ async function runTool(
   if (name === "book_appointment") {
     const procedure = await findProcedure(clinicId, input.procedure_name);
     if (!procedure) return await procedureNotFoundMessage(clinicId, input.procedure_name);
+    if (/avalia/i.test(procedure.name)) {
+      const dup = await futureEvaluation(patientId);
+      if (dup) {
+        return JSON.stringify({
+          agendado: false,
+          motivo: `esta pessoa JA tem uma avaliacao marcada (${formatDateTimeInZone(dup.scheduledAt, tz)}): nao agende outra. Diga o horario que ela ja tem e pergunte se precisa remarcar ou de mais alguma coisa.`,
+        });
+      }
+    }
 
     // Cadastro nao localizado na agenda da clinica (Clinica Experts) e so o apelido do WhatsApp: pede o nome completo
     // antes de agendar (o agendamento e o cadastro la saem com o nome certo). Se a pessoa ja informou, grava.
@@ -1048,7 +1091,7 @@ AGENDAMENTO PELA EQUIPE: voce NAO agenda, NAO remarca, NAO cancela e NAO oferece
       : "\nAVALIACAO: ofereca a avaliacao gratuita quando a conversa ja mostrou interesse, uma vez, e depois de responder o que a pessoa quis saber. Se ela pedir avaliacao ou agendar, agende na hora.";
   }
   const evalFirstLine = clinic.evaluationFirst
-    ? `\nAVALIACAO PRIMEIRO: nunca exija que o paciente saiba qual procedimento precisa. Sempre ofereca os dois caminhos ("voce ja tem algo em mente ou prefere uma avaliacao pra o profissional entender seu caso?"). Se ele nao sabe e quer ser avaliado, isso e intencao valida de agendamento - conduza direto, sem listar procedimentos.`
+    ? `\nAVALIACAO PRIMEIRO: nunca exija que o paciente saiba qual procedimento precisa. Sempre ofereca os dois caminhos ("voce ja tem algo em mente ou prefere uma avaliacao pra o profissional entender seu caso?"). Se ele nao sabe e quer ser avaliado, isso e intencao valida de agendamento - conduza direto, sem listar procedimentos. MAS se ele ja disse qual procedimento quer (ex.: limpeza de pele, drenagem), agende ESSE procedimento (nome exato do catalogo), nao a avaliacao: a avaliacao gratuita e so para quem pediu ou ainda nao sabe o que quer. Quem ja e paciente (ja foi atendido) nao recebe oferta de avaliacao gratuita.`
     : "";
 
   const emojiLine = clinic.allowEmojis === false ? `\nNao use emojis em nenhuma mensagem.` : "";
@@ -1275,7 +1318,7 @@ FERIADOS PROXIMOS: ${holidayItems.join("; ")}. Se a pessoa perguntar se funciona
 - Se o horario pedido NAO estiver livre, diga com naturalidade que aquele horario nao esta disponivel (ex: "esse horario ja esta ocupado") e ofereca as alternativas retornadas, agrupadas por dia (um dia de cada vez, ex: "sexta-feira tenho 9h ou 10h" - nao misture horarios de dias diferentes na mesma frase corrida, vira um paredao confuso). Se o paciente nao gostar das alternativas e quiser esperar uma vaga, use join_waitlist.
 - "procedure_name" e sempre um TRATAMENTO/PROCEDIMENTO, nunca o nome de um profissional. Se o paciente perguntar por vaga citando so o nome de um profissional ("tem vaga com a Dra. Fulana?"), sem dizer qual procedimento, NAO chame a ferramenta ainda: pergunte primeiro qual procedimento ele quer agendar com essa pessoa.
 - AGENDAR E EM DOIS PASSOS - nunca despeje a agenda inteira de uma vez, vira um paredao de texto:
-  0) AVALIACAO: se check_availability SEM "date" devolver "horarios_mais_proximos", ofereca EXATAMENTE esses horarios (hoje e amanha primeiro), sem perguntar o dia antes e sem empurrar para a semana seguinte; so va para outros dias se nao houver vaga hoje nem amanha ou se ela preferir.
+  0) Se check_availability SEM "date" devolver "horarios_mais_proximos", ofereca EXATAMENTE esses horarios (NO MAXIMO 3; hoje e amanha primeiro), sem perguntar o dia antes e sem empurrar para a semana seguinte; so va para outros dias se nao houver vaga hoje nem amanha ou se ela preferir. Se ela disser o turno (manha, tarde ou noite), passe "period" e ofereca so os horarios desse turno. NUNCA liste mais de 3 horarios nem diga "conseguimos agendar" antes do book_appointment: ate la voce so oferece.
   1) DIA primeiro: chame check_availability SEM "date" e ofereca os dias que tem vaga ("consigo quarta, quinta ou sexta - qual fica melhor pra voce?"). Nao cite horario ainda.
   2) HORARIO depois: quando ele escolher o dia, chame check_availability COM o "date" daquele dia e ai sim ofereca os horarios livres (se forem muitos, agrupe por periodo: "de manha tenho 9h e 10h, de tarde 14h e 15h").
 - Se o paciente ja disser o dia que quer ("pode ser quinta?"), pule direto pro passo 2. Se ele ja disser dia E hora, use check_specific_time.
@@ -1699,6 +1742,28 @@ async function removeEvaluationPitch(draft: string, patientMessages: string[], c
   }
 }
 
+// Reescreve a resposta que indicou procedimento de OUTRA regiao: responde a queixa dela e, se houver, indica so o que serve.
+async function rewriteForRelevance(draft: string, patientMessages: string[], areaLabel: string, wrongProcedure: string, fits: string[], clinicName: string): Promise<string | null> {
+  try {
+    const res = await openai.chat.completions.create({
+      model: MODEL,
+      temperature: 0.3,
+      messages: [
+        {
+          role: "system",
+          content: `Voce reescreve a resposta de uma secretaria de clinica (${clinicName}) no WhatsApp. O rascunho indica "${wrongProcedure}", que NAO e da regiao da queixa da pessoa (${areaLabel}). Reescreva SEM citar esse procedimento. ${fits.length ? `Se fizer sentido, indique apenas: ${fits.join(", ")}.` : "Nao indique nenhum procedimento: diga que a profissional define o melhor caminho para essa regiao na avaliacao."} Responda ao que a pessoa disse agora, com as palavras dela (se ela falou em flacidez, fale em flacidez), em no maximo 3 frases curtas, tom natural de WhatsApp, sem markdown, no maximo 1 emoji e no maximo UMA pergunta. Nao invente nada (sem valor, prazo ou resultado). Responda SO com a mensagem.`,
+        },
+        { role: "user", content: `Mensagens recentes da pessoa:\n${patientMessages.join("\n").slice(0, 600)}\n\nRascunho:\n${draft.slice(0, 1200)}` },
+      ],
+    });
+    const text = res.choices[0]?.message?.content?.trim();
+    return text && text.length >= 15 ? text : null;
+  } catch (err) {
+    console.error("[relevancia] falha ao reescrever:", err);
+    return null;
+  }
+}
+
 // Reescreve a primeira resposta em no maximo 2 frases: apresentacao + UMA pergunta.
 async function shortenFirstReply(draft: string, patientMessages: string[], clinicName: string, assistantName: string): Promise<string | null> {
   try {
@@ -1798,7 +1863,7 @@ async function generateReplyUnlocked(
   // novo - passa direto pra equipe. Conversas ja em andamento continuam.
   const usageClinic = await prisma.clinic.findUnique({
     where: { id: clinicId },
-    select: { id: true, plan: true, aiModel: true, businessType: true, aliceActive: true, silentHandoff: true, handoffOnPrice: true, humanizedTone: true, softSell: true, conversationLimitOverride: true, usageMonth: true, usageCount: true, usageLimitNotified: true },
+    select: { id: true, plan: true, aiModel: true, evalNearestFirst: true, businessType: true, aliceActive: true, silentHandoff: true, handoffOnPrice: true, humanizedTone: true, softSell: true, conversationLimitOverride: true, usageMonth: true, usageCount: true, usageLimitNotified: true },
   });
   // Alice PAUSADA pela clinica (botao "Alice atendendo"): nao responde. A conversa
   // fica como "nao lida" pra equipe, sem virar atendimento humano (quando a Alice
@@ -1974,6 +2039,19 @@ async function generateReplyUnlocked(
     }
   }
 
+  // RESPOSTA POSITIVA AO ACOMPANHAMENTO POS-PROCEDIMENTO ("estou otima e sem roxinho"): so agradece. Antes a Alice emendava "como posso
+  // agendar sua proxima avaliacao?" numa paciente que acabou de dizer que esta bem.
+  if (usageClinic && usageClinic.businessType !== "geral") {
+    const lastUserText = history.filter((m) => m.role === "user").at(-1)?.content ?? "";
+    const lastOut = history.filter((m) => m.role !== "user").at(-1);
+    if (lastOut?.role === "assistant" && lastOut.authorName && /p[oó]s/i.test(lastOut.authorName) && isPositiveFeedback(lastUserText)) {
+      const text = feedbackThanks(patient.name);
+      await prisma.message.create({ data: { conversationId: conversation.id, role: "assistant", content: text, deliveryStatus: "pending" } });
+      await prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: new Date() } });
+      return text;
+    }
+  }
+
   // AGENDOU E AGRADECEU ("Obrigadaa", "ok", "👍"): so finaliza o atendimento, sem perguntas (pedido da Lisboa, 14/10). Quem ja tem horario
   // futuro nao volta pra descoberta.
   if (usageClinic && usageClinic.businessType !== "geral") {
@@ -2014,7 +2092,8 @@ async function generateReplyUnlocked(
   const trailingNow: string[] = [];
   for (let i = history.length - 1; i >= 0 && history[i].role === "user"; i--) trailingNow.unshift(history[i].content);
   const hasBooking = (await prisma.appointment.count({ where: { patientId: patient.id, status: "confirmed", scheduledAt: { gte: new Date() } } })) > 0;
-  const flow = analyzeFlow({ history, trailing: trailingNow, priceAsked: PRICE_ASK_RE.test(normalizeReply(trailingNow.join(" "))), hasBooking });
+  const pastVisitCount = await prisma.appointment.count({ where: { patientId: patient.id, status: { in: ["completed", "confirmed"] }, scheduledAt: { lt: new Date() } } });
+  const flow = analyzeFlow({ history, trailing: trailingNow, priceAsked: PRICE_ASK_RE.test(normalizeReply(trailingNow.join(" "))), hasBooking, pastVisits: pastVisitCount > 0 });
   const system = await buildSystemPrompt(clinicId, { patientId: patient.id, flow });
 
   const messages: ChatCompletionMessageParam[] = [
@@ -2089,6 +2168,23 @@ async function generateReplyUnlocked(
   let bookedOk = false; // book_appointment devolveu agendado:true nesta rodada
   let promiseNudged = false;
   pendingPreProcedure.delete(conversation.id); // sobra de uma tentativa anterior que falhou
+  // TRAVA DE DIA E HORA: o que a resposta pode citar (ver slotGuard.ts)
+  const guardOn = canBook && usageClinic?.businessType !== "geral";
+  const guardTz = (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { timezone: true } }))?.timezone || "America/Sao_Paulo";
+  const slotState = newSlotState();
+  let slotToolUsed = false;
+  let slotNudged = false;
+  let knownStrict = knownFrom([], [], guardTz);
+  let knownLoose = knownStrict;
+  if (guardOn) {
+    const myAppts = await prisma.appointment.findMany({ where: { patientId: patient.id, status: "confirmed", scheduledAt: { gte: new Date() } }, select: { scheduledAt: true }, take: 10 });
+    const apptDates = myAppts.map((a) => a.scheduledAt);
+    const patientTexts = [...trailingUser, ...history.filter((m) => m.role === "user").slice(-3).map((m) => m.content)];
+    knownStrict = knownFrom(patientTexts, apptDates, guardTz);
+    knownLoose = knownFrom([...patientTexts, ...history.filter((m) => m.role !== "user").slice(-6).map((m) => m.content)], apptDates, guardTz);
+  }
+  const slotCheck = (text: string) =>
+    checkSlotMentions({ text, state: slotState, known: slotToolUsed ? knownStrict : knownLoose, toolUsed: slotToolUsed, now: new Date(), tz: guardTz });
   const chatModel = usageClinic?.aiModel?.trim() || MODEL;
   for (let turn = 0; turn < 6; turn++) {
     const response = await createChat(chatModel, messages, activeTools);
@@ -2104,6 +2200,16 @@ async function generateReplyUnlocked(
         messages.push(choice);
         messages.push({ role: "system", content: PROMISE_NUDGE });
         continue;
+      }
+      if (guardOn && !slotNudged && !didTransfer && turn < 5 && finalText.trim()) {
+        const verdict = slotCheck(finalText);
+        if (!verdict.ok) {
+          slotNudged = true;
+          console.warn(`[dia-hora] resposta cita dia/horario que a agenda nao devolveu - refazendo (conv ${conversation.id}): ${verdict.problems.join("; ")} | ${finalText.slice(0, 120)}`);
+          messages.push(choice);
+          messages.push({ role: "system", content: SLOT_NUDGE });
+          continue;
+        }
       }
       break;
     }
@@ -2123,6 +2229,10 @@ async function generateReplyUnlocked(
         result = "Ocorreu um erro ao executar essa acao. Nao invente o resultado; peca desculpas e diga que vai confirmar com a equipe.";
       }
       if (toolCall.function.name === "book_appointment" && result.includes('"agendado":true')) bookedOk = true;
+      if (guardOn && ["check_availability", "check_specific_time", "book_appointment"].includes(toolCall.function.name)) {
+        absorbToolResult(slotState, toolCall.function.name, result, guardTz);
+        slotToolUsed = true;
+      }
       messages.push({ role: "tool", tool_call_id: toolCall.id, content: result });
     }
   }
@@ -2161,6 +2271,15 @@ async function generateReplyUnlocked(
     return "";
   }
 
+  // TRAVA DE DIA E HORA (final): o modelo insistiu em citar dia/horario que a agenda nao devolveu -> monta a resposta com os dados reais.
+  if (guardOn && !didTransfer && !fixedReply && finalText.trim()) {
+    const verdict = slotCheck(finalText);
+    if (!verdict.ok) {
+      console.warn(`[dia-hora] resposta montada direto da agenda (conv ${conversation.id}): ${verdict.problems.join("; ")} | ${finalText.slice(0, 120)}`);
+      finalText = slotState.booked ? renderBooked(slotState.booked) : slotState.offer.length ? renderOffer(slotState.offer, guardTz) : SLOT_FALLBACK_ASK;
+    }
+  }
+
   // TRAVA DE RELEVANCIA: a resposta recomenda um procedimento de OUTRA regiao que a da queixa (ex.: "Preenchimento Labial" para sobrancelha).
   // Troca por uma resposta segura que nao cita procedimento nenhum.
   if (!didTransfer && !fixedReply && finalText.trim() && usageClinic?.businessType !== "geral") {
@@ -2170,8 +2289,12 @@ async function generateReplyUnlocked(
     const catalog = await prisma.procedure.findMany({ where: { clinicId, internalOnly: false }, select: { name: true, aliases: true } });
     const mismatch = findRelevanceMismatch({ complaintTexts, reply: finalText, procedures: catalog });
     if (mismatch) {
-      console.warn(`[relevancia] indicou "${mismatch.procedure}" para queixa de ${mismatch.complaintLabel} - resposta trocada (conv ${conversation.id}): ${finalText.slice(0, 120)}`);
-      finalText = safeReplyForMismatch(mismatch, flow.evalOffered);
+      console.warn(`[relevancia] indicou "${mismatch.procedure}" para queixa de ${mismatch.complaintLabel} - reescrevendo (conv ${conversation.id}): ${finalText.slice(0, 120)}`);
+      const clinicName = (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { name: true } }))?.name ?? "a clinica";
+      const fits = fittingProcedures(complaintTexts, catalog);
+      const rewritten = await rewriteForRelevance(finalText, userMsgs.slice(-3), mismatch.complaintLabel, mismatch.procedure, fits, clinicName);
+      const stillBad = rewritten ? findRelevanceMismatch({ complaintTexts, reply: rewritten, procedures: catalog }) : null;
+      finalText = rewritten && !stillBad ? rewritten : safeReplyForMismatch(mismatch, flow.evalOffered);
     }
   }
 
@@ -2310,6 +2433,7 @@ async function generateReplyUnlocked(
     finalText = fixWeekdayDatePairs(finalText, new Date(), clinicTz); // "sexta, 20/10" numa terca vira "terca, 20/10"
     finalText = fixRelativeDayLabels(finalText, new Date(), clinicTz); // "quinta (amanha)" numa quinta vira "quinta (hoje)"
     finalText = fixRelativeDateLabels(finalText, new Date(), clinicTz); // "Amanha, dia 20/10" numa quarta 14/10 vira "Terça-feira, dia 20/10"
+    if (usageClinic?.evalNearestFirst) finalText = capSlotLines(finalText, 3); // combinado: no maximo 3 horarios por vez
     await prisma.message.create({
       data: { conversationId: conversation.id, role: "assistant", content: finalText, deliveryStatus: "pending" }, // vira "sent"/"failed" depois do envio (uazapi/client.ts)
     });
