@@ -32,6 +32,7 @@ import { findRepetitions, removeSentences, askedAgain, conversationMemory, split
 import { announcesAction, brokenPromise, PROMISE_NUDGE } from "./promises.js";
 import { analyzeFlow, complainsAboutBot, type SalesFlow } from "./salesFlow.js";
 import { confirmationThanks, isConfirmationReply } from "./confirmation.js";
+import { closingReply, isCourtesyOnly } from "./courtesy.js";
 import { buildPreProcedureText } from "../reminders/preProcedure.js";
 
 // Orientacao de PRE-procedimento que sai como resposta da Alice logo apos a cliente confirmar o horario (por conversa).
@@ -1131,7 +1132,7 @@ AGENDAMENTO PELA EQUIPE: voce NAO agenda, NAO remarca, NAO cancela e NAO oferece
     const preSafety = upcoming.length
       ? `\nPRE-PROCEDIMENTO (seguranca): se a paciente relatar uso recente de medicamento, alteracao de saude, gestacao, amamentacao, reacao alergica ou qualquer duvida clinica ANTES do procedimento, NAO improvise orientacao: chame transfer_to_human com o resumo e diga que a equipe responsavel vai orientar.`
       : "";
-    apptLine = `${preSafety}\nAGENDAMENTOS REAIS DESTE PACIENTE (unica fonte de verdade para dia e horario):\n${list}\nSobre dia/horario de agendamento: use SOMENTE esta lista. Se o paciente citar um horario diferente do da lista, duvidar do horario ("nao e as 15h?") ou pedir para mudar, NAO concorde, NAO corrija e NAO invente: diga que vai confirmar com a equipe e chame transfer_to_human com o horario que ele citou e o que consta aqui. Nunca confirme um horario que nao esteja na lista. Se a lista estiver vazia, nao ha agendamento registrado: nao diga que esta agendado, encaminhe para a equipe.`;
+    apptLine = `${preSafety}\nAGENDAMENTOS REAIS DESTE PACIENTE (unica fonte de verdade para dia e horario):\n${list}\nSobre dia/horario de agendamento: use SOMENTE esta lista. Se o paciente citar um horario diferente do da lista, duvidar do horario ("nao e as 15h?") ou pedir para mudar, NAO concorde, NAO corrija e NAO invente: diga que vai confirmar com a equipe e chame transfer_to_human com o horario que ele citou e o que consta aqui. Nunca confirme um horario que nao esteja na lista. Se a lista estiver vazia, nao ha agendamento registrado: nao diga que esta agendado, encaminhe para a equipe.${upcoming.length ? "\nJA TEM HORARIO MARCADO: o atendimento esta concluido. Nao faca perguntas de descoberta, nao ofereca avaliacao nem outro horario e nao puxe assunto novo: responda so o que foi perguntado e pare. Agradecimento ou 'ok' = uma frase curta de encerramento." : ""}`;
   }
 
   const dayNow = new Date();
@@ -1962,6 +1963,23 @@ async function generateReplyUnlocked(
         } catch (err) {
           console.error("[confirmacao] falha ao confirmar direto; segue pelo modelo:", err);
         }
+      }
+    }
+  }
+
+  // AGENDOU E AGRADECEU ("Obrigadaa", "ok", "👍"): so finaliza o atendimento, sem perguntas (pedido da Lisboa, 14/10). Quem ja tem horario
+  // futuro nao volta pra descoberta.
+  if (usageClinic && usageClinic.businessType !== "geral") {
+    const lastUserText = history.filter((m) => m.role === "user").at(-1)?.content ?? "";
+    if (isCourtesyOnly(lastUserText)) {
+      const booked = await prisma.appointment.count({ where: { patientId: patient.id, status: "confirmed", scheduledAt: { gte: new Date() } } });
+      if (booked > 0) {
+        const text = closingReply(patient.name, history.filter((m) => m.role !== "user").at(-1)?.content ?? "");
+        if (text) {
+          await prisma.message.create({ data: { conversationId: conversation.id, role: "assistant", content: text, deliveryStatus: "pending" } });
+          await prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: new Date() } });
+        }
+        return text;
       }
     }
   }

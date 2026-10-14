@@ -203,3 +203,30 @@ test("expediente das biomedicas da Lisboa: Sabrina ter/qui 12h-21h, Amanda sabad
   assert.equal(evaluateSlot({ startUtc: terca0930, durationMin: 60, hours: sabrina, busy: [], now }).ok, false);
   assert.equal(evaluateSlot({ startUtc: quinta1230, durationMin: 60, hours: sabrina, busy: [], now }).ok, true);
 });
+
+test("agendou e agradeceu: 'Obrigadaa' e cortesia, a Alice so fecha com uma frase e nunca volta pra descoberta", async () => {
+  const { isCourtesyOnly, closingReply } = await import("../dist/ai/courtesy.js");
+  for (const t of ["Obrigadaa", "obrigada!!", "Okkk", "valeuuu", "👍", "Muito obrigada"]) assert.equal(isCourtesyOnly(t), true, t);
+  for (const t of ["Só confirmando o valor fica 99,99?", "obrigada, e o endereço?", "[imagem]", "ok mas qual o horário?"]) assert.equal(isCourtesyOnly(t), false, t);
+  assert.equal(closingReply("Sthefany Souza", "Perfeito! Está agendado. Estamos te esperando!"), "Por nada, Sthefany! 💗");
+  assert.equal(closingReply(null, "Estamos te esperando"), "Por nada! 💗");
+  assert.equal(closingReply("Sthefany", "Por nada, Sthefany! 💗"), ""); // ja fechou: nao vira despedida sem fim
+  // humanReturn continua exportando a mesma funcao
+  const hr = await import("../dist/crm/humanReturn.js");
+  assert.equal(hr.isCourtesyOnly("Obrigadaa"), true);
+});
+
+test("quem ja tem horario marcado: a jogada e responder so o que perguntou e parar (sem descoberta nem avaliacao)", async () => {
+  const { analyzeFlow } = await import("../dist/ai/salesFlow.js");
+  for (const [msg, priceAsked] of [["Obrigadaa", false], ["Só confirmando o valor fica 99,99?", true]]) {
+    const flow = analyzeFlow({ history: [{ role: "assistant", content: "Está agendado para quarta, 21/10, às 16:00." }, { role: "user", content: msg }], trailing: [msg], priceAsked, hasBooking: true });
+    assert.equal(flow.intent, "booked");
+    assert.equal(flow.hasBooking, true);
+    assert.match(flow.nextMove, /JA TEM HORARIO MARCADO/);
+    assert.match(flow.nextMove, /NAO ofereca avaliacao/);
+    assert.match(flow.nextMove, /PARE/);
+  }
+  // quer agendar outra coisa mesmo tendo horario: segue o agendamento
+  const outro = analyzeFlow({ history: [], trailing: ["quero marcar outro horário"], priceAsked: false, hasBooking: true });
+  assert.equal(outro.intent, "schedule");
+});

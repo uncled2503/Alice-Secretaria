@@ -10,7 +10,7 @@ function fold(s: string): string {
   return s.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
 }
 
-export type Intent = "schedule" | "decline" | "hesitate" | "price" | "info";
+export type Intent = "schedule" | "decline" | "hesitate" | "price" | "info" | "booked";
 
 export interface FlowMessage {
   role: string;
@@ -81,7 +81,7 @@ export function analyzeFlow(input: { history: FlowMessage[]; trailing: string[];
   const hesitates = !proposesTime && (hardNo || softStall);
 
   let intent: Intent = "info";
-  if (hasBooking && !wantsSchedule(trailText)) intent = priceAsked ? "price" : "info";
+  if (hasBooking && !wantsSchedule(trailText)) intent = "booked"; // ja agendou: so responde o que perguntou e para
   else if (hesitates) intent = "hesitate";
   else if (declined) intent = "decline";
   else if (wantsSchedule(trailText) || scheduleAsked) intent = "schedule";
@@ -104,6 +104,11 @@ export function analyzeFlow(input: { history: FlowMessage[]; trailing: string[];
       nextMove =
         "A cliente disse NAO, que vai pensar ou que vai se organizar - sem marcar nada. NUNCA responda so 'ok', 'tudo bem' ou 'quando estiver pronta me avise': isso entrega a venda. Respeite (sem pressao, sem insistir, sem inventar desconto/urgencia). Em 1 frase acolha e, se fizer sentido, faca UMA pergunta aberta que descubra o motivo (ex.: 'o que te deixou ainda pensando?'). NAO proponha avaliacao nem peca dia e turno de agendamento agora. Proponha um momento para retomar o contato (ex.: 'posso te chamar amanha?' ou 'qual dia e horario ficam bons pra eu te chamar?'); quando ela disser o dia e o horario, chame schedule_recontact (date AAAA-MM-DD, time HH:MM) e confirme em uma frase. Se ela ja disse quando quer ser chamada, registre direto. Nao repita uma pergunta que ja fez." +
         noPrice;
+      break;
+    case "booked":
+      nextMove =
+        "A cliente JA TEM HORARIO MARCADO. O atendimento esta concluido: NAO faca perguntas de descoberta (queixa, regiao, 'o que gostaria de melhorar'), NAO ofereca avaliacao nem outro horario, NAO puxe assunto novo. Responda SO o que ela perguntou, em ate 2 frases, e PARE, sem pergunta no final." +
+        (priceAsked ? " Ela perguntou valor: responda conforme a regra de valores desta clinica, em 1 frase." : " Se for so agradecimento ou 'ok', encerre com uma frase curta ('Por nada! Te esperamos') ou nao responda.");
       break;
     case "price":
       nextMove =

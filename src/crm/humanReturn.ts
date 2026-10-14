@@ -1,4 +1,5 @@
 import { prisma } from "../db/client.js";
+import { isCourtesyOnly } from "../ai/courtesy.js";
 import { scheduleLocked } from "../jobs/lock.js";
 import { PAID_CLINIC_WHERE } from "./plan.js";
 import { logActivity } from "./activity.js";
@@ -22,20 +23,7 @@ import { deliverAliceReply } from "../uazapi/client.js";
 export const RESUME_MAX_AGE_MS = 6 * 3_600_000;
 export const RESUME_MARK = "A Alice voltou a atender";
 
-const ACK_WORDS = new Set(
-  "ok okay oks blz beleza certo combinado obrigado obrigada obrigadinha obg valeu vlw perfeito show otimo entendi entendido ta bom muito maravilha legal tmj amem de nada disponha imagina".split(" "),
-);
-
-function normalized(s: string): string {
-  return s.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "").replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
-}
-
-// PURO: mensagem so de cortesia ("ok", "obrigada!", "👍") - nao pede resposta.
-export function isCourtesyOnly(text: string): boolean {
-  const tokens = normalized(text).split(" ").filter(Boolean);
-  if (!tokens.length) return !/^\[(imagem|vídeo|áudio|arquivo)/i.test(text.trim()); // so emoji/pontuacao; anexo NAO e cortesia
-  return tokens.length <= 5 && tokens.every((t) => ACK_WORDS.has(t));
-}
+export { isCourtesyOnly };
 
 // PURO: a conversa esta esperando a equipe ha tempo suficiente? `incoming` = mensagens da pessoa sem resposta (em ordem).
 // Devolve o instante da primeira mensagem que pede resposta, ou null se nao ha nada pra responder.
