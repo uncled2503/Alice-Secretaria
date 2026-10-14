@@ -83,7 +83,7 @@ export async function runHotLeadCheck(now = new Date()): Promise<number> {
 // ---- Retorno combinado ---------------------------------------------------
 
 export const CALLBACK_MESSAGE =
-  "Oi, {primeiro_nome}! 💗 Você tinha me pedido para retomarmos nossa conversa por esta data. Ficou alguma dúvida ou posso verificar um horário para você? ✨";
+  "Oi, {primeiro_nome}! 💗 Você tinha me pedido para retomarmos nossa conversa por esta data. Ficou alguma dúvida ou posso ver um horário para você? ✨";
 
 export function renderCallbackMessage(name: string | null): string {
   const first = (name ?? "").trim().split(/\s+/)[0] ?? "";

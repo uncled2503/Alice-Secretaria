@@ -228,7 +228,18 @@ Ficar com: regra 579 + 468 reescrita; desligar `evaluationFirst` ou reescrever o
 
 ## 3. Decisões da Lisboa e plano de aplicação
 
-### Decisões que só a Lisboa pode tomar
+### Respostas da Lisboa (14/10/2026, 08:55) e o que foi feito
+
+| # | Resposta da Lisboa | Aplicação |
+|---|---|---|
+| D1 | Quando não souber responder: **fica em silêncio** e **não retoma o contato**; aguarda a equipe | Regra 509 reescrita (silêncio, sem "vou verificar"); 513 removida. O sistema já só devolve a conversa à Alice se uma pessoa da equipe tinha agido e demorou 15 min; conversa transferida pela própria Alice nunca volta sozinha |
+| D2 | A Alice **informa o preço cadastrado e vigente**; anúncio: a condição do anúncio; dúvida, negociação ou condição não cadastrada: equipe | Migração: `handoffOnPrice=0`, `quotePrices=1` na Lisboa; regras 485/492/540/486 reescritas |
+| D3 | **3 horários** por vez | Regra padrão "no máximo DUAS" desativada; fica "2 a 3" |
+| D4 | Recontatos: **"posso ver um horário para você"** | Migração (texto antigo exato): 4h, 1 dia e 7 dias |
+| D5 | Confirmação assinada **Alice** | Migração (substitui "Fabi" pelo texto) |
+| D6 | Regras 470, 468 e 486: ajustar. **"Vou pensar"**: acolher, entender o motivo se fizer sentido, sem empurrar avaliação, **propor um momento e recontatar na data e hora pedidas** | 470 removida; 468 e roteiro reescritos; nova ferramenta `schedule_recontact` registra o dia e a hora e o sistema manda a retomada |
+
+### Decisões que só a Lisboa pode tomar (histórico)
 
 | # | Decisão | Impacto |
 |---|---|---|

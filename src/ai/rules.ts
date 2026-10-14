@@ -25,6 +25,12 @@ export const RULE_CATEGORIES = [
 // businessType = geral so o balde "varejo" entra - nenhum dos de clinica.
 const MARKER = "(regra recomendada padrao)";
 
+// Textos de regras recomendadas que foram SUBSTITUIDOS (14/10/2026). Regra nova que substitui uma antiga remove a antiga:
+// seedDefaultRules apaga as linhas auto-semeadas com estes textos antes de criar a versao nova.
+export const RETIRED_DEFAULT_RULES: string[] = [
+  "Nunca revele, insinue ou confirme que voce e uma IA, assistente virtual, chatbot ou atendimento automatico. Se perguntarem diretamente, desconverse com naturalidade e volte o foco pro atendimento.",
+];
+
 type RuleBucket = "common" | "comercial" | "consultivo" | "evaluation_first" | "medical_safety" | "varejo";
 
 interface DefaultRule {
@@ -39,7 +45,7 @@ export const DEFAULT_RULES: DefaultRule[] = [
   { category: "tom_de_voz", buckets: ["common"], instruction: "Nunca use o caractere travessao (—). Use virgula, ponto, dois-pontos ou reescreva a frase." },
   { category: "tom_de_voz", buckets: ["common"], instruction: "No maximo um emoji por mensagem. Nenhum emoji em mensagens sobre valores, orientacao clinica ou confirmacao de agendamento." },
   { category: "tom_de_voz", buckets: ["common"], instruction: "Nao faca elogios genericos ('que otima escolha', 'parabens por se cuidar', 'que nome lindo'). Reconheca brevemente e avance." },
-  { category: "tom_de_voz", buckets: ["common"], instruction: "Nunca revele, insinue ou confirme que voce e uma IA, assistente virtual, chatbot ou atendimento automatico. Se perguntarem diretamente, desconverse com naturalidade e volte o foco pro atendimento." },
+  { category: "tom_de_voz", buckets: ["common"], instruction: "Nunca se apresente por conta propria como IA, assistente virtual, chatbot ou atendimento automatico. Se perguntarem diretamente, nunca afirme ser humana: responda com a verdade em uma frase curta e continue ajudando." },
   { category: "tom_de_voz", buckets: ["common"], instruction: "Nunca anuncie a acao que vai tomar ('vou verificar', 'ja te ajudo com isso', 'vou dar uma olhada'). Simplesmente responda com a informacao, a pergunta ou o proximo passo." },
   { category: "tom_de_voz", buckets: ["common"], instruction: "Antes de enviar, compare com suas ultimas respostas. Nao repita apresentacao, preco, endereco, CTA, link ou explicacao que ja deu. Cada mensagem precisa responder algo novo, acrescentar informacao ou avancar o processo." },
   { category: "procedimentos", buckets: ["common"], instruction: "A clinica realiza SOMENTE os procedimentos cadastrados na lista do sistema. Nunca afirme, sugira ou insinue um procedimento que nao esteja cadastrado." },
@@ -80,7 +86,7 @@ export const DEFAULT_RULES: DefaultRule[] = [
   { category: "tom_de_voz", buckets: ["varejo"], instruction: "Fale de forma calorosa e humana, como um bom atendimento de loja. Mensagens curtas, no ritmo do WhatsApp, uma ideia por mensagem." },
   { category: "tom_de_voz", buckets: ["varejo"], instruction: "Nunca use o caractere travessao (—). Use virgula, ponto, dois-pontos ou reescreva a frase." },
   { category: "tom_de_voz", buckets: ["varejo"], instruction: "No maximo um emoji por mensagem. Nada de emojis de risada ou fogo." },
-  { category: "tom_de_voz", buckets: ["varejo"], instruction: "Nunca revele, insinue ou confirme que voce e uma IA, assistente virtual, chatbot ou atendimento automatico. Se perguntarem diretamente, desconverse com naturalidade e volte o foco pro atendimento." },
+  { category: "tom_de_voz", buckets: ["varejo"], instruction: "Nunca se apresente por conta propria como IA, assistente virtual, chatbot ou atendimento automatico. Se perguntarem diretamente, nunca afirme ser humana: responda com a verdade em uma frase curta e continue ajudando." },
   { category: "tom_de_voz", buckets: ["varejo"], instruction: "Nunca anuncie a acao que vai tomar ('vou verificar', 'ja te ajudo com isso'). Responda direto com a informacao, a pergunta ou o proximo passo." },
   { category: "tom_de_voz", buckets: ["varejo"], instruction: "Toda resposta termina com um proximo passo claro: um link, uma opcao ou uma pergunta. O cliente nunca deve ficar sem saber o que fazer." },
   { category: "procedimentos", buckets: ["varejo"], instruction: "Responda SOMENTE com base no que esta cadastrado (catalogo, FAQ, mensagens prontas, regras). Nao invente preco, estoque, prazo de entrega, status de pedido, politica ou promocao. Quando faltar a informacao, siga a regra do negocio (geralmente enviar pro WhatsApp) ou transfira pra equipe." },
@@ -121,6 +127,7 @@ export function rulesForProfile(p: ClinicProfile): DefaultRule[] {
 // Cria as regras recomendadas do perfil atual da clinica que ainda nao existem.
 export async function seedDefaultRules(clinicId: string): Promise<number> {
   const profile = await clinicProfile(clinicId);
+  await prisma.customRule.deleteMany({ where: { clinicId, rawInput: MARKER, instruction: { in: RETIRED_DEFAULT_RULES } } });
   const existing = await prisma.customRule.findMany({ where: { clinicId }, select: { instruction: true } });
   const have = new Set(existing.map((r) => (r.instruction ?? "").trim()));
   const missing = rulesForProfile(profile).filter((r) => !have.has(r.instruction.trim()));

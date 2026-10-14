@@ -262,7 +262,9 @@ export async function runLeadSummaryJob(clinicId: string): Promise<LeadSummaryRu
           data.noInterestAt = new Date();
         }
         const callbackAt = summary.callbackDate ? callbackInstant(summary.callbackDate, tz) : null;
-        if (callbackAt) {
+        // O dia e horario que a Alice combinou na conversa (schedule_recontact) valem mais que o resumo do robo (que so sabe o dia).
+        const alreadyAgreed = callbackAt ? await prisma.patient.findFirst({ where: { id: conversation.patient.id, callbackAt: { gt: new Date() } }, select: { id: true } }) : null;
+        if (callbackAt && !alreadyAgreed) {
           data.callbackAt = callbackAt;
           data.callbackNote = summary.callbackNote || null;
         }

@@ -202,6 +202,23 @@ const tools: ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "schedule_recontact",
+      description:
+        "Registra QUANDO a Alice deve retomar o contato com a pessoa (ex.: ela disse 'vou pensar' e combinou de falar sexta as 10h). No dia e horario combinados a Alice manda a mensagem de retomada sozinha. Chame SO depois que a pessoa disser ou aceitar um dia/horario. Se ela nao disse a hora, use 10:00. Depois confirme em uma frase ('Combinado, te chamo sexta as 10h!').",
+      parameters: {
+        type: "object",
+        properties: {
+          date: { type: "string", description: "AAAA-MM-DD do dia combinado, no ano corrente do contexto (copie do calendario dos proximos dias)." },
+          time: { type: "string", description: "HH:MM em 24h, no fuso da clinica. Padrao 10:00." },
+          note: { type: "string", description: "Opcional: o que ficou pendente (ex.: 'pensando no valor da criolipolise')." },
+        },
+        required: ["date"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "record_satisfaction",
       description:
         "Registra a nota da pesquisa de satisfacao quando o paciente responde com um numero (0 a 10) e ha uma pesquisa pendente no contexto. So chame quando o paciente realmente deu uma nota.",
@@ -313,6 +330,16 @@ function parseRequestedDateTime(date: unknown, time: unknown) {
   return parsed;
 }
 
+
+// Dia + hora combinados para a Alice retomar o contato (fuso da clinica). null = invalido, no passado ou longe demais (~13 meses).
+export function recontactInstant(date: unknown, time: unknown, tz: string, now = new Date()): Date | null {
+  const p = parseRequestedDateTime(date, time ? time : "10:00");
+  if (!p) return null;
+  const at = zonedWallClockToUtc(tz, p.year, p.month, p.day, p.hour, p.minute);
+  if (Number.isNaN(at.getTime()) || at.getTime() <= now.getTime()) return null;
+  if (at.getTime() > now.getTime() + 400 * 24 * 3_600_000) return null;
+  return at;
+}
 
 async function runTool(
   clinicId: string,
@@ -435,6 +462,13 @@ async function runTool(
         ...(a.professionalName ? { profissional: a.professionalName, profissional_id: a.professionalId } : {}),
       })),
     });
+  }
+
+  if (name === "schedule_recontact") {
+    const at = recontactInstant(input.date, input.time, tz);
+    if (!at) return JSON.stringify({ registrado: false, motivo: "data ou hora invalida ou que ja passou: confirme o dia (AAAA-MM-DD) e a hora (HH:MM) com a pessoa e tente de novo" });
+    await prisma.patient.update({ where: { id: patientId }, data: { callbackAt: at, callbackNote: String(input.note ?? "").trim().slice(0, 200) || null } });
+    return JSON.stringify({ registrado: true, quando: formatDateTimeInZone(at, tz), instrucao: "Confirme em UMA frase o dia e o horario combinados. Se for fora do expediente, a mensagem sai na abertura." });
   }
 
   if (name === "book_appointment") {
@@ -924,7 +958,7 @@ NAO FIQUE SE DESPEDINDO: se voce ja se despediu ou disse "fico a disposicao"/"e 
 - Recusou os horarios ("nenhum deles", "nao posso")? Nao se despeca: pergunte o dia da semana e o periodo que preferem e ofereca outras datas. So desista se ela disser claramente que nao quer mais.
 - Nao fale de valor se ela nao perguntou. Se perguntou, responda direto, em 1 frase, e volte ao proximo passo.
 - Objecao (preco, medo, tempo, indecisao): acolha, reconecte com o resultado que ela quer, use so as orientacoes cadastradas e proponha o proximo passo menor (a avaliacao). Nunca invente desconto, garantia nem urgencia.
-- Respondeu "nao", "vou pensar" ou "vou me organizar"? NUNCA responda so "ok"/"tudo bem": acolha em meia frase e faca UMA pergunta aberta (o que a deixou ainda pensando sobre o protocolo? quando podemos retomar o contato?).
+- Respondeu "nao", "vou pensar" ou "vou me organizar"? NUNCA responda so "ok"/"tudo bem": acolha em meia frase e, se fizer sentido, faca UMA pergunta aberta sobre o motivo (o que ficou pesando?), SEM empurrar avaliacao. Proponha um momento para retomar o contato ("posso te chamar amanha?") e, quando ela disser o dia e o horario, chame schedule_recontact.
 - NAO monte pacote, combo nem junte procedimentos por conta propria, e nao indique tratamento que nao tenha relacao direta com a queixa que ela contou. Indique o procedimento do catalogo que resolve a queixa dela; combo/pacote so se ja estiver cadastrado como condicao vigente ou se ela pedir.
 - Mensagens curtas (ate 3 frases), uma pergunta so, tom de WhatsApp, sem formulario, sem repetir a mesma abertura nem a mesma pergunta de fechamento.
 - Nunca diga que "ja tem outro paciente" no horario: diga so que "esse horario nao esta disponivel" e ofereca o mais proximo.

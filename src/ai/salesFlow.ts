@@ -101,7 +101,7 @@ export function analyzeFlow(input: { history: FlowMessage[]; trailing: string[];
       break;
     case "hesitate":
       nextMove =
-        "A cliente disse NAO, que vai pensar ou que vai se organizar - sem marcar nada. NUNCA responda so 'ok', 'tudo bem' ou 'quando estiver pronta me avise': isso entrega a venda. Respeite (sem pressao, sem insistir, sem inventar desconto/urgencia), mas em 1 frase acolha e faca UMA pergunta aberta que descubra o motivo ou combine o retorno, por exemplo: 'o que te deixou ainda pensando sobre o protocolo?' ou 'quando podemos retomar nosso contato?' (se ela disse que vai se organizar: 'qual dia da semana costuma ficar mais tranquilo pra voce? ja deixo um horario em mente'). Escolha a pergunta que combina com o que ela disse; nao repita uma pergunta que ja fez." +
+        "A cliente disse NAO, que vai pensar ou que vai se organizar - sem marcar nada. NUNCA responda so 'ok', 'tudo bem' ou 'quando estiver pronta me avise': isso entrega a venda. Respeite (sem pressao, sem insistir, sem inventar desconto/urgencia). Em 1 frase acolha e, se fizer sentido, faca UMA pergunta aberta que descubra o motivo (ex.: 'o que te deixou ainda pensando?'). NAO proponha avaliacao nem peca dia e turno de agendamento agora. Proponha um momento para retomar o contato (ex.: 'posso te chamar amanha?' ou 'qual dia e horario ficam bons pra eu te chamar?'); quando ela disser o dia e o horario, chame schedule_recontact (date AAAA-MM-DD, time HH:MM) e confirme em uma frase. Se ela ja disse quando quer ser chamada, registre direto. Nao repita uma pergunta que ja fez." +
         noPrice;
       break;
     case "price":

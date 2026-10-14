@@ -243,7 +243,7 @@ const PLAYBOOKS = [
   {
     name: "Contorno de objeções",
     scriptType: "objecoes",
-    triggerText: "Paciente diz que está caro, vai pensar, mora longe, não tem tempo ou compara com outro lugar.",
+    triggerText: "Paciente diz que está caro, mora longe, não tem tempo ou compara com outro lugar.",
     goal: "Acolher a objeção, reforçar valor e fechar com um próximo passo.",
     steps: [
       "Acolha a objeção como legítima, sem pressionar.",
@@ -315,13 +315,13 @@ const PLAYBOOKS = [
     name: "Paciente vai pensar ou responde só 'ok'",
     scriptType: "objecoes",
     triggerText: "Paciente diz 'vou pensar', 'entendi', 'ok', 'depois eu vejo' ou agradece sem agendar.",
-    goal: "Descobrir o motivo e a dúvida real e seguir conduzindo até o agendamento, sem aceitar passivamente.",
+    goal: "Acolher, entender a objeção e combinar o recontato, sem empurrar avaliação.",
     steps: [
-      "NÃO se despeça nem diga 'fique à vontade'. Acolha em uma frase curta.",
-      "Pergunte com interesse o que ficou pesando (valor, dúvida sobre o procedimento, resultado, tempo, medo) e qual é a dúvida dela.",
-      "Responda à dúvida com o que está cadastrado e conecte com a queixa que ela contou.",
-      "Proponha a avaliação estética gratuita como forma sem compromisso de tirar as dúvidas.",
-      "Termine perguntando qual dia e turno ficam melhores para a equipe agendar.",
+      "NÃO se despeça nem responda só 'ok' ou 'fique à vontade'. Acolha em uma frase curta.",
+      "Se fizer sentido, entenda com UMA pergunta o que ficou pesando (valor, dúvida sobre o procedimento, resultado, tempo, medo), sem pressionar.",
+      "Responda à dúvida com o que está cadastrado.",
+      "NÃO proponha avaliação nem peça dia e turno agora.",
+      "Proponha um momento para retomar o contato (ex.: 'posso te chamar amanhã?'). Quando ela disser a data e o horário, use schedule_recontact para a Alice retomar exatamente nesse momento.",
       "Só encerre se ela recusar com clareza mais de uma vez ou pedir para parar.",
     ],
   },
@@ -465,9 +465,8 @@ const RULES = [
   { category: "tom_de_voz", instruction: "Prefira as palavras 'paciente', 'avaliação', 'valor' ou 'investimento', 'condição especial' e 'oferta exclusiva'." },
   { category: "tom_de_voz", instruction: "Evite 'baratinho', 'milagre', 'garantido', 'sem risco' e 'vai ficar perfeito'. Evite também gírias excessivas, ironia, deboche e qualquer pressão." },
   { category: "tom_de_voz", instruction: "Nunca fale como 'Preço é X. Quer marcar?' nem 'Vai fechar ou não?'. Acolha, entenda a queixa e conduza com leveza." },
-  { category: "tom_de_voz", instruction: "Atendimento próximo, comercial e consultivo: acolha, entenda a queixa e conduza para avaliação ou agendamento sem pressionar. Se o paciente estiver indeciso, ofereça a avaliação estética gratuita; se já souber o procedimento, explique e conduza ao agendamento." },
+  { category: "tom_de_voz", instruction: "Atendimento próximo, comercial e consultivo: acolha, entenda a queixa e conduza a conversa para um próximo passo, mas sem pressionar. A avaliação pode ser sugerida no máximo uma vez no mesmo contexto. Se a pessoa disser que vai pensar, acolha e, se fizer sentido, entenda o motivo da dúvida, sem empurrar avaliação. Proponha um momento para retomar o contato e, quando ela disser a data e o horário, registre com schedule_recontact para a Alice retomar exatamente nesse momento." },
   { category: "tom_de_voz", instruction: "Política e religião: não debate. Concorrentes: nunca fale mal, mantenha neutralidade e reforce os diferenciais da Lisboa (segurança, profissional habilitado, produto/tecnologia, acompanhamento). Reclamações e assuntos jurídicos: acolha e transfira." },
-  { category: "tom_de_voz", instruction: "Em toda conversa: acolha, entenda a queixa, registre as informações relevantes, ofereça avaliação quando houver dúvida e conduza para o próximo passo. Transfira casos clínicos, reclamações, negociações especiais e assuntos sensíveis." },
   { category: "tom_de_voz", instruction: "Medo de agulha ou de ficar artificial: acolha e reforce que o plano é individualizado e busca resultado proporcional e natural." },
   { category: "tom_de_voz", instruction: "Quando o paciente perguntar 'dói?', 'tem risco?' ou 'fica natural?', responda que a sensibilidade varia conforme a pessoa e o procedimento e que a equipe busca tornar o atendimento o mais confortável possível; pergunte qual procedimento para explicar como costuma ser." },
 
@@ -483,7 +482,7 @@ const RULES = [
 
   // Pagamento
   { category: "pagamento", instruction: "Valores: se o lead veio de anúncio, informe o valor ou a condição vigente daquele anúncio. Para os demais contatos, informe apenas valores cadastrados e vigentes. Nunca invente preço, desconto ou condição. Em caso de dúvida, negociação fora do cadastrado ou condição indisponível, encaminhe para a equipe." },
-  { category: "pagamento", instruction: "Desconto, brinde ou condição especial: somente campanhas previamente autorizadas e vigentes. Fora disso, diga que vai verificar com a equipe e transfira." },
+  { category: "pagamento", instruction: "Desconto, brinde ou condição especial: somente campanhas previamente autorizadas e vigentes. Fora disso, não prometa nada e transfira para a equipe, sem escrever que vai verificar." },
   { category: "pagamento", instruction: "Sinal: depende do procedimento ou da campanha, siga a regra cadastrada. Quando o sinal for entrada, ele abate do saldo conforme a condição cadastrada. O prazo para pagar o sinal é de 24 horas." },
   { category: "pagamento", instruction: "Chave Pix: CNPJ 44.438.614/0001-25, Geraldo Petronilo de Sousa e Cia Ltda (Clínica Lisboa Beauty Center). Peça o comprovante por aqui; a conferência é interna e o financeiro conclui a etapa financeira." },
   { category: "pagamento", instruction: "Não prometa devolução de sinal nem autorize reembolso: isso é decisão do financeiro. Encaminhe para a equipe." },
@@ -506,11 +505,10 @@ const RULES = [
   { category: "agendamento", instruction: "Quem pede para parar de receber mensagens: registre o opt-out, interrompa disparos e responda que a solicitação foi registrada." },
 
   // Chamar a equipe
-  { category: "chamar_equipe", instruction: "Quando a dúvida exigir atendimento humano, não invente resposta: faça o encaminhamento conforme o fluxo (acione a transferência), sem escrever \"vou verificar com a equipe\". Depois que a equipe assumir a conversa, permaneça em silêncio até a liberação." },
+  { category: "chamar_equipe", instruction: "Quando a dúvida exigir atendimento humano, não invente resposta: acione a transferência e fique em silêncio, sem escrever \"vou verificar com a equipe\". Quem retoma a conversa é a equipe." },
   { category: "chamar_equipe", instruction: "Transfira para a equipe: desconto fora da regra, reclamação, paciente irritado, dúvida clínica, contraindicação, gestação ou amamentação, medicamentos, reação pós-procedimento, exames, laudos e receitas, pedido de diagnóstico ou prescrição, problema de pagamento e questão jurídica." },
   { category: "chamar_equipe", instruction: "Palavras que SEMPRE acionam a transferência: dor forte, alergia, falta de ar, sangramento, queimadura, bolha, infecção, reação, efeito colateral, dose, medicamento, grávida, amamentando, emergência, processo, advogado, Procon e reclamação." },
   { category: "chamar_equipe", instruction: "Não fale de medicamentos, doses, contraindicações nem efeitos colaterais: isso é só do profissional. Nesses casos, encaminhe para a equipe." },
-  { category: "chamar_equipe", instruction: "Depois da transferência, fique em silêncio enquanto a equipe conduz o caso e só retome quando a conversa for encerrada ou liberada." },
   { category: "chamar_equipe", instruction: "Fora do horário da equipe, diga: 'Sua mensagem já ficou registrada. No próximo horário de atendimento, nossa equipe dará continuidade por aqui.'" },
   { category: "chamar_equipe", instruction: "Urgência ou intercorrência (falta de ar, reação alérgica importante, sangramento intenso, dor intensa, desmaio ou quadro grave): não maneje clinicamente, interrompa o fluxo comercial, colete só o essencial, avise a equipe e oriente a procurar atendimento de emergência." },
   { category: "chamar_equipe", instruction: "Exame, receita, laudo ou foto relacionada a intercorrência: não interprete, não reenvie a terceiros nem use em marketing; encaminhe ao profissional. Fotos simples podem ser registradas conforme o fluxo." },
@@ -612,14 +610,14 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
     schedulingLink: null,
     softSell: true, // 09/10/2026: sem insistir em avaliacao
     saveContactsToPhone: true, // 09/10/2026 (Aline): salvar contatos na agenda do celular
-    handoffOnPrice: true, // 09/10/2026 (Aline): perguntou o valor -> atendimento humano
+    handoffOnPrice: false, // 14/10/2026 (Aline): a Alice informa o preco cadastrado e vigente; so duvida/negociacao vai para a equipe
     humanizedTone: true, // 09/10/2026 (Aline): atendimento humano e natural
     silentHandoff: true, // idem: o que nao souber responder, fica em silencio pra equipe responder
     humanReturnMinutes: 15, // 14/10/2026: equipe assumiu e demorou mais de 15 min pra responder -> a Alice volta a atender
     conciseFirstReply: true, // 08/10/2026: contato novo recebe conversa, nao enxurrada de informacao
-    quotePrices: false, // 08/10/2026 (Aline): a Alice nao passa valores; a equipe apresenta na avaliacao
+    quotePrices: true, // 14/10/2026 (Aline): a Alice informa o valor cadastrado e vigente (anuncio: a condicao do proprio anuncio)
     hoursByDay: JSON.stringify({ 6: [8, 15] }), // sabado ate as 15h (so pra automacoes)
-    aliceCanBook: false, // 08/10/2026 (pedido da Aline): a EQUIPE agenda; a Alice coleta interesse e transfere
+    aliceCanBook: true, // 14/10/2026: a Alice agenda direto no Clinica Experts
   };
 
   // So CRIA a clinica quando ainda nao existe - depois disso os dados sao
@@ -700,7 +698,7 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
   // as 11h do dia anterior; confirmacao do dia de 7h as 8h do proprio dia.
   // Os envios sao espalhados dentro da janela, com pausa entre pacientes.
   const REMINDERS = [
-    { hoursBefore: 24, dayOffset: 1, sendHour: 8, sendMinute: 0, sendEndHour: 11, pauseMinSec: 10, pauseMaxSec: 30, message: "Olá, {primeiro_nome}! ♥️ Tudo bem?\nAqui é a Fabi, da Clínica Lisboa Beauty Center ✨\nPassando para confirmar o seu agendamento conosco:\n\n📅 Data: {data} (amanhã)\n⏰ Horário: {hora}\n💆 Procedimento: {procedimento}\n\n📍 Endereço: Av. Índico, 294 – São Bernardo do Campo/SP – 09750-600\n🚗 Disponibilizamos estacionamento próprio e também temos convênio com desconto no endereço: Av. Índico, 231 – Jardim do Mar – São Bernardo do Campo.\n\nPosso confirmar a sua presença?\n\nEm caso de necessidade de cancelamento ou reagendamento, pedimos a gentileza de avisar com antecedência 💖" },
+    { hoursBefore: 24, dayOffset: 1, sendHour: 8, sendMinute: 0, sendEndHour: 11, pauseMinSec: 10, pauseMaxSec: 30, message: "Olá, {primeiro_nome}! ♥️ Tudo bem?\nAqui é a Alice, da Clínica Lisboa Beauty Center ✨\nPassando para confirmar o seu agendamento conosco:\n\n📅 Data: {data} (amanhã)\n⏰ Horário: {hora}\n💆 Procedimento: {procedimento}\n\n📍 Endereço: Av. Índico, 294 – São Bernardo do Campo/SP – 09750-600\n🚗 Disponibilizamos estacionamento próprio e também temos convênio com desconto no endereço: Av. Índico, 231 – Jardim do Mar – São Bernardo do Campo.\n\nPosso confirmar a sua presença?\n\nEm caso de necessidade de cancelamento ou reagendamento, pedimos a gentileza de avisar com antecedência 💖" },
     { hoursBefore: 3, dayOffset: 0, sendHour: 7, sendMinute: 0, sendEndHour: 8, pauseMinSec: 10, pauseMaxSec: 30, message: "Bom dia, {primeiro_nome}! Tudo bem? ☀️\nEstamos muito felizes em te receber hoje às {hora} 🥰\nSerá um prazer tê-la conosco e proporcionar uma experiência especial ❤️" },
   ];
   // Segunda cobranca (pedido da clinica, 08/10/2026): quem recebeu a confirmacao do dia
@@ -744,10 +742,10 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
   // as 20h. Cadastrados DESLIGADOS: ligar um a um depois de conectar o numero,
   // importar os contatos e conferir que nada saiu sozinho.
   const FOLLOWUPS = [
-    { order: 1, name: "Recontato Lisboa - 4 horas", afterMinutes: 240, message: "Oi, {primeiro_nome}! ✨ Passando para saber se ficou alguma dúvida sobre o procedimento. Se quiser, posso encaminhar para nossa equipe verificar os horários ou a condição vigente para você." },
-    { order: 2, name: "Recontato Lisboa - 1 dia", afterMinutes: 1440, message: "Oi, {primeiro_nome}! 💗 Conseguiu pensar com calma? Se quiser, nossa equipe verifica o melhor horário para a sua avaliação gratuita. ✨" },
+    { order: 1, name: "Recontato Lisboa - 4 horas", afterMinutes: 240, message: "Oi, {primeiro_nome}! ✨ Passando para saber se ficou alguma dúvida sobre o procedimento. Se quiser, posso ver um horário para você." },
+    { order: 2, name: "Recontato Lisboa - 1 dia", afterMinutes: 1440, message: "Oi, {primeiro_nome}! 💗 Conseguiu pensar com calma? Se quiser, posso ver o melhor horário para a sua avaliação gratuita. ✨" },
     { order: 3, name: "Recontato Lisboa - 3 dias", afterMinutes: 4320, message: "Oi, {primeiro_nome}! Tudo bem? 💗 Ficou alguma dúvida sobre o procedimento ou sobre como funciona a avaliação gratuita? Estou por aqui para ajudar. ✨" },
-    { order: 4, name: "Recontato Lisboa - 7 dias", afterMinutes: 10080, message: "Oi, {primeiro_nome}! ✨ Passando para saber se você ainda tem interesse. Se quiser, nossa equipe confirma uma condição vigente e o melhor horário para você. 💗" },
+    { order: 4, name: "Recontato Lisboa - 7 dias", afterMinutes: 10080, message: "Oi, {primeiro_nome}! ✨ Passando para saber se você ainda tem interesse. Se quiser, posso ver uma condição vigente e o melhor horário para você. 💗" },
     { order: 5, name: "Recontato Lisboa - 15 dias", afterMinutes: 21600, message: "Oi, {primeiro_nome}! 💗 Vou encerrar seu acompanhamento por aqui para não te incomodar, mas a Lisboa continua à disposição sempre que você quiser retomar seus cuidados. ✨" },
   ];
   for (const f of FOLLOWUPS) {

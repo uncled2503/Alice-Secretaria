@@ -3885,7 +3885,7 @@ function updateHomeStats() {
   const box = document.getElementById("rt-home-stats");
   if (!box) return;
   const activeRules = allCustomRules.filter((r) => r.status === "active").length;
-  const pendingRules = allCustomRules.filter((r) => r.status !== "active").length;
+  const pendingRules = allCustomRules.filter((r) => r.status !== "active" && r.status !== "inactive").length;
   const cards = [
     ["Regras ativas", activeRules, "A Alice cumpre sozinha em toda conversa."],
     ["Precisam da sua atenção", pendingRules, pendingRules ? "Sugestões e perguntas pendentes." : "Nada pendente."],
@@ -5859,19 +5859,19 @@ document.getElementById("btn-lisboa-limpar-regras").addEventListener("click", as
   try {
     const p = await post(true);
     const lines = p.changes.map((c) => {
-      const tag = !c.approved ? "AGUARDA OK (não será aplicada)" : c.action === "add" ? (c.found ? "já existe" : "CRIAR") : !c.found ? "texto não encontrado (já editada?)" : c.action === "remove" ? "REMOVER" : "REESCREVER";
-      return `• ${c.line ? "linha " + c.line : "regra nova"} — ${tag}\n   ${c.oldText ? "Hoje: " + c.oldText + "\n   " : ""}${c.newText ? "Fica: " + c.newText : ""}`;
+      const tag = !c.approved ? "AGUARDA OK (não será aplicada)" : c.action === "add" ? (c.found ? "já existe" : "CRIAR") : !c.found ? "texto não encontrado (já editada?)" : c.action === "remove" ? "REMOVER" : c.action === "disable" ? "DESATIVAR" : "REESCREVER";
+      return `• ${c.line ? "linha " + c.line : c.target === "roteiro" ? "roteiro \"" + c.name + "\"" : c.target || "regra nova"} — ${tag}\n   ${c.oldText ? "Hoje: " + c.oldText + "\n   " : ""}${c.newText ? "Fica: " + c.newText : ""}`;
     });
     const s = p.summary;
-    if (!s.removed && !s.rewritten && !s.added) { showError("Nada a fazer: as regras aprovadas já foram aplicadas ou foram editadas."); return; }
+    if (!s.removed && !s.rewritten && !s.added && !s.disabled) { showError("Nada a fazer: as regras aprovadas já foram aplicadas ou foram editadas."); return; }
     const msg = `Limpar regras em conflito da Lisboa?
 
-${s.removed} remoções · ${s.rewritten} reescritas · ${s.added} nova(s) · ${s.notFound} não encontradas · ${s.pendingOk} aguardando ok
+${s.removed} remoções · ${s.rewritten} reescritas · ${s.disabled} desativada(s) · ${s.added} nova(s) · ${s.notFound} não encontradas · ${s.pendingOk} aguardando ok
 
 ${lines.join("\n\n")}`;
     if (!(await showConfirm(msg))) return;
     const r = await post(false);
-    out.textContent = `Regras limpas: ${r.summary.removed} removidas, ${r.summary.rewritten} reescritas, ${r.summary.added} nova(s); ${r.summary.notFound} não encontradas; ${r.summary.pendingOk} aguardando ok.`;
+    out.textContent = `Regras limpas: ${r.summary.removed} removidas, ${r.summary.rewritten} reescritas, ${r.summary.disabled} desativada(s), ${r.summary.added} nova(s); ${r.summary.notFound} não encontradas; ${r.summary.pendingOk} aguardando ok.`;
     out.hidden = false;
   } finally {
     btn.disabled = false;

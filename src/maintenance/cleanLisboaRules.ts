@@ -1,4 +1,5 @@
 import { prisma } from "../db/client.js";
+import { DEFAULT_RULES, RETIRED_DEFAULT_RULES } from "../ai/rules.js";
 
 // Limpeza das regras da Lisboa que se contradizem (analise de 14/10/2026, aprovada pela Aline linha a linha).
 // As regras reais estao no banco (CustomRule); o seed nao apaga nada. Aqui cada regra e achada pelo TEXTO EXATO que o
@@ -10,6 +11,9 @@ import { prisma } from "../db/client.js";
 // "line" e a linha em seedLisboa.ts ANTES desta limpeza.
 export const CLEAN_MARKER = "seed:lisboa-limpeza-conflitos";
 
+// A regra padrao de identidade NOVA e a que esta em DEFAULT_RULES (a antiga fica em RETIRED_DEFAULT_RULES).
+const NEW_IDENTITY_DEFAULT = DEFAULT_RULES.find((r) => r.instruction.startsWith("Nunca se apresente por conta propria como IA"))!.instruction;
+
 const OLD: Record<number, { category: string; text: string }> = {
   467: { category: "tom_de_voz", text: "A Alice se identifica como assistente virtual da Lisboa Beauty Center. Se perguntarem se é robô, responda com naturalidade que é a Alice, assistente virtual da clínica, que ajuda com informações, horários e agendamentos e encaminha para a equipe quando necessário." },
   468: { category: "tom_de_voz", text: "Atendimento próximo, comercial e consultivo: acolha, entenda a queixa e conduza para avaliação ou agendamento sem pressionar. Se o paciente estiver indeciso, ofereça a avaliação estética gratuita; se já souber o procedimento, explique e conduza ao agendamento." },
@@ -18,6 +22,7 @@ const OLD: Record<number, { category: string; text: string }> = {
   486: { category: "pagamento", text: "Desconto, brinde ou condição especial: somente campanhas previamente autorizadas e vigentes. Fora disso, diga que vai verificar com a equipe e transfira." },
   492: { category: "pagamento", text: "Quando o paciente achar caro, pedir desconto ou comparar com outro lugar: acolha, explique que o valor envolve profissional, produto/tecnologia, protocolo e acompanhamento, reforce a avaliação personalizada e verifique se há condição vigente. Nunca prometa desconto." },
   509: { category: "chamar_equipe", text: "Se não souber ou não tiver informação segura, admita e encaminhe: 'Essa é uma orientação que preciso confirmar com nossa equipe para te passar corretamente.'" },
+  513: { category: "chamar_equipe", text: "Depois da transferência, fique em silêncio enquanto a equipe conduz o caso e só retome quando a conversa for encerrada ou liberada." },
   524: { category: "tom_de_voz", text: "Equipe da Lisboa: SÓ Sabrina e Amanda são 'Dra.' (biomédicas). Talita, Adriana e Suelen são esteticistas: chame apenas pelo primeiro nome, SEM 'Dra.'. Nunca chame ninguém de 'Dra.' por conta própria." },
   537: { category: "tom_de_voz", text: "Toda resposta termina com UMA pergunta que avança a conversa (qual a dúvida, qual a queixa, qual dia e turno), até o paciente chegar ao agendamento. Nunca termine só com 'qualquer dúvida estou aqui' ou 'é só me chamar'." },
   538: { category: "tom_de_voz", text: "Seja comercial de verdade, não apenas receptiva: entenda o PORQUÊ do paciente (a queixa, o que ele quer mudar) e qual é a DÚVIDA dele, responda e continue conduzindo até o agendamento. Aceitar passivamente o que o paciente diz é erro." },
@@ -30,9 +35,12 @@ const OLD: Record<number, { category: string; text: string }> = {
 };
 
 export interface RuleChange {
-  line: number | null; // null = regra nova
+  line: number | null; // null = nao tem linha no seedLisboa (regra nova, regra padrao ou roteiro)
   marker?: string; // so em action=add: marcador proprio da regra nova (padrao CLEAN_MARKER)
-  action: "remove" | "rewrite" | "add";
+  target?: "regra" | "regra padrão" | "roteiro"; // o que e (padrao: regra)
+  name?: string; // roteiro: nome
+  newTrigger?: string; // roteiro: novo "quando usar"
+  action: "remove" | "rewrite" | "add" | "disable";
   approved: boolean;
   category: string;
   oldText: string | null;
@@ -51,8 +59,34 @@ export const EVAL_TODAY_TOMORROW_MARKER = "seed:lisboa-avaliacao-hoje-amanha";
 export const EVAL_TODAY_TOMORROW_RULE =
   "Agendamento de avaliação: sempre ofereça a possibilidade de a pessoa vir hoje (se ainda houver horário no expediente) ou amanhã. Consulte esses dois dias antes de qualquer outro e ofereça de 2 a 3 horários entre eles; só ofereça outros dias se não houver vaga ou se a pessoa preferir.";
 
+// "Vou pensar" (Aline, 14/10/2026): acolhe, entende o motivo se fizer sentido, NAO empurra avaliacao e combina QUANDO retomar o contato.
 export const CONSOLIDATED_CONDUCTION_RULE =
-  "Atendimento próximo, comercial e consultivo: acolha, entenda a queixa e conduza a conversa para um próximo passo, mas sem pressionar. A avaliação pode ser sugerida no máximo uma vez no mesmo contexto. Se a pessoa disser que vai pensar, acolha e, se fizer sentido, entenda o motivo da dúvida, sem empurrar avaliação.";
+  "Atendimento próximo, comercial e consultivo: acolha, entenda a queixa e conduza a conversa para um próximo passo, mas sem pressionar. A avaliação pode ser sugerida no máximo uma vez no mesmo contexto. Se a pessoa disser que vai pensar, acolha e, se fizer sentido, entenda o motivo da dúvida, sem empurrar avaliação. Proponha um momento para retomar o contato e, quando ela disser a data e o horário, registre com schedule_recontact para a Alice retomar exatamente nesse momento.";
+
+export const TRANSFER_RULE =
+  "Quando a dúvida exigir atendimento humano, não invente resposta: acione a transferência e fique em silêncio, sem escrever \"vou verificar com a equipe\". Quem retoma a conversa é a equipe.";
+
+const OLD_THINK_STEPS = [
+  "NÃO se despeça nem diga 'fique à vontade'. Acolha em uma frase curta.",
+  "Pergunte com interesse o que ficou pesando (valor, dúvida sobre o procedimento, resultado, tempo, medo) e qual é a dúvida dela.",
+  "Responda à dúvida com o que está cadastrado e conecte com a queixa que ela contou.",
+  "Proponha a avaliação estética gratuita como forma sem compromisso de tirar as dúvidas.",
+  "Termine perguntando qual dia e turno ficam melhores para a equipe agendar.",
+  "Só encerre se ela recusar com clareza mais de uma vez ou pedir para parar.",
+].join("\n");
+
+export const NEW_THINK_STEPS = [
+  "NÃO se despeça nem responda só 'ok' ou 'fique à vontade'. Acolha em uma frase curta.",
+  "Se fizer sentido, entenda com UMA pergunta o que ficou pesando (valor, dúvida sobre o procedimento, resultado, tempo, medo), sem pressionar.",
+  "Responda à dúvida com o que está cadastrado.",
+  "NÃO proponha avaliação nem peça dia e turno agora.",
+  "Proponha um momento para retomar o contato (ex.: 'posso te chamar amanhã?'). Quando ela disser a data e o horário, use schedule_recontact para a Alice retomar exatamente nesse momento.",
+  "Só encerre se ela recusar com clareza mais de uma vez ou pedir para parar.",
+].join("\n");
+
+const OLD_OBJECTION_TRIGGER = "Paciente diz que está caro, vai pensar, mora longe, não tem tempo ou compara com outro lugar.";
+
+const DEFAULT_TWO_OPTIONS = "Ao oferecer horarios, ofereca no maximo DUAS opcoes concretas por vez. Se nenhuma servir, ofereca mais duas. Nunca liste todos os horarios de uma vez.";
 
 export const RULE_CHANGES: RuleChange[] = [
   // 1. Valores
@@ -64,7 +98,7 @@ export const RULE_CHANGES: RuleChange[] = [
     "Depois de informar o valor, continue a conversa naturalmente com UMA pergunta sobre o interesse da pessoa (qual região ou resultado ela quer, ou se ficou alguma dúvida). Não encerre de forma passiva, e não peça dia e turno nem repita a oferta de avaliação a cada resposta."),
   c(552, "remove", true, "Duplicata de 581 (\"nunca informe valores\", desatualizada)."),
   c(581, "remove", true, "\"Nunca informe valores\" está desatualizado."),
-  c(486, "rewrite", false, "NÃO estava na lista: manda dizer \"vai verificar com a equipe\", o que bate com a regra 546. Aguardando ok.",
+  c(486, "rewrite", true, "Aprovada pela Aline (14/10): mandava dizer \"vai verificar com a equipe\", que conflita com o silêncio ao transferir.",
     "Desconto, brinde ou condição especial: somente campanhas previamente autorizadas e vigentes. Fora disso, não prometa nada e transfira para a equipe, sem escrever que vai verificar."),
 
   // 2. Agendamento
@@ -72,53 +106,64 @@ export const RULE_CHANGES: RuleChange[] = [
   c(553, "remove", true, "Coberta pelas linhas 495/497 (coleta do nome completo) e pela regra nova abaixo."),
   { line: null, action: "add", approved: true, category: "agendamento", oldText: null, newText: NEW_BOOKING_NAME_RULE,
     note: "Preserva: sem cadastro, pede nome completo antes de concluir; depois de agendar, aviso interno à equipe." },
-
-  // Pedido da Aline (14/10/2026)
   { line: null, action: "add", approved: true, category: "agendamento", marker: EVAL_TODAY_TOMORROW_MARKER, oldText: null, newText: EVAL_TODAY_TOMORROW_RULE,
-    note: "Avaliação: sempre oferecer vir hoje ou amanhã." },
+    note: "Pedido da Aline (14/10): avaliação sempre oferece vir hoje ou amanhã." },
+  { line: null, target: "regra padrão", action: "disable", approved: true, category: "agendamento", oldText: DEFAULT_TWO_OPTIONS, newText: null,
+    note: "Aline (14/10): pode ser 3 horários por vez. Desativada (não apagada, para o sistema não recriar)." },
 
-  // 3. Condução / pressão
+  // 3. Condução / pressão / "vou pensar"
   c(537, "remove", true, "Fica a linha 568 (no máximo uma pergunta por resposta)."),
   c(538, "remove", true, "Mesma ideia da 537."),
   c(539, "remove", true, "\"Vou pensar\" não vira empurrão de avaliação (conflita com a 579)."),
-  c(470, "remove", false, "NÃO é duplicata exata da 468: tem a mais \"registre as informações\" e \"transfira casos clínicos…\" (a transferência já está na 510). Aguardando ok."),
-  c(468, "rewrite", false, "NÃO estava na lista: diz \"se indeciso, ofereça a avaliação\" e contradiz a regra consolidada. Aguardando ok.",
-    CONSOLIDATED_CONDUCTION_RULE),
+  c(470, "remove", true, "Aprovada pela Aline (14/10). Não era cópia exata da 468; a transferência já está na 510."),
+  c(468, "rewrite", true, "Aprovada pela Aline (14/10): sem oferecer avaliação a quem está indecisa; combina o recontato.", CONSOLIDATED_CONDUCTION_RULE),
+  { line: null, target: "roteiro", name: "Paciente vai pensar ou responde só 'ok'", action: "rewrite", approved: true, category: "objecoes",
+    oldText: OLD_THINK_STEPS, newText: NEW_THINK_STEPS, newTrigger: "Paciente diz 'vou pensar', 'entendi', 'ok', 'depois eu vejo' ou agradece sem agendar.",
+    note: "O roteiro mandava propor avaliação e pedir dia e turno; agora acolhe, entende o motivo e combina o recontato." },
+  { line: null, target: "roteiro", name: "Contorno de objeções", action: "rewrite", approved: true, category: "objecoes",
+    oldText: OLD_OBJECTION_TRIGGER, newText: "Paciente diz que está caro, mora longe, não tem tempo ou compara com outro lugar.",
+    note: "\"Vai pensar\" sai deste gatilho: tem roteiro próprio." },
 
   // 4. Identidade
   c(467, "remove", true, "Não se apresenta como assistente virtual por conta própria; se perguntarem, vale a resposta fixa."),
+  { line: null, target: "regra padrão", action: "rewrite", approved: true, category: "tom_de_voz", oldText: RETIRED_DEFAULT_RULES[0], newText: NEW_IDENTITY_DEFAULT,
+    note: "A regra padrão mandava \"desconverse\" sobre ser IA; o sistema responde a verdade." },
 
-  // 5. Transferência
-  c(509, "rewrite", true, "Separa antes da transferência (não inventa, encaminha) de depois (silêncio até liberar).",
-    "Quando a dúvida exigir atendimento humano, não invente resposta: faça o encaminhamento conforme o fluxo (acione a transferência), sem escrever \"vou verificar com a equipe\". Depois que a equipe assumir a conversa, permaneça em silêncio até a liberação."),
+  // 5. Transferência e silêncio
+  c(509, "rewrite", true, "Silêncio ao transferir (decisão da Aline, 14/10); sem frase de encaminhamento.", TRANSFER_RULE),
+  c(513, "remove", true, "O silêncio depois da tomada é feito pelo sistema; a regra dizia \"só retome quando liberada\", o que conflita com a volta após 15 min da equipe."),
 
   // 6. Equipe
   c(524, "remove", true, "A linha 531 repete e completa (Aline e Fabíola)."),
 ];
 
 export interface RuleChangeResult extends RuleChange {
-  found: number; // quantas regras ativas com esse texto exato existem no banco
+  found: number; // quantas existem no banco com esse texto exato
   applied: boolean;
 }
 
 export interface CleanRulesResult {
   dryRun: boolean;
   changes: RuleChangeResult[];
-  summary: { removed: number; rewritten: number; added: number; notFound: number; pendingOk: number };
+  summary: { removed: number; rewritten: number; added: number; disabled: number; notFound: number; pendingOk: number };
 }
 
 export async function cleanLisboaRules(clinicId: string, opts: { dryRun: boolean }): Promise<CleanRulesResult> {
   const rules = await prisma.customRule.findMany({ where: { clinicId, status: "active" }, select: { id: true, category: true, instruction: true } });
+  const playbooks = await prisma.playbook.findMany({ where: { clinicId }, select: { id: true, name: true, steps: true, triggerText: true } });
   const addedMarkers = new Set(
     (await prisma.customRule.findMany({ where: { clinicId, rawInput: { in: [CLEAN_MARKER, EVAL_TODAY_TOMORROW_MARKER] } }, select: { rawInput: true } })).map((r) => r.rawInput),
   );
   const changes: RuleChangeResult[] = [];
-  const summary = { removed: 0, rewritten: 0, added: 0, notFound: 0, pendingOk: 0 };
+  const summary = { removed: 0, rewritten: 0, added: 0, disabled: 0, notFound: 0, pendingOk: 0 };
 
   for (const ch of RULE_CHANGES) {
-    const matches = ch.oldText ? rules.filter((r) => r.instruction === ch.oldText) : [];
+    const isPlaybook = ch.target === "roteiro";
+    // roteiro: casa por nome + texto exato (os passos, ou o "quando usar" do roteiro de objecoes)
+    const pbMatches = isPlaybook ? playbooks.filter((p) => p.name === ch.name && (p.steps === ch.oldText || p.triggerText === ch.oldText)) : [];
+    const matches = isPlaybook ? [] : ch.oldText ? rules.filter((r) => r.instruction === ch.oldText) : [];
     const addedBefore = ch.action === "add" && addedMarkers.has(ch.marker ?? CLEAN_MARKER);
-    const found = ch.action === "add" ? (addedBefore ? 1 : 0) : matches.length;
+    const found = ch.action === "add" ? (addedBefore ? 1 : 0) : isPlaybook ? pbMatches.length : matches.length;
     let applied = false;
     if (!ch.approved) summary.pendingOk++;
     else if (ch.action === "add") {
@@ -127,13 +172,28 @@ export async function cleanLisboaRules(clinicId: string, opts: { dryRun: boolean
         summary.added++;
         applied = true;
       }
+    } else if (isPlaybook) {
+      if (!pbMatches.length) summary.notFound++;
+      else {
+        if (!opts.dryRun) {
+          const p = pbMatches[0];
+          await prisma.playbook.update({
+            where: { id: p.id },
+            data: p.steps === ch.oldText ? { steps: ch.newText ?? p.steps, ...(ch.newTrigger ? { triggerText: ch.newTrigger } : {}) } : { triggerText: ch.newText },
+          });
+        }
+        summary.rewritten++;
+        applied = true;
+      }
     } else if (!matches.length) summary.notFound++;
     else {
       if (!opts.dryRun) {
         if (ch.action === "remove") await prisma.customRule.deleteMany({ where: { id: { in: matches.map((m) => m.id) } } });
+        else if (ch.action === "disable") await prisma.customRule.updateMany({ where: { id: { in: matches.map((m) => m.id) } }, data: { status: "inactive" } });
         else await prisma.customRule.update({ where: { id: matches[0].id }, data: { instruction: ch.newText } });
       }
       if (ch.action === "remove") summary.removed++;
+      else if (ch.action === "disable") summary.disabled++;
       else summary.rewritten++;
       applied = true;
     }
