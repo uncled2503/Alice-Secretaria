@@ -31,6 +31,7 @@ const OLD: Record<number, { category: string; text: string }> = {
 
 export interface RuleChange {
   line: number | null; // null = regra nova
+  marker?: string; // so em action=add: marcador proprio da regra nova (padrao CLEAN_MARKER)
   action: "remove" | "rewrite" | "add";
   approved: boolean;
   category: string;
@@ -45,6 +46,10 @@ const c = (line: number, action: "remove" | "rewrite", approved: boolean, note: 
 
 export const NEW_BOOKING_NAME_RULE =
   "Se não localizar o cadastro do paciente, peça o nome completo antes de concluir o agendamento. Depois de agendar, a equipe recebe um aviso interno com nome, procedimento, data e horário para conferir.";
+
+export const EVAL_TODAY_TOMORROW_MARKER = "seed:lisboa-avaliacao-hoje-amanha";
+export const EVAL_TODAY_TOMORROW_RULE =
+  "Agendamento de avaliação: sempre ofereça a possibilidade de a pessoa vir hoje (se ainda houver horário no expediente) ou amanhã. Consulte esses dois dias antes de qualquer outro e ofereça de 2 a 3 horários entre eles; só ofereça outros dias se não houver vaga ou se a pessoa preferir.";
 
 export const CONSOLIDATED_CONDUCTION_RULE =
   "Atendimento próximo, comercial e consultivo: acolha, entenda a queixa e conduza a conversa para um próximo passo, mas sem pressionar. A avaliação pode ser sugerida no máximo uma vez no mesmo contexto. Se a pessoa disser que vai pensar, acolha e, se fizer sentido, entenda o motivo da dúvida, sem empurrar avaliação.";
@@ -67,6 +72,10 @@ export const RULE_CHANGES: RuleChange[] = [
   c(553, "remove", true, "Coberta pelas linhas 495/497 (coleta do nome completo) e pela regra nova abaixo."),
   { line: null, action: "add", approved: true, category: "agendamento", oldText: null, newText: NEW_BOOKING_NAME_RULE,
     note: "Preserva: sem cadastro, pede nome completo antes de concluir; depois de agendar, aviso interno à equipe." },
+
+  // Pedido da Aline (14/10/2026)
+  { line: null, action: "add", approved: true, category: "agendamento", marker: EVAL_TODAY_TOMORROW_MARKER, oldText: null, newText: EVAL_TODAY_TOMORROW_RULE,
+    note: "Avaliação: sempre oferecer vir hoje ou amanhã." },
 
   // 3. Condução / pressão
   c(537, "remove", true, "Fica a linha 568 (no máximo uma pergunta por resposta)."),
@@ -100,18 +109,21 @@ export interface CleanRulesResult {
 
 export async function cleanLisboaRules(clinicId: string, opts: { dryRun: boolean }): Promise<CleanRulesResult> {
   const rules = await prisma.customRule.findMany({ where: { clinicId, status: "active" }, select: { id: true, category: true, instruction: true } });
-  const addedBefore = (await prisma.customRule.count({ where: { clinicId, rawInput: CLEAN_MARKER } })) > 0;
+  const addedMarkers = new Set(
+    (await prisma.customRule.findMany({ where: { clinicId, rawInput: { in: [CLEAN_MARKER, EVAL_TODAY_TOMORROW_MARKER] } }, select: { rawInput: true } })).map((r) => r.rawInput),
+  );
   const changes: RuleChangeResult[] = [];
   const summary = { removed: 0, rewritten: 0, added: 0, notFound: 0, pendingOk: 0 };
 
   for (const ch of RULE_CHANGES) {
     const matches = ch.oldText ? rules.filter((r) => r.instruction === ch.oldText) : [];
+    const addedBefore = ch.action === "add" && addedMarkers.has(ch.marker ?? CLEAN_MARKER);
     const found = ch.action === "add" ? (addedBefore ? 1 : 0) : matches.length;
     let applied = false;
     if (!ch.approved) summary.pendingOk++;
     else if (ch.action === "add") {
       if (!addedBefore) {
-        if (!opts.dryRun) await prisma.customRule.create({ data: { clinicId, category: ch.category, rawInput: CLEAN_MARKER, instruction: ch.newText, status: "active" } });
+        if (!opts.dryRun) await prisma.customRule.create({ data: { clinicId, category: ch.category, rawInput: ch.marker ?? CLEAN_MARKER, instruction: ch.newText, status: "active" } });
         summary.added++;
         applied = true;
       }

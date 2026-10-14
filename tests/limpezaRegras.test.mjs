@@ -32,3 +32,20 @@ test("textos novos nao mandam 'nunca informe valores' nem prometem 'vou verifica
     assert.doesNotMatch(c.newText, /diga que vai verificar|preciso confirmar com nossa equipe/i);
   }
 });
+
+test("avaliacao: regra de hoje/amanha existe, aprovada e com marcador proprio", async () => {
+  const { RULE_CHANGES, EVAL_TODAY_TOMORROW_MARKER } = await import("../dist/maintenance/cleanLisboaRules.js");
+  const c = RULE_CHANGES.find((x) => x.marker === EVAL_TODAY_TOMORROW_MARKER);
+  assert.ok(c && c.approved && c.action === "add");
+  assert.match(c.newText, /hoje/);
+  assert.match(c.newText, /amanhã/);
+});
+
+test("a retomada da Alice nao pede desculpa pela demora", () => {
+  const src = fs.readFileSync(new URL("../src/ai/alice.ts", import.meta.url), "utf8");
+  const i = src.indexOf("RETOMADA DO ATENDIMENTO");
+  assert.ok(i > 0);
+  const trecho = src.slice(i, i + 400);
+  assert.doesNotMatch(trecho, /pedindo desculpa|Desculpa a demora/);
+  assert.match(trecho, /NAO peca desculpa/);
+});

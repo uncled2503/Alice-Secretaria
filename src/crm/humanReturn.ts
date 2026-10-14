@@ -9,7 +9,7 @@ import { deliverAliceReply } from "../uazapi/client.js";
 // ---------------------------------------------------------------------------
 // ALICE VOLTA SE A EQUIPE DEMORAR (pedido da Lisboa, 14/10/2026): a equipe assumiu a conversa (respondeu pelo painel ou pelo
 // celular), a pessoa continuou escrevendo e ninguem respondeu em N minutos (Clinic.humanReturnMinutes, Lisboa = 15). A Alice
-// volta a atender: devolve a conversa pra ela, avisa no chat e responde ja, pedindo desculpa pela demora.
+// volta a atender: devolve a conversa pra ela, avisa no chat e responde ja (sem pedir desculpa pela demora, pedido da Lisboa 14/10).
 //
 // Regras de seguranca:
 //  - so vale se uma PESSOA da equipe ja agiu na conversa (Conversation.staffTouchedAt). Conversa que a propria Alice

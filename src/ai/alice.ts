@@ -1198,6 +1198,7 @@ FERIADOS PROXIMOS: ${holidayItems.join("; ")}. Se a pessoa perguntar se funciona
 - Se o horario pedido NAO estiver livre, diga com naturalidade que aquele horario nao esta disponivel (ex: "esse horario ja esta ocupado") e ofereca as alternativas retornadas, agrupadas por dia (um dia de cada vez, ex: "sexta-feira tenho 9h ou 10h" - nao misture horarios de dias diferentes na mesma frase corrida, vira um paredao confuso). Se o paciente nao gostar das alternativas e quiser esperar uma vaga, use join_waitlist.
 - "procedure_name" e sempre um TRATAMENTO/PROCEDIMENTO, nunca o nome de um profissional. Se o paciente perguntar por vaga citando so o nome de um profissional ("tem vaga com a Dra. Fulana?"), sem dizer qual procedimento, NAO chame a ferramenta ainda: pergunte primeiro qual procedimento ele quer agendar com essa pessoa.
 - AGENDAR E EM DOIS PASSOS - nunca despeje a agenda inteira de uma vez, vira um paredao de texto:
+  0) AVALIACAO (quando as regras da clinica pedirem hoje/amanha): consulte HOJE e AMANHA (check_availability COM "date" de cada um) e ofereca de 2 a 3 horarios entre esses dois dias; so va para outros dias se nao houver vaga ou se ela preferir.
   1) DIA primeiro: chame check_availability SEM "date" e ofereca os dias que tem vaga ("consigo quarta, quinta ou sexta - qual fica melhor pra voce?"). Nao cite horario ainda.
   2) HORARIO depois: quando ele escolher o dia, chame check_availability COM o "date" daquele dia e ai sim ofereca os horarios livres (se forem muitos, agrupe por periodo: "de manha tenho 9h e 10h, de tarde 14h e 15h").
 - Se o paciente ja disser o dia que quer ("pode ser quinta?"), pule direto pro passo 2. Se ele ja disser dia E hora, use check_specific_time.
@@ -1893,7 +1894,7 @@ async function generateReplyUnlocked(
     messages.push({
       role: "system",
       content:
-        "RETOMADA DO ATENDIMENTO: uma pessoa da equipe estava atendendo esta conversa e a cliente ficou esperando uma resposta; agora VOCE esta retomando. Comece com UMA frase curta pedindo desculpa pela demora (ex.: \"Desculpa a demora!\"), sem se reapresentar, e responda o que ela mandou. As falas anteriores da equipe no historico foram escritas por uma pessoa: continue de onde ela parou, sem contradizer nem repetir o que a equipe ja disse. Se o assunto so a equipe resolve (negociacao, caso clinico), diga que ja avisou a equipe e chame transfer_to_human.",
+        "RETOMADA DO ATENDIMENTO: uma pessoa da equipe estava atendendo esta conversa e a cliente ficou esperando uma resposta; agora VOCE esta retomando. NAO peca desculpa pela demora e NAO se reapresente: responda direto o que ela mandou, como se a conversa seguisse normal. As falas anteriores da equipe no historico foram escritas por uma pessoa: continue de onde ela parou, sem contradizer nem repetir o que a equipe ja disse. Se o assunto so a equipe resolve (negociacao, caso clinico), diga que ja avisou a equipe e chame transfer_to_human.",
     });
   }
 

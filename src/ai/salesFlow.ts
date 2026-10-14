@@ -91,7 +91,7 @@ export function analyzeFlow(input: { history: FlowMessage[]; trailing: string[];
   switch (intent) {
     case "schedule":
       nextMove =
-        "A cliente quer AGENDAR (avaliacao ou procedimento). Va DIRETO ao agendamento, sem perguntas de descoberta e sem repetir o que ja foi dito: se ela ja citou dia/hora, chame check_specific_time; senao chame check_availability e ofereca 2 ou 3 opcoes reais (um dia por vez). Para 'avaliacao', use o procedimento de avaliacao cadastrado. Se ela respondeu a uma pergunta sua (ex.: a regiao, a queixa), agradeca em meia frase e volte ao agendamento. Se o horario pedido nao esta livre, diga so que 'esse horario nao esta disponivel' (NUNCA cite outro paciente) e ofereca o mais proximo no mesmo dia e nos dias seguintes. Horario combinado: book_appointment." +
+        "A cliente quer AGENDAR (avaliacao ou procedimento). Va DIRETO ao agendamento, sem perguntas de descoberta e sem repetir o que ja foi dito: se ela ja citou dia/hora, chame check_specific_time; senao chame check_availability e ofereca 2 ou 3 opcoes reais (agrupe por dia; se as regras da clinica pedirem hoje/amanha para avaliacao, comece por esses dois dias). Para 'avaliacao', use o procedimento de avaliacao cadastrado. Se ela respondeu a uma pergunta sua (ex.: a regiao, a queixa), agradeca em meia frase e volte ao agendamento. Se o horario pedido nao esta livre, diga so que 'esse horario nao esta disponivel' (NUNCA cite outro paciente) e ofereca o mais proximo no mesmo dia e nos dias seguintes. Horario combinado: book_appointment." +
         noPrice;
       break;
     case "decline":

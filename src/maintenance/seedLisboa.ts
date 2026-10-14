@@ -4,7 +4,7 @@ import { prisma } from "../db/client.js";
 import { hashPassword } from "../api/passwords.js";
 import { seedDefaultRules } from "../ai/rules.js";
 import { getFunnelStages } from "../crm/stages.js";
-import { CLEAN_MARKER, NEW_BOOKING_NAME_RULE } from "./cleanLisboaRules.js";
+import { CLEAN_MARKER, EVAL_TODAY_TOMORROW_MARKER, EVAL_TODAY_TOMORROW_RULE, NEW_BOOKING_NAME_RULE } from "./cleanLisboaRules.js";
 import { seedRulesOnce } from "./seedGuard.js";
 
 // Configuracao da Lisboa Beauty Center (Sao Bernardo do Campo/SP), montada a
@@ -693,6 +693,7 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
   await seedRulesOnce(clinic.id, "seed:lisboa-natural", NATURAL_RULES);
   await seedRulesOnce(clinic.id, "seed:lisboa-sem-pressao", SEM_PRESSAO_RULES);
   await seedRulesOnce(clinic.id, CLEAN_MARKER, [{ category: "agendamento", instruction: NEW_BOOKING_NAME_RULE }]);
+  await seedRulesOnce(clinic.id, EVAL_TODAY_TOMORROW_MARKER, [{ category: "agendamento", instruction: EVAL_TODAY_TOMORROW_RULE }]);
 
   // Automacoes: so o que o cliente pediu com todos os dados.
   // JANELAS pedidas pela clinica (08/10/2026): confirmacao do dia seguinte de 8h
