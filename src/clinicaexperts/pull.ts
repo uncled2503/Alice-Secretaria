@@ -25,6 +25,7 @@ export interface CeBookingLite {
   professional?: { uuid?: string } | null;
   patient?: { uuid?: string; name?: string | null; phone?: string | null } | null;
   procedures?: { id: number }[];
+  [k: string]: unknown; // o CE pode mandar o procedimento em outro campo: ver extractProcedureIds
 }
 
 // PURO: status do Clinica Experts -> status da Alice. "scheduled"/confirmado
@@ -49,6 +50,78 @@ export function normalizeCePhone(raw: string | null | undefined): string | null 
 // PURO: nome de procedimento que e so a avaliacao (nao o servico em si).
 export function isEvaluationName(name: string): boolean {
   return /^\s*avalia/i.test(name.normalize("NFD").replace(/[\u0300-\u036f]/g, ""));
+}
+
+// ---------------------------------------------------------------------------
+// PROCEDIMENTO DA RESERVA (14/10/2026): varias reservas da Lisboa chegavam com "procedures" vazio e ficavam fora das confirmacoes
+// ("reserva sem procedimento"), mesmo a paciente tendo recebido a mensagem com o nome do procedimento. O CE pode guardar o procedimento
+// em outro campo (servico, item, sessao, pacote) ou so no detalhe da reserva. Aqui o extrator aceita as formas usuais; quando a lista nao
+// traz nada, a importacao consulta o DETALHE da reserva (1x por hora por reserva) e o diagnostico guarda os nomes de campo que o CE devolveu.
+// ---------------------------------------------------------------------------
+const PROC_KEYS = ["procedures", "procedure", "services", "service", "items", "sessions", "session", "packages", "package", "treatments", "booking_procedures", "appointment_procedures", "sold_procedures"];
+
+function idOf(x: unknown): number | null {
+  if (typeof x === "number" && Number.isFinite(x)) return x;
+  if (typeof x === "string" && /^\d+$/.test(x.trim())) return Number(x.trim());
+  if (x && typeof x === "object") {
+    const o = x as Record<string, unknown>;
+    for (const k of ["procedure_id", "service_id", "id"]) {
+      const v = idOf(o[k]);
+      if (v != null) return v;
+    }
+    for (const k of ["procedure", "service"]) {
+      const v = o[k] && typeof o[k] === "object" ? idOf(o[k]) : null;
+      if (v != null) return v;
+    }
+  }
+  return null;
+}
+
+// PURO: ids de procedimento do CE que a reserva traz, em qualquer um dos campos conhecidos (ignora o que nao for id).
+export function extractProcedureIds(booking: unknown, depth = 0): number[] {
+  if (!booking || typeof booking !== "object" || depth > 2) return [];
+  const rec = booking as Record<string, unknown>;
+  const out: number[] = [];
+  for (const key of PROC_KEYS) {
+    const v = rec[key];
+    if (v == null) continue;
+    const list = Array.isArray(v) ? v : [v];
+    for (const item of list) {
+      // pacote/sessao: pode trazer a lista de procedimentos por dentro
+      if (item && typeof item === "object" && Array.isArray((item as Record<string, unknown>).procedures)) out.push(...extractProcedureIds(item, depth + 1));
+      const id = idOf(item);
+      if (id != null) out.push(id);
+    }
+    if (out.length) break; // o primeiro campo que trouxe algo vale
+  }
+  return [...new Set(out)];
+}
+
+// Campos que o CE devolveu para reservas sem procedimento (so nomes e valores NAO pessoais): alimenta o botao de diagnostico.
+export interface BookingDiagnostic {
+  uuid: string;
+  startsAt: string;
+  status: string;
+  listKeys: string[];
+  detailKeys: string[] | null;
+  detailFound: number[];
+  safe: Record<string, string | number | boolean | null>;
+}
+export const lastBookingDiagnostics = new Map<string, { at: Date; items: BookingDiagnostic[] }>();
+const PERSONAL_KEY = /name|nome|phone|fone|tel|email|mail|cpf|document|address|endereco|birth|nasc|note|obs|comment|photo|avatar|token/i;
+const detailTried = new Map<string, number>(); // uuid -> quando consultou o detalhe (1x por hora)
+
+function safeScalars(obj: unknown): Record<string, string | number | boolean | null> {
+  const out: Record<string, string | number | boolean | null> = {};
+  if (!obj || typeof obj !== "object") return out;
+  for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+    if (PERSONAL_KEY.test(k)) continue;
+    if (v === null || typeof v === "boolean" || typeof v === "number") out[k] = v as null | boolean | number;
+    else if (typeof v === "string") out[k] = v.slice(0, 60);
+    else if (Array.isArray(v)) out[k] = `[lista com ${v.length}]`;
+    else if (typeof v === "object") out[k] = `{${Object.keys(v as object).slice(0, 8).join(",")}}`;
+  }
+  return out;
 }
 
 // Uma reserva pode ter varios procedimentos (ex.: "Avaliacao" + o procedimento
@@ -122,6 +195,41 @@ export async function pullClinicBookings(clinicId: string): Promise<PullResult> 
     ? await prisma.appointment.findMany({ where: { clinicId, ceBookingUuid: { in: uuids } }, include: { procedure: true } })
     : [];
   const existingByUuid = new Map(existingRows.map((a) => [a.ceBookingUuid as string, a]));
+
+  // Reservas novas e futuras SEM procedimento na lista: tenta os outros campos e, se preciso, o detalhe da reserva (teto de 20 por rodada).
+  const diagnostics: BookingDiagnostic[] = [];
+  let detailCalls = 0;
+  for (const b of bookings) {
+    if (!b.uuid || !b.starts_at || existingByUuid.has(b.uuid)) continue;
+    const st0 = mapCeStatus(b.status);
+    if (st0 === "cancelled" || st0 === "no_show") continue;
+    const at0 = parseCeInstant(b.starts_at, tz);
+    if (Number.isNaN(at0.getTime()) || at0.getTime() < Date.now()) continue;
+    if ((b.procedures ?? []).length) continue;
+    let ids = extractProcedureIds(b);
+    let detailKeys: string[] | null = null;
+    let detailObj: unknown = null;
+    if (!ids.length && detailCalls < 20 && Date.now() - (detailTried.get(b.uuid) ?? 0) > 3_600_000) {
+      detailTried.set(b.uuid, Date.now());
+      detailCalls++;
+      const det = await ceRequest<{ data?: unknown }>(clinicId, `/bookings/${b.uuid}`);
+      if (det.ok) {
+        detailObj = (det.data as { data?: unknown })?.data ?? det.data;
+        detailKeys = detailObj && typeof detailObj === "object" ? Object.keys(detailObj as object) : null;
+        ids = extractProcedureIds(detailObj);
+      }
+    }
+    if (ids.length) {
+      b.procedures = ids.map((id) => ({ id }));
+      console.log(`[clinicaexperts] procedimento da reserva ${b.uuid.slice(0, 8)} lido de outro campo/detalhe: ${ids.join(",")}`);
+    } else {
+      diagnostics.push({ uuid: b.uuid.slice(0, 8), startsAt: b.starts_at, status: String(b.status ?? ""), listKeys: Object.keys(b), detailKeys, detailFound: ids, safe: safeScalars(detailObj ?? b) });
+    }
+  }
+  if (diagnostics.length) {
+    lastBookingDiagnostics.set(clinicId, { at: new Date(), items: diagnostics.slice(0, 15) });
+    console.warn(`[clinicaexperts] ${diagnostics.length} reserva(s) futura(s) sem procedimento mesmo no detalhe; campos da lista: ${diagnostics[0].listKeys.join(",")}; detalhe: ${(diagnostics[0].detailKeys ?? []).join(",")}`);
+  }
 
   // Reservas novas e futuras cujo procedimento ainda nao existe aqui (criado no CE depois do ultimo "Sincronizar catalogo", ou
   // item interno como "Retoque"): cria/vincula so o que falta, em vez de descartar a reserva e deixar a pessoa sem confirmacao.

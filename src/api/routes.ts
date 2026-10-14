@@ -56,6 +56,7 @@ import { applyLisboaDescritivos } from "../maintenance/applyLisboaDescritivos.js
 import { cleanLisboaRules, listActiveRules, listAutomations } from "../maintenance/cleanLisboaRules.js";
 import { diagnoseSlot } from "../scheduling/slots.js";
 import { syncBirthdaysFromCe } from "../clinicaexperts/birthdays.js";
+import { lastBookingDiagnostics, pullClinicBookings } from "../clinicaexperts/pull.js";
 import { auditProcedureLinks } from "../clinicaexperts/procedureLink.js";
 import { connectAccount, disconnectAccount, ceStatusFor } from "../clinicaexperts/client.js";
 import { syncCatalog } from "../clinicaexperts/sync.js";
@@ -1248,6 +1249,29 @@ apiRouter.post(
       await logActivity({ clinicId: clinic.id, type: "briefing_applied", area: "clinica", title: "Procedimentos vinculados ao Clínica Experts", description: `${result.applied} vinculado(s) por nome igual; ${result.unmatched.length} sem correspondência; ${result.stale.length} com vínculo antigo.`, actorName: req.staff?.name ?? null });
     }
     res.json(result);
+  })
+);
+
+// Diagnostico das reservas do Clinica Experts que nao entram nas confirmacoes (sem procedimento): roda a importacao e devolve os campos que o CE
+// mandou (so nomes de campo e valores nao pessoais). So admin.
+apiRouter.post(
+  "/clinics/lisboa-diagnostico-reservas-ce",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await prisma.clinic.findFirst({ where: { name: "Lisboa Beauty Center" } });
+    if (!clinic) {
+      res.status(404).json({ error: "Clínica Lisboa não encontrada." });
+      return;
+    }
+    const pull = await pullClinicBookings(clinic.id);
+    const skips = lastPullSkips.get(clinic.id)?.skips ?? [];
+    res.json({
+      error: pull.error ?? null,
+      imported: { created: pull.created, updated: pull.updated },
+      stillSkipped: skips.length,
+      byReason: { semProcedimento: skips.filter((x) => x.reason === "procedimento_sem_vinculo").length, semTelefone: skips.filter((x) => x.reason === "sem_telefone").length },
+      samples: lastBookingDiagnostics.get(clinic.id)?.items ?? [],
+    });
   })
 );
 

@@ -5949,6 +5949,26 @@ document.getElementById("btn-lisboa-vincular-proc").addEventListener("click", as
   }
 });
 
+document.getElementById("btn-lisboa-diag-ce").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const out = document.getElementById("seed-lisboa-result");
+  btn.disabled = true;
+  try {
+    const r = await api("/clinics/lisboa-diagnostico-reservas-ce", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const linhas = [
+      `Importação rodada agora: ${r.imported.created} criada(s), ${r.imported.updated} atualizada(s).`,
+      `Ainda fora das confirmações: ${r.stillSkipped} (sem procedimento no CE: ${r.byReason.semProcedimento}; sem telefone: ${r.byReason.semTelefone}).`,
+      r.error ? `ERRO: ${r.error}` : "",
+      ...r.samples.slice(0, 6).map((x) => `• reserva ${x.uuid} em ${x.startsAt} (${x.status})\n   campos da lista: ${x.listKeys.join(", ")}\n   campos do detalhe: ${(x.detailKeys || []).join(", ") || "(não veio)"}\n   valores: ${JSON.stringify(x.safe)}`),
+    ].filter(Boolean);
+    out.textContent = linhas.join("\n");
+    out.style.whiteSpace = "pre-wrap";
+    out.hidden = false;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 document.getElementById("btn-lisboa-regras-ativas").addEventListener("click", async (e) => {
   const btn = e.currentTarget;
   btn.disabled = true;
