@@ -5851,6 +5851,33 @@ Não altera duração, valor nem o que já foi escrito.`;
   }
 });
 
+document.getElementById("btn-lisboa-limpar-regras").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const out = document.getElementById("seed-lisboa-result");
+  const post = (dryRun) => api("/clinics/lisboa-limpar-regras", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dryRun }) });
+  btn.disabled = true;
+  try {
+    const p = await post(true);
+    const lines = p.changes.map((c) => {
+      const tag = !c.approved ? "AGUARDA OK (não será aplicada)" : c.action === "add" ? (c.found ? "já existe" : "CRIAR") : !c.found ? "texto não encontrado (já editada?)" : c.action === "remove" ? "REMOVER" : "REESCREVER";
+      return `• ${c.line ? "linha " + c.line : "regra nova"} — ${tag}\n   ${c.oldText ? "Hoje: " + c.oldText + "\n   " : ""}${c.newText ? "Fica: " + c.newText : ""}`;
+    });
+    const s = p.summary;
+    if (!s.removed && !s.rewritten && !s.added) { showError("Nada a fazer: as regras aprovadas já foram aplicadas ou foram editadas."); return; }
+    const msg = `Limpar regras em conflito da Lisboa?
+
+${s.removed} remoções · ${s.rewritten} reescritas · ${s.added} nova(s) · ${s.notFound} não encontradas · ${s.pendingOk} aguardando ok
+
+${lines.join("\n\n")}`;
+    if (!(await showConfirm(msg))) return;
+    const r = await post(false);
+    out.textContent = `Regras limpas: ${r.summary.removed} removidas, ${r.summary.rewritten} reescritas, ${r.summary.added} nova(s); ${r.summary.notFound} não encontradas; ${r.summary.pendingOk} aguardando ok.`;
+    out.hidden = false;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 document.getElementById("btn-seed-teste").addEventListener("click", async (e) => {
   const btn = e.currentTarget;
   const out = document.getElementById("seed-teste-result");

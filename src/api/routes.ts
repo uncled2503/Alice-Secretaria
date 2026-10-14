@@ -53,6 +53,7 @@ import { seedDiamondClinic } from "../maintenance/seedDiamondClinic.js";
 import { seedLisboa } from "../maintenance/seedLisboa.js";
 import { applyLisboaServicos } from "../maintenance/applyLisboaServicos.js";
 import { applyLisboaDescritivos } from "../maintenance/applyLisboaDescritivos.js";
+import { cleanLisboaRules } from "../maintenance/cleanLisboaRules.js";
 import { connectAccount, disconnectAccount, ceStatusFor } from "../clinicaexperts/client.js";
 import { syncCatalog } from "../clinicaexperts/sync.js";
 import { undoCeImport } from "../clinicaexperts/undo.js";
@@ -1135,6 +1136,33 @@ apiRouter.post(
         area: "clinica",
         title: "Descritivos comerciais dos procedimentos aplicados",
         description: `${result.filled} procedimentos receberam descrição; ${result.alreadyFilled} já tinham e ficaram como estavam; ${result.unmatched.length} descritivos sem procedimento com o mesmo nome.`,
+        actorName: req.staff?.name ?? null,
+      });
+    }
+    res.json(result);
+  })
+);
+
+// Limpa as regras da Lisboa que se contradizem (lista aprovada pela clinica; so o que bate com o texto exato). dryRun (padrao) so mostra a previa. So admin.
+apiRouter.post(
+  "/clinics/lisboa-limpar-regras",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    if (!maintenanceEnabled(res)) return;
+    const clinic = await prisma.clinic.findFirst({ where: { name: "Lisboa Beauty Center" } });
+    if (!clinic) {
+      res.status(404).json({ error: "Clínica Lisboa não encontrada (aplique primeiro a configuração da Lisboa)." });
+      return;
+    }
+    const { dryRun } = (req.body ?? {}) as { dryRun?: boolean };
+    const result = await cleanLisboaRules(clinic.id, { dryRun: dryRun !== false });
+    if (!result.dryRun) {
+      await logActivity({
+        clinicId: clinic.id,
+        type: "briefing_applied",
+        area: "clinica",
+        title: "Regras em conflito da Lisboa limpas",
+        description: `${result.summary.removed} regras removidas, ${result.summary.rewritten} reescritas, ${result.summary.added} nova(s); ${result.summary.notFound} não encontradas (texto já editado) e ${result.summary.pendingOk} aguardando ok da clínica.`,
         actorName: req.staff?.name ?? null,
       });
     }
