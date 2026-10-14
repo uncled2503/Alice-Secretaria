@@ -294,7 +294,12 @@ async function procedureNotFoundMessage(clinicId: string, rawName: unknown): Pro
   if (looksLikeProfessional) {
     return `"${raw}" e o nome de um PROFISSIONAL, nao de um procedimento. Nao diga ao paciente que esse "procedimento" nao existe. Em vez disso, pergunte qual procedimento/tratamento ele quer agendar com essa pessoa e so entao chame check_availability de novo com o procedure_name correto.`;
   }
-  return `Procedimento "${raw}" nao encontrado na clinica. Pergunte ao paciente qual procedimento ele deseja, usando os nomes cadastrados.`;
+  // A pessoa pediu algo que nao esta no catalogo (ex.: oferta de anuncio, "Protocolo do Olhar"): nao fica repetindo "nao localizei".
+  const evaluation = await prisma.procedure.findFirst({ where: { clinicId, internalOnly: false, name: { contains: "avalia" } }, select: { name: true } });
+  const alt = evaluation
+    ? ` Se ela veio de um anuncio ou de uma oferta que nao esta no catalogo, NAO diga que nao encontrou e NAO repita a pergunta: ofereca a avaliacao gratuita (procedimento "${evaluation.name}", chame check_availability com esse nome); a equipe apresenta a oferta na avaliacao, sem voce prometer valor ou condicao.`
+    : " Pergunte ao paciente qual procedimento ele deseja, usando os nomes cadastrados.";
+  return `Procedimento "${raw}" nao encontrado na clinica.${alt} Se a pessoa fez outra pergunta (endereco, valor, horario de funcionamento), RESPONDA essa pergunta primeiro e nunca repita a mensagem anterior.`;
 }
 
 // Resolve quais profissionais considerar para um procedimento. Se o paciente

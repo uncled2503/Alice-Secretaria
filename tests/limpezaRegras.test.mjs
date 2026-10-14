@@ -261,3 +261,34 @@ test("candidata a vaga de emprego nao e paciente (mas 'tem vaga amanha?' continu
   }
   assert.equal(isJobSeeker("tenho interesse na drenagem", "Drenagem R$ 99,99"), false);
 });
+
+test("avaliacao ja oferecida e a cliente segue perguntando do tratamento: explica o procedimento, nao insiste na avaliacao", async () => {
+  const { analyzeFlow } = await import("../dist/ai/salesFlow.js");
+  const hist = [
+    { role: "user", content: "Gostaria de saber o valor do clareamento corporal, tratamento para estrias e gordura localizada" },
+    { role: "assistant", content: "O clareamento corporal custa R$ 189,90. Você gostaria de agendar uma avaliação gratuita?" },
+    { role: "user", content: "Esse valor é por região? Do clareamento corporal" },
+  ];
+  const preco = analyzeFlow({ history: hist, trailing: [hist[2].content], priceAsked: true, hasBooking: false });
+  assert.equal(preco.intent, "price");
+  assert.equal(preco.evalOffered, true);
+  assert.match(preco.nextMove, /NAO ofereca avaliacao nem horario/);
+  assert.match(preco.nextMove, /explique o procedimento/);
+  // sem oferta anterior, o comportamento de conduzir continua
+  const semOferta = analyzeFlow({ history: [hist[0], hist[2]], trailing: [hist[2].content], priceAsked: true, hasBooking: false });
+  assert.match(semOferta.nextMove, /avaliacao ou horario/);
+  // caso padrao (so informacao) com avaliacao ja oferecida: tambem explica
+  const info = analyzeFlow({ history: [{ role: "user", content: "tenho flacidez no braço" }, { role: "assistant", content: "Posso agendar sua avaliação gratuita." }, { role: "user", content: "e como funciona o tratamento?" }], trailing: ["e como funciona o tratamento?"], priceAsked: false, hasBooking: false });
+  assert.match(info.nextMove, /Converse de verdade/);
+  assert.doesNotMatch(info.nextMove, /feche com UMA pergunta concreta que leve a avaliacao/);
+});
+
+test("quer agendar algo que nao esta no catalogo (oferta de anuncio): avaliacao gratuita, sem 'nao localizei'", async () => {
+  const { analyzeFlow } = await import("../dist/ai/salesFlow.js");
+  const f = analyzeFlow({ history: [{ role: "user", content: "Sim, quero agendar um horário o Protocolo do Olhar!" }], trailing: ["Sim, quero agendar um horário o Protocolo do Olhar!"], priceAsked: false, hasBooking: false });
+  assert.equal(f.intent, "schedule");
+  assert.match(f.nextMove, /NAO estiver no catalogo/);
+  assert.match(f.nextMove, /AVALIACAO gratuita/);
+  const src = fs.readFileSync(new URL("../src/ai/alice.ts", import.meta.url), "utf8");
+  assert.match(src, /RESPONDA essa pergunta primeiro e nunca repita a mensagem anterior/);
+});

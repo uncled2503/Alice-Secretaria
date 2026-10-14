@@ -92,7 +92,7 @@ export function analyzeFlow(input: { history: FlowMessage[]; trailing: string[];
   switch (intent) {
     case "schedule":
       nextMove =
-        "A cliente quer AGENDAR (avaliacao ou procedimento). Va DIRETO ao agendamento, sem perguntas de descoberta e sem repetir o que ja foi dito: se ela ja citou dia/hora, chame check_specific_time; senao chame check_availability e ofereca 2 ou 3 opcoes reais (agrupe por dia; se as regras da clinica pedirem hoje/amanha para avaliacao, comece por esses dois dias). Para 'avaliacao', use o procedimento de avaliacao cadastrado. Se ela respondeu a uma pergunta sua (ex.: a regiao, a queixa), agradeca em meia frase e volte ao agendamento. Se o horario pedido nao esta livre, diga so que 'esse horario nao esta disponivel' (NUNCA cite outro paciente) e ofereca o mais proximo no mesmo dia e nos dias seguintes. Horario combinado: book_appointment." +
+        "A cliente quer AGENDAR (avaliacao ou procedimento). Va DIRETO ao agendamento, sem perguntas de descoberta e sem repetir o que ja foi dito: se ela ja citou dia/hora, chame check_specific_time; senao chame check_availability e ofereca 2 ou 3 opcoes reais (agrupe por dia; se as regras da clinica pedirem hoje/amanha para avaliacao, comece por esses dois dias). Para 'avaliacao', use o procedimento de avaliacao cadastrado. Se ela respondeu a uma pergunta sua (ex.: a regiao, a queixa), agradeca em meia frase e volte ao agendamento. Se o horario pedido nao esta livre, diga so que 'esse horario nao esta disponivel' (NUNCA cite outro paciente) e ofereca o mais proximo no mesmo dia e nos dias seguintes. Horario combinado: book_appointment. Se o procedimento que ela citou (ou a oferta do anuncio) NAO estiver no catalogo, NAO diga que nao encontrou nem pergunte de novo qual procedimento: agende a AVALIACAO gratuita (a equipe apresenta a oferta na avaliacao, sem prometer valor ou condicao). Se ela fez outra pergunta junto (endereco, valor), responda tambem." +
         noPrice;
       break;
     case "decline":
@@ -111,14 +111,17 @@ export function analyzeFlow(input: { history: FlowMessage[]; trailing: string[];
         (priceAsked ? " Ela perguntou valor: responda conforme a regra de valores desta clinica, em 1 frase." : " Se for so agradecimento ou 'ok', encerre com uma frase curta ('Por nada! Te esperamos') ou nao responda.");
       break;
     case "price":
-      nextMove =
-        "Ela perguntou VALOR. Responda isso primeiro, em 1 frase, conforme a regra de valores desta clinica (cadastrados, ou a equipe apresenta), sem enrolar, e conduza ao proximo passo: avaliacao ou horario.";
+      nextMove = evalOffered
+        ? "Ela perguntou VALOR. Responda isso primeiro, em 1 frase, conforme a regra de valores desta clinica. Voce JA ofereceu a avaliacao e ela nao pegou a oferta: NAO ofereca avaliacao nem horario agora. Converse de verdade: explique o procedimento de que ela esta falando com o que esta cadastrado (o que e, para que serve, como funciona), em 2 ou 3 frases, sem despejar tudo, e termine com UMA pergunta sobre o interesse ou a duvida dela. So volte a falar de avaliacao se ela demonstrar interesse em agendar."
+        : "Ela perguntou VALOR. Responda isso primeiro, em 1 frase, conforme a regra de valores desta clinica (cadastrados, ou a equipe apresenta), sem enrolar, e conduza ao proximo passo: avaliacao ou horario.";
       break;
     default:
       nextMove = statedGoal
-        ? "Ela JA contou o que quer (queixa/regiao). NAO pergunte de novo 'o que voce gostaria de melhorar'. Reconheca a queixa com as palavras dela (1 frase), conecte a solucao do catalogo (1 frase) e feche com UMA pergunta concreta que leve a avaliacao ou ao horario (ex.: 'Quer que eu veja um horario pra sua avaliacao?')." +
-          noPrice +
-          (evalOffered ? " Voce ja falou de avaliacao: se ela nao pediu, nao repita a oferta; aprofunde com informacao util e uma pergunta NOVA." : "")
+        ? evalOffered
+          ? "Ela JA contou o que quer e voce JA falou de avaliacao sem que ela pedisse. NAO repita a oferta nem pergunte de novo o que ela quer melhorar. Converse de verdade: explique o procedimento do catalogo que resolve a queixa dela (o que e, para que serve, como funciona) em 2 ou 3 frases, sem despejar tudo, e termine com UMA pergunta NOVA sobre o interesse ou a duvida dela. So volte a falar de avaliacao se ela demonstrar interesse em agendar." +
+            noPrice
+          : "Ela JA contou o que quer (queixa/regiao). NAO pergunte de novo 'o que voce gostaria de melhorar'. Reconheca a queixa com as palavras dela (1 frase), conecte a solucao do catalogo (1 frase) e feche com UMA pergunta concreta que leve a avaliacao ou ao horario (ex.: 'Quer que eu veja um horario pra sua avaliacao?')." +
+            noPrice
         : "Descubra o que ela quer com UMA pergunta especifica ao assunto dela (se veio de anuncio, use o procedimento do anuncio; ex.: gordura -> qual regiao). Curto, natural." + noPrice;
   }
 
