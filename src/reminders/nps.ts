@@ -18,7 +18,7 @@ export function startNpsJob(): void {
   scheduleLocked("pesquisa-satisfacao", "*/15 * * * *", async () => {
     const clinics = await prisma.clinic.findMany({
       where: { npsEnabled: true, plan: { not: FREE_PLAN } },
-      select: { id: true, npsHoursAfter: true, npsMessage: true, name: true, timezone: true, workDays: true, workStartHour: true, workEndHour: true, hoursByDay: true },
+      select: { id: true, npsHoursAfter: true, npsMessage: true, npsEvaluationMessage: true, name: true, timezone: true, workDays: true, workStartHour: true, workEndHour: true, hoursByDay: true },
     });
 
     for (const clinic of clinics) {
@@ -43,7 +43,7 @@ export function startNpsJob(): void {
           scheduledAt: { lte: cutoff, gte: floor },
           patient: { optedOut: false },
         },
-        include: { patient: true },
+        include: { patient: true, procedure: { select: { name: true } } },
         orderBy: { scheduledAt: "asc" },
         take: MAX_PER_TICK, // ligar o NPS pela 1a vez nao dispara os ultimos 5 dias de uma vez: o resto sai nas proximas rodadas
       });
@@ -58,7 +58,8 @@ export function startNpsJob(): void {
         if (already) continue;
 
         const firstName = appt.patient.name?.trim().split(" ")[0] || "";
-        const text = (clinic.npsMessage?.trim() || DEFAULT_MESSAGE)
+        const isEvaluation = /avalia/i.test(appt.procedure.name);
+        const text = ((isEvaluation && clinic.npsEvaluationMessage?.trim()) || clinic.npsMessage?.trim() || DEFAULT_MESSAGE)
           .replace(/\{primeiro_nome\}/gi, firstName)
           .replace(/\{nome\}/gi, firstName)
           .replace(/\{unidade\}/gi, info.primaryLocation?.name || info.name)

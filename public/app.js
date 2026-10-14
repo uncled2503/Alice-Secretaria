@@ -5914,9 +5914,9 @@ document.getElementById("btn-lisboa-regras-ativas").addEventListener("click", as
   const btn = e.currentTarget;
   btn.disabled = true;
   try {
-    const { rules } = await api("/clinics/lisboa-regras-ativas", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const { rules, automations } = await api("/clinics/lisboa-regras-ativas", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
     const txt = rules.map((r, i) => `#${i + 1} [${r.category}] (${r.origem})\n${r.instruction}`).join("\n\n");
-    const url = URL.createObjectURL(new Blob([`Regras ativas da Lisboa: ${rules.length}\n\n${txt}`], { type: "text/plain;charset=utf-8" }));
+    const url = URL.createObjectURL(new Blob([`Regras ativas da Lisboa: ${rules.length}\n\n${txt}\n\n==== AUTOMAÇÕES ====\n\n${(automations || []).join("\n\n")}`], { type: "text/plain;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url;
     link.download = "regras-ativas-lisboa.txt";

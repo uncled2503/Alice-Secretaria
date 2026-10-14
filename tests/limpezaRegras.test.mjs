@@ -165,3 +165,25 @@ test("agendar sem profissional informado escolhe um que esteja livre (nao valida
   assert.match(corpo, /checkSpecificTime\(clinicId, procedure\.id, \{ year: wc\.year/);
   assert.ok(corpo.indexOf("candidateProIds.length > 1") < corpo.indexOf("await createBooking("));
 });
+
+test("recontato de 1 dia: vence no dia civil seguinte as 8h (fuso de Sao Paulo), inclusive na virada do mes", async () => {
+  const { nextDayAt } = await import("../dist/crm/followup.js");
+  assert.equal(nextDayAt(new Date("2026-10-14T18:00:00Z"), "America/Sao_Paulo", 8).toISOString(), "2026-10-15T11:00:00.000Z"); // escreveu 15h -> amanha 8h
+  assert.equal(nextDayAt(new Date("2026-10-15T02:30:00Z"), "America/Sao_Paulo", 8).toISOString(), "2026-10-15T11:00:00.000Z"); // 23h30 do dia 14 em SP -> dia 15 8h
+  assert.equal(nextDayAt(new Date("2026-10-31T23:00:00Z"), "America/Sao_Paulo", 8).toISOString(), "2026-11-01T11:00:00.000Z"); // virada de mes
+});
+
+test("migracao 17: recontato de 1 dia as 8h so na Lisboa + texto da pesquisa pos-avaliacao da Aline", () => {
+  const sql = fs.readFileSync(new URL("../prisma/migrations/20261014170000_recontato_dia_seguinte_pos_avaliacao/migration.sql", import.meta.url), "utf8");
+  assert.match(sql, /"nextDayHour" = 8, "sendWindowStart" = 8, "sendWindowEnd" = 12/);
+  assert.match(sql, /"order" = 2 AND "afterMinutes" = 1440/);
+  assert.match(sql, /Gostaríamos de saber como foi sua experiência durante a avaliação conosco/);
+  assert.match(sql, /\{primeiro_nome\}/);
+  assert.match(sql, /WHERE "name" = 'Lisboa Beauty Center'/);
+});
+
+test("pesquisa de satisfacao usa o texto da avaliacao so quando o atendimento e uma avaliacao", () => {
+  const src = fs.readFileSync(new URL("../src/reminders/nps.ts", import.meta.url), "utf8");
+  assert.match(src, /\/avalia\/i\.test\(appt\.procedure\.name\)/);
+  assert.match(src, /isEvaluation && clinic\.npsEvaluationMessage/);
+});

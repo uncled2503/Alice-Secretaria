@@ -207,3 +207,26 @@ export async function listActiveRules(clinicId: string): Promise<{ origem: strin
   const rules = await prisma.customRule.findMany({ where: { clinicId, status: "active" }, orderBy: { createdAt: "asc" }, select: { rawInput: true, category: true, instruction: true } });
   return rules.map((r) => ({ origem: r.rawInput.startsWith("seed:") || r.rawInput.startsWith("(regra") ? r.rawInput : "manual (painel / Ensinar a Alice)", category: r.category, instruction: r.instruction ?? "" }));
 }
+
+// Somente leitura: as AUTOMACOES da clinica (o que sai sozinho pro paciente), pra conferir qual mensagem esta ativa de verdade.
+export async function listAutomations(clinicId: string): Promise<string[]> {
+  const out: string[] = [];
+  const cut = (t: string | null | undefined) => (t ?? "").replace(/\s+/g, " ").trim().slice(0, 220);
+  const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { npsEnabled: true, npsHoursAfter: true, npsMessage: true, npsEvaluationMessage: true, humanReturnMinutes: true } });
+  out.push(`PESQUISA DE SATISFAÇÃO (NPS): ${clinic.npsEnabled ? "LIGADA" : "desligada"} · ${clinic.npsHoursAfter}h depois do atendimento concluído\n  mensagem geral: ${cut(clinic.npsMessage) || "(padrão do sistema)"}\n  mensagem da avaliação: ${cut(clinic.npsEvaluationMessage) || "(usa a geral)"}`);
+  const procs = new Map((await prisma.procedure.findMany({ where: { clinicId }, select: { id: true, name: true } })).map((p) => [p.id, p.name]));
+  for (const r of await prisma.postProcedureRule.findMany({ where: { clinicId }, orderBy: { createdAt: "asc" } })) {
+    const ids = r.procedureIds.split(",").filter(Boolean);
+    out.push(`PÓS-PROCEDIMENTO "${r.name}": ${r.active ? "ATIVA" : "desligada"} · ${r.intervalValue} ${r.intervalUnit} depois · ${r.onlyIfCompleted ? "só concluídos" : "todos"} · procedimentos: ${ids.length ? ids.map((i) => procs.get(i) ?? i).join(", ") : "TODOS"}\n  mensagem: ${cut(r.message)}`);
+  }
+  for (const r of await prisma.reminderRule.findMany({ where: { clinicId }, orderBy: { createdAt: "asc" } })) {
+    out.push(`LEMBRETE ${r.hoursBefore}h (dia ${r.dayOffset}): ${r.active ? "ATIVO" : "desligado"}\n  mensagem: ${cut(r.message)}`);
+  }
+  for (const r of await prisma.followUpRule.findMany({ where: { clinicId }, orderBy: { order: "asc" } })) {
+    out.push(`RECONTATO ${r.order} "${r.name}": ${r.active ? "ATIVO" : "desligado"} · ${r.nextDayHour != null ? `dia seguinte às ${r.nextDayHour}h` : `${r.afterMinutes} min de silêncio`}${r.sendWindowStart != null ? ` · janela ${r.sendWindowStart}h-${r.sendWindowEnd}h` : ""}\n  mensagem: ${cut(r.message)}`);
+  }
+  for (const r of await prisma.renewalRule.findMany({ where: { clinicId } })) out.push(`REATIVAÇÃO "${r.name}": ${r.active ? "ATIVA" : "desligada"} · ${r.intervalValue} ${r.intervalUnit}\n  mensagem: ${cut(r.message)}`);
+  for (const r of await prisma.birthdayRule.findMany({ where: { clinicId } })) out.push(`ANIVERSÁRIO "${r.name}": ${r.active ? "ATIVO" : "desligado"}\n  mensagem: ${cut(r.message)}`);
+  out.push(`ALICE VOLTA SE A EQUIPE DEMORAR: ${clinic.humanReturnMinutes > 0 ? `${clinic.humanReturnMinutes} min` : "desligado"}`);
+  return out;
+}

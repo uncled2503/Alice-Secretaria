@@ -53,7 +53,7 @@ import { seedDiamondClinic } from "../maintenance/seedDiamondClinic.js";
 import { seedLisboa } from "../maintenance/seedLisboa.js";
 import { applyLisboaServicos } from "../maintenance/applyLisboaServicos.js";
 import { applyLisboaDescritivos } from "../maintenance/applyLisboaDescritivos.js";
-import { cleanLisboaRules, listActiveRules } from "../maintenance/cleanLisboaRules.js";
+import { cleanLisboaRules, listActiveRules, listAutomations } from "../maintenance/cleanLisboaRules.js";
 import { diagnoseSlot } from "../scheduling/slots.js";
 import { connectAccount, disconnectAccount, ceStatusFor } from "../clinicaexperts/client.js";
 import { syncCatalog } from "../clinicaexperts/sync.js";
@@ -1221,7 +1221,7 @@ apiRouter.post(
       res.status(404).json({ error: "Clínica Lisboa não encontrada." });
       return;
     }
-    res.json({ rules: await listActiveRules(clinic.id) });
+    res.json({ rules: await listActiveRules(clinic.id), automations: await listAutomations(clinic.id) });
   })
 );
 

@@ -8,6 +8,7 @@ import { PAID_CLINIC_WHERE } from "./plan.js";
 import { isWithinClinicHours, type OpenHoursClinic } from "./openHours.js";
 import { isClosingMessage } from "./followupGuards.js";
 import { judgeConversation } from "./recontactJudge.js";
+import { wallClockInZone, zonedWallClockToUtc } from "../scheduling/time.js";
 
 // Cache simples por execucao do job.
 const stagesCache = new Map<string, Awaited<ReturnType<typeof getFunnelStages>>>();
@@ -54,6 +55,13 @@ async function cachedClinic(clinicId: string) {
 
 function localHour(timeZone: string): number {
   return Number(new Intl.DateTimeFormat("en-US", { timeZone, hourCycle: "h23", hour: "2-digit" }).format(new Date()));
+}
+
+// PURO: o instante em que vence um recontato "no dia seguinte as N horas" (fuso da clinica), contado do dia civil da ultima mensagem.
+export function nextDayAt(lastMessageAt: Date, timeZone: string, hour: number): Date {
+  const wc = wallClockInZone(lastMessageAt, timeZone);
+  const next = new Date(Date.UTC(wc.year, wc.month - 1, wc.day + 1, 12, 0, 0)); // so pra normalizar fim de mes/ano
+  return zonedWallClockToUtc(timeZone, next.getUTCFullYear(), next.getUTCMonth() + 1, next.getUTCDate(), hour, 0);
 }
 
 // Janela [start, end): aceita janela que vira a meia-noite (ex: 20 -> 6).
@@ -190,8 +198,16 @@ async function runFollowUpCheckInner(): Promise<void> {
 
     const silenceMin = (Date.now() - lastPatientMessage.createdAt.getTime()) / 60_000;
     const thresholdMin = rule.afterMinutes > 0 ? rule.afterMinutes : rule.afterDays * 1440;
-    if (silenceMin < thresholdMin) continue;
-    if (silenceMin - thresholdMin > MAX_OVERDUE_MS / 60_000) continue; // conversa fria demais, nao recontata
+    if (rule.nextDayHour != null) {
+      // DIA SEGUINTE as N horas (pedido da Lisboa): vence no dia civil seguinte a ultima mensagem da pessoa, nao 24h corridas.
+      const tzRule = (await cachedClinic(clinicId)).timezone;
+      const dueAt = nextDayAt(lastPatientMessage.createdAt, tzRule, rule.nextDayHour);
+      if (Date.now() < dueAt.getTime()) continue;
+      if (Date.now() - dueAt.getTime() > MAX_OVERDUE_MS) continue; // conversa fria demais, nao recontata
+    } else {
+      if (silenceMin < thresholdMin) continue;
+      if (silenceMin - thresholdMin > MAX_OVERDUE_MS / 60_000) continue; // conversa fria demais, nao recontata
+    }
 
     if ((sentByClinic.get(clinicId) ?? 0) >= MAX_SENDS_PER_CLINIC) continue; // o resto fica pra proxima execucao
 
@@ -203,8 +219,9 @@ async function runFollowUpCheckInner(): Promise<void> {
     const lastAny = await prisma.message.findFirst({
       where: { conversationId: conversation.id, role: { in: ["user", "assistant", "human"] } },
       orderBy: { createdAt: "desc" },
-      select: { role: true },
+      select: { role: true, createdAt: true },
     });
+    if (rule.nextDayHour != null && lastAny && Date.now() - lastAny.createdAt.getTime() < 6 * 3_600_000) continue; // acabou de receber outro recontato
     if (lastAny?.role === "user") continue; // o paciente falou por ultimo: a bola esta com a clinica, nao e silencio dele
 
     // O texto cita o procedimento, mas ainda nao sabemos qual interessa a este paciente: nao envia

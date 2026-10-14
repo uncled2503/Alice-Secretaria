@@ -1187,7 +1187,7 @@ FERIADOS PROXIMOS: ${holidayItems.join("; ")}. Se a pessoa perguntar se funciona
       orderBy: { askedAt: "desc" },
     });
     if (pending) {
-      surveyLine = `\nPESQUISA DE SATISFACAO PENDENTE: voce perguntou a nota de 0 a 10. Quando o paciente responder com um numero, chame record_satisfaction (com o comentario, se houver) e siga a "acao" que a ferramenta devolver. Se ele falar de outro assunto, atenda normalmente.`;
+      surveyLine = `\nPESQUISA DE SATISFACAO PENDENTE: voce perguntou a nota de 0 a 10. Quando o paciente responder com um numero, chame record_satisfaction (com o comentario, se houver) e siga a "acao" que a ferramenta devolver. Se ele responder com um feedback em texto, sem nota (ex.: se sentiu bem atendida), agradeca em UMA frase curta e nao puxe outro assunto; se houver reclamacao ou duvida sem resposta, chame transfer_to_human. Se ele falar de outro assunto, atenda normalmente.`;
     }
   }
 

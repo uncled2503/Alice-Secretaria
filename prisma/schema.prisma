@@ -62,6 +62,7 @@ model Clinic {
   leadReactivationDay  Int?    // dia do mes (1-28) em que sai a campanha "Leads do mes" (leads do mes que nao agendaram/compraram); null = desligada (src/crm/leadReactivation.ts)
   leadReactivationMessage String? // texto da campanha mensal; aceita {primeiro_nome} e {procedimento}
   evalNearestFirst     Boolean @default(false) // true = avaliacao: a Alice oferece SEMPRE os horarios livres mais proximos (hoje/amanha antes de outros dias); ver nearestSlots em scheduling/slots.ts
+  npsEvaluationMessage String? // mensagem da pesquisa de satisfacao quando o atendimento concluido e uma AVALIACAO (procedimento com "avalia" no nome); null = usa npsMessage
   aiModel              String? // modelo da OpenAI so desta clinica (admin); null = padrao do servidor (OPENAI_MODEL). Ver chatModelFor em ai/alice.ts
   humanReturnMinutes   Int     @default(0) // > 0 = se a equipe assumiu a conversa, a pessoa escreveu e ninguem respondeu em N min, a Alice volta a atender (src/crm/humanReturn.ts); 0 = desligado
   tagLeadOrigin        Boolean @default(false) // true = todo contato novo ganha a etiqueta "Lead <campanha> | dd/mm/aaaa" no CRM (src/crm/leadTag.ts)
@@ -635,6 +636,7 @@ model FollowUpRule {
   skipIfUpcomingAppt Boolean @default(true)
   sendWindowStart    Int?    // hora local (0-23) de inicio da janela de envio; null = qualquer horario
   sendWindowEnd      Int?
+  nextDayHour        Int?    // 0-23: recontato no DIA SEGUINTE a ultima mensagem da pessoa, as N horas (em vez de contar 24h corridas); null = usa o silencio em minutos
   active             Boolean @default(true)
 
   sentLogs           FollowUpSent[]
