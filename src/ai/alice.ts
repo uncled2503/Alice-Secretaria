@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
+import type { ChatCompletion, ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
 import { prisma } from "../db/client.js";
 import { enrichPatientFromCe } from "../clinicaexperts/sync.js";
 import { fixRelativeDayLabels, fixWeekdayDatePairs } from "./relativeDays.js";
@@ -1645,19 +1645,23 @@ async function shortenFirstReply(draft: string, patientMessages: string[], clini
 }
 
 // Penalidades de repeticao so existem nos modelos gpt-4*; os modelos mais novos (raciocinio) as recusam.
-function samplingFor(model: string): { frequency_penalty?: number; presence_penalty?: number } {
-  return /^gpt-4/i.test(model) ? { frequency_penalty: 0.3, presence_penalty: 0.2 } : {};
+// Familia gpt-6: no Chat Completions as ferramentas (agenda, transferencia) so funcionam com reasoning_effort "none" (relato de
+// terceiros, ainda nao validado aqui: se o modelo recusar, createChat volta ao padrao).
+function samplingFor(model: string): Record<string, unknown> {
+  if (/^gpt-4/i.test(model)) return { frequency_penalty: 0.3, presence_penalty: 0.2 };
+  if (/^gpt-6/i.test(model)) return { reasoning_effort: "none" };
+  return {};
 }
 
 // Chamada principal da conversa. Se a clinica usa um modelo proprio (Clinic.aiModel) e ele falha (nome errado, sem acesso, parametro
 // recusado), volta ao modelo padrao NA MESMA resposta: a Alice nunca fica muda por causa de um teste de modelo.
 async function createChat(model: string, messages: ChatCompletionMessageParam[], activeTools: ChatCompletionTool[]) {
   try {
-    return await openai.chat.completions.create({ model, messages, tools: activeTools, ...samplingFor(model) });
+    return await openai.chat.completions.create({ model, messages, tools: activeTools, ...samplingFor(model) } as Parameters<typeof openai.chat.completions.create>[0] & { stream?: false }) as ChatCompletion;
   } catch (err) {
     if (model === MODEL) throw err;
     console.error(`[modelo] ${model} falhou, usando ${MODEL}:`, err);
-    return await openai.chat.completions.create({ model: MODEL, messages, tools: activeTools, ...samplingFor(MODEL) });
+    return await openai.chat.completions.create({ model: MODEL, messages, tools: activeTools, ...samplingFor(MODEL) } as Parameters<typeof openai.chat.completions.create>[0] & { stream?: false }) as ChatCompletion;
   }
 }
 
