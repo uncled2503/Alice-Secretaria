@@ -1121,7 +1121,6 @@ apiRouter.post(
   "/clinics/lisboa-descritivos",
   asyncRoute(async (req, res) => {
     if (!requireAdmin(req, res)) return;
-    if (!maintenanceEnabled(res)) return;
     const clinic = await prisma.clinic.findFirst({ where: { name: "Lisboa Beauty Center" } });
     if (!clinic) {
       res.status(404).json({ error: "Clínica Lisboa não encontrada (aplique primeiro a configuração da Lisboa)." });
@@ -1148,7 +1147,6 @@ apiRouter.post(
   "/clinics/lisboa-limpar-regras",
   asyncRoute(async (req, res) => {
     if (!requireAdmin(req, res)) return;
-    if (!maintenanceEnabled(res)) return;
     const clinic = await prisma.clinic.findFirst({ where: { name: "Lisboa Beauty Center" } });
     if (!clinic) {
       res.status(404).json({ error: "Clínica Lisboa não encontrada (aplique primeiro a configuração da Lisboa)." });
@@ -1212,7 +1210,6 @@ apiRouter.post(
   "/clinics/lisboa-servicos",
   asyncRoute(async (req, res) => {
     if (!requireAdmin(req, res)) return;
-    if (!maintenanceEnabled(res)) return;
     const clinic = await prisma.clinic.findFirst({ where: { name: "Lisboa Beauty Center" } });
     if (!clinic) {
       res.status(404).json({ error: "Clínica Lisboa não encontrada (aplique primeiro a configuração da Lisboa)." });

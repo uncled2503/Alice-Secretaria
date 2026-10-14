@@ -57,3 +57,14 @@ test("todo botao ligado no app.js existe no index.html (um id faltando derruba o
   const missing = ids.filter((id) => !html.includes(`id="${id}"`));
   assert.deepEqual(missing, []);
 });
+
+test("rotas da Lisboa no admin nao dependem da trava de manutencao (so admin, com previa)", () => {
+  const src = fs.readFileSync(new URL("../src/api/routes.ts", import.meta.url), "utf8");
+  for (const rota of ["lisboa-descritivos", "lisboa-limpar-regras", "lisboa-servicos"]) {
+    const i = src.indexOf(`"/clinics/${rota}"`);
+    assert.ok(i > 0, rota);
+    const corpo = src.slice(i, i + 400);
+    assert.match(corpo, /requireAdmin/);
+    assert.doesNotMatch(corpo, /maintenanceEnabled/);
+  }
+});
