@@ -11,7 +11,11 @@ import { ceRequest, getAccount, isoWithOffset, noteError } from "./client.js";
 export const CELL_MIN = 15;
 
 // (inicio em epoch ms, duracao em min) -> cabe?
-export type SlotGate = (startMs: number, durationMin: number) => boolean;
+// `covers` diz se o CE foi consultado com sucesso pro DIA daquele horario: nesses dias o CE e a fonte da verdade
+// (ja inclui agendamentos, remarcacoes e cancelamentos feitos la), entao os agendamentos que a Alice espelhou/importou
+// do CE (ceBookingUuid) NAO contam de novo como ocupado - a copia local pode estar velha (cancelado/movido no CE) ou ter
+// duracao diferente, e era isso que fazia a Alice dizer "ocupado" pra horario vago.
+export type SlotGate = ((startMs: number, durationMin: number) => boolean) & { covers?: (startMs: number) => boolean };
 
 // PURO: "08:30" no dia (fuso da clinica) -> epoch ms.
 export function cellStarts(timeZone: string, date: { year: number; month: number; day: number }, hhmm: string[]): number[] {
@@ -28,7 +32,7 @@ export function cellStarts(timeZone: string, date: { year: number; month: number
 // efetivamente carregados. Dia que nao foi carregado (CE fora do ar naquele
 // dia) nao bloqueia: nunca derrubamos a agenda por falha de integracao.
 export function buildGate(freeCells: Set<number>, loadedDays: Set<string>, timeZone: string): SlotGate {
-  return (startMs, durationMin) => {
+  const gate: SlotGate = (startMs, durationMin) => {
     if (!loadedDays.has(isoDateInZone(new Date(startMs), timeZone))) return true;
     const cells = Math.max(1, Math.ceil(durationMin / CELL_MIN));
     for (let i = 0; i < cells; i++) {
@@ -36,6 +40,8 @@ export function buildGate(freeCells: Set<number>, loadedDays: Set<string>, timeZ
     }
     return true;
   };
+  gate.covers = (startMs) => loadedDays.has(isoDateInZone(new Date(startMs), timeZone));
+  return gate;
 }
 
 // Cache curto por (clinica, profissional, dia): a busca de horarios chama isso

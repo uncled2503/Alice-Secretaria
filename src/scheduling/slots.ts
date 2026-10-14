@@ -16,6 +16,7 @@ export interface Slot {
 export interface BusyInterval {
   start: number;
   end: number;
+  ce?: boolean; // agendamento que veio do / foi espelhado no Clinica Experts (o portao do CE ja o enxerga)
 }
 
 export interface ClinicHours {
@@ -182,7 +183,9 @@ export function evaluateSlot(params: {
   for (const b of blocks) {
     if (s < b.end && e > b.start) return { ok: false, reason: "blocked" };
   }
+  const ceCovered = params.gate?.covers?.(s) ?? false;
   for (const b of busy) {
+    if (ceCovered && b.ce) continue; // o CE e a fonte da verdade desse dia
     if (s < b.end && e > b.start) return { ok: false, reason: "conflict" };
   }
   if (params.gate && !params.gate(s, durationMin)) return { ok: false, reason: "conflict" };
@@ -270,7 +273,7 @@ async function loadBusyContext(
       // ocupado. Continuam contando pra qualquer outro procedimento.
       ...(opts.excludeProcedureId ? { procedureId: { not: opts.excludeProcedureId } } : {}),
     },
-    select: { scheduledAt: true, procedure: { select: { durationMin: true } } },
+    select: { scheduledAt: true, ceBookingUuid: true, procedure: { select: { durationMin: true } } },
   });
 
   const scheduleBlocks = await prisma.scheduleBlock.findMany({
@@ -291,6 +294,7 @@ async function loadBusyContext(
     busy: appts.map((a) => ({
       start: a.scheduledAt.getTime(),
       end: a.scheduledAt.getTime() + a.procedure.durationMin * 60_000,
+      ce: !!a.ceBookingUuid,
     })),
     blocks: [...scheduleBlocks.map((b) => ({ start: b.startsAt.getTime(), end: b.endsAt.getTime() })), ...googleBusy],
   };
@@ -646,7 +650,7 @@ export async function createBooking(params: {
         // pacientes podem dividir o mesmo horario de proposito.
         ...(procedure.allowConcurrentBooking ? { procedureId: { not: procedure.id } } : {}),
       },
-      select: { scheduledAt: true, procedure: { select: { durationMin: true } } },
+      select: { scheduledAt: true, ceBookingUuid: true, procedure: { select: { durationMin: true } } },
     });
     const blockRows = await tx.scheduleBlock.findMany({
       where: {
@@ -659,6 +663,7 @@ export async function createBooking(params: {
     const busy: BusyInterval[] = appts.map((a) => ({
       start: a.scheduledAt.getTime(),
       end: a.scheduledAt.getTime() + a.procedure.durationMin * 60_000,
+      ce: !!a.ceBookingUuid,
     }));
     const blocks: BusyInterval[] = [
       ...blockRows.map((b) => ({ start: b.startsAt.getTime(), end: b.endsAt.getTime() })),

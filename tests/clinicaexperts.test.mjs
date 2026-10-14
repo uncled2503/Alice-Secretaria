@@ -260,3 +260,19 @@ test("nome de contato: precisa ter letras; numero, emoji e vazio nao viram conta
   assert.equal(usableContactName(null), null);
   assert.equal(usableContactName("A"), null);
 });
+
+test("dia coberto pelo CE: agendamento espelhado do CE nao conta de novo como ocupado", async () => {
+  const { evaluateSlot, resolveHours } = await import("../dist/scheduling/slots.js");
+  const hours = resolveHours({ timezone: TZ, workDays: "1,2,3,4,5,6", workStartHour: 8, workEndHour: 20, closedOnHolidays: false }, null);
+  const free = new Set(cellStarts(TZ, day, ["10:00", "10:15", "10:30", "10:45"]));
+  const gate = buildGate(free, new Set(["2026-10-08"]), TZ);
+  const now = new Date(Date.UTC(2026, 9, 1));
+  const stale = { start: at(10, 0), end: at(11, 0), ce: true }; // cancelado/movido no CE, copia local velha
+  const local = { start: at(10, 0), end: at(11, 0) }; // ainda nao espelhado no CE
+  const base = { startUtc: new Date(at(10, 0)), durationMin: 60, hours, now, gate };
+  assert.equal(evaluateSlot({ ...base, busy: [stale] }).ok, true);
+  assert.equal(evaluateSlot({ ...base, busy: [local] }).ok, false);
+  // dia que o CE nao carregou: a copia local volta a valer
+  const gateOff = buildGate(new Set(), new Set(["2026-10-09"]), TZ);
+  assert.equal(evaluateSlot({ ...base, gate: gateOff, busy: [stale] }).ok, false);
+});
