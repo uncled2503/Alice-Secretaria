@@ -188,6 +188,19 @@ export async function pullClinicBookings(clinicId: string): Promise<PullResult> 
 
     const procedure = picked;
     const phone = normalizeCePhone(b.patient?.phone);
+    // Reserva sem procedimento no CE, mas a pessoa JA tem esse horario na Alice (agendado pela Alice ou importado antes, sem o vinculo
+    // com a reserva): so liga o uuid. Antes desistia aqui e a pessoa aparecia no aviso "NAO vao receber a confirmacao" mesmo recebendo.
+    if (!procedure && phone) {
+      const known = await prisma.patient.findUnique({ where: { clinicId_phone: { clinicId, phone } } });
+      const own = known
+        ? await prisma.appointment.findFirst({ where: { clinicId, patientId: known.id, scheduledAt: when, ceBookingUuid: null, status: "confirmed" } })
+        : null;
+      if (own) {
+        await prisma.appointment.update({ where: { id: own.id }, data: { ceBookingUuid: b.uuid } });
+        result.updated++;
+        continue;
+      }
+    }
     if (!procedure || !phone) {
       // sem procedimento vinculado ou sem telefone: nada a lembrar
       result.skipped++;
@@ -236,6 +249,13 @@ export async function pullClinicBookings(clinicId: string): Promise<PullResult> 
   return result;
 }
 
+// PURO: por que a reserva nao entra nas confirmacoes. "?" confundia: lista de procedimentos VAZIA quer dizer que a reserva foi criada no
+// Clinica Experts sem procedimento escolhido (com procedimento desconhecido o aviso mostra o numero, "#123").
+export function skipReasonText(s: Pick<PullSkip, "reason" | "procedureNames">): string {
+  if (s.reason === "sem_telefone") return "sem telefone";
+  return s.procedureNames.length ? `procedimento sem vínculo: ${s.procedureNames.join(", ")}` : "reserva sem procedimento no Clínica Experts (escolha o procedimento lá)";
+}
+
 // Aviso diario a equipe: reservas das proximas 48h que NAO entram nas confirmacoes automaticas (sem isso so se
 // descobria quando o paciente reclamava que nao recebeu).
 const skipAlertedOn = new Map<string, string>();
@@ -246,7 +266,7 @@ async function alertSkippedSoon(clinicId: string, skips: PullSkip[]): Promise<vo
   const today = new Date().toISOString().slice(0, 10);
   if (skipAlertedOn.get(clinicId) === today) return;
   skipAlertedOn.set(clinicId, today);
-  const lines = soon.slice(0, 8).map((s) => `• ${s.patient} (${s.reason === "sem_telefone" ? "sem telefone" : `procedimento sem vínculo: ${s.procedureNames.join(", ") || "?"}`})`);
+  const lines = soon.slice(0, 8).map((s) => `• ${s.patient} (${skipReasonText(s)})`);
   await notifyStaff(
     clinicId,
     "automation_failed",

@@ -320,3 +320,15 @@ test("relevancia: nunca indicar procedimento de OUTRA regiao (preenchimento labi
   assert.ok(ok("flacidez no rosto", "Drenagem Corporal"));
   assert.equal(procedureFitsComplaint(areasIn("Preenchimento Labial"), areasIn("sobrancelha")), false);
 });
+
+test("aviso do Clinica Experts: 'reserva sem procedimento' em vez de '?', e reserva que ja existe na Alice e ligada antes de desistir", async () => {
+  const { skipReasonText } = await import("../dist/clinicaexperts/pull.js");
+  assert.equal(skipReasonText({ reason: "sem_telefone", procedureNames: [] }), "sem telefone");
+  assert.equal(skipReasonText({ reason: "procedimento_sem_vinculo", procedureNames: ["Peeling"] }), "procedimento sem vínculo: Peeling");
+  assert.equal(skipReasonText({ reason: "procedimento_sem_vinculo", procedureNames: ["#12"] }), "procedimento sem vínculo: #12");
+  assert.match(skipReasonText({ reason: "procedimento_sem_vinculo", procedureNames: [] }), /reserva sem procedimento no Clínica Experts/);
+  const src = fs.readFileSync(new URL("../src/clinicaexperts/pull.ts", import.meta.url), "utf8");
+  const casar = src.indexOf("if (!procedure && phone) {");
+  const desistir = src.indexOf("if (!procedure || !phone) {");
+  assert.ok(casar > 0 && desistir > casar, "o casamento com o agendamento existente tem que vir ANTES de descartar a reserva");
+});
