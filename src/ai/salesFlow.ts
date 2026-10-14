@@ -24,6 +24,7 @@ export interface SalesFlow {
   scheduleAsked: boolean; // em algum momento pediu avaliacao/agendamento (e ainda nao tem horario marcado)
   slotsOffered: boolean; // a ultima fala da Alice ofereceu horarios
   evalOffered: boolean; // a Alice ja falou de avaliacao nesta conversa
+  hasBooking: boolean; // ela ja tem agendamento futuro (nao e lead em descoberta)
   nextMove: string; // instrucao pro modelo
 }
 
@@ -116,7 +117,7 @@ export function analyzeFlow(input: { history: FlowMessage[]; trailing: string[];
         : "Descubra o que ela quer com UMA pergunta especifica ao assunto dela (se veio de anuncio, use o procedimento do anuncio; ex.: gordura -> qual regiao). Curto, natural." + noPrice;
   }
 
-  return { intent, askedPrice: priceAsked, statedGoal, scheduleAsked, slotsOffered, evalOffered, nextMove };
+  return { intent, askedPrice: priceAsked, statedGoal, scheduleAsked, slotsOffered, evalOffered, hasBooking, nextMove };
 }
 
 // Reclamacao direta do atendimento automatico ("a IA de voces e pessima", "repetitiva", "nao ajuda em nada"): pessoa de verdade.

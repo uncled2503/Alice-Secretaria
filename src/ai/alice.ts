@@ -31,6 +31,7 @@ import { handoffCard } from "../crm/handoffCard.js";
 import { findRepetitions, removeSentences, askedAgain, conversationMemory, splitSentences } from "./repetition.js";
 import { announcesAction, brokenPromise, PROMISE_NUDGE } from "./promises.js";
 import { analyzeFlow, complainsAboutBot, type SalesFlow } from "./salesFlow.js";
+import { confirmationThanks, isConfirmationReply } from "./confirmation.js";
 import { buildPreProcedureText } from "../reminders/preProcedure.js";
 
 // Orientacao de PRE-procedimento que sai como resposta da Alice logo apos a cliente confirmar o horario (por conversa).
@@ -1141,7 +1142,7 @@ FERIADOS PROXIMOS: ${holidayItems.join("; ")}. Se a pessoa perguntar se funciona
     earlyStage = (await prisma.message.count({ where: { role: "assistant", authorName: null, conversation: { patientId: ctx.patientId } } })) < 4;
   }
   // Descoberta so enquanto ela NAO contou o que quer e NAO pediu pra agendar (senao vira interrogatorio e perde a venda).
-  const discoveryLine = clinic.conciseFirstReply && earlyStage && !ctx.flow?.statedGoal && ctx.flow?.intent !== "schedule"
+  const discoveryLine = clinic.conciseFirstReply && earlyStage && !ctx.flow?.statedGoal && ctx.flow?.intent !== "schedule" && !ctx.flow?.hasBooking
     ? `\nABERTURA DO ATENDIMENTO (descubra ANTES de explicar, UMA pergunta por mensagem, sem formulario): (1) o nome, se ainda nao souber; (2) se a pessoa JA CONHECE ou JA FEZ o procedimento; (3) o que ela quer melhorar / qual a queixa (ex.: qual regiao incomoda, o que quer melhorar na pele); (4) quando pretende fazer (agora, este mes ou mais pra frente) - pergunte com naturalidade, sem pressionar. So depois dessas respostas explique o procedimento, de forma CURTA e comercial (no maximo 3 frases), e termine com uma pergunta que leve ao proximo passo. Nao repita informacao que ja deu. Se ela perguntar algo direto no meio (preco, endereco, horario), responda e retome as perguntas que faltam.`
     : "";
 
@@ -1243,7 +1244,7 @@ FERIADOS PROXIMOS: ${holidayItems.join("; ")}. Se a pessoa perguntar se funciona
 - NUNCA escreva que a consulta esta "confirmada", "agendada" ou "reservada" sem ter chamado book_appointment e recebido "agendado: true" nesta mesma resposta. Escrever a mensagem de confirmacao NAO agenda nada - sem a ferramenta, o horario nao existe na agenda e a equipe nao fica sabendo.
 - Se o paciente confirmar presenca numa consulta ja marcada, cancelar ou pedir pra remarcar, use manage_my_appointment.
 - CANCELAMENTO: se o paciente pedir pra cancelar, chame manage_my_appointment com action "cancel" (isso tira o horario da agenda e libera a vaga) - nao diga que cancelou sem chamar. Se ele tiver mais de um agendamento, pergunte QUAL (ou se sao todos) antes de cancelar. Depois de cancelar, OFERECA reagendar em uma frase ("quer que eu veja outro horario pra voce?"), sem insistir se ele disser que nao.
-- CONFIRMACAO: a clinica manda UMA confirmacao por dia (a do primeiro horario). Se o paciente responder confirmando, chame manage_my_appointment com action "confirm": isso confirma todos os horarios do dia.${clinic.conciseFirstReply ? "\n- ANTES de oferecer dias e horarios, se a ficha acima nao trouxer a preferencia, pergunte se ela prefere manha, tarde ou noite e quais dias da semana costumam ser melhores; depois ofereca so horarios compativeis." : ""}${professionalsBlock}`;
+- CONFIRMACAO: a clinica manda UMA confirmacao por dia (a do primeiro horario). Se o paciente responder confirmando ("pode sim", "confirmo", "estarei ai"), chame manage_my_appointment com action "confirm" (isso confirma todos os horarios do dia) e responda SO agradecendo a confirmacao, em uma frase curta: sem pergunta, sem oferta e sem falar de outro assunto (nunca pergunte se ja fez o procedimento).${clinic.conciseFirstReply ? "\n- ANTES de oferecer dias e horarios, se a ficha acima nao trouxer a preferencia, pergunte se ela prefere manha, tarde ou noite e quais dias da semana costumam ser melhores; depois ofereca so horarios compativeis." : ""}${professionalsBlock}`;
 
   const allStages = await getFunnelStages(clinicId);
   const stagesBlock = allStages.length
@@ -1891,6 +1892,42 @@ async function generateReplyUnlocked(
         await prisma.message.create({ data: { conversationId: conversation.id, role: "assistant", content: REACTION_TEXT, deliveryStatus: "pending" } });
         await prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: new Date() } });
         return REACTION_TEXT;
+      }
+    }
+  }
+
+  // RESPOSTA A CONFIRMACAO DE PRESENCA ("pode sim" ao lembrete de 24h): so agradece (ou manda o preparo, se houver), sem passar pelo modelo.
+  if (usageClinic && usageClinic.businessType !== "geral") {
+    const lastUserText = history.filter((m) => m.role === "user").at(-1)?.content ?? "";
+    // so vale se a ULTIMA fala foi o proprio lembrete (senao o "sim" pode ser resposta a outra pergunta da conversa)
+    const lastNonUser = history.filter((m) => m.role !== "user").at(-1);
+    if (isConfirmationReply(lastUserText) && lastNonUser?.authorName === "Lembrete de consulta") {
+      const now = new Date();
+      const awaiting = await prisma.appointment.findFirst({
+        where: {
+          clinicId,
+          patientId: patient.id,
+          status: "confirmed",
+          patientConfirmed: false,
+          scheduledAt: { gte: now, lte: new Date(now.getTime() + 72 * 3_600_000) },
+          reminders: { some: { sentAt: { gte: new Date(now.getTime() - 36 * 3_600_000) }, rule: { hoursBefore: { gte: 12 } } } },
+        },
+        select: { id: true },
+      });
+      if (awaiting) {
+        try {
+          const raw = await runTool(clinicId, patient.id, conversation.id, "manage_my_appointment", { action: "confirm" });
+          if ((JSON.parse(raw) as { ok?: boolean }).ok) {
+            const pre = pendingPreProcedure.get(conversation.id);
+            pendingPreProcedure.delete(conversation.id);
+            const text = pre || confirmationThanks(patient.name);
+            await prisma.message.create({ data: { conversationId: conversation.id, role: "assistant", content: text, deliveryStatus: "pending" } });
+            await prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: new Date() } });
+            return text;
+          }
+        } catch (err) {
+          console.error("[confirmacao] falha ao confirmar direto; segue pelo modelo:", err);
+        }
       }
     }
   }

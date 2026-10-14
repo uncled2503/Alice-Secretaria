@@ -116,3 +116,21 @@ test("rotas da Lisboa no admin nao dependem da trava de manutencao (so admin, co
     assert.doesNotMatch(corpo, /maintenanceEnabled/);
   }
 });
+
+test("confirmacao de presenca: so agradece quando a resposta e SO uma confirmacao", async () => {
+  const { isConfirmationReply, confirmationThanks } = await import("../dist/ai/confirmation.js");
+  for (const t of ["Bom dia. Pode sim.", "Pode sim", "Confirmo", "Sim", "ok", "Estarei aí", "Sim, confirmado!", "Confirmado 😊", "Vou sim, obrigada!", "Combinado"]) {
+    assert.equal(isConfirmationReply(t), true, t);
+  }
+  for (const t of ["Não vou poder", "Preciso remarcar", "pode ser outro horário?", "ok, quero saber o valor", "Sim, mas queria mudar o horário", "Quanto custa?", "obrigada", "Posso levar acompanhante?", "Infelizmente não consigo", "", "ok, quero um desconto"]) {
+    assert.equal(isConfirmationReply(t), false, t);
+  }
+  assert.equal(confirmationThanks("Shirley narciso de oliveira"), "Obrigada pela confirmação, Shirley! 💗");
+  assert.equal(confirmationThanks(null), "Obrigada pela confirmação! 💗");
+});
+
+test("quem ja tem horario marcado nao recebe as perguntas de descoberta (ja fez o procedimento?)", () => {
+  const src = fs.readFileSync(new URL("../src/ai/alice.ts", import.meta.url), "utf8");
+  assert.match(src, /!ctx\.flow\?\.hasBooking/);
+  assert.match(src, /nunca pergunte se ja fez o procedimento/);
+});
