@@ -20,6 +20,7 @@ import { startFollowUpJob } from "./crm/followup.js";
 import { startLeadSummaryJob } from "./crm/leadSummary.js";
 import { startCeBookingPullJob } from "./clinicaexperts/pull.js";
 import { startCeBirthdayJob } from "./clinicaexperts/birthdays.js";
+import { REVISION } from "./version.js";
 import { startUnansweredJob } from "./crm/unanswered.js";
 import { startPhoneContactsJob } from "./crm/phoneContacts.js";
 import { startBroadcastJob } from "./crm/broadcast.js";
@@ -107,10 +108,21 @@ function refreshDbHealth(): void {
     console.error("Health check do banco falhou:", error);
   });
 }
+// Ultima migracao do banco aplicada (prova de que o deploy rodou as migracoes). Consulta no maximo 1x por minuto.
+let lastMigration: string | null = null;
+let migrationCheckedAt = 0;
+function refreshMigration(): void {
+  if (Date.now() - migrationCheckedAt < 60_000) return;
+  migrationCheckedAt = Date.now();
+  void prisma.$queryRaw<{ migration_name: string }[]>`SELECT migration_name FROM _prisma_migrations ORDER BY migration_name DESC LIMIT 1`
+    .then((rows) => (lastMigration = rows[0]?.migration_name ?? null))
+    .catch(() => undefined);
+}
 app.get("/health", (_req, res) => {
   res.set("Cache-Control", "no-store");
   refreshDbHealth();
-  res.json({ ok: true, database: dbHealthy ? "ok" : "unavailable", uptimeSeconds: Math.floor(process.uptime()), commit: buildInfo.commit, builtAt: buildInfo.builtAt });
+  refreshMigration();
+  res.json({ ok: true, database: dbHealthy ? "ok" : "unavailable", uptimeSeconds: Math.floor(process.uptime()), commit: buildInfo.commit, builtAt: buildInfo.builtAt, revision: REVISION, lastMigration });
 });
 
 // Painel administrativo: so a "casca" HTML/CSS/JS, sem dado nenhum - fica
