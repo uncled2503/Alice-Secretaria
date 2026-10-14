@@ -1644,6 +1644,23 @@ async function shortenFirstReply(draft: string, patientMessages: string[], clini
   }
 }
 
+// Penalidades de repeticao so existem nos modelos gpt-4*; os modelos mais novos (raciocinio) as recusam.
+function samplingFor(model: string): { frequency_penalty?: number; presence_penalty?: number } {
+  return /^gpt-4/i.test(model) ? { frequency_penalty: 0.3, presence_penalty: 0.2 } : {};
+}
+
+// Chamada principal da conversa. Se a clinica usa um modelo proprio (Clinic.aiModel) e ele falha (nome errado, sem acesso, parametro
+// recusado), volta ao modelo padrao NA MESMA resposta: a Alice nunca fica muda por causa de um teste de modelo.
+async function createChat(model: string, messages: ChatCompletionMessageParam[], activeTools: ChatCompletionTool[]) {
+  try {
+    return await openai.chat.completions.create({ model, messages, tools: activeTools, ...samplingFor(model) });
+  } catch (err) {
+    if (model === MODEL) throw err;
+    console.error(`[modelo] ${model} falhou, usando ${MODEL}:`, err);
+    return await openai.chat.completions.create({ model: MODEL, messages, tools: activeTools, ...samplingFor(MODEL) });
+  }
+}
+
 // Uma resposta por vez POR CONVERSA. Sem isso, duas mensagens seguidas do paciente
 // ("Oi boa tarde" + "quanto custa?") geravam duas respostas em paralelo, cada uma
 // sem enxergar a outra, e o paciente recebia a mesma coisa 2 ou 3 vezes.
@@ -1700,7 +1717,7 @@ async function generateReplyUnlocked(
   // novo - passa direto pra equipe. Conversas ja em andamento continuam.
   const usageClinic = await prisma.clinic.findUnique({
     where: { id: clinicId },
-    select: { id: true, plan: true, businessType: true, aliceActive: true, silentHandoff: true, handoffOnPrice: true, humanizedTone: true, softSell: true, conversationLimitOverride: true, usageMonth: true, usageCount: true, usageLimitNotified: true },
+    select: { id: true, plan: true, aiModel: true, businessType: true, aliceActive: true, silentHandoff: true, handoffOnPrice: true, humanizedTone: true, softSell: true, conversationLimitOverride: true, usageMonth: true, usageCount: true, usageLimitNotified: true },
   });
   // Alice PAUSADA pela clinica (botao "Alice atendendo"): nao responde. A conversa
   // fica como "nao lida" pra equipe, sem virar atendimento humano (quando a Alice
@@ -1921,14 +1938,9 @@ async function generateReplyUnlocked(
   let bookedOk = false; // book_appointment devolveu agendado:true nesta rodada
   let promiseNudged = false;
   pendingPreProcedure.delete(conversation.id); // sobra de uma tentativa anterior que falhou
+  const chatModel = usageClinic?.aiModel?.trim() || MODEL;
   for (let turn = 0; turn < 6; turn++) {
-    const response = await openai.chat.completions.create({
-      model: MODEL,
-      messages,
-      tools: activeTools,
-      frequency_penalty: 0.3,
-      presence_penalty: 0.2,
-    });
+    const response = await createChat(chatModel, messages, activeTools);
 
     const choice = response.choices[0].message;
     finalText = choice.content ?? "";

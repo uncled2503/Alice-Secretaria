@@ -5878,6 +5878,21 @@ ${lines.join("\n\n")}`;
   }
 });
 
+document.getElementById("btn-lisboa-modelo").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const out = document.getElementById("seed-lisboa-result");
+  const model = document.getElementById("lisboa-ai-model").value.trim();
+  if (!(await showConfirm(model ? `Trocar o modelo de IA da Lisboa para "${model}"? Muda o custo e o comportamento só dela. Se o modelo falhar, a Alice volta sozinha ao padrão.` : "Voltar a Lisboa ao modelo padrão do servidor?"))) return;
+  btn.disabled = true;
+  try {
+    const r = await api("/clinics/lisboa-modelo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model }) });
+    out.textContent = r.model ? `Modelo da Lisboa: ${r.model}.` : "Lisboa voltou ao modelo padrão do servidor.";
+    out.hidden = false;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 document.getElementById("btn-lisboa-regras-ativas").addEventListener("click", async (e) => {
   const btn = e.currentTarget;
   btn.disabled = true;

@@ -1170,6 +1170,27 @@ apiRouter.post(
   })
 );
 
+// Define (ou limpa) o modelo da OpenAI so da Lisboa. Vazio = padrao do servidor. So admin.
+apiRouter.post(
+  "/clinics/lisboa-modelo",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await prisma.clinic.findFirst({ where: { name: "Lisboa Beauty Center" } });
+    if (!clinic) {
+      res.status(404).json({ error: "Clínica Lisboa não encontrada." });
+      return;
+    }
+    const raw = String(((req.body ?? {}) as { model?: string }).model ?? "").trim();
+    if (raw && !/^[a-z0-9][a-z0-9._-]{2,59}$/i.test(raw)) {
+      res.status(400).json({ error: "Nome de modelo inválido." });
+      return;
+    }
+    await prisma.clinic.update({ where: { id: clinic.id }, data: { aiModel: raw || null } });
+    await logActivity({ clinicId: clinic.id, type: "briefing_applied", area: "clinica", title: "Modelo de IA da clínica alterado", description: raw ? `Modelo: ${raw}.` : "Voltou ao modelo padrão do servidor.", actorName: req.staff?.name ?? null });
+    res.json({ model: raw || null });
+  })
+);
+
 // Somente leitura: regras ativas da Lisboa (origem, categoria, texto) pra conferencia. So admin.
 apiRouter.post(
   "/clinics/lisboa-regras-ativas",

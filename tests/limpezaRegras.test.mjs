@@ -49,3 +49,11 @@ test("a retomada da Alice nao pede desculpa pela demora", () => {
   assert.doesNotMatch(trecho, /pedindo desculpa|Desculpa a demora/);
   assert.match(trecho, /NAO peca desculpa/);
 });
+
+test("todo botao ligado no app.js existe no index.html (um id faltando derruba o resto do painel)", () => {
+  const html = fs.readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
+  const js = fs.readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
+  const ids = [...js.matchAll(/getElementById\("([^"]+)"\)\.addEventListener/g)].map((m) => m[1]);
+  const missing = ids.filter((id) => !html.includes(`id="${id}"`));
+  assert.deepEqual(missing, []);
+});
