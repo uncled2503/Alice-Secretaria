@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
 import { prisma } from "../db/client.js";
 import { enrichPatientFromCe } from "../clinicaexperts/sync.js";
-import { fixRelativeDayLabels } from "./relativeDays.js";
+import { fixRelativeDayLabels, fixWeekdayDatePairs } from "./relativeDays.js";
 import {
   findAvailableSlots,
   findAvailableSlotsOnDay,
@@ -924,6 +924,8 @@ NAO FIQUE SE DESPEDINDO: se voce ja se despediu ou disse "fico a disposicao"/"e 
 - Recusou os horarios ("nenhum deles", "nao posso")? Nao se despeca: pergunte o dia da semana e o periodo que preferem e ofereca outras datas. So desista se ela disser claramente que nao quer mais.
 - Nao fale de valor se ela nao perguntou. Se perguntou, responda direto, em 1 frase, e volte ao proximo passo.
 - Objecao (preco, medo, tempo, indecisao): acolha, reconecte com o resultado que ela quer, use so as orientacoes cadastradas e proponha o proximo passo menor (a avaliacao). Nunca invente desconto, garantia nem urgencia.
+- Respondeu "nao", "vou pensar" ou "vou me organizar"? NUNCA responda so "ok"/"tudo bem": acolha em meia frase e faca UMA pergunta aberta (o que a deixou ainda pensando sobre o protocolo? quando podemos retomar o contato?).
+- NAO monte pacote, combo nem junte procedimentos por conta propria, e nao indique tratamento que nao tenha relacao direta com a queixa que ela contou. Indique o procedimento do catalogo que resolve a queixa dela; combo/pacote so se ja estiver cadastrado como condicao vigente ou se ela pedir.
 - Mensagens curtas (ate 3 frases), uma pergunta so, tom de WhatsApp, sem formulario, sem repetir a mesma abertura nem a mesma pergunta de fechamento.
 - Nunca diga que "ja tem outro paciente" no horario: diga so que "esse horario nao esta disponivel" e ofereca o mais proximo.
 Tudo isso sem quebrar regra nenhuma: nao invente valor, prazo, garantia nem urgencia que nao seja real.`;
@@ -1186,7 +1188,8 @@ FERIADOS PROXIMOS: ${holidayItems.join("; ")}. Se a pessoa perguntar se funciona
 
   const scheduleBlock = `\n\nAGENDA E HORARIOS (regras rigidas):
 - Data e hora agora: ${formatInZone(new Date(), tz)} (fuso ${tz}). HOJE E ${isoDateInZone(new Date(), tz)} - este e o ano corrente, use SEMPRE ele. Nunca assuma outro ano por conta propria: uma data com o ano errado cai no passado e a agenda recusa com "esse horario ja passou".
-- Calendario dos proximos dias (ja no formato AAAA-MM-DD que as ferramentas esperam - COPIE daqui, nunca calcule de cabeca): ${upcomingWeekdayTable(tz)}.
+- Calendario dos proximos dias (ja no formato AAAA-MM-DD que as ferramentas esperam - COPIE daqui, nunca calcule de cabeca): ${upcomingWeekdayTable(tz)}
+- BASE DE DATAS (regras fixas): (1) o dia da semana e a data SEMPRE andam juntos como estao na tabela acima - nunca escreva um dia da semana com a data de outro (ex: "sexta-feira, 20/10" se 20/10 e terca). (2) "semana que vem"/"proxima semana" = a linha SEMANA QUE VEM; "sexta da outra semana", "daqui a duas semanas" = a linha correspondente - procure o dia da semana NA LINHA, nao some dias de cabeca. (3) "proxima sexta" = a primeira sexta que ainda nao passou, contando de hoje (se hoje ja e sexta, e a de 7 dias depois). (4) Antes de escrever uma data na resposta, confira na tabela que o dia da semana bate. (5) Se o paciente disser so "dia 20", procure na tabela qual dia da semana e esse 20 e confirme com ele ("terca, dia 20, pode ser?"). (6) Horarios: sempre no formato 24h do fuso da clinica (ex: 14:30), sem converter fuso, e so cite horarios que vieram das ferramentas de agenda. (7) Se a data que o paciente pediu nao existe na tabela ou ha duvida, pergunte em vez de chutar.
 - Se o paciente escolher um horario que VOCE ja ofereceu (veio de check_availability ou das "alternativas" de check_specific_time), NAO chame check_specific_time de novo nem recalcule a data: use direto o "iso" daquele horario no book_appointment.
 - Ao falar de um horario com o paciente, use o rotulo "quando" que a ferramenta devolveu, sem reescrever o dia da semana por conta propria.
 - Expediente da clinica: ${workDayLabels || "(nao definido)"}, das ${clinic.workStartHour}h as ${clinic.workEndHour}h${clinic.lunchStartHour != null && clinic.lunchEndHour != null ? ` (com intervalo das ${clinic.lunchStartHour}h as ${clinic.lunchEndHour}h - as ferramentas ja recusam esse intervalo, mas se o paciente perguntar, mencione o intervalo com naturalidade)` : ""}. Cada profissional pode ter um expediente proprio - as ferramentas ja consideram isso.
@@ -2126,6 +2129,7 @@ async function generateReplyUnlocked(
 
   if (finalText.trim()) {
     const clinicTz = (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { timezone: true } }))?.timezone || "America/Sao_Paulo";
+    finalText = fixWeekdayDatePairs(finalText, new Date(), clinicTz); // "sexta, 20/10" numa terca vira "terca, 20/10"
     finalText = fixRelativeDayLabels(finalText, new Date(), clinicTz); // "quinta (amanha)" numa quinta vira "quinta (hoje)"
     await prisma.message.create({
       data: { conversationId: conversation.id, role: "assistant", content: finalText, deliveryStatus: "pending" }, // vira "sent"/"failed" depois do envio (uazapi/client.ts)

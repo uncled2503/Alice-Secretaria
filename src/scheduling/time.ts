@@ -140,14 +140,25 @@ export function isoDateInZone(instant: Date, timeZone: string): string {
 // O ano e obrigatorio: sem ele o modelo chuta o ano que conhece do proprio
 // treinamento (tipicamente um ano no passado), monta uma data que ja passou e
 // a agenda responde "esse horario ja passou" pra um dia que ainda nem chegou.
-export function upcomingWeekdayTable(timeZone: string, days = 9): string {
+//
+// Cobre 5 semanas (nao 9 dias): "sexta da outra semana" caia fora da tabela e o
+// modelo calculava de cabeca, errando o dia (ex: "sexta-feira, 20/10" numa
+// terca). Agrupada por semana (segunda a domingo) pra "semana que vem" e
+// "daqui a duas semanas" serem so uma leitura.
+export function upcomingWeekdayTable(timeZone: string, days = 35): string {
   const now = new Date();
-  const parts: string[] = [];
+  const todayWd = wallClockInZone(now, timeZone).weekday;
+  const toMonday = (todayWd + 6) % 7; // dias desde a segunda desta semana
+  const weeks: string[][] = [];
   for (let i = 0; i < days; i++) {
     const day = new Date(now.getTime() + i * 86_400_000);
     const wc = wallClockInZone(day, timeZone);
+    const wi = Math.floor((i + toMonday) / 7);
     const suffix = i === 0 ? " (hoje)" : i === 1 ? " (amanha)" : "";
-    parts.push(`${DOW_LABEL[wc.weekday]}${suffix} = ${isoDateInZone(day, timeZone)}`);
+    const dd = String(wc.day).padStart(2, "0");
+    const mm = String(wc.month).padStart(2, "0");
+    (weeks[wi] ??= []).push(`${DOW_LABEL[wc.weekday]}${suffix} ${dd}/${mm} = ${isoDateInZone(day, timeZone)}`);
   }
-  return parts.join(", ");
+  const label = (w: number) => (w === 0 ? "ESTA SEMANA" : w === 1 ? "SEMANA QUE VEM" : `DAQUI A ${w} SEMANAS`);
+  return "\n" + weeks.map((w, idx) => `  * ${label(idx)}: ${w.join("; ")}`).join("\n");
 }

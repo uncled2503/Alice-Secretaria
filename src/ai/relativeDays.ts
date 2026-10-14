@@ -16,6 +16,32 @@ function weekdayIndex(word: string): number {
   return ["domingo", "segunda", "terca", "quarta", "quinta", "sexta", "sabado"].findIndex((d) => w.startsWith(d));
 }
 
+// Corrige "sexta-feira, 20/10" quando 20/10 cai numa terca. A DATA e a que as ferramentas de agenda
+// usaram, entao o dia da semana e que se ajusta ao calendario real (nunca o contrario).
+const WD_DATE = new RegExp(`\\b((?:domingo|segunda|ter[cç]a|quarta|quinta|sexta|s[aá]bado)(?:-feira)?)(\\s*,?\\s*\\(?\\s*(?:dia\\s+)?)(\\d{1,2})/(\\d{1,2})(?:/(\\d{2,4}))?`, "gi");
+const WD_NAMES = ["domingo", "segunda", "terça", "quarta", "quinta", "sexta", "sábado"];
+
+export function fixWeekdayDatePairs(text: string, now: Date, timeZone: string): string {
+  const today = wallClockInZone(now, timeZone);
+  return text.replace(WD_DATE, (whole: string, weekday: string, sep: string, d: string, m: string, y?: string) => {
+    const day = Number(d), month = Number(m);
+    if (month < 1 || month > 12 || day < 1 || day > 31) return whole;
+    let year = y ? (y.length === 2 ? 2000 + Number(y) : Number(y)) : today.year;
+    // Sem ano e a data ja ficou ha muito tempo pra tras (ex: dezembro, falando de janeiro) = ano que vem.
+    if (!y && Date.UTC(year, month - 1, day) < Date.UTC(today.year, today.month - 1, today.day) - 180 * 86_400_000) year += 1;
+    const real = new Date(Date.UTC(year, month - 1, day));
+    if (real.getUTCMonth() !== month - 1) return whole; // 31/02 etc: nao mexe
+    const idx = real.getUTCDay();
+    if (weekdayIndex(weekday) === idx) return whole;
+    const hadFeira = /-feira/i.test(weekday);
+    let name = WD_NAMES[idx];
+    if (idx >= 1 && idx <= 5 && hadFeira) name += "-feira";
+    if (weekday[0] === weekday[0].toUpperCase()) name = name[0].toUpperCase() + name.slice(1);
+    console.warn(`[datas] dia da semana corrigido: "${weekday}" ${d}/${m} -> "${name}"`);
+    return `${name}${sep}${d}/${m}${y ? `/${y}` : ""}`;
+  });
+}
+
 export function fixRelativeDayLabels(text: string, now: Date, timeZone: string): string {
   const today = wallClockInZone(now, timeZone).weekday;
   const tomorrow = (today + 1) % 7;

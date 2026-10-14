@@ -10,7 +10,7 @@ function fold(s: string): string {
   return s.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
 }
 
-export type Intent = "schedule" | "decline" | "price" | "info";
+export type Intent = "schedule" | "decline" | "hesitate" | "price" | "info";
 
 export interface FlowMessage {
   role: string;
@@ -32,6 +32,12 @@ const SCHEDULE_RE =
 
 const DECLINE_RE =
   /\b(nenhum(a)?( deles| delas| desses| dessas)?|nao (da|posso|consigo|rola|tenho como|vai dar|serve|quero)|nao me (serve|atende)|outro (dia|horario)|mais pra frente|mais tarde|vou pensar|depois (eu )?(vejo|falo|aviso|te falo)|talvez depois)\b/;
+
+// "Nao" claro ao procedimento/proposta (nao a um horario) e adiamentos ("vou me organizar", "depois eu vejo").
+const HARD_NO_RE =
+  /\b(nao tenho (mais )?interesse|sem interesse|nao quero( mais)?( fazer| esse| isso)?|desisti|nao vou (fazer|querer)|nao (era|e) isso|nao me interessa)\b/;
+const SOFT_STALL_RE =
+  /\b(vou pensar|vou me organizar|vou ver (e|com)|te aviso|depois (eu )?(vejo|falo|aviso|te falo|entro em contato)|mais pra frente|talvez depois|agora nao|no momento nao|deixa eu ver)\b/;
 
 const GOAL_RE =
   /gordura|barriga|abdom|flacidez|flacida|braco|ruga|mancha|celulite|estria|papada|coxa|culote|olheira|acne|labio|rosto|\bpele\b|cabelo|emagrec|peso|sobrancelha|tatuagem|depila|cicatriz|poros|bumbum|gluteo|perna|seio|colo\b|melasma|vasinho/;
@@ -67,8 +73,15 @@ export function analyzeFlow(input: { history: FlowMessage[]; trailing: string[];
   const proposesTime = /\b\d{1,2}\s?(h\b|horas|:\d\d)|\b(amanha|hoje|segunda|terca|quarta|quinta|sexta|sabado|domingo)\b/.test(fold(trailText));
   const declined = declinesOptions(trailText) && !proposesTime && (slotsOffered || evalOffered || scheduleAsked);
 
+  // Disse "nao"/"vou pensar"/"vou me organizar" sem propor nada: a Alice nao pode responder so "ok" nem ficar esperando.
+  const trailFold = fold(trailText);
+  const hardNo = HARD_NO_RE.test(trailFold);
+  const softStall = SOFT_STALL_RE.test(trailFold) && !slotsOffered;
+  const hesitates = !proposesTime && (hardNo || softStall);
+
   let intent: Intent = "info";
   if (hasBooking && !wantsSchedule(trailText)) intent = priceAsked ? "price" : "info";
+  else if (hesitates) intent = "hesitate";
   else if (declined) intent = "decline";
   else if (wantsSchedule(trailText) || scheduleAsked) intent = "schedule";
   else if (priceAsked) intent = "price";
@@ -84,6 +97,11 @@ export function analyzeFlow(input: { history: FlowMessage[]; trailing: string[];
     case "decline":
       nextMove =
         "A cliente RECUSOU as opcoes que voce deu. NAO se despeca e NAO encerre ('se mudar de ideia...' perde a venda). Em UMA frase curta, pergunte qual dia da semana e periodo (manha, tarde ou noite) ficam melhores pra ela, e ja chame check_availability para ver OUTROS dias (inclusive amanha em outro horario) e ofereca 2 opcoes novas. So pare se ela disser claramente que nao quer mais." +
+        noPrice;
+      break;
+    case "hesitate":
+      nextMove =
+        "A cliente disse NAO, que vai pensar ou que vai se organizar - sem marcar nada. NUNCA responda so 'ok', 'tudo bem' ou 'quando estiver pronta me avise': isso entrega a venda. Respeite (sem pressao, sem insistir, sem inventar desconto/urgencia), mas em 1 frase acolha e faca UMA pergunta aberta que descubra o motivo ou combine o retorno, por exemplo: 'o que te deixou ainda pensando sobre o protocolo?' ou 'quando podemos retomar nosso contato?' (se ela disse que vai se organizar: 'qual dia da semana costuma ficar mais tranquilo pra voce? ja deixo um horario em mente'). Escolha a pergunta que combina com o que ela disse; nao repita uma pergunta que ja fez." +
         noPrice;
       break;
     case "price":
