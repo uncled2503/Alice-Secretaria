@@ -187,3 +187,19 @@ test("pesquisa de satisfacao usa o texto da avaliacao so quando o atendimento e 
   assert.match(src, /\/avalia\/i\.test\(appt\.procedure\.name\)/);
   assert.match(src, /isEvaluation && clinic\.npsEvaluationMessage/);
 });
+
+test("expediente das biomedicas da Lisboa: Sabrina ter/qui 12h-21h, Amanda sabado 8h-15h (so na Lisboa)", async () => {
+  const sql = fs.readFileSync(new URL("../prisma/migrations/20261014180000_lisboa_expediente_sabrina_amanda/migration.sql", import.meta.url), "utf8");
+  assert.match(sql, /"workDays" = '2,4', "workStartHour" = 12, "workStartMinute" = 0, "workEndHour" = 21/);
+  assert.match(sql, /"workDays" = '6', "workStartHour" = 8, "workStartMinute" = 0, "workEndHour" = 15/);
+  assert.equal((sql.match(/Lisboa Beauty Center/g) ?? []).length, 2);
+  // com esse expediente, terca 09:30 NAO e horario da Sabrina e quinta 12:30 e
+  const { resolveHours, evaluateSlot } = await import("../dist/scheduling/slots.js");
+  const clinic = { timezone: "America/Sao_Paulo", workStartHour: 8, workEndHour: 21, workDays: "1,2,3,4,5,6" };
+  const sabrina = resolveHours(clinic, { workDays: "2,4", workStartHour: 12, workEndHour: 21 });
+  const now = new Date("2026-10-14T15:00:00Z");
+  const terca0930 = new Date("2026-10-20T12:30:00Z"); // 09:30 em Sao Paulo
+  const quinta1230 = new Date("2026-10-15T15:30:00Z"); // 12:30 em Sao Paulo
+  assert.equal(evaluateSlot({ startUtc: terca0930, durationMin: 60, hours: sabrina, busy: [], now }).ok, false);
+  assert.equal(evaluateSlot({ startUtc: quinta1230, durationMin: 60, hours: sabrina, busy: [], now }).ok, true);
+});
