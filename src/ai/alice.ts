@@ -38,6 +38,7 @@ import { absorbToolResult, checkSlotMentions, knownFrom, newSlotState, renderBoo
 import { isJobSeeker } from "./jobSeeker.js";
 import { ceBookingReadiness } from "../clinicaexperts/procedureLink.js";
 import { buildConversationBrief } from "./conversationBrief.js";
+import { selectFocusProcedures } from "./procedureFocus.js";
 import { analyzeConversation, renderAnalysis } from "./conversationAnalysis.js";
 import { areasIn, findRelevanceMismatch, fittingProcedures, safeReplyForMismatch } from "./relevance.js";
 import { buildPreProcedureText } from "../reminders/preProcedure.js";
@@ -972,6 +973,16 @@ function describeProcedureForPrompt(p: Procedure & { _count?: { photos: number }
   return lines.join("\n");
 }
 
+// Linha COMPACTA de um procedimento (nome, duracao, valor, marcador de fotos): e a lista que vai em TODA mensagem. Os detalhes (descricao,
+// beneficios...) so vao para os procedimentos em foco na conversa (ver procedureFocus.ts).
+function describeProcedureCompact(p: Procedure & { _count?: { photos: number } }, quotePrices = true): string {
+  let price = "";
+  if (!quotePrices) price = " | valor: equipe";
+  else if (p.price != null) price = ` | R$ ${p.price.toFixed(2).replace(".", ",")}${p.offerInstallments && p.maxInstallments ? ` (ate ${p.maxInstallments}x)` : ""}`;
+  else if (p.priceVariable) price = " | valor: na avaliacao";
+  return `- ${p.name} (${p.durationMin}min)${price}${p._count?.photos ? " [tem fotos]" : ""}`;
+}
+
 // Concordancia em portugues: o nome de uma PESSOA leva "de" ("secretaria de
 // Ana"), mas um titulo define o genero ("secretaria do Dr. Joao", "da Dra.
 // Ana"). Sem isso a Alice fala "secretaria de Dr. Isac".
@@ -1013,7 +1024,7 @@ function personaInstruction(clinic: { name: string; assistantName: string; assis
   return `Voce se apresenta apenas como parte da equipe ${prepLugar(clinic.name)}, sem citar cargo. Ex: "Oi! Aqui e a ${a}, da equipe ${prepLugar(clinic.name)}".${grammar}`;
 }
 
-export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: string; flow?: SalesFlow } = {}): Promise<string> {
+export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: string; flow?: SalesFlow; focusTexts?: string[] } = {}): Promise<string> {
   const clinic = await prisma.clinic.findUniqueOrThrow({
     where: { id: clinicId },
     include: {
@@ -1026,6 +1037,14 @@ export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: str
 
   const a = clinic.assistantName || "Alice";
   const procedureList = clinic.procedures.map((p) => describeProcedureForPrompt(p, clinic.quotePrices)).join("\n\n");
+  const procedureListCompact = clinic.procedures.map((p) => describeProcedureCompact(p, clinic.quotePrices)).join("\n");
+  // Procedimentos em foco: os que a conversa (e o anuncio de origem) tocam. So eles levam descricao completa no prompt.
+  const adOrigin = ctx.patientId ? await prisma.patient.findUnique({ where: { id: ctx.patientId }, select: { adName: true, adCampaignName: true } }) : null;
+  const focusProcs = selectFocusProcedures(clinic.procedures, [...(ctx.focusTexts ?? []), adOrigin?.adName ?? "", adOrigin?.adCampaignName ?? ""], 6);
+  const focusIds = new Set(focusProcs.map((p) => p.id));
+  const focusBlock = focusProcs.length
+    ? `\n\nDETALHES DOS PROCEDIMENTOS EM FOCO NESTA CONVERSA (explique SO com estes dados):\n${focusProcs.map((p) => describeProcedureForPrompt(p, clinic.quotePrices)).join("\n\n")}`
+    : "";
 
   const areaLine = clinic.activityArea?.trim()
     ? `\nArea de atuacao: ${clinic.activityArea.trim()}.`
@@ -1317,17 +1336,20 @@ FERIADOS PROXIMOS: ${holidayItems.join("; ")}. Se a pessoa perguntar se funciona
     .map((n) => DOW[n])
     .join(", ");
   const prosByProcedure = clinic.procedures
-    .filter((p) => p.professionals.length > 0)
+    .filter((p) => p.professionals.length > 0 && focusIds.has(p.id))
     .map((p) => `- ${p.name}: ${p.professionals.map((pr) => `${pr.title ? pr.title + " " : ""}${pr.name}`).join(", ")}`)
     .join("\n");
   const professionalsBlock = prosByProcedure
     ? `\n\nProfissionais por procedimento (use o nome EXATAMENTE como escrito aqui; quem esta sem 'Dr./Dra.' e chamado so pelo nome, nunca invente titulo):\n${prosByProcedure}\nSe houver mais de um profissional, pergunte a preferencia do paciente (ou ofereca o primeiro horario livre de qualquer um). Passe professional_name/professional_id nas ferramentas de agenda.`
     : "";
 
-  const scheduleBlock = `\n\nAGENDA E HORARIOS (regras rigidas):
+  // Parte da agenda que muda a cada minuto/dia: vai no FIM do prompt (o inicio fica identico entre mensagens e a OpenAI reaproveita o cache).
+  const scheduleDynamic = `\n\nDATA E CALENDARIO DE AGORA (use exatamente):
 - Data e hora agora: ${formatInZone(new Date(), tz)} (fuso ${tz}). HOJE E ${isoDateInZone(new Date(), tz)} - este e o ano corrente, use SEMPRE ele. Nunca assuma outro ano por conta propria: uma data com o ano errado cai no passado e a agenda recusa com "esse horario ja passou".
-- Calendario dos proximos dias (ja no formato AAAA-MM-DD que as ferramentas esperam - COPIE daqui, nunca calcule de cabeca): ${upcomingWeekdayTable(tz)}
-- BASE DE DATAS (regras fixas): (1) o dia da semana e a data SEMPRE andam juntos como estao na tabela acima - nunca escreva um dia da semana com a data de outro (ex: "sexta-feira, 20/10" se 20/10 e terca). (2) "semana que vem"/"proxima semana" = a linha SEMANA QUE VEM; "sexta da outra semana", "daqui a duas semanas" = a linha correspondente - procure o dia da semana NA LINHA, nao some dias de cabeca. (3) "proxima sexta" = a primeira sexta que ainda nao passou, contando de hoje (se hoje ja e sexta, e a de 7 dias depois). (4) Antes de escrever uma data na resposta, confira na tabela que o dia da semana bate. (5) Se o paciente disser so "dia 20", procure na tabela qual dia da semana e esse 20 e confirme com ele ("terca, dia 20, pode ser?"). (6) Horarios: sempre no formato 24h do fuso da clinica (ex: 14:30), sem converter fuso, e so cite horarios que vieram das ferramentas de agenda. (7) Se a data que o paciente pediu nao existe na tabela ou ha duvida, pergunte em vez de chutar.
+- Calendario dos proximos dias (ja no formato AAAA-MM-DD que as ferramentas esperam - COPIE daqui, nunca calcule de cabeca): ${upcomingWeekdayTable(tz)}`;
+
+  const scheduleBlock = `\n\nAGENDA E HORARIOS (regras rigidas):
+- BASE DE DATAS (regras fixas; a tabela de datas esta no fim do contexto): (1) o dia da semana e a data SEMPRE andam juntos como estao na tabela - nunca escreva um dia da semana com a data de outro (ex: "sexta-feira, 20/10" se 20/10 e terca). (2) "semana que vem"/"proxima semana" = a linha SEMANA QUE VEM; "sexta da outra semana", "daqui a duas semanas" = a linha correspondente - procure o dia da semana NA LINHA, nao some dias de cabeca. (3) "proxima sexta" = a primeira sexta que ainda nao passou, contando de hoje (se hoje ja e sexta, e a de 7 dias depois). (4) Antes de escrever uma data na resposta, confira na tabela que o dia da semana bate. (5) Se o paciente disser so "dia 20", procure na tabela qual dia da semana e esse 20 e confirme com ele ("terca, dia 20, pode ser?"). (6) Horarios: sempre no formato 24h do fuso da clinica (ex: 14:30), sem converter fuso, e so cite horarios que vieram das ferramentas de agenda. (7) Se a data que o paciente pediu nao existe na tabela ou ha duvida, pergunte em vez de chutar.
 - Se o paciente escolher um horario que VOCE ja ofereceu (veio de check_availability ou das "alternativas" de check_specific_time), NAO chame check_specific_time de novo nem recalcule a data: use direto o "iso" daquele horario no book_appointment.
 - Ao falar de um horario com o paciente, use o rotulo "quando" que a ferramenta devolveu, sem reescrever o dia da semana por conta propria.
 - Expediente da clinica: ${workDayLabels || "(nao definido)"}, das ${clinic.workStartHour}h as ${clinic.workEndHour}h${clinic.lunchStartHour != null && clinic.lunchEndHour != null ? ` (com intervalo das ${clinic.lunchStartHour}h as ${clinic.lunchEndHour}h - as ferramentas ja recusam esse intervalo, mas se o paciente perguntar, mencione o intervalo com naturalidade)` : ""}. Cada profissional pode ter um expediente proprio - as ferramentas ja consideram isso.
@@ -1347,7 +1369,7 @@ FERIADOS PROXIMOS: ${holidayItems.join("; ")}. Se a pessoa perguntar se funciona
 - NUNCA escreva que a consulta esta "confirmada", "agendada" ou "reservada" sem ter chamado book_appointment e recebido "agendado: true" nesta mesma resposta. Escrever a mensagem de confirmacao NAO agenda nada - sem a ferramenta, o horario nao existe na agenda e a equipe nao fica sabendo.
 - Se o paciente confirmar presenca numa consulta ja marcada, cancelar ou pedir pra remarcar, use manage_my_appointment.
 - CANCELAMENTO: se o paciente pedir pra cancelar, chame manage_my_appointment com action "cancel" (isso tira o horario da agenda e libera a vaga) - nao diga que cancelou sem chamar. Se ele tiver mais de um agendamento, pergunte QUAL (ou se sao todos) antes de cancelar. Depois de cancelar, OFERECA reagendar em uma frase ("quer que eu veja outro horario pra voce?"), sem insistir se ele disser que nao.
-- CONFIRMACAO: a clinica manda UMA confirmacao por dia (a do primeiro horario). Se o paciente responder confirmando ("pode sim", "confirmo", "estarei ai"), chame manage_my_appointment com action "confirm" (isso confirma todos os horarios do dia) e responda SO agradecendo a confirmacao, em uma frase curta: sem pergunta, sem oferta e sem falar de outro assunto (nunca pergunte se ja fez o procedimento).${clinic.conciseFirstReply ? "\n- ANTES de oferecer dias e horarios, se a ficha acima nao trouxer a preferencia, pergunte se ela prefere manha, tarde ou noite e quais dias da semana costumam ser melhores; depois ofereca so horarios compativeis." : ""}${professionalsBlock}`;
+- CONFIRMACAO: a clinica manda UMA confirmacao por dia (a do primeiro horario). Se o paciente responder confirmando ("pode sim", "confirmo", "estarei ai"), chame manage_my_appointment com action "confirm" (isso confirma todos os horarios do dia) e responda SO agradecendo a confirmacao, em uma frase curta: sem pergunta, sem oferta e sem falar de outro assunto (nunca pergunte se ja fez o procedimento).${clinic.conciseFirstReply ? "\n- ANTES de oferecer dias e horarios, se a ficha acima nao trouxer a preferencia, pergunte se ela prefere manha, tarde ou noite e quais dias da semana costumam ser melhores; depois ofereca so horarios compativeis." : ""}`;
 
   const allStages = await getFunnelStages(clinicId);
   const stagesBlock = allStages.length
@@ -1409,14 +1431,16 @@ Seu trabalho:
 2. Manter a etapa do paciente no funil atualizada (update_crm_stage) conforme a conversa avanca.
 3. Checar disponibilidade real (check_specific_time / check_availability) antes de falar de qualquer data.
 4. Confirmar o horario escolhido com o paciente e so entao usar book_appointment.
-5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${locationLine}${explainLine}${evalPitchLine}${firstContactLine}${discoveryLine}${adLine}${profileLine}${objectionLine}${dateLine}${holidayLine}${apptLine}${teamBooksLine}${continuityLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${handoffLine}${silentLine}${humanLine}${noRepeatLine}
+5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${locationLine}${explainLine}${teamBooksLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${handoffLine}${silentLine}${humanLine}${noRepeatLine}
 
-Procedimentos oferecidos pela clinica:
-${procedureList || "(nenhum procedimento cadastrado ainda)"}
+Procedimentos oferecidos pela clinica (lista resumida: nome, duracao e valor; a descricao completa so vem, no fim do contexto, para os procedimentos em foco na conversa):
+${procedureListCompact || "(nenhum procedimento cadastrado ainda)"}
 
-Use so os dados de valor, beneficio, indicacao e prazo que estao cadastrados acima em cada procedimento. Se o paciente perguntar algo que nao esta ali (preco de um item sem valor, prazo de um item sem prazo cadastrado, etc.), diga que precisa confirmar na avaliacao/com a equipe - nunca invente numero, garantia ou prazo.${scheduleBlock}${stagesBlock}${templatesBlock}${faqBlock}${playbookBlock}
+Use so os dados de valor, beneficio, indicacao e prazo cadastrados na lista acima e nos DETALHES DOS PROCEDIMENTOS EM FOCO (fim do contexto). Procedimento que aparece so na lista (sem detalhes): nao descreva nem prometa nada dele alem de nome, duracao e valor; diga que a profissional explica na avaliacao. Marcador [tem fotos]: ofereca enviar resultados quando houver interesse (send_procedure_photos). Se o paciente perguntar algo que nao esta ali (preco de um item sem valor, prazo de um item sem prazo cadastrado, etc.), diga que precisa confirmar na avaliacao/com a equipe - nunca invente numero, garantia ou prazo.${scheduleBlock}${stagesBlock}${templatesBlock}${faqBlock}${playbookBlock}
 
-Responda sempre em portugues do Brasil, em mensagens curtas como quem digita no WhatsApp. ${GRAMMAR_REMINDER}${await getActiveRulesPrompt(clinicId)}`;
+Responda sempre em portugues do Brasil, em mensagens curtas como quem digita no WhatsApp. ${GRAMMAR_REMINDER}${await getActiveRulesPrompt(clinicId)}
+
+=== CONTEXTO DESTA CONVERSA (muda a cada mensagem; vale mais que o texto padrao acima) ===${scheduleDynamic}${dateLine}${holidayLine}${apptLine}${profileLine}${adLine}${objectionLine}${continuityLine}${evalPitchLine}${firstContactLine}${discoveryLine}${surveyLine}${focusBlock}${professionalsBlock}`;
 }
 
 export interface IncomingReferral {
@@ -1808,20 +1832,32 @@ async function shortenFirstReply(draft: string, patientMessages: string[], clini
 // Familia gpt-6: no Chat Completions as ferramentas (agenda, transferencia) so funcionam com reasoning_effort "none" (relato de
 // terceiros, ainda nao validado aqui: se o modelo recusar, createChat volta ao padrao).
 function samplingFor(model: string): Record<string, unknown> {
-  if (/^gpt-4/i.test(model)) return { frequency_penalty: 0.3, presence_penalty: 0.2 };
+  if (/^gpt-4/i.test(model)) return { frequency_penalty: 0.3, presence_penalty: 0.2, max_tokens: 500 }; // resposta de WhatsApp e curta: teto evita texto longo (e gasto)
   if (/^gpt-6/i.test(model)) return { reasoning_effort: "none" };
   return {};
 }
 
 // Chamada principal da conversa. Se a clinica usa um modelo proprio (Clinic.aiModel) e ele falha (nome errado, sem acesso, parametro
 // recusado), volta ao modelo padrao NA MESMA resposta: a Alice nunca fica muda por causa de um teste de modelo.
+// Uso de tokens de cada chamada (entrada, parte reaproveitada do cache da OpenAI, saida): serve para medir o custo real e ver se o cache funciona.
+function logUsage(model: string, res: ChatCompletion): void {
+  const u = res.usage as (ChatCompletion["usage"] & { prompt_tokens_details?: { cached_tokens?: number } }) | undefined;
+  if (!u) return;
+  const cached = u.prompt_tokens_details?.cached_tokens ?? 0;
+  console.log(`[tokens] ${model} entrada=${u.prompt_tokens} cache=${cached} (${u.prompt_tokens ? Math.round((cached / u.prompt_tokens) * 100) : 0}%) saida=${u.completion_tokens}`);
+}
+
 async function createChat(model: string, messages: ChatCompletionMessageParam[], activeTools: ChatCompletionTool[]) {
   try {
-    return await openai.chat.completions.create({ model, messages, tools: activeTools, ...samplingFor(model) } as Parameters<typeof openai.chat.completions.create>[0] & { stream?: false }) as ChatCompletion;
+    const res = (await openai.chat.completions.create({ model, messages, tools: activeTools, ...samplingFor(model) } as Parameters<typeof openai.chat.completions.create>[0] & { stream?: false })) as ChatCompletion;
+    logUsage(model, res);
+    return res;
   } catch (err) {
     if (model === MODEL) throw err;
     console.error(`[modelo] ${model} falhou, usando ${MODEL}:`, err);
-    return await openai.chat.completions.create({ model: MODEL, messages, tools: activeTools, ...samplingFor(MODEL) } as Parameters<typeof openai.chat.completions.create>[0] & { stream?: false }) as ChatCompletion;
+    const res = (await openai.chat.completions.create({ model: MODEL, messages, tools: activeTools, ...samplingFor(MODEL) } as Parameters<typeof openai.chat.completions.create>[0] & { stream?: false })) as ChatCompletion;
+    logUsage(MODEL, res);
+    return res;
   }
 }
 
@@ -1833,6 +1869,7 @@ async function readConversation(p: {
   history: { role: string; content: string; authorName: string | null; createdAt: Date }[];
   trailing: string[];
   pastVisitCount: number;
+  skipAnalysis?: boolean;
 }): Promise<string> {
   try {
     const [clinic, patient, upcoming, catalog] = await Promise.all([
@@ -1862,7 +1899,7 @@ async function readConversation(p: {
     });
     // Segunda leitura so quando ha conversa suficiente para valer a chamada.
     let analysisText = "";
-    if (p.history.filter((m) => m.role !== "system").length >= 4) {
+    if (!p.skipAnalysis && p.history.filter((m) => m.role !== "system").length >= 4) {
       const analysis = await analyzeConversation(
         async (system, user) => {
           const res = await openai.chat.completions.create({
@@ -2174,13 +2211,17 @@ async function generateReplyUnlocked(
   const hasBooking = (await prisma.appointment.count({ where: { patientId: patient.id, status: "confirmed", scheduledAt: { gte: new Date() } } })) > 0;
   const pastVisitCount = await prisma.appointment.count({ where: { patientId: patient.id, status: { in: ["completed", "confirmed"] }, scheduledAt: { lt: new Date() } } });
   const flow = analyzeFlow({ history, trailing: trailingNow, priceAsked: PRICE_ASK_RE.test(normalizeReply(trailingNow.join(" "))), hasBooking, pastVisits: pastVisitCount > 0 });
-  const system = await buildSystemPrompt(clinicId, { patientId: patient.id, flow });
+  const focusTexts = [
+    ...history.filter((m) => m.role !== "user").slice(-3).map((m) => m.content),
+    ...history.filter((m) => m.role === "user").slice(-8).map((m) => m.content),
+  ];
+  const system = await buildSystemPrompt(clinicId, { patientId: patient.id, flow, focusTexts });
 
   const messages: ChatCompletionMessageParam[] = [
     { role: "system", content: system },
-    ...history.map((m): ChatCompletionMessageParam => ({
+    ...history.map((m, idx): ChatCompletionMessageParam => ({
       role: m.role === "user" ? "user" : "assistant",
-      content: m.content,
+      content: idx < history.length - 6 && m.content.length > 700 ? `${m.content.slice(0, 700)}…` : m.content, // economia: mensagem antiga e longa (automacao, descricao) vai cortada
     })),
   ];
 
@@ -2232,7 +2273,7 @@ async function generateReplyUnlocked(
     const trailing = trailingUser;
     if (trailing.length) {
       const memory = conversationMemory(priorReplies, answeredUser);
-      const reading = await readConversation({ clinicId, patientId: patient.id, history, trailing, pastVisitCount });
+      const reading = await readConversation({ clinicId, patientId: patient.id, history, trailing, pastVisitCount, skipAnalysis: flow.intent === "booked" });
       messages.push({
         role: "system",
         content: `${reading ? reading + "\n\n" : ""}JOGADA AGORA (siga isto): ${flow.nextMove}\n\n${memory ? memory + "\n\n" : ""}LEMBRETE FINAL: ${trailing.length > 1 ? "as mensagens novas da pessoa (ainda sem resposta) sao" : "a mensagem nova da pessoa e"}: ${trailing.map((t) => `"${t.slice(0, 300)}"`).join(" + ")}. Responda SOMENTE a isso, UMA vez${trailing.length > 1 ? ", juntando as mensagens numa resposta so" : ""}. O que ela perguntou ANTES ja foi respondido nas mensagens anteriores: NAO responda de novo, NAO repita valores, endereco, horarios, avisos nem frases que voce ja disse, e NAO feche com a mesma pergunta das mensagens anteriores (mude a pergunta ou so responda e pare). Fale como uma pessoa conversando: curto, direto, natural, continuando a conversa de onde ela parou.`,
