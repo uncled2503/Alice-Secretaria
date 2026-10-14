@@ -230,3 +230,34 @@ test("quem ja tem horario marcado: a jogada e responder so o que perguntou e par
   const outro = analyzeFlow({ history: [], trailing: ["quero marcar outro horário"], priceAsked: false, hasBooking: true });
   assert.equal(outro.intent, "schedule");
 });
+
+test("rotulo relativo bate com a data: 'Amanha, dia 20/10' numa quarta 14/10 vira 'Terca-feira, dia 20/10'", async () => {
+  const { fixRelativeDateLabels } = await import("../dist/ai/relativeDays.js");
+  const SP = "America/Sao_Paulo";
+  const quarta = new Date("2026-10-14T15:00:00Z"); // quarta, 14/10/2026, 12h em SP
+  const fix = (t) => fixRelativeDateLabels(t, quarta, SP);
+  assert.equal(fix("*Amanhã, dia 20/10* às *14:30*"), "*Terça-feira, dia 20/10* às *14:30*");
+  assert.equal(fix("Amanhã, dia 20/10 às 18:30"), "Terça-feira, dia 20/10 às 18:30");
+  assert.equal(fix("*Quinta-feira, dia 22/10* às 12:00"), "*Quinta-feira, dia 22/10* às 12:00"); // sem rotulo relativo: nao mexe
+  assert.equal(fix("Amanhã, dia 15/10"), "Amanhã, dia 15/10"); // certo
+  assert.equal(fix("Hoje, dia 14/10 às 16h"), "Hoje, dia 14/10 às 16h"); // certo
+  assert.equal(fix("Hoje, dia 15/10"), "Amanhã, dia 15/10"); // e amanha
+  assert.equal(fix("hoje (20/10)"), "terça-feira (20/10)");
+  assert.equal(fix("depois de amanhã, 16/10"), "depois de amanhã, 16/10");
+  assert.equal(fix("20/10 (amanhã)"), "20/10");
+  assert.equal(fix("15/10 (hoje)"), "15/10 (amanhã)");
+  assert.equal(fix("amanhã às 10h"), "amanhã às 10h"); // sem data: nao mexe
+  assert.equal(fix("Sábado, dia 24/10"), "Sábado, dia 24/10");
+});
+
+test("candidata a vaga de emprego nao e paciente (mas 'tem vaga amanha?' continua sendo pergunta de horario)", async () => {
+  const { isJobSeeker } = await import("../dist/ai/jobSeeker.js");
+  for (const t of ["Olá! Tenho interesse na vaga de esteticista e gostaria de enviar meu currículo", "Posso mandar meu curriculo?", "Vocês estão com processo seletivo?", "quero me candidatar"]) {
+    assert.equal(isJobSeeker(t), true, t);
+  }
+  assert.equal(isJobSeeker("Tenho interesse na vaga e gostaria de enviar", "Vaga de esteticista - Instagram"), true); // anuncio de vaga
+  for (const t of ["Tem vaga amanhã?", "Tem vaga na quinta?", "Queria agendar uma avaliação", "tenho interesse na drenagem"]) {
+    assert.equal(isJobSeeker(t), false, t);
+  }
+  assert.equal(isJobSeeker("tenho interesse na drenagem", "Drenagem R$ 99,99"), false);
+});

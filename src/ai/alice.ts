@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import type { ChatCompletion, ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
 import { prisma } from "../db/client.js";
 import { enrichPatientFromCe } from "../clinicaexperts/sync.js";
-import { fixRelativeDayLabels, fixWeekdayDatePairs } from "./relativeDays.js";
+import { fixRelativeDateLabels, fixRelativeDayLabels, fixWeekdayDatePairs } from "./relativeDays.js";
 import { findNearestSlots,
   findAvailableSlots,
   findAvailableSlotsOnDay,
@@ -33,6 +33,7 @@ import { announcesAction, brokenPromise, PROMISE_NUDGE } from "./promises.js";
 import { analyzeFlow, complainsAboutBot, type SalesFlow } from "./salesFlow.js";
 import { confirmationThanks, isConfirmationReply } from "./confirmation.js";
 import { closingReply, isCourtesyOnly } from "./courtesy.js";
+import { isJobSeeker } from "./jobSeeker.js";
 import { buildPreProcedureText } from "../reminders/preProcedure.js";
 
 // Orientacao de PRE-procedimento que sai como resposta da Alice logo apos a cliente confirmar o horario (por conversa).
@@ -1984,6 +1985,23 @@ async function generateReplyUnlocked(
     }
   }
 
+  // CANDIDATA A VAGA (anuncio de emprego, "envio meu curriculo"): nao e paciente, nao recebe oferta de avaliacao. Vai para a equipe, em silencio.
+  if (usageClinic && usageClinic.businessType !== "geral") {
+    const lastUserText = history.filter((m) => m.role === "user").at(-1)?.content ?? "";
+    const origin = await prisma.patient.findUnique({ where: { id: patient.id }, select: { adName: true, adCampaignName: true } });
+    if (isJobSeeker(lastUserText, [origin?.adName, origin?.adCampaignName].filter(Boolean).join(" "))) {
+      try {
+        await runTool(clinicId, patient.id, conversation.id, "transfer_to_human", {
+          reason: "Candidata a vaga de emprego (currículo)",
+          summary: `A pessoa escreveu sobre vaga/currículo: "${String(lastUserText).slice(0, 300)}". Não é paciente: a Alice não ofereceu avaliação.`,
+        });
+      } catch (err) {
+        console.error("[vaga] falha ao encaminhar pra equipe:", err);
+      }
+      return "";
+    }
+  }
+
   await enrichPatientFromCe(clinicId, patient); // nome completo/vinculo pelo Clinica Experts (melhor esforco)
   // FLUXO DE VENDA: le a conversa (intencao agora, o que ela ja contou, se recusou horarios) e define a PROXIMA JOGADA. O
   // prompt desliga as regras que conflitam com ela e a jogada vai na ultima instrucao ao modelo.
@@ -2271,6 +2289,7 @@ async function generateReplyUnlocked(
     const clinicTz = (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { timezone: true } }))?.timezone || "America/Sao_Paulo";
     finalText = fixWeekdayDatePairs(finalText, new Date(), clinicTz); // "sexta, 20/10" numa terca vira "terca, 20/10"
     finalText = fixRelativeDayLabels(finalText, new Date(), clinicTz); // "quinta (amanha)" numa quinta vira "quinta (hoje)"
+    finalText = fixRelativeDateLabels(finalText, new Date(), clinicTz); // "Amanha, dia 20/10" numa quarta 14/10 vira "Terça-feira, dia 20/10"
     await prisma.message.create({
       data: { conversationId: conversation.id, role: "assistant", content: finalText, deliveryStatus: "pending" }, // vira "sent"/"failed" depois do envio (uazapi/client.ts)
     });
