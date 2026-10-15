@@ -9,60 +9,64 @@ html { scrollbar-color: var(--border) var(--bg); }
 *::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
 
 :root {
+  /* Marca: o laranja #ea580c continua sendo a cor da Alice; o resto da paleta e derivado dele (neutros quentes, nunca branco/preto puro). */
   --accent: #ea580c;
-  --accent-dark: #c2410c;
+  --accent-dark: #9a3412;          /* texto/icone ativo (AA sobre accent-100 e sobre o fundo) */
   --accent-hover: #c2410c;
-  --accent-50: #fff7ed;
-  --accent-100: #ffedd5;
-  --bg: #f7f7fb;
-  --sidebar-bg: #ffffff;
-  --card-bg: #ffffff;
-  --border: #ececf3;
-  --text: #1a1a2e;
-  --text-muted: #6b7280;
-  --text-faint: #9ca3af;
+  --accent-50: #fff4ec;              /* fundo de hover */
+  --accent-100: #ffe6d5;            /* item ativo/selecionado */
+  --accent-fill: #c2410c;                  /* preenchimento com TEXTO BRANCO (5,18:1). O --accent puro com branco da 3,56:1 e nao passa em AA */
+  --accent-deep: #7c2d12;                  /* fim dos gradientes de marca */
+  --accent-rgb: 234, 88, 12;
+  --bg: #fbf6f1;
+  --sidebar-bg: #fffaf6;
+  --card-bg: #fffdfb;
+  --border: #eaddd2;
+  --text: #2b2119;
+  --text-muted: #6a594d;
+  --text-faint: #74635a;
   --green-bg: #d1fae5;
   --green-text: #065f46;
   --msg-out-bg: #d9fdd3;
   --msg-out-text: #111b21;
-  --msg-assistant-bg: #ffedd5;
-  --msg-assistant-text: #7c2d12;
+  --msg-assistant-bg: var(--accent-100);
+  --msg-assistant-text: #8f300f;
 
-  /* Botao da marca (.btn-brand). #FF7A1A com texto branco reprova AA (2.6:1),
-     entao a cor de preenchimento e a laranja escura da marca (~5:1 com branco,
-     mesma familia do --accent-dark). --brand-orange-line e usada no texto/borda
-     do secundario e clareia no tema escuro pra manter contraste AA. */
-  --brand-orange: #c2410c;
+  /* Botao da marca (.btn-brand): preenchimento AA com texto branco (ver --accent-fill). --brand-orange-line serve de texto/borda do
+     secundario e clareia no tema escuro. Soft/ring derivam do accent. */
+  --brand-orange: var(--accent-fill);
   --brand-orange-hover: #9a3412;
   --brand-orange-line: #c2410c;
-  --brand-orange-soft: rgba(194, 65, 12, 0.10);
-  --brand-orange-ring: rgba(194, 65, 12, 0.40);
+  --brand-orange-soft: rgba(var(--accent-rgb), 0.10);
+  --brand-orange-ring: rgba(var(--accent-rgb), 0.40);
 }
 
 [data-theme="dark"] {
-  --accent: #d97706;
-  --accent-dark: #fbbf24;
-  --accent-hover: #b45309;
-  --accent-50: rgba(217, 119, 6, 0.12);
-  --accent-100: rgba(217, 119, 6, 0.22);
-  --bg: #0d0d0d;
-  --sidebar-bg: #141414;
-  --card-bg: #1c1c1c;
-  --border: #333333;
-  --text: #f0f0f0;
-  --text-muted: #a3a3a3;
-  --text-faint: #787878;
-  --green-bg: rgba(217, 119, 6, 0.16);
-  --green-text: #fbbf24;
-  --msg-out-bg: #2b2b2b;
-  --msg-out-text: #f0f0f0;
-  --msg-assistant-bg: #40290f;
-  --msg-assistant-text: #fcd34d;
+  /* Escuro: fundos quentes tingidos pelo matiz do laranja e accent mais claro. */
+  --accent: #f0743a;
+  --accent-dark: #ffc2a1;          /* aqui e um tom CLARO usado em texto/icone ativo */
+  --accent-hover: #ff8a52;
+  --accent-50: #2a1d15;
+  --accent-100: #43291a;
+  --accent-rgb: 240, 116, 58;
+  --bg: #16110d;
+  --sidebar-bg: #1d1712;
+  --card-bg: #241c16;
+  --border: #42352a;
+  --text: #f7eee6;
+  --text-muted: #cdbcad;
+  --text-faint: #b8a595;
+  --green-bg: #1e3a2f;
+  --green-text: #9fdcc0;
+  --msg-out-bg: #2b2622;
+  --msg-out-text: #f7eee6;
+  --msg-assistant-bg: var(--accent-100);
+  --msg-assistant-text: #ffe1cf;
 
   --brand-orange-hover: #a83a0d;
-  --brand-orange-line: #fb923c;
-  --brand-orange-soft: rgba(251, 146, 60, 0.15);
-  --brand-orange-ring: rgba(251, 146, 60, 0.45);
+  --brand-orange-line: #ffa574;
+  --brand-orange-soft: rgba(var(--accent-rgb), 0.12);
+  --brand-orange-ring: rgba(var(--accent-rgb), 0.45);
 }
 
 body {
@@ -122,8 +126,8 @@ body[data-plan="free"] .nav-item[data-plan-lock] .nav-label::after { content: ""
 /* Bloco grande de venda no Início */
 .upsell-hero {
   border-radius: 14px; padding: 1.25rem 1.4rem; margin-bottom: 1rem;
-  background: linear-gradient(135deg, var(--brand-orange) 0%, #7c2d12 100%);
-  color: #fff; box-shadow: 0 10px 30px rgba(124, 45, 18, 0.25);
+  background: linear-gradient(135deg, var(--accent-fill) 0%, var(--accent-deep) 100%);
+  color: #fff; box-shadow: 0 10px 30px rgba(var(--accent-rgb), 0.25);
 }
 .upsell-tag {
   display: inline-block; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em;
@@ -174,7 +178,7 @@ body[data-plan="free"] .nav-item[data-plan-lock] .nav-label::after { content: ""
 /* Botão fixo na barra lateral (display fica com o gate [data-plan-free]) */
 .unlock-cta {
   width: 100%; text-align: left; cursor: pointer; margin-bottom: 0.5rem;
-  background: linear-gradient(135deg, var(--brand-orange) 0%, #7c2d12 100%);
+  background: linear-gradient(135deg, var(--accent-fill) 0%, var(--accent-deep) 100%);
   color: #fff; border: 0; border-radius: 10px; padding: 0.6rem 0.75rem;
 }
 .unlock-cta:hover { filter: brightness(1.08); }
@@ -304,7 +308,7 @@ main { flex: 1; padding: 1.6rem 2rem 3rem; max-width: 1600px; min-width: 0; }
 .badge-neutral { background: var(--bg); color: var(--text-muted); border: 1px solid var(--border); }
 .badge-red { background: #7f1d1d; color: white; }
 .badge-amber { background: #fef3c7; color: #92400e; border: 1px solid #fcd34d; }
-.badge-plan { background: var(--accent); color: white; }
+.badge-plan { background: var(--accent-fill); color: white; }
 
 /* Aviso de plano vencido/vencendo no topo da aba Clínicas (painel adm). */
 .plan-alert {
@@ -316,7 +320,7 @@ main { flex: 1; padding: 1.6rem 2rem 3rem; max-width: 1600px; min-width: 0; }
 .plan-alert strong { display: block; margin-bottom: 0.2rem; }
 
 .page-header > button, .page-header > .header-actions {
-  background: var(--accent); color: white; border: none; border-radius: 8px;
+  background: var(--accent-fill); color: white; border: none; border-radius: 8px;
   padding: 0.55rem 1rem; cursor: pointer; font-weight: 600; font-size: 0.85rem; white-space: nowrap;
 }
 .page-header > button:hover { background: var(--accent-hover); }
@@ -338,7 +342,7 @@ main { flex: 1; padding: 1.6rem 2rem 3rem; max-width: 1600px; min-width: 0; }
   background: transparent; border: none; padding: 0.4rem 0.9rem; border-radius: 6px; cursor: pointer;
   font-size: 0.8rem; color: var(--text-muted); font-family: inherit;
 }
-.view-toggle button.active { background: var(--accent); color: white; font-weight: 600; }
+.view-toggle button.active { background: var(--accent-fill); color: white; font-weight: 600; }
 
 /* --- Agenda: grid de calendario --- */
 .agenda-grid-card { padding: 0; overflow-x: auto; }
@@ -414,7 +418,7 @@ main { flex: 1; padding: 1.6rem 2rem 3rem; max-width: 1600px; min-width: 0; }
 .ag-minical-grid button:hover { background: var(--accent-50); }
 .ag-minical-grid button.other { color: var(--text-faint); }
 .ag-minical-grid button.today { outline: 1px solid var(--accent); }
-.ag-minical-grid button.sel { background: var(--accent); color: #fff; }
+.ag-minical-grid button.sel { background: var(--accent-fill); color: #fff; }
 .ag-minical-grid button.has::after {
   content: ""; position: absolute; bottom: 3px; left: 50%; transform: translateX(-50%);
   width: 4px; height: 4px; border-radius: 50%; background: var(--accent);
@@ -474,7 +478,7 @@ main { flex: 1; padding: 1.6rem 2rem 3rem; max-width: 1600px; min-width: 0; }
   background: transparent; border: 1px solid var(--border); color: var(--text-muted);
   border-radius: 6px; padding: 0.4rem 0.7rem; cursor: pointer; font-size: 0.78rem; font-family: inherit;
 }
-.tour-actions #tour-next { border: none; background: var(--accent); color: white; border-radius: 6px; padding: 0.4rem 0.9rem; cursor: pointer; font-size: 0.78rem; font-weight: 600; }
+.tour-actions #tour-next { border: none; background: var(--accent-fill); color: white; border-radius: 6px; padding: 0.4rem 0.9rem; cursor: pointer; font-size: 0.78rem; font-weight: 600; }
 
 /* --- Card --- */
 .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 1.1rem 1.2rem; }
@@ -487,7 +491,7 @@ main { flex: 1; padding: 1.6rem 2rem 3rem; max-width: 1600px; min-width: 0; }
   background: var(--card-bg); border: 1px solid var(--border); color: var(--text-muted);
   border-radius: 999px; padding: 0.35rem 0.9rem; font-size: 0.8rem; cursor: pointer; font-family: inherit;
 }
-.period-btn.active { background: var(--accent); border-color: var(--accent); color: white; font-weight: 600; }
+.period-btn.active { background: var(--accent-fill); border-color: var(--accent-fill); color: white; font-weight: 600; }
 
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.2rem; }
 .stat-card { display: flex; flex-direction: column; gap: 0.3rem; }
@@ -786,7 +790,7 @@ tbody tr:hover { background: var(--accent-50); }
   background: transparent; border: none; color: var(--text-muted); font-family: inherit;
   font-size: 0.8rem; padding: 0.3rem 0.5rem; border-radius: 6px; cursor: pointer;
 }
-.contact-panel-tabs button[data-cpt].active { background: var(--accent); color: #fff; }
+.contact-panel-tabs button[data-cpt].active { background: var(--accent-fill); color: #fff; }
 #cp-open-chat { margin-left: auto; }
 .contact-panel-body { display: none; padding: 1rem; overflow-y: auto; flex: 1; }
 .contact-panel-body.active { display: block; }
@@ -920,7 +924,7 @@ tbody tr:hover { background: var(--accent-50); }
 #chat-input { flex: 1; padding: 0.6rem 1rem; border: 1px solid var(--border); border-radius: 999px; background: var(--card-bg); color: var(--text); }
 #chat-send-btn {
   width: 40px; height: 40px; padding: 0; border-radius: 50%; flex-shrink: 0;
-  background: var(--accent); color: white; display: flex; align-items: center; justify-content: center;
+  background: var(--accent-fill); color: white; display: flex; align-items: center; justify-content: center;
 }
 #chat-send-btn .nav-icon { width: 18px; height: 18px; }
 #chat-send-btn:disabled { opacity: 0.5; }
@@ -955,7 +959,7 @@ tbody tr:hover { background: var(--accent-50); }
 .chat-audio-mini { display: inline-flex; align-items: center; gap: 0.5rem; }
 .chat-audio-play {
   flex-shrink: 0; width: 30px; height: 30px; border-radius: 50%; border: none; cursor: pointer;
-  background: var(--accent); color: #fff; font-size: 0.72rem; display: flex; align-items: center; justify-content: center;
+  background: var(--accent-fill); color: #fff; font-size: 0.72rem; display: flex; align-items: center; justify-content: center;
 }
 .chat-audio-time { font-size: 0.78rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .chat-audio-wave {
@@ -1149,16 +1153,16 @@ button { font-family: inherit; }
 }
 
 button[type="submit"]:not(.btn-brand), .broadcast-form-row button:not(.btn-brand) {
-  background: var(--accent); color: white; border: none; border-radius: 8px;
+  background: var(--accent-fill); color: white; border: none; border-radius: 8px;
   padding: 0.55rem 1.2rem; cursor: pointer; height: fit-content; font-weight: 600; font-size: 0.85rem;
 }
 button[type="submit"]:not(.btn-brand):hover, .broadcast-form-row button:not(.btn-brand):hover { background: var(--accent-hover); }
 
-.btn-save { background: var(--accent); color: white; border: none; border-radius: 6px; padding: 0.4rem 0.8rem; cursor: pointer; font-size: 0.8rem; }
+.btn-save { background: var(--accent-fill); color: white; border: none; border-radius: 6px; padding: 0.4rem 0.8rem; cursor: pointer; font-size: 0.8rem; }
 .btn-approve { background: #10b981; color: white; border: none; border-radius: 6px; padding: 0.3rem 0.8rem; cursor: pointer; font-size: 0.78rem; }
 .btn-discard { background: transparent; border: 1px solid var(--border); color: var(--text-muted); border-radius: 6px; padding: 0.3rem 0.8rem; cursor: pointer; font-size: 0.78rem; }
 .btn-cancel { background: transparent; border: 1px solid #ef4444; color: #ef4444; border-radius: 6px; padding: 0.3rem 0.6rem; cursor: pointer; font-size: 0.78rem; }
-[data-theme="dark"] .btn-approve { background: var(--accent); }
+[data-theme="dark"] .btn-approve { background: var(--accent-fill); }
 [data-theme="dark"] .btn-cancel { border-color: var(--border); color: var(--accent-dark); }
 td.actions { display: flex; gap: 0.4rem; }
 
@@ -1170,7 +1174,7 @@ td.actions { display: flex; gap: 0.4rem; }
   background: var(--card-bg); border: 1px solid var(--border); color: var(--text-muted);
   border-radius: 999px; padding: 0.3rem 0.8rem; font-size: 0.78rem; cursor: pointer; font-family: inherit;
 }
-.rules-cat-filter button.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.rules-cat-filter button.active { background: var(--accent-fill); border-color: var(--accent-fill); color: #fff; font-weight: 600; }
 .rule-cat-hints { display: flex; gap: 0.4rem; flex-wrap: wrap; }
 .rule-cat-hint { cursor: pointer; }
 
@@ -1479,8 +1483,8 @@ code { background: var(--accent-50); color: var(--accent-dark); padding: 0.1rem 
   padding: 4px;
   border: 1px solid var(--border);
   border-radius: 50%;
-  background: linear-gradient(135deg, var(--accent), var(--accent-dark));
-  box-shadow: 0 14px 36px rgba(194, 65, 12, 0.34);
+  background: linear-gradient(135deg, var(--accent-fill), var(--accent-deep));
+  box-shadow: 0 14px 36px rgba(var(--accent-rgb), 0.34);
   cursor: pointer;
   z-index: 2200;
   transition: transform 0.16s ease, box-shadow 0.16s ease;
@@ -1536,7 +1540,7 @@ code { background: var(--accent-50); color: var(--accent-dark); padding: 0.1rem 
 
 .panel-ai-head {
   padding: 14px 15px;
-  background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+  background: linear-gradient(135deg, var(--accent-fill), var(--accent-deep));
   color: #fff;
   display: flex;
   align-items: center;
@@ -1591,7 +1595,7 @@ code { background: var(--accent-50); color: var(--accent-dark); padding: 0.1rem 
 .panel-ai-message--user {
   align-self: flex-end;
   border-bottom-right-radius: 4px;
-  background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+  background: linear-gradient(135deg, var(--accent-fill), var(--accent-deep));
   color: #fff;
 }
 .panel-ai-typing { display: flex; align-items: center; gap: 4px; width: fit-content; }
@@ -1677,3 +1681,96 @@ code { background: var(--accent-50); color: var(--accent-dark); padding: 0.1rem 
 .alice-power .alice-power-dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: #10b981; box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.25); flex-shrink: 0; }
 .alice-power.is-off { background: rgba(148, 163, 184, 0.14); }
 .alice-power.is-off .alice-power-dot { background: #94a3b8; box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.25); }
+
+
+/* ===== Renovacao visual (14/10/2026): identidade mais acolhedora, diretorio de configuracoes e responsividade =====
+   Tudo daqui usa SO variaveis do tema (--accent*, --brand-orange*, --bg...): nada de hexadecimal novo. */
+
+/* --- Acessibilidade e controles --- */
+:root { accent-color: var(--accent); }
+button:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px solid var(--brand-orange-line); outline-offset: 3px; }
+
+/* --- Menu lateral e marca --- */
+.sidebar { width: 264px; padding: 1.5rem 1rem; }
+.brand-logo { width: 42px; height: 42px; }
+.brand-text .brand-wordmark { font-family: Georgia, "Times New Roman", serif; font-size: 2rem; font-weight: 500; letter-spacing: -0.08em; line-height: 1; }
+.brand-text .brand-wordmark .brand-dot { color: var(--accent); }
+.nav-group-label { font-size: 0.62rem; letter-spacing: 0.12em; }
+.nav-item { padding: 0.75rem; border-radius: 12px; }
+.nav-item.active { background: var(--accent-100); color: var(--accent-dark); box-shadow: inset 3px 0 var(--accent); }
+.nav-item.active .nav-icon { color: var(--accent-dark); }
+#app-root.sidebar-collapsed main { padding-left: 2.2rem; }
+
+/* --- Cabecalhos de pagina --- */
+.page-eyebrow { display: block; margin: 0 0 0.35rem; font-size: 0.65rem; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent-dark); }
+.page-header h1 { font-size: 1.65rem; letter-spacing: -0.035em; }
+.page-subtitle { line-height: 1.6; max-width: 680px; }
+
+/* Cartao de boas-vindas do Inicio (formato de balao de conversa) */
+.day-welcome { padding: 1.7rem 1.8rem; border: 1px solid var(--border); border-radius: 24px 24px 24px 6px; background: var(--card-bg); }
+.day-welcome h1 { font-family: Georgia, "Times New Roman", serif; font-weight: 400; font-size: clamp(1.8rem, 3vw, 2.6rem); letter-spacing: -0.03em; }
+
+/* --- Cartoes, indicadores e filtros --- */
+.card { border-radius: 16px; }
+.stat-card { border-top: 3px solid var(--accent-100); }
+.stat-icon { border-radius: 50%; }
+.period-btn { border-radius: 999px; }
+
+/* --- Login --- */
+.auth-gate { background: radial-gradient(circle at 0% 0%, var(--accent-100) 0%, transparent 46%), var(--bg); }
+.auth-gate-card { max-width: 420px; padding: 2rem 1.8rem; border: 1px solid var(--border); border-radius: 28px 28px 28px 8px; background: var(--card-bg); box-shadow: 0 18px 48px rgba(var(--accent-rgb), 0.14); }
+
+/* --- Sub-abas em pilula (usadas fora do diretorio) --- */
+.settings-tabs button { border-radius: 999px; }
+.settings-tabs button.active { background: var(--accent-100); }
+
+/* --- Configuracoes em "diretorio" agrupado --- */
+.settings-workspace { display: grid; grid-template-columns: 215px minmax(0, 1fr); gap: 1.4rem; align-items: start; }
+.settings-directory { position: sticky; top: 1rem; border: 1px solid var(--border); border-radius: 16px; background: var(--card-bg); padding: 0.4rem 0.5rem 0.7rem; }
+.settings-directory > summary { list-style: none; cursor: pointer; display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; padding: 0.7rem 0.5rem; font-size: 0.74rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-muted); }
+.settings-directory > summary::-webkit-details-marker { display: none; }
+.settings-directory > summary::after { content: "▾"; font-size: 0.8rem; color: var(--text-faint); }
+.settings-directory:not([open]) > summary::after { content: "▸"; }
+#settings-current-label { min-width: 0; margin-left: auto; margin-right: 0.3rem; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--accent-dark); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-directory-nav { display: flex; flex-direction: column; gap: 0.9rem; padding: 0.2rem 0.2rem 0; }
+.settings-directory-group h2 { margin: 0 0 0.3rem; padding: 0 0.5rem; font-size: 0.62rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-faint); }
+.settings-directory-nav button { display: block; width: 100%; text-align: left; padding: 0.5rem 0.6rem; border: 0; border-radius: 8px; background: transparent; color: var(--text); font: inherit; font-size: 0.84rem; cursor: pointer; }
+.settings-directory-nav button:hover { background: var(--accent-50); }
+.settings-directory-nav button.active { background: var(--accent-100); color: var(--accent-dark); font-weight: 700; }
+.settings-content { min-width: 0; }
+.settings-context { margin: 0 0 1rem; padding-bottom: 0.8rem; border-bottom: 1px solid var(--border); }
+.settings-context .page-eyebrow { margin-bottom: 0.2rem; }
+.settings-context h2 { margin: 0; font-size: 1.25rem; letter-spacing: -0.03em; }
+
+/* --- Grades de cartoes que se ajustam a qualquer largura --- */
+.rules-cards { grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr)); }
+.professionals-grid { grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); }
+.stat-grid { grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); }
+.rules-cards > *, .professionals-grid > *, .stat-grid > * { min-width: 0; overflow-wrap: anywhere; }
+
+/* Linhas de botoes, cabecalhos e barras de ferramentas nunca vazam do cartao */
+.page-header, .toolbar, .chat-header, .contact-panel-footer, .modal-actions, .header-actions, .contact-panel-tabs, .broadcast-form-row { flex-wrap: wrap; }
+
+/* --- Telas medias e pequenas --- */
+@media (max-width: 1100px) {
+  .settings-workspace { grid-template-columns: 1fr; }
+  .settings-directory { position: static; }
+  .settings-directory-nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.9rem 1rem; }
+}
+@media (max-width: 860px) {
+  .sidebar { width: min(84vw, 310px); }
+  .page-header h1 { font-size: 1.4rem; }
+  .day-welcome { padding: 1.2rem; border-radius: 18px 18px 18px 5px; }
+  .day-welcome h1 { font-size: clamp(1.5rem, 6vw, 2rem); }
+  .broadcast-form-row { flex-wrap: wrap; }
+  .broadcast-form-row > * { flex: 1 1 180px !important; min-width: 0; }
+  .msg { max-width: 86%; }
+  .contact-panel { max-width: 100vw; }
+  .tour-popover { width: calc(100vw - 24px); max-width: calc(100vw - 24px); }
+  .chat-page-header { display: block; }
+}
+@media (max-width: 560px) { .modal-actions { flex-direction: column; align-items: stretch; } .modal-actions > * { width: 100%; } }
+@media (max-width: 460px) { .settings-directory-nav { grid-template-columns: 1fr; } }
+
+/* Cabecalho da Caixa de conversas: so no celular (no desktop a conversa ocupa a tela toda) */
+.chat-page-header { display: none; }

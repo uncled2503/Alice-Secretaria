@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Alice — Painel</title>
+  <title>Alice — Seu dia, mais leve</title>
   <!-- Icone de "adicionar a tela de inicio". O iOS so aceita PNG aqui (com
        .webp ele ignora e mostra a letra inicial), e renderiza transparencia
        como preto - por isso o PNG tem fundo branco. -->
@@ -17,9 +17,9 @@
 <body>
   <div id="auth-gate" class="auth-gate" style="display:none">
     <div class="auth-gate-card">
-      <img src="/assets/logo.webp" alt="Alice IA" class="auth-logo auth-logo--light" />
-      <img src="/assets/logotipo-branca.webp" alt="Alice IA" class="auth-logo auth-logo--dark" />
-      <p class="hint" style="margin-top:0">Entre com sua conta para acessar o painel.</p>
+      <img src="/assets/logo.webp" alt="Alice" class="auth-logo auth-logo--light" />
+      <img src="/assets/logotipo-branca.webp" alt="Alice" class="auth-logo auth-logo--dark" />
+      <p class="hint" style="margin-top:0">Seu dia, mais leve. Entre no seu espaço Alice.</p>
       <form id="auth-gate-form">
         <label>Usuário
           <input id="auth-gate-username" type="text" required autocomplete="username" />
@@ -39,18 +39,18 @@
         <span></span><span></span><span></span>
       </button>
       <img src="/assets/logo-personagem.webp" alt="" class="mobile-topbar-logo" />
-      <strong id="mobile-topbar-title">Início</strong>
+      <strong id="mobile-topbar-title">Meu dia</strong>
     </div>
     <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
 
-    <button type="button" id="sidebar-expand" class="sidebar-expand" title="Mostrar menu" aria-label="Mostrar menu">›</button>
+    <button type="button" id="sidebar-expand" class="sidebar-expand" title="Abrir menu lateral" aria-label="Abrir menu lateral">›</button>
 
     <aside class="sidebar">
-      <button type="button" id="sidebar-collapse" class="sidebar-collapse" title="Recolher menu" aria-label="Recolher menu">‹</button>
+      <button type="button" id="sidebar-collapse" class="sidebar-collapse" title="Recolher menu lateral" aria-label="Recolher menu lateral">‹</button>
       <div class="brand">
         <img src="/assets/logo-personagem.webp" alt="" class="brand-logo brand-logo--img" />
         <div class="brand-text">
-          <strong>Alice IA</strong>
+          <strong class="brand-wordmark" aria-label="Alice">alice<span class="brand-dot">.</span></strong>
           <span id="brand-clinic-name">—</span>
         </div>
       </div>
@@ -58,41 +58,41 @@
       <select id="clinic-select" class="clinic-select"></select>
       <button type="button" id="alice-power" class="alice-power" aria-pressed="true" title="Liga ou desliga o atendimento da Alice nesta clínica"><span class="alice-power-dot"></span><span id="alice-power-label">Alice atendendo</span></button>
 
-      <nav class="side-nav">
+      <nav class="side-nav" aria-label="Navegação principal">
         <div class="nav-group">
-          <div class="nav-group-label">Início</div>
+          <div class="nav-group-label">Seu dia</div>
           <button data-tab="dashboard" class="nav-item active">
-            <span class="nav-icon" data-icon="home"></span> <span class="nav-label">Início</span>
+            <span class="nav-icon" data-icon="home"></span> <span class="nav-label">Meu dia</span>
           </button>
         </div>
 
         <div class="nav-group">
-          <div class="nav-group-label">Clientes</div>
+          <div class="nav-group-label">Relacionamentos</div>
           <button data-tab="contacts" class="nav-item">
-            <span class="nav-icon" data-icon="users"></span> <span class="nav-label" data-biz-label="Contatos|Clientes">Contatos</span>
+            <span class="nav-icon" data-icon="users"></span> <span class="nav-label" data-biz-label="Pessoas|Pessoas">Pessoas</span>
           </button>
           <button data-tab="crm" class="nav-item">
-            <span class="nav-icon" data-icon="grid"></span> <span class="nav-label">CRM</span>
+            <span class="nav-icon" data-icon="grid"></span> <span class="nav-label">Jornada</span>
           </button>
           <button data-tab="chat" class="nav-item">
-            <span class="nav-icon" data-icon="chat"></span> <span class="nav-label">Chat</span>
+            <span class="nav-icon" data-icon="chat"></span> <span class="nav-label">Caixa de conversas</span>
           </button>
         </div>
 
         <div class="nav-group">
-          <div class="nav-group-label">Operação</div>
+          <div class="nav-group-label">Organização</div>
           <button data-tab="agenda" class="nav-item biz-clinica-only">
-            <span class="nav-icon" data-icon="calendar"></span> <span class="nav-label">Agenda</span>
+            <span class="nav-icon" data-icon="calendar"></span> <span class="nav-label">Compromissos</span>
           </button>
           <button data-tab="reports" class="nav-item">
-            <span class="nav-icon" data-icon="chart"></span> <span class="nav-label">Relatórios</span>
+            <span class="nav-icon" data-icon="chart"></span> <span class="nav-label">Resultados</span>
           </button>
         </div>
 
         <div class="nav-group">
-          <div class="nav-group-label">Conta</div>
+          <div class="nav-group-label">Do seu jeito</div>
           <button data-tab="settings" class="nav-item">
-            <span class="nav-icon" data-icon="sparkles"></span> <span class="nav-label">Personalizar Alice</span>
+            <span class="nav-icon" data-icon="sparkles"></span> <span class="nav-label">Meu espaço Alice</span>
           </button>
         </div>
       </nav>
@@ -107,10 +107,10 @@
           <span class="nav-icon" data-icon="user"></span> <span id="staff-session-label">—</span>
         </button>
         <button id="btn-guide" class="theme-toggle" style="margin-bottom:0.5rem">
-          <span class="nav-icon" data-icon="guide"></span> Guia
+          <span class="nav-icon" data-icon="guide"></span> Conheça seu espaço
         </button>
-        <button id="theme-toggle" class="theme-toggle" title="Alternar tema">
-          <span class="nav-icon" data-icon="sun"></span> Tema
+        <button id="theme-toggle" class="theme-toggle" title="Alternar aparência (claro ou escuro)">
+          <span class="nav-icon" data-icon="sun"></span> Aparência
         </button>
       </div>
     </aside>
@@ -134,10 +134,11 @@
 
     <main>
       <section id="tab-dashboard" class="tab-panel active">
-        <div class="page-header">
+        <div class="page-header day-welcome">
           <div>
+            <span class="page-eyebrow">Meu dia · Alice</span>
             <h1 id="dash-greeting">Olá!</h1>
-            <p class="page-subtitle">Pronto(a) para gerenciar o seu negócio hoje?</p>
+            <p class="page-subtitle">Um olhar para o dia. Mais tempo para cuidar de quem chega.</p>
           </div>
           <span class="badge badge-green">Ativa</span>
         </div>
@@ -148,7 +149,7 @@
           <div class="upsell-hero-body">
             <span class="upsell-tag">Plano Grátis</span>
             <h2 id="upsell-hero-title">Você está fazendo o trabalho da Alice.</h2>
-            <p id="upsell-hero-lead">Os leads chegam do anúncio, entram no funil e mandam evento pra Meta. Só que quem responde cada um deles, uma mensagem por vez, é você.</p>
+            <p id="upsell-hero-lead">Os leads chegam do anúncio, entram na Jornada e mandam evento pra Meta. Só que quem responde cada um deles, uma mensagem por vez, é você.</p>
             <div class="upsell-metrics" id="upsell-metrics"></div>
             <p class="upsell-close" id="upsell-hero-close">A Alice responde em segundos, 24 horas por dia, 7 dias por semana — no seu WhatsApp, com o seu tom, com as suas regras. E nunca deixa um lead esperando.</p>
             <div class="upsell-actions">
@@ -173,7 +174,7 @@
               <span class="stat-icon" data-icon="chat"></span>
             </div>
             <div class="stat-value" id="stat-attended">—</div>
-            <div class="stat-hint">Contatos únicos com resposta no período</div>
+            <div class="stat-hint">Pessoas únicas com resposta no período</div>
           </div>
           <div class="card stat-card biz-clinica-only">
             <div class="stat-card-header">
@@ -193,7 +194,7 @@
           </div>
           <div class="card stat-card biz-loja-only">
             <div class="stat-card-header">
-              <span class="stat-label">Contatos novos</span>
+              <span class="stat-label">Pessoas novas</span>
               <span class="stat-icon" data-icon="users"></span>
             </div>
             <div class="stat-value" id="stat-new-contacts">—</div>
@@ -218,14 +219,14 @@
             <div id="dash-chart" class="dash-chart"></div>
           </div>
           <div class="card dash-calendar-card">
-            <h3 id="dash-calendar-title">Calendário operacional</h3>
+            <h3 id="dash-calendar-title">Seus próximos encontros</h3>
             <div class="mini-calendar" id="mini-calendar"></div>
           </div>
         </div>
 
         <div class="card dash-map-card">
           <div class="card-title-row">
-            <h3>De onde chegam os leads</h3>
+            <h3>De onde vêm as pessoas</h3>
             <span class="chart-total" id="map-total"></span>
           </div>
           <p class="hint" style="margin:0 0 0.6rem">Estados dos contatos atendidos no período, pelo DDD do WhatsApp.</p>
@@ -239,7 +240,8 @@
       <section id="tab-contacts" class="tab-panel">
         <div class="page-header">
           <div>
-            <h1 data-biz-label="Contatos|Clientes">Contatos</h1>
+            <span class="page-eyebrow">Relacionamentos</span>
+            <h1 data-biz-label="Pessoas|Pessoas">Pessoas</h1>
             <p class="page-subtitle" id="contacts-count">0 contato(s)</p>
           </div>
           <button id="btn-toggle-contact-form" type="button" data-biz-label="+ Adicionar contato|+ Adicionar cliente">+ Adicionar contato</button>
@@ -275,8 +277,12 @@
 
       <section id="tab-crm" class="tab-panel">
         <div class="page-header">
-          <h1>CRM</h1>
-          <button id="btn-goto-funnel-config" type="button">Configurar funil</button>
+          <div>
+            <span class="page-eyebrow">Relacionamentos</span>
+            <h1>Jornada</h1>
+            <p class="page-subtitle">Do primeiro oi ao próximo encontro: acompanhe cada pessoa.</p>
+          </div>
+          <button id="btn-goto-funnel-config" type="button">Organizar etapas</button>
         </div>
         <div class="toolbar">
           <input id="crm-search" type="text" placeholder="Buscar por nome ou telefone..." class="search-input" />
@@ -292,6 +298,13 @@
       </section>
 
       <section id="tab-chat" class="tab-panel">
+        <div class="page-header chat-page-header">
+          <div>
+            <span class="page-eyebrow">Relacionamentos</span>
+            <h1>Caixa de conversas</h1>
+            <p class="page-subtitle">Cada conversa merece atenção. Acompanhe por aqui.</p>
+          </div>
+        </div>
         <div class="upsell-strip" data-plan-free>
           <div>
             <strong>Todas essas respostas estão saindo do seu tempo.</strong>
@@ -357,8 +370,8 @@
             <div class="contact-panel-tabs" id="cp-tabs">
               <button data-cpt="resumo" class="active">Resumo</button>
               <button data-cpt="agendamentos" class="biz-clinica-only">Agendamentos</button>
-              <button data-cpt="automacoes">Automações</button>
-              <button data-cpt="timeline">Timeline</button>
+              <button data-cpt="automacoes">Rotinas automáticas</button>
+              <button data-cpt="timeline">Linha do tempo</button>
               <button type="button" id="cp-open-chat" class="btn-chat-action">Abrir atendimento</button>
               <button type="button" id="cp-schedule" class="btn-brand btn-brand--primary btn-brand--sm biz-clinica-only">Agendar</button>
             </div>
@@ -378,14 +391,14 @@
               <label>Nascimento<input id="cp-f-birth" type="date" /></label>
               <label style="display:flex;align-items:center;gap:0.4rem;flex-direction:row"><input id="cp-f-active" type="checkbox" /> Paciente ativo</label>
               <label style="display:flex;align-items:center;gap:0.4rem;flex-direction:row"><input id="cp-f-opted-out" type="checkbox" /> Não quer receber mensagens automáticas</label>
-              <label style="display:flex;align-items:center;gap:0.4rem;flex-direction:row"><input id="cp-f-no-interest" type="checkbox" /> Sem interesse (não recontatar nem incluir em campanhas)</label>
-              <p class="hint" style="margin:0 0 0.5rem">Marcado: recontato, campanhas, aniversário, renovação e pesquisa não são enviados. Marca sozinho quando o contato pede para parar.</p>
+              <label style="display:flex;align-items:center;gap:0.4rem;flex-direction:row"><input id="cp-f-no-interest" type="checkbox" /> Sem interesse (não retomar conversa nem incluir em envios planejados)</label>
+              <p class="hint" style="margin:0 0 0.5rem">Marcado: retomada de conversa, envios planejados, aniversário, ciclo de retorno e pesquisa não são enviados. Marca sozinho quando a pessoa pede para parar.</p>
               <label>Observações<textarea id="cp-f-notes" rows="3" placeholder="Anotações úteis para a equipe"></textarea></label>
               <div class="cp-section-title" style="margin-top:1rem">Receita</div>
               <label style="display:flex;align-items:center;gap:0.4rem;flex-direction:row"><input id="cp-f-has-prescription" type="checkbox" /> Paciente tem receita</label>
               <div id="cp-prescription-block" hidden>
                 <div id="cp-prescription-list"></div>
-                <button type="button" id="cp-prescription-add" class="btn-chat-action" style="margin-top:0.4rem">+ Lembrete de renovação</button>
+                <button type="button" id="cp-prescription-add" class="btn-chat-action" style="margin-top:0.4rem">+ Lembrete de retorno</button>
                 <p class="hint" style="margin:0.3rem 0 0">Escolha a data e escreva a mensagem - o sistema manda automaticamente nesse dia. Até 2 por paciente.</p>
               </div>
               <div class="cp-tags-block">
@@ -394,7 +407,7 @@
                 <input id="cp-tag-input" type="text" placeholder="Buscar ou criar etiqueta..." autocomplete="off" />
                 <div id="cp-tag-suggestions" class="cp-tag-suggestions"></div>
               </div>
-              <div class="cp-section-title" style="margin-top:1rem">CRM</div>
+              <div class="cp-section-title" style="margin-top:1rem">Jornada</div>
               <div class="cp-crm-row">
                 <label>Valor estimado<input id="cp-f-value" type="number" min="0" step="0.01" placeholder="R$" /></label>
                 <label>Temperatura
@@ -432,7 +445,7 @@
             </div>
 
             <div class="contact-panel-footer">
-              <button type="button" id="cp-remove-crm" class="btn-danger-solid">Remover do CRM</button>
+              <button type="button" id="cp-remove-crm" class="btn-danger-solid">Remover da Jornada</button>
               <div class="cp-footer-right">
                 <span id="cp-save-status" class="hint" style="margin:0"></span>
                 <button type="button" id="cp-save" class="btn-brand btn-brand--primary" data-biz-label="Salvar contato|Salvar cliente">Salvar contato</button>
@@ -442,6 +455,13 @@
       </div>
 
       <section id="tab-agenda" class="tab-panel">
+        <div class="page-header">
+          <div>
+            <span class="page-eyebrow">Organização</span>
+            <h1>Compromissos</h1>
+            <p class="page-subtitle">Cada encontro no seu tempo. Organize os próximos atendimentos.</p>
+          </div>
+        </div>
         <div class="upsell-strip" data-plan-free>
           <div>
             <strong>Você está marcando cada horário na mão.</strong>
@@ -546,7 +566,8 @@
       <section id="tab-reports" class="tab-panel">
         <div class="page-header">
           <div>
-            <h1>Relatórios</h1>
+            <span class="page-eyebrow">Organização</span>
+            <h1>Resultados</h1>
             <p class="page-subtitle" id="rp-range">Últimos 30 dias</p>
           </div>
         </div>
@@ -563,7 +584,7 @@
 
         <div class="dash-columns" style="grid-template-columns:1fr 1fr">
           <div class="card">
-            <h3>Funil do período</h3>
+            <h3>Etapas da jornada do período</h3>
             <div id="rp-funnel" class="rp-bars"></div>
           </div>
           <div class="card">
@@ -598,50 +619,80 @@
       </section>
 
       <section id="tab-settings" class="tab-panel">
-        <div class="page-header"><h1>Personalizar Alice</h1></div>
+        <div class="page-header">
+          <div>
+            <span class="page-eyebrow">Do seu jeito</span>
+            <h1>Meu espaço Alice</h1>
+            <p class="page-subtitle">Seu negócio, seus combinados e uma Alice com o seu jeito de cuidar.</p>
+          </div>
+        </div>
 
         <div class="upsell-strip" data-plan-free>
           <div>
             <strong>Tudo com 🔒 aqui já está pronto esperando você.</strong>
-            <span>Não é preciso migrar nada nem começar de novo: sua base, seu funil e suas conversas continuam onde estão. A Alice só é ligada por cima e assume o atendimento no mesmo número.</span>
+            <span>Não é preciso migrar nada nem começar de novo: sua base, sua Jornada e suas conversas continuam onde estão. A Alice só é ligada por cima e assume o atendimento no mesmo número.</span>
           </div>
           <button type="button" class="upsell-btn upsell-btn--sm" data-upsell="geral">Ativar a Alice</button>
         </div>
 
-        <div class="settings-tabs" id="settings-tabs">
-          <button data-sub="clinic-data" class="active" data-biz-label="Dados da clínica|Dados da loja">Dados da clínica</button>
-          <button data-sub="briefing" data-plan-lock="briefing">Briefing</button>
-          <button data-sub="products">Produtos</button>
-          <button data-sub="procedures" class="biz-clinica-only">Procedimentos</button>
-          <button data-sub="staff" class="biz-clinica-only">Profissionais</button>
-          <button data-sub="channels">Canais</button>
-          <button data-sub="broadcasts" data-plan-lock="broadcasts">Mensagens Programadas</button>
-          <button data-sub="appt-reminder" class="biz-clinica-only" data-plan-lock="lembrete">Lembrete de Consulta</button>
-          <button data-sub="pre-procedure" class="biz-clinica-only" data-plan-lock="posvenda">Pré-procedimento</button>
-          <button data-sub="post-procedure" class="biz-clinica-only" data-plan-lock="posvenda">Pós-procedimento</button>
-          <button data-sub="renewal" class="biz-clinica-only" data-plan-lock="posvenda">Renovação</button>
-          <button data-sub="birthday" data-plan-lock="posvenda">Aniversário</button>
-          <button data-sub="followup" data-plan-lock="recontato">Recontato</button>
-          <button data-sub="funnel">Funil</button>
-          <button data-sub="holidays" class="biz-clinica-only">Feriados</button>
-          <button data-sub="blocks" class="biz-clinica-only">Bloqueios de agenda</button>
-          <button data-sub="google" class="biz-clinica-only">Google Agenda</button>
-          <button data-sub="clinica-experts" class="biz-clinica-only">Clínica Experts</button>
-          <button data-sub="waitlist" class="biz-clinica-only" data-plan-lock="lista-espera">Lista de espera</button>
-          <button data-sub="history">Histórico</button>
-          <button data-sub="learning" data-plan-lock="aprendizado">Aprendizado da Alice</button>
-          <button data-sub="rules" data-plan-lock="alice">Personalizar Alice</button>
-          <button data-sub="clinics">Clínicas</button>
-          <button data-sub="team">Equipe</button>
-          <button data-sub="external-api" data-plan-lock="api">API Externa</button>
-          <button data-sub="meta">Meta / Pixel</button>
-        </div>
+        <div class="settings-workspace">
+          <details class="settings-directory" open>
+            <summary>Explorar recursos <span id="settings-current-label"></span></summary>
+            <nav id="settings-tabs" class="settings-directory-nav" aria-label="Recursos da Alice">
+              <div class="settings-directory-group">
+              <h2>Seu negócio</h2>
+              <button type="button" data-sub="clinic-data" class="active" data-biz-label="Perfil do negócio|Perfil do negócio">Perfil do negócio</button>
+              <button type="button" data-sub="products">Vitrine de produtos</button>
+              <button type="button" data-sub="procedures" class="biz-clinica-only">Menu de serviços</button>
+              <button type="button" data-sub="staff" class="biz-clinica-only">Quem atende</button>
+              </div>
+              <div class="settings-directory-group">
+              <h2>Jeito de atender</h2>
+              <button type="button" data-sub="briefing" data-plan-lock="briefing">Ponto de partida</button>
+              <button type="button" data-sub="rules" data-plan-lock="alice">Jeito da Alice</button>
+              <button type="button" data-sub="learning" data-plan-lock="aprendizado">Alice evolui</button>
+              <button type="button" data-sub="funnel">Etapas da jornada</button>
+              </div>
+              <div class="settings-directory-group">
+              <h2>Cuidado contínuo</h2>
+              <button type="button" data-sub="broadcasts" data-plan-lock="broadcasts">Envios planejados</button>
+              <button type="button" data-sub="appt-reminder" class="biz-clinica-only" data-plan-lock="lembrete">Antes da visita</button>
+              <button type="button" data-sub="pre-procedure" class="biz-clinica-only" data-plan-lock="posvenda">Preparo da visita</button>
+              <button type="button" data-sub="post-procedure" class="biz-clinica-only" data-plan-lock="posvenda">Depois da visita</button>
+              <button type="button" data-sub="renewal" class="biz-clinica-only" data-plan-lock="posvenda">Ciclo de retorno</button>
+              <button type="button" data-sub="birthday" data-plan-lock="posvenda">Celebrar aniversários</button>
+              <button type="button" data-sub="followup" data-plan-lock="recontato">Retomar conversa</button>
+              </div>
+              <div class="settings-directory-group">
+              <h2>Rotina e conexões</h2>
+              <button type="button" data-sub="channels">WhatsApp conectado</button>
+              <button type="button" data-sub="holidays" class="biz-clinica-only">Feriados</button>
+              <button type="button" data-sub="blocks" class="biz-clinica-only">Pausas na agenda</button>
+              <button type="button" data-sub="google" class="biz-clinica-only">Sincronia Google</button>
+              <button type="button" data-sub="clinica-experts" class="biz-clinica-only">Clínica Experts</button>
+              <button type="button" data-sub="waitlist" class="biz-clinica-only" data-plan-lock="lista-espera">Oportunidades de encaixe</button>
+              <button type="button" data-sub="external-api" data-plan-lock="api">Integrações</button>
+              </div>
+              <div class="settings-directory-group">
+              <h2>Gestão do espaço</h2>
+              <button type="button" data-sub="history">Diário de atividades</button>
+              <button type="button" data-sub="team">Acessos da equipe</button>
+              <button type="button" data-sub="clinics">Meus negócios</button>
+              <button type="button" data-sub="meta">Anúncios e conversões</button>
+              </div>
+            </nav>
+          </details>
+          <div class="settings-content">
+            <div class="settings-context">
+              <span class="page-eyebrow">Você está em</span>
+              <h2 id="settings-current-title">Perfil do negócio</h2>
+            </div>
 
         <div id="sub-clinic-data" class="settings-subpanel active">
           <div class="section-header"><span class="nav-icon" data-icon="building"></span> <span data-biz-label="Dados gerais da clínica|Dados gerais da loja">Dados gerais da clínica</span></div>
           <form id="clinic-data-form" class="broadcast-form card">
             <input type="hidden" id="cd-id" />
-            <p class="hint" style="margin-top:0">O horário abaixo é usado pelas mensagens programadas e pelo recontato automático, que só disparam dentro dele.</p>
+            <p class="hint" style="margin-top:0">O horário abaixo é usado pelos envios planejados e pela retomada de conversa automática, que só disparam dentro dele.</p>
             <div class="broadcast-form-row">
               <label style="flex:1" data-biz-label="Nome da clínica|Nome da loja">Nome da clínica
                 <input id="cd-name" type="text" required />
@@ -650,7 +701,7 @@
                 <input id="cd-phone" type="text" placeholder="Só números, ex: 5511999999999" />
               </label>
             </div>
-            <p class="hint" style="margin-top:-0.4rem">Esse número é atualizado sozinho assim que você escaneia o QR Code em "Canais" - só altere aqui se precisar corrigir manualmente.</p>
+            <p class="hint" style="margin-top:-0.4rem">Esse número é atualizado sozinho assim que você escaneia o QR Code em "WhatsApp conectado" - só altere aqui se precisar corrigir manualmente.</p>
             <div class="broadcast-form-row">
               <label>Fuso horário
                 <select id="cd-timezone">
@@ -715,8 +766,8 @@
             </div>
 
             <div class="section-header" style="margin-top:1rem"><span class="nav-icon" data-icon="building"></span> Notificações no WhatsApp</div>
-            <p class="hint biz-clinica-only" style="margin-top:0">Receba um aviso no seu WhatsApp sempre que houver agendamento novo, remarcação, cancelamento ou transferência para atendimento humano. As mensagens são enviadas pelo WhatsApp conectado em "Canais".</p>
-            <p class="hint biz-loja-only" style="margin-top:0">Receba um aviso no seu WhatsApp quando a Alice transferir um atendimento para uma pessoa. As mensagens saem pelo WhatsApp conectado em "Canais".</p>
+            <p class="hint biz-clinica-only" style="margin-top:0">Receba um aviso no seu WhatsApp sempre que houver agendamento novo, remarcação, cancelamento ou transferência para atendimento humano. As mensagens são enviadas pelo WhatsApp conectado em "WhatsApp conectado".</p>
+            <p class="hint biz-loja-only" style="margin-top:0">Receba um aviso no seu WhatsApp quando a Alice transferir um atendimento para uma pessoa. As mensagens saem pelo WhatsApp conectado em "WhatsApp conectado".</p>
             <div class="broadcast-form-row">
               <label style="flex:1">Número para receber avisos (com DDI/DDD, ex: 5511999999999)
                 <input id="cd-notify-phone" type="text" placeholder="Deixe em branco para desativar" />
@@ -875,8 +926,8 @@
               <div><span id="import-stat-merged">0</span><label>Já existentes/mesclados</label></div>
               <div><span id="import-stat-ignored">0</span><label>Ignorados</label></div>
               <div><span id="import-stat-conversations">0</span><label>Conversas</label></div>
-              <div><span id="import-stat-partial">0</span><label>Histórico parcial</label></div>
-              <div><span id="import-stat-total">0</span><label>Contatos na base</label></div>
+              <div><span id="import-stat-partial">0</span><label>Conversas parciais</label></div>
+              <div><span id="import-stat-total">0</span><label>Pessoas na base</label></div>
             </div>
             <p class="hint" id="channel-import-updated" style="margin-bottom:0"></p>
           </div>
@@ -885,12 +936,12 @@
         <div id="sub-broadcasts" class="settings-subpanel">
           <div class="list-toolbar">
             <div>
-              <div class="list-count">Mensagens Programadas (<span id="broadcasts-count">0</span>)</div>
+              <div class="list-count">Envios planejados (<span id="broadcasts-count">0</span>)</div>
               <p class="hint" style="margin:0.2rem 0 0">Programe mensagens para seus contatos. O envio é feito em ritmo seguro, dentro do horário comercial.</p>
             </div>
             <div class="list-toolbar-actions">
               <input id="broadcasts-search" type="text" placeholder="Buscar por título" />
-              <button type="button" id="btn-add-broadcast" class="btn-brand btn-brand--primary"><span class="nav-icon" data-icon="plus"></span> Nova mensagem programada</button>
+              <button type="button" id="btn-add-broadcast" class="btn-brand btn-brand--primary"><span class="nav-icon" data-icon="plus"></span> Planejar envio</button>
             </div>
           </div>
           <div class="card">
@@ -898,14 +949,14 @@
               <thead><tr><th>Mensagem</th><th>Agendada para</th><th>Status</th><th>Progresso</th><th>Ação</th></tr></thead>
               <tbody id="broadcasts-body"></tbody>
             </table>
-            <div id="broadcasts-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Nenhuma mensagem programada.</div>
+            <div id="broadcasts-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Nenhum envio planejado.</div>
           </div>
         </div>
 
         <div id="sub-appt-reminder" class="settings-subpanel biz-clinica-only">
           <div class="list-toolbar">
             <div>
-              <div class="list-count">Lembrete de Consulta (<span id="reminder-rules-count">0</span>)</div>
+              <div class="list-count">Antes da visita (<span id="reminder-rules-count">0</span>)</div>
               <p class="hint" style="margin:0.2rem 0 0">Envie lembretes automáticos antes do horário marcado para reduzir faltas.</p>
             </div>
             <div class="list-toolbar-actions">
@@ -945,41 +996,41 @@
         <div id="sub-post-procedure" class="settings-subpanel biz-clinica-only">
           <div class="list-toolbar">
             <div>
-              <div class="list-count">Pós-procedimento (<span id="pp-rules-count">0</span>)</div>
+              <div class="list-count">Depois da visita (<span id="pp-rules-count">0</span>)</div>
               <p class="hint" style="margin:0.2rem 0 0">Envie cuidados e acompanhamento até 30 dias após o atendimento.</p>
             </div>
             <div class="list-toolbar-actions">
-              <input id="pp-rules-search" type="text" placeholder="Buscar pós-procedimento" />
-              <button type="button" id="btn-add-pp-rule" class="btn-brand btn-brand--primary"><span class="nav-icon" data-icon="plus"></span> Nova mensagem</button>
+              <input id="pp-rules-search" type="text" placeholder="Buscar cuidado depois da visita" />
+              <button type="button" id="btn-add-pp-rule" class="btn-brand btn-brand--primary"><span class="nav-icon" data-icon="plus"></span> Novo cuidado</button>
             </div>
           </div>
           <div class="card">
             <table>
-              <thead><tr><th>Pós-procedimento</th><th>Status</th><th>Quando</th><th>Ação</th></tr></thead>
+              <thead><tr><th>Depois da visita</th><th>Status</th><th>Quando</th><th>Ação</th></tr></thead>
               <tbody id="pp-rules-body"></tbody>
             </table>
-            <div id="pp-rules-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Nenhuma mensagem criada.</div>
+            <div id="pp-rules-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Nenhum cuidado criado.</div>
           </div>
         </div>
 
         <div id="sub-renewal" class="settings-subpanel biz-clinica-only">
           <div class="list-toolbar">
             <div>
-              <div class="list-count"><span data-biz-label="Renovação|Recompra">Renovação</span> (<span id="renewal-rules-count">0</span>)</div>
+              <div class="list-count"><span data-biz-label="Ciclo de retorno|Ciclo de retorno">Ciclo de retorno</span> (<span id="renewal-rules-count">0</span>)</div>
               <p class="hint biz-clinica-only" style="margin:0.2rem 0 0">Retome o contato meses ou anos depois para renovar procedimentos e tratamentos.</p>
               <p class="hint biz-loja-only" style="margin:0.2rem 0 0">Retome o contato semanas ou meses depois da compra para trazer o cliente de volta (reposição, nova coleção, tamanho seguinte).</p>
             </div>
             <div class="list-toolbar-actions">
-              <input id="renewal-rules-search" type="text" placeholder="Buscar renovação" />
-              <button type="button" id="btn-add-renewal-rule" class="btn-brand btn-brand--primary"><span class="nav-icon" data-icon="plus"></span> Nova renovação</button>
+              <input id="renewal-rules-search" type="text" placeholder="Buscar ciclo de retorno" />
+              <button type="button" id="btn-add-renewal-rule" class="btn-brand btn-brand--primary"><span class="nav-icon" data-icon="plus"></span> Novo ciclo de retorno</button>
             </div>
           </div>
           <div class="card">
             <table>
-              <thead><tr><th>Renovação</th><th>Status</th><th>Quando</th><th>Ação</th></tr></thead>
+              <thead><tr><th>Ciclo de retorno</th><th>Status</th><th>Quando</th><th>Ação</th></tr></thead>
               <tbody id="renewal-rules-body"></tbody>
             </table>
-            <div id="renewal-rules-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Nenhuma renovação criada.</div>
+            <div id="renewal-rules-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Nenhum ciclo de retorno criado.</div>
           </div>
         </div>
 
@@ -987,7 +1038,7 @@
           <div class="list-toolbar">
             <div>
               <div class="list-count">Aniversário (<span id="birthday-rules-count">0</span>)</div>
-              <p class="hint" style="margin:0.2rem 0 0">Envie uma mensagem automática de parabéns no dia do aniversário do paciente. Preencha a data de nascimento no contato (aba Chat).</p>
+              <p class="hint" style="margin:0.2rem 0 0">Envie uma mensagem automática de parabéns no dia do aniversário do paciente. Preencha a data de nascimento no cadastro da pessoa (na Caixa de conversas).</p>
             </div>
             <div class="list-toolbar-actions">
               <input id="birthday-rules-search" type="text" placeholder="Buscar mensagem de aniversário" />
@@ -1006,25 +1057,25 @@
         <div id="sub-followup" class="settings-subpanel">
           <div class="list-toolbar">
             <div>
-              <div class="list-count">Recontato (<span id="followup-rules-count">0</span>)</div>
-              <p class="hint" style="margin:0.2rem 0 0">Quando um lead fica um tempo sem responder, a Alice envia um recontato. Conversas já ganhas, perdidas ou com horário marcado não recebem.</p>
+              <div class="list-count">Retomar conversa (<span id="followup-rules-count">0</span>)</div>
+              <p class="hint" style="margin:0.2rem 0 0">Quando um lead fica um tempo sem responder, a Alice retoma a conversa. Conversas já ganhas, perdidas ou com horário marcado não recebem.</p>
             </div>
             <div class="list-toolbar-actions">
-              <input id="followup-rules-search" type="text" placeholder="Buscar recontato" />
-              <button type="button" id="btn-add-followup-rule" class="btn-brand btn-brand--primary"><span class="nav-icon" data-icon="plus"></span> Novo recontato</button>
+              <input id="followup-rules-search" type="text" placeholder="Buscar retomada" />
+              <button type="button" id="btn-add-followup-rule" class="btn-brand btn-brand--primary"><span class="nav-icon" data-icon="plus"></span> Nova retomada</button>
             </div>
           </div>
           <div class="card">
             <table>
-              <thead><tr><th>Recontato</th><th>Status</th><th>Quando</th><th>Ação</th></tr></thead>
+              <thead><tr><th>Retomar conversa</th><th>Status</th><th>Quando</th><th>Ação</th></tr></thead>
               <tbody id="followup-body"></tbody>
             </table>
-            <div id="followup-rules-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Nenhum recontato criado.</div>
+            <div id="followup-rules-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Nenhuma retomada criada.</div>
           </div>
         </div>
 
         <div id="sub-funnel" class="settings-subpanel">
-          <p class="hint">Etapas do funil kanban usado na aba CRM.</p>
+          <p class="hint">Etapas do quadro usado na Jornada.</p>
           <form id="stage-form" class="broadcast-form card">
             <input id="st-label" type="text" placeholder="Nome da etapa nova" required />
             <div class="broadcast-form-row">
@@ -1036,7 +1087,7 @@
                   <option value="aberta">Aberta (em andamento)</option>
                   <option value="avaliacao_agendada">Avaliação agendada (marcador especial)</option>
                   <option value="ganho">Ganho (fechou)</option>
-                  <option value="pos_procedimento">Pós-procedimento</option>
+                  <option value="pos_procedimento">Depois da visita</option>
                   <option value="perdido">Perdido</option>
                 </select>
               </label>
@@ -1052,7 +1103,7 @@
         </div>
 
         <div id="sub-holidays" class="settings-subpanel biz-clinica-only">
-          <p class="hint" style="margin-top:0">Por padrão a clínica <strong>fecha</strong> nos feriados nacionais: a Alice não oferece nem aceita horário nesses dias e avisa quem perguntar. Marque <strong>"Abre"</strong> nos feriados em que vocês funcionam. Carnaval e feriados locais não entram aqui: use "Bloqueios de agenda".</p>
+          <p class="hint" style="margin-top:0">Por padrão a clínica <strong>fecha</strong> nos feriados nacionais: a Alice não oferece nem aceita horário nesses dias e avisa quem perguntar. Marque <strong>"Abre"</strong> nos feriados em que vocês funcionam. Carnaval e feriados locais não entram aqui: use "Pausas na agenda".</p>
           <div class="card">
             <table>
               <thead><tr><th>Data</th><th>Feriado</th><th>Funcionamento</th></tr></thead>
@@ -1156,7 +1207,7 @@
               <thead><tr><th>Paciente</th><th>Procedimento</th><th>Preferência</th><th>Status</th><th>Desde</th><th></th></tr></thead>
               <tbody id="waitlist-body"></tbody>
             </table>
-            <div id="waitlist-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Ninguém na lista de espera.</div>
+            <div id="waitlist-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Ninguém nas oportunidades de encaixe.</div>
           </div>
         </div>
 
@@ -1202,25 +1253,25 @@
 
         <div id="sub-rules" class="settings-subpanel">
           <div class="settings-tabs" id="rules-tabs" style="margin-bottom:1rem">
-            <button data-rt="home" class="active">Início</button>
-            <button data-rt="global">Regras globais</button>
-            <button data-rt="templates">Mensagens prontas</button>
-            <button data-rt="faq" data-biz-label="FAQ da clínica|FAQ da loja">FAQ da clínica</button>
-            <button data-rt="settings">Ajustes da Alice</button>
-            <button data-rt="playbooks">Roteiros</button>
+            <button data-rt="home" class="active">Ensinar algo novo</button>
+            <button data-rt="global">Combinados</button>
+            <button data-rt="templates">Respostas da casa</button>
+            <button data-rt="faq" data-biz-label="Dúvidas frequentes|Dúvidas frequentes">Dúvidas frequentes</button>
+            <button data-rt="settings">Voz e preferências</button>
+            <button data-rt="playbooks">Caminhos de conversa</button>
           </div>
 
           <!-- ===== Início ===== -->
           <div id="rt-home" class="rules-panel active">
             <div class="page-header"><h1 style="margin:0">O que você quer ensinar para a Alice hoje?</h1></div>
-            <p class="hint" style="margin-top:0">Descreva em uma frase, do seu jeito. A Alice entende, decide onde aplicar (regra, roteiro, mensagem pronta ou FAQ) e monta tudo — você só revisa e aprova.</p>
+            <p class="hint" style="margin-top:0">Descreva em uma frase, do seu jeito. A Alice entende, decide onde aplicar (combinado, caminho de conversa, resposta da casa ou dúvida frequente) e monta tudo — você só revisa e aprova.</p>
             <form id="rule-form" class="broadcast-form card">
               <textarea id="rule-text" placeholder="Escreva aqui o que você quer que a Alice passe a fazer..." required></textarea>
               <div class="broadcast-form-row" style="justify-content:space-between;align-items:center">
                 <div class="rule-cat-hints">
                   <span class="payment-method-btn rule-cat-hint">Preço</span>
                   <span class="payment-method-btn rule-cat-hint">Sinal</span>
-                  <span class="payment-method-btn rule-cat-hint">Recontato</span>
+                  <span class="payment-method-btn rule-cat-hint">Retomada</span>
                 </div>
                 <button type="submit" class="btn-brand btn-brand--primary"><span class="nav-icon" data-icon="sparkles"></span> Gerar sugestão</button>
               </div>
@@ -1233,7 +1284,7 @@
           <div id="rt-global" class="rules-panel">
             <div class="list-toolbar">
               <div>
-                <div class="list-count">Regras globais <span id="rules-active-count">(0)</span></div>
+                <div class="list-count">Combinados <span id="rules-active-count">(0)</span></div>
                 <p class="hint" style="margin:0.2rem 0 0">Coisas que a Alice deve sempre respeitar em toda conversa: tom de voz, catálogo, pagamento, agendamento, quando chamar a equipe.</p>
               </div>
               <div class="list-toolbar-actions">
@@ -1250,7 +1301,7 @@
           <div id="rt-templates" class="rules-panel">
             <div class="list-toolbar">
               <div>
-                <div class="list-count">Mensagens prontas (<span id="tpl-count">0</span>)</div>
+                <div class="list-count">Respostas da casa (<span id="tpl-count">0</span>)</div>
                 <p class="hint" style="margin:0.2rem 0 0">Textos que a Alice reaproveita no atendimento (boas-vindas, confirmação, orientações). Use variáveis como {primeiro_nome}.</p>
               </div>
               <div class="list-toolbar-actions">
@@ -1366,7 +1417,7 @@
               <p class="hint" style="margin-top:0">Ligado: a Alice escreve como uma recepcionista de verdade (frases curtas, sem listas) e não diz que é assistente virtual sozinha. Se o paciente perguntar diretamente se é robô, ela responde com a verdade, sem fingir ser uma pessoa.</p>
 
               <label class="checkbox-row"><input type="checkbox" id="as-silent-handoff" /> Quando não souber responder, ficar em silêncio (sem avisar que vai transferir)</label>
-              <p class="hint" style="margin-top:0">Ligado: a Alice não escreve "vou encaminhar para a equipe". A conversa fica como não lida no Chat e a equipe responde. Em urgência clínica ela ainda orienta procurar emergência.</p>
+              <p class="hint" style="margin-top:0">Ligado: a Alice não escreve "vou encaminhar para a equipe". A conversa fica como não lida na Caixa de conversas e a equipe responde. Em urgência clínica ela ainda orienta procurar emergência.</p>
 
               <div class="broadcast-form-row">
                 <label>Se a equipe assumiu e demorar, a Alice volta a atender depois de (minutos)
@@ -1413,16 +1464,16 @@
           <div id="rt-playbooks" class="rules-panel">
             <div class="list-toolbar">
               <div>
-                <div class="list-count">Roteiros (<span id="pb-count">0</span>)</div>
+                <div class="list-count">Caminhos de conversa (<span id="pb-count">0</span>)</div>
                 <p class="hint" style="margin:0.2rem 0 0">Sequências de conversa que a Alice conduz passo a passo em situações específicas.</p>
               </div>
               <div class="list-toolbar-actions">
-                <input id="pb-search" type="text" placeholder="Buscar roteiro" />
-                <button type="button" id="btn-add-pb" class="btn-brand btn-brand--primary"><span class="nav-icon" data-icon="plus"></span> Novo roteiro</button>
+                <input id="pb-search" type="text" placeholder="Buscar caminho de conversa" />
+                <button type="button" id="btn-add-pb" class="btn-brand btn-brand--primary"><span class="nav-icon" data-icon="plus"></span> Novo caminho</button>
               </div>
             </div>
             <div id="pb-list" class="rules-cards"></div>
-            <div id="pb-empty" class="hint" style="display:none;text-align:center;padding:1.2rem 0">Nenhum roteiro criado.</div>
+            <div id="pb-empty" class="hint" style="display:none;text-align:center;padding:1.2rem 0">Nenhum caminho de conversa criado.</div>
           </div>
         </div>
 
@@ -1447,31 +1498,31 @@
           </div>
           <div class="card">
             <div class="section-header">Treino da conta Laleblu</div>
-            <p class="hint" style="margin-top:0">Aplica o treino versionado da <strong>Laleblu</strong>: preenche FAQ, mensagens prontas, roteiros e regras que ainda não existem. Nunca sobrescreve nada já cadastrado ou editado no painel, e não mexe em contatos, conversas nem no número de avisos. Rode depois de adicionar conteúdo novo à base de conhecimento dela.</p>
+            <p class="hint" style="margin-top:0">Aplica o treino versionado da <strong>Laleblu</strong>: preenche dúvidas frequentes, respostas da casa, caminhos de conversa e combinados que ainda não existem. Nunca sobrescreve nada já cadastrado ou editado no painel, e não mexe em contatos, conversas nem no número de avisos. Rode depois de adicionar conteúdo novo à base de conhecimento dela.</p>
             <button type="button" id="btn-seed-laleblu" class="btn-brand btn-brand--secondary">Aplicar treino da Laleblu</button>
             <p id="seed-laleblu-result" class="hint" style="margin:0.6rem 0 0" hidden></p>
           </div>
           <div class="card">
             <div class="section-header">Configuração da Harmonizze Clinic</div>
-            <p class="hint" style="margin-top:0">Aplica a configuração versionada da <strong>Harmonizze Clinic</strong> (Dra. Hellen Matias): dados da clínica, unidades, procedimentos, profissional, FAQ, mensagens, roteiros, regras e automações (lembretes, recontato, pós-procedimento, renovação, aniversário). Não mexe em contatos, conversas nem no número de avisos. Rode depois de cada atualização do briefing dela.</p>
+            <p class="hint" style="margin-top:0">Aplica a configuração versionada da <strong>Harmonizze Clinic</strong> (Dra. Hellen Matias): dados da clínica, unidades, procedimentos, profissional, dúvidas frequentes, respostas, caminhos de conversa, combinados e automações (lembretes, retomada de conversa, depois da visita, ciclo de retorno, aniversário). Não mexe em contatos, conversas nem no número de avisos. Rode depois de cada atualização do briefing dela.</p>
             <button type="button" id="btn-seed-harmonizze" class="btn-brand btn-brand--secondary">Aplicar configuração da Harmonizze</button>
             <p id="seed-harmonizze-result" class="hint" style="margin:0.6rem 0 0" hidden></p>
           </div>
           <div class="card">
             <div class="section-header">Configuração da Clínica Dr. Saulo Silva</div>
-            <p class="hint" style="margin-top:0">Aplica a configuração versionada da <strong>Clínica Dr. Saulo Silva</strong> (medicina de precisão, emagrecimento, performance e longevidade): dados da clínica, consultas presencial/online, profissional, FAQ, mensagens, roteiros, regras e automações (lembretes, recontato, renovação trimestral, recuperação de inativos, aniversário). Não mexe em contatos, conversas nem no número de avisos. Rode depois de cada atualização do manual dela.</p>
+            <p class="hint" style="margin-top:0">Aplica a configuração versionada da <strong>Clínica Dr. Saulo Silva</strong> (medicina de precisão, emagrecimento, performance e longevidade): dados da clínica, consultas presencial/online, profissional, dúvidas frequentes, respostas, caminhos de conversa, combinados e automações (lembretes, retomada de conversa, ciclo de retorno trimestral, recuperação de inativos, aniversário). Não mexe em contatos, conversas nem no número de avisos. Rode depois de cada atualização do manual dela.</p>
             <button type="button" id="btn-seed-dr-saulo" class="btn-brand btn-brand--secondary">Aplicar configuração da Dr. Saulo</button>
             <p id="seed-dr-saulo-result" class="hint" style="margin:0.6rem 0 0" hidden></p>
           </div>
           <div class="card">
             <div class="section-header">Configuração da Diamond Clinic Saúde & Beleza</div>
-            <p class="hint" style="margin-top:0">Aplica a configuração versionada da <strong>Diamond Clinic</strong> (Campinas/SP - Dr. Vitor Rodrigues e Dra. Natieli Rodrigues): dados da clínica, unidade, 22 procedimentos, 2 profissionais com agenda e intervalo, mensagens prontas, regras (migradas de outro sistema) e automações (recontato, pós-procedimento). Não mexe em contatos, conversas nem no número de avisos. Rode depois de cada atualização do briefing dela.</p>
+            <p class="hint" style="margin-top:0">Aplica a configuração versionada da <strong>Diamond Clinic</strong> (Campinas/SP - Dr. Vitor Rodrigues e Dra. Natieli Rodrigues): dados da clínica, unidade, 22 procedimentos, 2 profissionais com agenda e intervalo, respostas da casa, combinados (migrados de outro sistema) e automações (retomada de conversa, depois da visita). Não mexe em contatos, conversas nem no número de avisos. Rode depois de cada atualização do briefing dela.</p>
             <button type="button" id="btn-seed-diamond-clinic" class="btn-brand btn-brand--secondary">Aplicar configuração da Diamond Clinic</button>
             <p id="seed-diamond-clinic-result" class="hint" style="margin:0.6rem 0 0" hidden></p>
           </div>
           <div class="card">
             <div class="section-header">Configuração da Lisboa Beauty Center</div>
-            <p class="hint" style="margin-top:0">Aplica a configuração versionada da <strong>Lisboa Beauty Center</strong> (São Bernardo do Campo/SP, estética avançada): dados da clínica, unidade, avaliação gratuita e procedimentos (sem preço ainda), 5 profissionais, FAQ, mensagens prontas, roteiros, regras e lembrete de 24h. Só cria o que ainda não existe.</p>
+            <p class="hint" style="margin-top:0">Aplica a configuração versionada da <strong>Lisboa Beauty Center</strong> (São Bernardo do Campo/SP, estética avançada): dados da clínica, unidade, avaliação gratuita e procedimentos (sem preço ainda), 5 profissionais, dúvidas frequentes, respostas da casa, caminhos de conversa, combinados e lembrete de 24h. Só cria o que ainda não existe.</p>
             <button type="button" id="btn-seed-lisboa" class="btn-brand btn-brand--secondary">Aplicar configuração da Lisboa</button>
             <button type="button" id="btn-lisboa-servicos" class="btn-brand btn-brand--secondary">Aplicar cadastro de serviços (planilha)</button>
             <button type="button" id="btn-lisboa-descritivos" class="btn-brand btn-brand--secondary">Aplicar descritivos comerciais</button>
@@ -1487,8 +1538,8 @@
           </div>
           <div class="card">
             <div class="section-header">Automação extra: Dr. Isac Roldão</div>
-            <p class="hint" style="margin-top:0">Cria (se ainda não existir) o recontato automático pedido pelo Dr. Isac: quando o paciente para de responder por 3 dias, a Alice pergunta um horário possível e avisa que confirma em seguida. Só dentro do expediente, não dispara se já tem consulta marcada ou se um humano assumiu a conversa. Idempotente - clicar de novo não duplica.</p>
-            <button type="button" id="btn-setup-isac-followup" class="btn-brand btn-brand--secondary">Aplicar recontato do Dr. Isac</button>
+            <p class="hint" style="margin-top:0">Cria (se ainda não existir) a retomada de conversa automática pedida pelo Dr. Isac: quando o paciente para de responder por 3 dias, a Alice pergunta um horário possível e avisa que confirma em seguida. Só dentro do expediente, não dispara se já tem consulta marcada ou se um humano assumiu a conversa. Idempotente - clicar de novo não duplica.</p>
+            <button type="button" id="btn-setup-isac-followup" class="btn-brand btn-brand--secondary">Aplicar retomada do Dr. Isac</button>
             <p id="setup-isac-followup-result" class="hint" style="margin:0.6rem 0 0" hidden></p>
           </div>
           <div class="card">
@@ -1500,7 +1551,7 @@
         </div>
 
         <div id="sub-team" class="settings-subpanel">
-          <p class="hint">Contas individuais pra equipe usar o painel — quando um atendente está logado, as transferências de atendimento no Chat mostram o nome dele. Isso não substitui a senha do painel (<code>ADMIN_USER</code>/<code>ADMIN_PASSWORD</code>), é só pra identificar quem é quem.</p>
+          <p class="hint">Contas individuais pra equipe usar o painel — quando um atendente está logado, as transferências de atendimento na Caixa de conversas mostram o nome dele. Isso não substitui a senha do painel (<code>ADMIN_USER</code>/<code>ADMIN_PASSWORD</code>), é só pra identificar quem é quem.</p>
           <form id="team-form" class="broadcast-form card">
             <input id="tm-name" type="text" placeholder="Nome" required />
             <input id="tm-username" type="text" placeholder="Usuário (login)" required autocomplete="off" />
@@ -1536,7 +1587,7 @@
         </div>
 
         <div id="sub-meta" class="settings-subpanel">
-          <p class="hint" style="margin-top:0">Envia os eventos dos leads pra Meta pela <strong>API de Conversões</strong> (servidor): Lead ao gravar o contato, Schedule ao confirmar o agendamento, e as movimentações do CRM. Deduplicado, com fila e novas tentativas. Não há Pixel no navegador nesta versão.</p>
+          <p class="hint" style="margin-top:0">Envia os eventos dos leads pra Meta pela <strong>API de Conversões</strong> (servidor): Lead ao gravar o contato, Schedule ao confirmar o agendamento, e as movimentações da Jornada. Deduplicado, com fila e novas tentativas. Não há Pixel no navegador nesta versão.</p>
           <p id="meta-enc-warning" class="plan-alert plan-alert--danger" hidden>⚠️ <code>META_ENCRYPTION_KEY</code> não está configurada no servidor. Sem ela não dá pra guardar o token com segurança — configure a variável de ambiente (32 bytes em base64 ou hex).</p>
 
           <form id="meta-form" class="broadcast-form card">
@@ -1568,7 +1619,7 @@
             <label class="checkbox-row"><input type="checkbox" id="meta-pixel-enabled" /> Ativar Pixel (navegador) — sem efeito nesta versão, guardado para o futuro</label>
             <label class="checkbox-row"><input type="checkbox" id="meta-capi-enabled" /> <strong>Ativar API de Conversões</strong> (liga o envio dos eventos do servidor)</label>
 
-            <div class="section-header" style="margin-top:1rem"><span class="nav-icon" data-icon="grid"></span> Mapeamento das etapas do CRM</div>
+            <div class="section-header" style="margin-top:1rem"><span class="nav-icon" data-icon="grid"></span> Mapeamento das etapas da Jornada</div>
             <p class="hint" style="margin-top:0">As colunas são identificadas pelo ID interno da etapa — não quebra se você renomear a coluna.</p>
             <div class="broadcast-form-row">
               <label>Lead qualificado <select id="meta-stage-qualified"></select></label>
@@ -1604,6 +1655,8 @@
               <tbody id="meta-events-body"></tbody>
             </table>
             <div id="meta-events-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Nenhum evento ainda.</div>
+          </div>
+        </div>
           </div>
         </div>
       </section>
@@ -1787,12 +1840,12 @@
     <div id="broadcast-edit-overlay" class="modal-overlay" style="display:none">
       <div class="modal-card modal-card-lg">
         <div class="modal-header">
-          <h3>Nova mensagem programada</h3>
+          <h3>Planejar envio</h3>
           <button type="button" id="broadcast-edit-close" class="modal-close">&times;</button>
         </div>
         <form id="broadcast-form">
           <label>Título*
-            <input id="bc-title" type="text" placeholder="Ex.: Campanha de retorno de junho" required />
+            <input id="bc-title" type="text" placeholder="Ex.: Envio de retorno de junho" required />
           </label>
           <label>Mensagem*
             <textarea id="bc-message" rows="4" placeholder="Ex.: Olá {primeiro_nome}, temos uma novidade para você!" required></textarea>
@@ -1809,13 +1862,13 @@
 
           <label>Para quais contatos?*
             <select id="bc-target-mode">
-              <option value="all">Todos os contatos</option>
-              <option value="stage">Uma etapa do funil</option>
-              <option value="contacts">Contatos específicos</option>
+              <option value="all">Todas as pessoas</option>
+              <option value="stage">Uma etapa da Jornada</option>
+              <option value="contacts">Pessoas específicas</option>
               <option value="reactivation" class="biz-clinica-only">Reativação de base (quem não volta há um tempo)</option>
             </select>
           </label>
-          <label id="bc-stage-wrap" style="display:none">Etapa do funil
+          <label id="bc-stage-wrap" style="display:none">Etapa da Jornada
             <select id="bc-target-stage"></select>
           </label>
           <div id="bc-react-wrap" style="display:none">
@@ -1896,13 +1949,13 @@
     <div id="pp-rule-overlay" class="modal-overlay" style="display:none">
       <div class="modal-card modal-card-lg">
         <div class="modal-header">
-          <h3 id="pp-rule-title">Nova mensagem de pós-procedimento</h3>
+          <h3 id="pp-rule-title">Novo cuidado após a visita</h3>
           <button type="button" id="pp-rule-close" class="modal-close">&times;</button>
         </div>
         <form id="pp-rule-form">
           <input type="hidden" id="pp-id" />
           <label>Nome da automação*
-            <input id="pp-name" type="text" placeholder="Ex.: Cuidados pós-procedimento" required />
+            <input id="pp-name" type="text" placeholder="Ex.: Cuidados depois da visita" required />
           </label>
           <div class="modal-form-row">
             <label>Intervalo*
@@ -1986,13 +2039,13 @@
     <div id="renewal-rule-overlay" class="modal-overlay" style="display:none">
       <div class="modal-card modal-card-lg">
         <div class="modal-header">
-          <h3 id="renewal-rule-title">Nova renovação</h3>
+          <h3 id="renewal-rule-title">Novo ciclo de retorno</h3>
           <button type="button" id="renewal-rule-close" class="modal-close">&times;</button>
         </div>
         <form id="renewal-rule-form">
           <input type="hidden" id="rn-id" />
           <label>Nome da automação*
-            <input id="rn-name" type="text" placeholder="Ex.: Renovação anual de botox" required />
+            <input id="rn-name" type="text" placeholder="Ex.: Ciclo de retorno anual de botox" required />
           </label>
           <label>Quando renovar?</label>
           <div class="payment-methods-grid" id="rn-presets">
@@ -2082,13 +2135,13 @@
     <div id="followup-rule-overlay" class="modal-overlay" style="display:none">
       <div class="modal-card modal-card-lg">
         <div class="modal-header">
-          <h3 id="followup-rule-title">Novo recontato</h3>
+          <h3 id="followup-rule-title">Nova retomada</h3>
           <button type="button" id="followup-rule-close" class="modal-close">&times;</button>
         </div>
         <form id="followup-rule-form">
           <input type="hidden" id="fu-id" />
-          <label>Nome do recontato*
-            <input id="fu-name" type="text" placeholder="Ex.: Recontato pós-orçamento" required />
+          <label>Nome da retomada*
+            <input id="fu-name" type="text" placeholder="Ex.: Retomada pós-orçamento" required />
           </label>
           <label>Tempo sem resposta*</label>
           <div class="payment-methods-grid" id="fu-presets">
@@ -2103,9 +2156,9 @@
             <label>Horas<input id="fu-h" type="number" min="0" max="23" value="0" /></label>
             <label>Minutos<input id="fu-m" type="number" min="0" max="59" value="0" /></label>
           </div>
-          <p class="hint" style="margin-top:0" id="fu-silence-hint">O recontato é enviado quando o contato fica esse tempo sem responder.</p>
+          <p class="hint" style="margin-top:0" id="fu-silence-hint">A retomada é enviada quando a pessoa fica esse tempo sem responder.</p>
 
-          <label>Repetição do recontato</label>
+          <label>Repetição da retomada</label>
           <label class="checkbox-row"><input type="radio" name="fu-repeat" value="every_silence" checked /> Repetir a cada novo silêncio</label>
           <label class="checkbox-row"><input type="radio" name="fu-repeat" value="once" /> Enviar só uma vez por conversa</label>
 
@@ -2268,7 +2321,7 @@
             <select id="bq-professional"><option value="">Clínica toda</option></select>
           </label>
           <div class="modal-form-row">
-            <label>Início<input id="bq-start" type="datetime-local" required /></label>
+            <label>Começa em<input id="bq-start" type="datetime-local" required /></label>
             <label>Fim<input id="bq-end" type="datetime-local" required /></label>
           </div>
           <label>Motivo
@@ -2284,7 +2337,7 @@
     <div id="pb-overlay" class="modal-overlay" style="display:none">
       <div class="modal-card modal-card-lg">
         <div class="modal-header">
-          <h3 id="pb-title">Novo roteiro</h3>
+          <h3 id="pb-title">Novo caminho de conversa</h3>
           <button type="button" id="pb-close" class="modal-close">&times;</button>
         </div>
         <form id="pb-form">
@@ -2300,9 +2353,9 @@
               <option value="preco">Preço e pagamento</option>
               <option value="objecoes">Objeções</option>
               <option value="remarcacao">Remarcar ou cancelar</option>
-              <option value="pos_procedimento">Pós-procedimento</option>
+              <option value="pos_procedimento">Depois da visita</option>
               <option value="transferir">Transferir para humano</option>
-              <option value="livre" selected>Roteiro livre</option>
+              <option value="livre" selected>Caminho livre</option>
             </select>
           </label>
           <label>Quando este roteiro deve ser usado?
@@ -2422,7 +2475,7 @@
         <ul class="upsell-list" id="upsell-modal-list"></ul>
         <div class="upsell-modal-proof" id="upsell-modal-proof" hidden></div>
         <a id="upsell-modal-cta" class="upsell-btn upsell-btn--block" href="#" target="_blank" rel="noopener">Falar com a gente e ativar</a>
-        <p class="hint upsell-modal-foot">Sua conta, seus contatos e seu funil continuam exatamente como estão. A Alice só entra por cima e assume o atendimento.</p>
+        <p class="hint upsell-modal-foot">Sua conta, suas pessoas e sua Jornada continuam exatamente como estão. A Alice só entra por cima e assume o atendimento.</p>
       </div>
     </div>
 
@@ -2462,7 +2515,7 @@
           <p class="hint" style="margin-top:0">Só a administração da Alice define o plano. Ao salvar, a vigência recomeça a contar a partir de hoje.</p>
           <label>Plano
             <select id="clinic-plan-select">
-              <option value="free">Plano Grátis — R$ 0 (só CRM + Meta, sem Alice)</option>
+              <option value="free">Plano Grátis — R$ 0 (só Jornada + Meta, sem Alice)</option>
               <option value="realce">Plano Realce — R$ 597/mês</option>
               <option value="prime">Plano Prime — R$ 897/mês</option>
               <option value="prestige">Plano Prestige — R$ 1.397/mês</option>
