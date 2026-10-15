@@ -39,6 +39,7 @@ import { absorbToolResult, checkSlotMentions, knownFrom, newSlotState, renderBoo
 import { isJobSeeker } from "./jobSeeker.js";
 import { findChosenSlot, identifyWanted, offersSlots, staffConfirmedBooking } from "./bookingIntent.js";
 import { statementsNote } from "./clinicStatements.js";
+import { bookingTagPrompt, getBookingTag } from "../crm/bookingTag.js";
 import { checkClinicTimeConflicts } from "./timeConflict.js";
 import { ceBookingReadiness } from "../clinicaexperts/procedureLink.js";
 import { buildConversationBrief } from "./conversationBrief.js";
@@ -2279,7 +2280,13 @@ async function generateReplyUnlocked(
   // prompt desliga as regras que conflitam com ela e a jogada vai na ultima instrucao ao modelo.
   const trailingNow: string[] = [];
   for (let i = history.length - 1; i >= 0 && history[i].role === "user"; i--) trailingNow.unshift(history[i].content);
-  const hasBooking = (await prisma.appointment.count({ where: { patientId: patient.id, status: "confirmed", scheduledAt: { gte: new Date() } } })) > 0 || staffConfirmedBooking(history);
+  // ETIQUETA INTERNA do lead (so a Alice ve): Agendado (com a data) / Nao agendado, calculada na hora pela agenda - vale pra agendamento da Alice, da equipe
+  // (painel, telefone, Clinica Experts) e de qualquer procedimento. Agendado = ela NAO tenta agendar de novo.
+  const tagTz = (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { timezone: true } }))?.timezone || "America/Sao_Paulo";
+  const bookingTag = await getBookingTag(patient.id, tagTz);
+  const staffSaidBooked = staffConfirmedBooking(history);
+  const bookingTagLine = usageClinic?.businessType !== "geral" ? bookingTagPrompt(bookingTag, staffSaidBooked) : "";
+  const hasBooking = bookingTag.status === "agendado" || staffSaidBooked;
   const pastVisitCount = await prisma.appointment.count({ where: { patientId: patient.id, status: { in: ["completed", "confirmed"] }, scheduledAt: { lt: new Date() } } });
   // QUAL PROCEDIMENTO ela quer (o catalogo inteiro, sem as descricoes) e QUAL HORARIO ela ja escolheu: a Alice agenda o procedimento pedido; a
   // avaliacao e pra quem nao sabe o que quer (15/10/2026).
@@ -2367,7 +2374,7 @@ async function generateReplyUnlocked(
       const reading = await readConversation({ clinicId, patientId: patient.id, history, trailing, pastVisitCount, skipAnalysis: flow.intent === "booked" });
       messages.push({
         role: "system",
-        content: `${reading ? reading + "\n\n" : ""}${statementsInfo ? statementsInfo + "\n\n" : ""}JOGADA AGORA (siga isto): ${flow.nextMove}\n\n${memory ? memory + "\n\n" : ""}LEMBRETE FINAL: ${trailing.length > 1 ? "as mensagens novas da pessoa (ainda sem resposta) sao" : "a mensagem nova da pessoa e"}: ${trailing.map((t) => `"${t.slice(0, 300)}"`).join(" + ")}. Responda SOMENTE a isso, UMA vez${trailing.length > 1 ? ", juntando as mensagens numa resposta so" : ""}. O que ela perguntou ANTES ja foi respondido nas mensagens anteriores: NAO responda de novo, NAO repita valores, endereco, horarios, avisos nem frases que voce ja disse, e NAO feche com a mesma pergunta das mensagens anteriores (mude a pergunta ou so responda e pare). Fale como uma pessoa conversando: curto, direto, natural, continuando a conversa de onde ela parou.`,
+        content: `${reading ? reading + "\n\n" : ""}${statementsInfo ? statementsInfo + "\n\n" : ""}${bookingTagLine ? bookingTagLine + "\n\n" : ""}JOGADA AGORA (siga isto): ${flow.nextMove}\n\n${memory ? memory + "\n\n" : ""}LEMBRETE FINAL: ${trailing.length > 1 ? "as mensagens novas da pessoa (ainda sem resposta) sao" : "a mensagem nova da pessoa e"}: ${trailing.map((t) => `"${t.slice(0, 300)}"`).join(" + ")}. Responda SOMENTE a isso, UMA vez${trailing.length > 1 ? ", juntando as mensagens numa resposta so" : ""}. O que ela perguntou ANTES ja foi respondido nas mensagens anteriores: NAO responda de novo, NAO repita valores, endereco, horarios, avisos nem frases que voce ja disse, e NAO feche com a mesma pergunta das mensagens anteriores (mude a pergunta ou so responda e pare). Fale como uma pessoa conversando: curto, direto, natural, continuando a conversa de onde ela parou.`,
       });
     }
   }
@@ -2557,6 +2564,16 @@ async function generateReplyUnlocked(
   if (flow.intent === "booked" && !didTransfer && !fixedReply && finalText.trim() && offersSlots(finalText) && !toolsUsed.some((n) => BOOKING_TOOLS.has(n))) {
     console.warn(`[ja-agendada] resposta ofereceu horarios a quem ja tem horario - descartada (conv ${conversation.id}): ${finalText.slice(0, 100)}`);
     finalText = closingReply(patient.name, lastAssistant ?? "");
+  }
+  // JA AGENDADO (etiqueta interna): tira da resposta qualquer oferta de agendar/avaliacao ("quer que eu veja um horario", "vamos agendar uma avaliacao").
+  if (flow.intent === "booked" && !didTransfer && !fixedReply && finalText.trim() && !toolsUsed.some((n) => BOOKING_TOOLS.has(n))) {
+    const OFFER_SENTENCE_RE = /(quer que eu (veja|veja um|agende|marque)|posso (agendar|marcar|ver um horario)|vamos (agendar|marcar)|gostaria de agendar|avaliacao gratuita|agendar (uma )?avaliacao|qual (dia|horario) (fica|voce prefere)|dia e turno)/;
+    const offerSentences = splitSentences(finalText).filter((s) => OFFER_SENTENCE_RE.test(normalizeReply(s)));
+    if (offerSentences.length) {
+      const kept = removeSentences(finalText, offerSentences);
+      console.warn(`[ja-agendado] oferta de agendamento removida da resposta (conv ${conversation.id}): ${offerSentences[0].slice(0, 80)}`);
+      finalText = kept.trim().length >= 12 ? kept : closingReply(patient.name, lastAssistant ?? "");
+    }
   }
 
   // Redundante: a propria Alice acabou de mandar (quase) isso. Nao reenvia.
