@@ -26,6 +26,7 @@ import { offerFreedSlotToWaitlist } from "../scheduling/waitlist.js";
 import { createBooking, checkSpecificTime, SLOT_REASON_PT } from "../scheduling/slots.js";
 import { isoDateInZone, wallClockInZone, zonedWallClockToUtc } from "../scheduling/time.js";
 import { periodWindow } from "../crm/period.js";
+import { restoreLisboaReminders } from "../maintenance/restoreReminders.js";
 import { upcomingNationalHolidays, parseHolidayOpen } from "../scheduling/holidays.js";
 import { patientDossier } from "../crm/dossier.js";
 import { buildReport } from "../crm/reports.js";
@@ -1273,6 +1274,25 @@ apiRouter.post(
       byReason: { semProcedimento: skips.filter((x) => x.reason === "procedimento_sem_vinculo").length, semTelefone: skips.filter((x) => x.reason === "sem_telefone").length },
       samples: lastBookingDiagnostics.get(clinic.id)?.items ?? [],
     });
+  })
+);
+
+// Restaura o horario fixo dos lembretes "Antes da visita" da Lisboa (perdido ao editar "horas antes"). dryRun (padrao) so mostra. So admin.
+apiRouter.post(
+  "/clinics/lisboa-restaurar-lembretes",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await prisma.clinic.findFirst({ where: { name: "Lisboa Beauty Center" } });
+    if (!clinic) {
+      res.status(404).json({ error: "Clínica Lisboa não encontrada." });
+      return;
+    }
+    const { dryRun } = (req.body ?? {}) as { dryRun?: boolean };
+    const result = await restoreLisboaReminders(clinic.id, { dryRun: dryRun !== false });
+    if (!result.dryRun && (result.applied || result.paused)) {
+      await logActivity({ clinicId: clinic.id, type: "automation_created", area: "automacoes", title: "Horário dos lembretes restaurado", description: `${result.applied} lembrete(s) voltaram ao horário fixo; ${result.paused} duplicado(s) pausado(s).`, actorName: req.staff?.name ?? null });
+    }
+    res.json(result);
   })
 );
 
@@ -3673,8 +3693,9 @@ apiRouter.put(
 
     const { hoursBefore, message, active } = req.body as { hoursBefore?: number; message?: string; active?: boolean };
     // O modal sempre manda hoursBefore; so trata como "mudei pra X horas antes"
-    // (e solta o horario fixo) se o valor realmente mudou.
-    const hoursChanged = hoursBefore !== undefined && hoursBefore !== existing.hoursBefore;
+    // (e solta o horario fixo) se o valor realmente mudou. Lembrete de HORARIO FIXO (dayOffset) NUNCA perde o horario por aqui:
+    // em 15/10 alguem mudou o "horas antes" de tres lembretes da Lisboa e eles passaram a sair 48h antes em vez da janela do dia.
+    const hoursChanged = hoursBefore !== undefined && hoursBefore !== existing.hoursBefore && existing.dayOffset == null;
     const rule = await prisma.reminderRule.update({
       where: { id: req.params.id },
       data: {

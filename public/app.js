@@ -3152,6 +3152,19 @@ function openReminderRuleModal(rule) {
   document.getElementById("reminder-rule-title").textContent = rule ? "Editar lembrete" : "Novo lembrete de consulta";
   document.getElementById("rr-id").value = rule?.id || "";
   document.getElementById("rr-hours-before").value = rule?.hoursBefore || 24;
+  // Lembrete de horario FIXO (ex.: dia anterior, 08:00 as 11:00): o "horas antes" nao vale nada pra ele e nao pode ser mexido aqui.
+  const fixed = !!rule && rule.dayOffset != null && rule.sendHour != null;
+  const hoursInput = document.getElementById("rr-hours-before");
+  hoursInput.disabled = fixed;
+  let fixedNote = document.getElementById("rr-fixed-note");
+  if (!fixedNote) {
+    fixedNote = el("p", { id: "rr-fixed-note", class: "hint", style: "margin:0.3rem 0 0" }, []);
+    hoursInput.insertAdjacentElement("afterend", fixedNote);
+  }
+  fixedNote.hidden = !fixed;
+  if (fixed) {
+    fixedNote.textContent = `Este lembrete sai em horário fixo (${rule.dayOffset === 1 ? "dia anterior" : "no próprio dia"}, ${String(rule.sendHour).padStart(2, "0")}:${String(rule.sendMinute || 0).padStart(2, "0")}${rule.sendEndHour != null ? ` às ${String(rule.sendEndHour).padStart(2, "0")}:00` : ""}). O horário não muda por aqui; só o texto e o status.`;
+  }
   document.getElementById("rr-message").value = rule?.message || "";
   document.getElementById("rr-active").checked = rule ? !!rule.active : true;
   document.getElementById("reminder-rule-delete-btn").style.display = rule ? "" : "none";
@@ -6050,6 +6063,28 @@ document.getElementById("btn-lisboa-diag-ce").addEventListener("click", async (e
     out.textContent = linhas.join("\n");
     out.style.whiteSpace = "pre-wrap";
     out.hidden = false;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("btn-lisboa-restaurar-lembretes").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const out = document.getElementById("seed-lisboa-result");
+  const post = (dryRun) => api("/clinics/lisboa-restaurar-lembretes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dryRun }) });
+  btn.disabled = true;
+  try {
+    const p = await post(true);
+    if (p.error) { showError(p.error); return; }
+    if (!p.items.length) { showError("Nenhum lembrete perdeu o horário fixo. Nada a restaurar."); return; }
+    const txt = p.items.map((x) => `• "${x.messageStart}…" (criado em ${new Date(x.createdAt).toLocaleDateString("pt-BR")}, hoje: ${x.currentHoursBefore}h antes)\n   → ${x.action === "restaurar" ? `VOLTA para ${x.to}` : x.action === "pausar_duplicado" ? "é DUPLICADO de outro igual: fica PAUSADO (dá pra reativar depois; nada é apagado)" : "não consegui saber se é do dia anterior ou do dia: NÃO mexo"}`).join("\n");
+    const msg = `Restaurar o horário dos lembretes?\n\n${txt}\n\nO texto das mensagens não muda.`;
+    if (!p.items.some((x) => x.action !== "nao_classificado")) { showError(msg); return; }
+    if (!(await showConfirm(msg))) return;
+    const r = await post(false);
+    out.textContent = `Lembretes restaurados: ${r.applied}; duplicados pausados: ${r.paused}.`;
+    out.hidden = false;
+    await loadReminderRules().catch(() => {});
   } finally {
     btn.disabled = false;
   }
