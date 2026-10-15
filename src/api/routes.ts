@@ -26,6 +26,12 @@ import { offerFreedSlotToWaitlist } from "../scheduling/waitlist.js";
 import { createBooking, checkSpecificTime, SLOT_REASON_PT } from "../scheduling/slots.js";
 import { isoDateInZone, wallClockInZone, zonedWallClockToUtc } from "../scheduling/time.js";
 import { periodWindow } from "../crm/period.js";
+import { describeAd, resolvePendingAdNames } from "../ads/attribution.js";
+import { backfillLeadTags } from "../ads/tags.js";
+import { classifyLead, confirmClassification, leadClassificationView, LEAD_STATUSES, rejectClassification, type LeadStatus } from "../ads/classification.js";
+import { suggestForLead, DEFAULT_CRITERIA } from "../ads/suggest.js";
+import { adsPerformance } from "../ads/report.js";
+import { requeueSkippedMessagingEvents } from "../ads/messaging.js";
 import { restoreLisboaReminders } from "../maintenance/restoreReminders.js";
 import { upcomingNationalHolidays, parseHolidayOpen } from "../scheduling/holidays.js";
 import { patientDossier } from "../crm/dossier.js";
@@ -1732,6 +1738,193 @@ apiRouter.get(
   })
 );
 
+// ===========================================================================
+// ATRIBUICAO DE ANUNCIOS, ETIQUETAS E CLASSIFICACAO DE LEADS (ver src/ads/)
+// ===========================================================================
+
+// "Origem do lead": todas as entradas de anuncio, a primeira origem, a da conversa atual, a classificacao e o historico.
+apiRouter.get(
+  "/ads/lead/:id",
+  asyncRoute(async (req, res) => {
+    const patient = await prisma.patient.findUniqueOrThrow({ where: { id: req.params.id }, select: { id: true, clinicId: true } });
+    if (!assertClinicAccess(req, res, patient.clinicId)) return;
+    const [entries, catalog, classification, tags] = await Promise.all([
+      prisma.adAttribution.findMany({ where: { patientId: patient.id }, orderBy: { receivedAt: "asc" } }),
+      prisma.adCatalog.findMany({ where: { clinicId: patient.clinicId } }),
+      leadClassificationView(patient.id),
+      prisma.patientTag.findMany({ where: { patientId: patient.id }, select: { tag: { select: { id: true, label: true, color: true, system: true } } } }),
+    ]);
+    const cat = new Map(catalog.map((c) => [c.sourceId, c]));
+    const view = entries.map((e) => ({
+      id: e.id,
+      receivedAt: e.receivedAt,
+      entryKind: e.entryKind,
+      platform: e.platform,
+      sourceType: e.sourceType,
+      sourceUrl: e.sourceUrl,
+      body: e.body,
+      wabaId: e.wabaId,
+      hasClickId: !!e.ctwaClid,
+      clickIdHint: e.ctwaClid ? `…${e.ctwaClid.slice(-6)}` : null,
+      conversationId: e.conversationId,
+      ...describeAd({ sourceId: e.sourceId, headline: e.headline }, e.sourceId ? cat.get(e.sourceId) : null),
+    }));
+    const attribution = !entries.length
+      ? "Sem atribuição confiável: nenhum anúncio chegou com a mensagem (orgânico ou origem não identificada)."
+      : entries.some((e) => e.ctwaClid && e.sourceId)
+        ? "Atribuído por anúncio (ID do anúncio + ID do clique)."
+        : "Anúncio identificado pelo ID, sem o ID do clique (não dá para devolver conversão à Meta).";
+    res.json({
+      origin: entries.length ? "Meta Ads / WhatsApp" : null,
+      attribution,
+      first: view[0] ?? null,
+      current: view.at(-1) ?? null,
+      entries: view,
+      tags: tags.map((t) => t.tag),
+      classification,
+    });
+  })
+);
+
+apiRouter.post(
+  "/ads/lead/:id/classify",
+  asyncRoute(async (req, res) => {
+    const patient = await prisma.patient.findUniqueOrThrow({ where: { id: req.params.id }, select: { id: true, clinicId: true } });
+    if (!assertClinicAccess(req, res, patient.clinicId)) return;
+    const { status, reason, reasonCode } = (req.body ?? {}) as { status?: string; reason?: string; reasonCode?: string };
+    if (!LEAD_STATUSES.includes(status as LeadStatus)) {
+      res.status(400).json({ error: "status invalido (em_qualificacao, qualificado ou desqualificado)" });
+      return;
+    }
+    if (status !== "em_qualificacao" && !String(reason ?? "").trim() && !reasonCode) {
+      res.status(400).json({ error: "Informe o motivo comercial da classificação." });
+      return;
+    }
+    const r = await classifyLead({ clinicId: patient.clinicId, patientId: patient.id, status: status as LeadStatus, reason, reasonCode, source: "manual", actorName: req.staff?.name ?? "equipe" });
+    res.json({ ...r, view: await leadClassificationView(patient.id) });
+  })
+);
+
+apiRouter.post(
+  "/ads/lead/:id/suggest",
+  asyncRoute(async (req, res) => {
+    const patient = await prisma.patient.findUniqueOrThrow({ where: { id: req.params.id }, select: { id: true, clinicId: true } });
+    if (!assertClinicAccess(req, res, patient.clinicId)) return;
+    const r = await suggestForLead(patient.clinicId, patient.id);
+    res.json({ ...r, view: await leadClassificationView(patient.id) });
+  })
+);
+
+// Sugestoes da IA aguardando revisao humana.
+apiRouter.get(
+  "/ads/pending",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const rows = await prisma.leadClassification.findMany({
+      where: { clinicId: clinic.id, confirmed: false, decidedAt: null },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+      include: { patient: { select: { id: true, name: true, phone: true } } },
+    });
+    res.json(rows.map((r) => ({ id: r.id, status: r.status, reason: r.reason, reasonCode: r.reasonCode, createdAt: r.createdAt, patient: r.patient })));
+  })
+);
+
+for (const action of ["confirm", "reject"] as const) {
+  apiRouter.post(
+    `/ads/classifications/:id/${action}`,
+    asyncRoute(async (req, res) => {
+      const row = await prisma.leadClassification.findUniqueOrThrow({ where: { id: req.params.id } });
+      if (!assertClinicAccess(req, res, row.clinicId)) return;
+      const who = req.staff?.name ?? "equipe";
+      if (action === "confirm") res.json(await confirmClassification(row.id, who));
+      else res.json({ ok: await rejectClassification(row.id, who) });
+    })
+  );
+}
+
+// Desempenho dos Anuncios (dados reais do CRM; ver ads/report.ts).
+apiRouter.get(
+  "/reports/ads",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const q = req.query as Record<string, string | undefined>;
+    const start = q.start ? parseDateParam(q.start) : new Date(Date.now() - 30 * 86_400_000);
+    const end = q.end ? parseDateParam(q.end) : new Date();
+    if (!start || !end) {
+      res.status(400).json({ error: "start/end invalidos" });
+      return;
+    }
+    const statusOk = ["qualificado", "desqualificado", "em_qualificacao", "sem_classificacao"];
+    res.json(
+      await adsPerformance(clinic.id, {
+        start,
+        end,
+        campaign: q.campaign || undefined,
+        adset: q.adset || undefined,
+        adId: q.adId || undefined,
+        staffId: q.staffId || undefined,
+        status: q.status && statusOk.includes(q.status) ? (q.status as "qualificado") : undefined,
+      })
+    );
+  })
+);
+
+// Configuracao da qualificacao (criterios por cliente, sugestao da IA, aprovacao automatica).
+apiRouter.get(
+  "/ads/settings",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    res.json({ criteria: clinic.qualificationCriteria ?? "", defaultCriteria: DEFAULT_CRITERIA, ai: clinic.qualificationAi, autoApprove: clinic.qualificationAutoApprove });
+  })
+);
+
+apiRouter.put(
+  "/ads/settings",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const b = (req.body ?? {}) as { criteria?: string | null; ai?: boolean; autoApprove?: boolean };
+    const data: Record<string, unknown> = {};
+    if (b.criteria !== undefined) data.qualificationCriteria = b.criteria?.trim().slice(0, 1500) || null;
+    if (b.ai !== undefined) data.qualificationAi = !!b.ai;
+    if (b.autoApprove !== undefined) data.qualificationAutoApprove = !!b.autoApprove;
+    const updated = await prisma.clinic.update({ where: { id: clinic.id }, data });
+    await logActivity({ clinicId: clinic.id, type: "clinic_updated", area: "clinica", title: "Qualificação de leads: configuração alterada", description: `IA ${updated.qualificationAi ? "ligada" : "desligada"}; aprovação automática ${updated.qualificationAutoApprove ? "LIGADA" : "desligada"}.`, actorName: req.staff?.name ?? null });
+    res.json({ criteria: updated.qualificationCriteria ?? "", ai: updated.qualificationAi, autoApprove: updated.qualificationAutoApprove });
+  })
+);
+
+// Admin: nomes dos anuncios (Marketing API), etiquetas de todos os leads, reenvio dos eventos de mensagens que ficaram "nao elegiveis".
+apiRouter.post(
+  "/ads/resolve-names",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await getClinic(req);
+    const r = await resolvePendingAdNames(clinic.id, { force: true });
+    const catalog = await prisma.adCatalog.findMany({ where: { clinicId: clinic.id }, orderBy: { createdAt: "desc" }, take: 30, select: { sourceId: true, status: true, adName: true, error: true } });
+    res.json({ ...r, catalog });
+  })
+);
+
+apiRouter.post(
+  "/ads/backfill-tags",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await getClinic(req);
+    const { after } = (req.body ?? {}) as { after?: string };
+    res.json(await backfillLeadTags(clinic.id, { after, limit: 300 }));
+  })
+);
+
+apiRouter.post(
+  "/ads/messaging/requeue",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await getClinic(req);
+    res.json(await requeueSkippedMessagingEvents(clinic.id));
+  })
+);
+
 // Ajuste do limite de atendimentos/mês da clínica (admin). limit: número =
 // teto fixo · 0 = ilimitado · null = volta pro padrão do plano.
 apiRouter.put(
@@ -2598,6 +2791,7 @@ apiRouter.get(
           name: p.name,
           phone: p.phone,
           tags: p.tags.map((pt) => pt.tag),
+          leadClass: p.leadClass, // situacao comercial (filtro da Jornada)
           // Lead em etapa de venda ganha sem valor preenchido: a Alice pode
           // mover livremente sem saber o valor, entao o card avisa que falta
           // alguem da equipe informar. Derivado (nao e campo salvo) - some
@@ -4673,6 +4867,9 @@ apiRouter.get(
             testEventCode: cfg.testEventCode,
             pixelEnabled: cfg.pixelEnabled,
             capiEnabled: cfg.capiEnabled,
+            messagingEnabled: cfg.messagingEnabled,
+            wabaId: cfg.wabaId,
+            messagingDatasetId: cfg.messagingDatasetId,
             stageQualified: cfg.stageQualified,
             stageDisqualified: cfg.stageDisqualified,
             stageWon: cfg.stageWon,
@@ -4703,6 +4900,9 @@ apiRouter.put(
       testEventCode?: string | null;
       pixelEnabled?: boolean;
       capiEnabled?: boolean;
+      messagingEnabled?: boolean;
+      wabaId?: string | null;
+      messagingDatasetId?: string | null;
       stageQualified?: string | null;
       stageDisqualified?: string | null;
       stageWon?: string | null;
@@ -4723,6 +4923,9 @@ apiRouter.put(
     if (b.testEventCode !== undefined) data.testEventCode = b.testEventCode?.trim() || null;
     if (b.pixelEnabled !== undefined) data.pixelEnabled = !!b.pixelEnabled;
     if (b.capiEnabled !== undefined) data.capiEnabled = !!b.capiEnabled;
+    if (b.messagingEnabled !== undefined) data.messagingEnabled = !!b.messagingEnabled;
+    if (b.wabaId !== undefined) data.wabaId = b.wabaId?.trim().replace(/\D/g, "") || null;
+    if (b.messagingDatasetId !== undefined) data.messagingDatasetId = b.messagingDatasetId?.trim().replace(/\D/g, "") || null;
     if (b.stageQualified !== undefined) data.stageQualified = b.stageQualified || null;
     if (b.stageDisqualified !== undefined) data.stageDisqualified = b.stageDisqualified || null;
     if (b.stageWon !== undefined) data.stageWon = b.stageWon || null;
@@ -4745,6 +4948,14 @@ apiRouter.put(
     const willHavePixel = data.pixelId ?? existing?.pixelId;
     if (data.capiEnabled === true && (!willHaveToken || !willHavePixel)) {
       res.status(400).json({ error: "Preencha o ID do Pixel e o token antes de ligar a API de Conversoes." });
+      return;
+    }
+
+    // Mensagens comerciais (WhatsApp) so ligam com token + WABA + dataset: sem isso o evento nem poderia ser montado.
+    const willHaveWaba = data.wabaId !== undefined ? data.wabaId : existing?.wabaId;
+    const willHaveDataset = data.messagingDatasetId !== undefined ? data.messagingDatasetId : existing?.messagingDatasetId;
+    if (data.messagingEnabled === true && (!willHaveToken || !willHaveWaba || !willHaveDataset)) {
+      res.status(400).json({ error: "Para ligar o envio de mensagens comerciais, preencha o token, o ID do WhatsApp Business (WABA) e o ID do dataset do WABA." });
       return;
     }
 

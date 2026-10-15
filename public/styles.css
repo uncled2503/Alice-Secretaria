@@ -1780,3 +1780,9 @@ button:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px soli
 
 /* No desktop o diretorio mostra o recurso aberto no cabecalho do conteudo: o rotulo repetido no resumo so aparece em tela estreita */
 @media (min-width: 1101px) { #settings-current-label { display: none; } }
+
+/* Origem do lead e classificacao comercial (aba do contato) */
+.cp-kv-row { display: flex; gap: 0.6rem; padding: 0.25rem 0; border-bottom: 1px solid var(--border); font-size: 0.88rem; }
+.cp-kv-label { flex: 0 0 9.5rem; color: var(--muted); }
+.cp-pending { border: 1px solid var(--accent-100); background: var(--accent-50); border-radius: 12px; padding: 0.6rem 0.8rem; margin: 0.6rem 0; }
+.cp-hist-row { padding: 0.45rem 0; border-bottom: 1px solid var(--border); }

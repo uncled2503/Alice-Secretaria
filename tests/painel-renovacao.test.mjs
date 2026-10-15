@@ -121,7 +121,7 @@ test("a lateral mostra os nomes novos e o wordmark 'alice.'", () => {
 });
 
 test("nenhum nome antigo em texto visivel (index.html, app.js, assistente de ajuda, manifest)", () => {
-  const antigos = /Personalizar|Canais|Mensagens? [Pp]rogramadas?|Lembrete de Consulta|Bloqueios? de agenda|[Ll]ista de espera|Aprendizado da|Regras globais|[Mm]ensagens prontas|Alice IA|\bGuia\b|\bTema\b|[Pp]ós-procedimento|\b[Ff]unil\b|\bCRM\b|aba Chat|no Chat\b|[Cc]ampanhas?|Alana/;
+  const antigos = /Personalizar|Canais|Mensagens? [Pp]rogramadas?|Lembrete de Consulta|Bloqueios? de agenda|[Ll]ista de espera|Aprendizado da|Regras globais|[Mm]ensagens prontas|Alice IA|\bGuia\b|\bTema\b|[Pp]ós-procedimento|\b[Ff]unil\b|\bCRM\b|aba Chat|no Chat\b|[Cc]ampanhas\b|Alana/; // "Campanha" no singular e o termo do anuncio (Meta), nao o recurso antigo
   // texto visivel do HTML (entre tags e atributos que aparecem na tela)
   const visivel = [];
   html.split("\n").forEach((linha, i) => {

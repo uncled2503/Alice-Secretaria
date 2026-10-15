@@ -39,6 +39,8 @@ import { absorbToolResult, checkSlotMentions, knownFrom, newSlotState, renderBoo
 import { isJobSeeker } from "./jobSeeker.js";
 import { findChosenSlot, identifyWanted, offersSlots, staffConfirmedBooking } from "./bookingIntent.js";
 import { statementsNote } from "./clinicStatements.js";
+import { captureAdReferral } from "../ads/attribution.js";
+import { syncLeadTagsInBackground } from "../ads/tags.js";
 import { bookingTagPrompt, getBookingTag } from "../crm/bookingTag.js";
 import { checkClinicTimeConflicts } from "./timeConflict.js";
 import { ceBookingReadiness } from "../clinicaexperts/procedureLink.js";
@@ -1481,6 +1483,13 @@ Responda sempre em portugues do Brasil, em mensagens curtas como quem digita no 
 }
 
 export interface IncomingReferral {
+  // Atribuicao de anuncios (ver ads/attribution.ts)
+  sourceId?: string;
+  sourceType?: string;
+  headline?: string;
+  body?: string;
+  mediaType?: string;
+  rawKeys?: string;
   ctwaClid?: string;
   sourceUrl?: string;
   adCampaignName?: string;
@@ -1557,6 +1566,11 @@ export async function recordIncomingMessage(params: {
   if (!conversation) {
     conversation = await prisma.conversation.create({ data: { patientId: patient.id } });
   }
+
+  // ATRIBUICAO DE ANUNCIOS: o referral do clique (ID do anuncio, ctwa_clid...) so vem na primeira mensagem e pode vir de novo se a pessoa voltar por
+  // outro anuncio. Grava uma entrada por clique (idempotente) e atualiza as etiquetas automaticas (origem + situacao). Nunca bloqueia a mensagem.
+  const adEntry = referral ? await captureAdReferral({ clinicId, patientId: patient.id, conversationId: conversation.id, externalId, referral }) : null;
+  if (!existing || adEntry?.created) syncLeadTagsInBackground(clinicId, patient.id);
 
   // Trava anti-eco: se o que "chegou do cliente" e quase identico a ULTIMA
   // mensagem que SAIU dessa conversa (Alice ou humano) a poucos minutos, e

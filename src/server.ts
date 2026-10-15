@@ -9,6 +9,7 @@ import { rateLimit } from "express-rate-limit";
 import { startReminderJob } from "./reminders/cron.js";
 import { startPostProcedureJob } from "./reminders/postProcedure.js";
 import { startPreProcedureJob } from "./reminders/preProcedure.js";
+import { startAdsJobs } from "./ads/jobs.js";
 import { startPrescriptionReminderJob } from "./reminders/prescription.js";
 import { startRenewalJob } from "./reminders/renewal.js";
 import { startBirthdayJob } from "./reminders/birthday.js";
@@ -346,6 +347,7 @@ const httpServer = app.listen(port, () => {
   console.log(`Alice rodando na porta ${port}`);
   startReminderJob();
   startPostProcedureJob();
+  startAdsJobs();
   startPreProcedureJob();
   startPrescriptionReminderJob();
   startRenewalJob();

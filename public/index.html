@@ -257,6 +257,21 @@
 
         <div class="toolbar">
           <input id="contacts-search" type="text" placeholder="Buscar por nome ou telefone..." class="search-input" />
+          <select id="contacts-f-class" class="search-input" style="max-width:13rem" aria-label="Situação comercial">
+            <option value="">Situação: todas</option>
+            <option value="qualificado">Lead Qualificado</option>
+            <option value="desqualificado">Lead Desqualificado</option>
+            <option value="em_qualificacao">Em Qualificação</option>
+            <option value="sem_classificacao">Sem classificação</option>
+          </select>
+          <select id="contacts-f-origin" class="search-input" style="max-width:14rem" aria-label="Origem">
+            <option value="">Origem: todas</option>
+            <option value="Meta Ads">Meta Ads</option>
+            <option value="Facebook Ads">Facebook Ads</option>
+            <option value="Instagram Ads">Instagram Ads</option>
+            <option value="WhatsApp Orgânico">WhatsApp Orgânico</option>
+            <option value="Origem Não Identificada">Origem Não Identificada</option>
+          </select>
         </div>
 
         <div class="upsell-strip" data-plan-free>
@@ -286,6 +301,13 @@
         </div>
         <div class="toolbar">
           <input id="crm-search" type="text" placeholder="Buscar por nome ou telefone..." class="search-input" />
+          <select id="crm-f-class" class="search-input" style="max-width:13rem" aria-label="Situação comercial">
+            <option value="">Situação: todas</option>
+            <option value="qualificado">Lead Qualificado</option>
+            <option value="desqualificado">Lead Desqualificado</option>
+            <option value="em_qualificacao">Em Qualificação</option>
+            <option value="sem_classificacao">Sem classificação</option>
+          </select>
         </div>
         <div class="upsell-strip" data-plan-free>
           <div>
@@ -371,6 +393,7 @@
               <button data-cpt="resumo" class="active">Resumo</button>
               <button data-cpt="agendamentos" class="biz-clinica-only">Agendamentos</button>
               <button data-cpt="automacoes">Rotinas automáticas</button>
+              <button data-cpt="origem">Origem e qualificação</button>
               <button data-cpt="timeline">Linha do tempo</button>
               <button type="button" id="cp-open-chat" class="btn-chat-action">Abrir atendimento</button>
               <button type="button" id="cp-schedule" class="btn-brand btn-brand--primary btn-brand--sm biz-clinica-only">Agendar</button>
@@ -439,6 +462,8 @@
               <div class="cp-section-title" style="margin-top:1rem">Já recebeu</div>
               <div id="cp-auto-sent"></div>
             </div>
+
+            <div id="cpt-origem" class="contact-panel-body"></div>
 
             <div id="cpt-timeline" class="contact-panel-body">
               <div id="cp-timeline"></div>
@@ -609,6 +634,33 @@
               <thead><tr><th>Profissional</th><th>Concluídos</th><th>Faturamento</th><th>No-show</th></tr></thead>
               <tbody id="rp-prof"></tbody>
             </table>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:1rem" id="ads-card">
+          <h3>Desempenho dos Anúncios</h3>
+          <p class="hint" id="ads-criteria" style="margin-top:0"></p>
+          <div class="toolbar" id="ads-filters" style="flex-wrap:wrap;gap:0.5rem">
+            <select id="ads-f-campaign" class="search-input" style="max-width:15rem" aria-label="Campanha"></select>
+            <select id="ads-f-adset" class="search-input" style="max-width:15rem" aria-label="Conjunto de anúncios"></select>
+            <select id="ads-f-ad" class="search-input" style="max-width:15rem" aria-label="Anúncio"></select>
+            <select id="ads-f-staff" class="search-input" style="max-width:13rem" aria-label="Atendente"></select>
+            <select id="ads-f-status" class="search-input" style="max-width:13rem" aria-label="Status comercial">
+              <option value="">Status: todos</option>
+              <option value="qualificado">Qualificado</option>
+              <option value="desqualificado">Desqualificado</option>
+              <option value="em_qualificacao">Em qualificação</option>
+              <option value="sem_classificacao">Sem classificação</option>
+            </select>
+          </div>
+          <table>
+            <thead><tr><th>Anúncio</th><th>Leads</th><th>Qualificados</th><th>Desqualificados</th><th>Agendamentos</th><th>Vendas</th></tr></thead>
+            <tbody id="ads-body"></tbody>
+          </table>
+          <div id="ads-empty" class="hint" style="display:none;text-align:center;padding:1rem 0">Nenhum lead de anúncio no período. A atribuição só aparece quando o WhatsApp entrega o ID do anúncio na primeira mensagem.</div>
+          <div id="ads-pending-card" hidden style="margin-top:1rem">
+            <div class="section-header">Sugestões da IA para revisar</div>
+            <div id="ads-pending"></div>
           </div>
         </div>
 
@@ -1622,6 +1674,18 @@
             <label class="checkbox-row"><input type="checkbox" id="meta-pixel-enabled" /> Ativar Pixel (navegador) — sem efeito nesta versão, guardado para o futuro</label>
             <label class="checkbox-row"><input type="checkbox" id="meta-capi-enabled" /> <strong>Ativar API de Conversões</strong> (liga o envio dos eventos do servidor)</label>
 
+            <div class="section-header" style="margin-top:1rem"><span class="nav-icon" data-icon="chart"></span> Mensagens comerciais (WhatsApp / Click-to-WhatsApp)</div>
+            <p class="hint" style="margin-top:0">Devolve à Meta, pelo clique original do anúncio (<code>ctwa_clid</code>), o evento <strong>QualifiedLead</strong> (lead qualificado) e <strong>Purchase</strong> (venda). Exige a API oficial do WhatsApp (WABA), um dataset ligado a ele e um token com a permissão <code>whatsapp_business_manage_events</code>. Desqualificação e agendamento não têm evento oficial nessa API: ficam só na Alice.</p>
+            <div class="broadcast-form-row">
+              <label style="flex:1">ID do WhatsApp Business (WABA)
+                <input id="meta-waba" type="text" inputmode="numeric" placeholder="Só números" />
+              </label>
+              <label style="flex:1">ID do dataset do WABA
+                <input id="meta-msg-dataset" type="text" inputmode="numeric" placeholder="Só números" />
+              </label>
+            </div>
+            <label class="checkbox-row"><input type="checkbox" id="meta-messaging-enabled" /> <strong>Ativar envio para mensagens comerciais</strong> (separado do envio atual do site)</label>
+
             <div class="section-header" style="margin-top:1rem"><span class="nav-icon" data-icon="grid"></span> Mapeamento das etapas da Jornada</div>
             <p class="hint" style="margin-top:0">As colunas são identificadas pelo ID interno da etapa — não quebra se você renomear a coluna.</p>
             <div class="broadcast-form-row">
@@ -1642,6 +1706,22 @@
               <span id="meta-status" class="hint" style="margin:0"></span>
             </div>
           </form>
+
+          <div class="card" id="ads-settings-card" style="margin-top:1.4rem">
+            <div class="section-header">Qualificação de leads e anúncios</div>
+            <label>Critérios comerciais desta empresa (a IA usa só isto para sugerir; deixe vazio para o padrão)
+              <textarea id="ads-criteria-input" rows="4" placeholder="Ex.: qualificado = pediu valor ou horário; desqualificado = vaga de emprego, fornecedor, teste."></textarea>
+            </label>
+            <label class="checkbox-row"><input type="checkbox" id="ads-ai-enabled" /> Sugerir a classificação dos leads automaticamente (a sugestão fica pendente de revisão humana)</label>
+            <label class="checkbox-row"><input type="checkbox" id="ads-auto-approve" /> Aprovar as sugestões da IA automaticamente (fica registrado no histórico; envia QualifiedLead sem revisão)</label>
+            <div class="broadcast-form-row" style="align-items:center;margin-top:0.6rem;flex-wrap:wrap">
+              <button type="button" id="ads-settings-save" class="btn-brand btn-brand--primary btn-brand--sm">Salvar</button>
+              <button type="button" id="ads-btn-resolve" class="btn-brand btn-brand--secondary btn-brand--sm">Buscar nomes dos anúncios</button>
+              <button type="button" id="ads-btn-backfill" class="btn-brand btn-brand--secondary btn-brand--sm">Aplicar etiquetas a todos os leads</button>
+              <button type="button" id="ads-btn-requeue" class="btn-brand btn-brand--secondary btn-brand--sm">Reavaliar eventos não elegíveis</button>
+              <span id="ads-settings-status" class="hint" style="margin:0"></span>
+            </div>
+          </div>
 
           <div class="section-header" style="margin-top:1.4rem"><span class="nav-icon" data-icon="chart"></span> Diagnóstico</div>
           <div class="stat-grid" id="meta-diag-grid" style="margin-bottom:1rem"></div>

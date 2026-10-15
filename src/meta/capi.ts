@@ -11,7 +11,8 @@ export interface CapiEvent {
   event_name: string;
   event_time: number; // unix seconds
   event_id: string;
-  action_source: "website";
+  action_source: "website" | "business_messaging";
+  messaging_channel?: "whatsapp"; // so em business_messaging
   event_source_url?: string;
   user_data: Record<string, unknown>;
   custom_data?: Record<string, unknown>;
@@ -60,9 +61,11 @@ export async function sendCapiEvent(
   config: Pick<MetaConfig, "pixelId" | "accessTokenEnc" | "graphVersion">,
   event: CapiEvent,
   testEventCode?: string | null,
+  datasetOverride?: string | null, // mensagens comerciais: o dataset do WABA (no lugar do pixel do site)
 ): Promise<CapiResult> {
-  if (!config.pixelId || !config.accessTokenEnc) {
-    return { ok: false, httpStatus: 0, error: "Pixel/token nao configurados", permanent: true };
+  const datasetId = datasetOverride || config.pixelId;
+  if (!datasetId || !config.accessTokenEnc) {
+    return { ok: false, httpStatus: 0, error: datasetOverride === undefined ? "Pixel/token nao configurados" : "Dataset/token nao configurados", permanent: true };
   }
 
   let token: string;
@@ -72,7 +75,7 @@ export async function sendCapiEvent(
     return { ok: false, httpStatus: 0, error: "Nao foi possivel ler o token (chave de criptografia mudou?)", permanent: true };
   }
 
-  const url = `https://graph.facebook.com/${graphVersionOf(config)}/${encodeURIComponent(config.pixelId)}/events`;
+  const url = `https://graph.facebook.com/${graphVersionOf(config)}/${encodeURIComponent(datasetId)}/events`;
   const payload: Record<string, unknown> = { data: [event], access_token: token };
   if (testEventCode) payload.test_event_code = testEventCode;
 

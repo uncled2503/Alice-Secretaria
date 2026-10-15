@@ -65,6 +65,9 @@ model Clinic {
   npsEvaluationMessage String? // mensagem da pesquisa de satisfacao quando o atendimento concluido e uma AVALIACAO (procedimento com "avalia" no nome); null = usa npsMessage
   aiModel              String? // modelo da OpenAI so desta clinica (admin); null = padrao do servidor (OPENAI_MODEL). Ver chatModelFor em ai/alice.ts
   humanReturnMinutes   Int     @default(0) // > 0 = se a equipe assumiu a conversa, a pessoa escreveu e ninguem respondeu em N min, a Alice volta a atender (src/crm/humanReturn.ts); 0 = desligado
+  qualificationCriteria String? // criterios COMERCIAIS (texto livre) que a IA usa pra SUGERIR qualificado/desqualificado; nunca dado de saude
+  qualificationAi       Boolean @default(false) // liga o robo que sugere a classificacao dos leads (a sugestao fica pendente de revisao humana)
+  qualificationAutoApprove Boolean @default(false) // aprovacao automatica das sugestoes da IA (explicita e auditavel: grava "aprovacao automatica" no historico)
   tagLeadOrigin        Boolean @default(false) // true = todo contato novo ganha a etiqueta "Lead <campanha> | dd/mm/aaaa" no CRM (src/crm/leadTag.ts)
   silentHandoff        Boolean @default(false) // true = quando a Alice nao sabe responder ela FICA EM SILENCIO (a equipe ve a mensagem nao respondida) em vez de avisar que vai transferir
   humanizedTone        Boolean @default(false) // true = escreve como recepcionista de verdade e nao se apresenta como IA por conta propria (se perguntarem direto, nao nega)
@@ -163,6 +166,12 @@ model MetaConfig {
   pixelEnabled      Boolean  @default(false)
   capiEnabled       Boolean  @default(false) // chave mestra dos eventos do servidor
 
+  // API de Conversoes para MENSAGENS COMERCIAIS (WhatsApp / Click-to-WhatsApp): exige WhatsApp Business Platform (WABA) e um dataset ligado a ele.
+  // Desligado por padrao; o envio atual ("website") continua exatamente como era.
+  messagingEnabled   Boolean @default(false)
+  wabaId             String? // WhatsApp Business Account ID
+  messagingDatasetId String? // dataset do WABA (GET /{waba_id}/dataset)
+
   // Mapeamento das etapas do CRM -> pelo stageId (estavel se renomear a coluna)
   stageQualified    String?
   stageDisqualified String?
@@ -185,6 +194,7 @@ model MetaEvent {
   eventId       String    // id estavel de deduplicacao (ex "lead:<patientId>")
   eventName     String    // Lead | Schedule | CRMStageChanged | DisqualifiedLead | QualifiedLead
   source        String    @default("server") // server (nao ha pixel de navegador nesta versao)
+  channel       String    @default("website") // website (pixel/dataset do site) | business_messaging (WhatsApp, via WABA)
   leadId        String?   // Patient.id
   payload       String    // JSON sanitizado do evento (user_data ja com hash, sem token, sem PII crua)
   status        String    @default("pending") // pending | processing | processed | error | dead
@@ -505,6 +515,12 @@ model Patient {
 
   createdAt     DateTime  @default(now())
 
+  // Classificacao comercial ATUAL do lead (a ultima CONFIRMADA em LeadClassification). Nunca "qualificado" e "desqualificado" ao mesmo tempo.
+  leadClass     String?   // em_qualificacao | qualificado | desqualificado (null = ainda sem classificacao)
+  leadClassAt   DateTime?
+  adAttributions AdAttribution[]
+  leadClassifications LeadClassification[]
+
   // Card do CRM (modal "detalhes do lead" no quadro): dados comerciais que nao
   // vem da conversa - a equipe preenche na mao. Nada disso afeta a Alice.
   estimatedValue  Float?    // valor estimado do negocio, em reais
@@ -576,6 +592,7 @@ model Tag {
   clinic    Clinic       @relation(fields: [clinicId], references: [id])
   label     String
   color     String       @default("#8b5cf6")
+  system    Boolean      @default(false) // etiqueta automatica (origem/qualificacao): mantida pelo sistema
   createdAt DateTime     @default(now())
 
   patients  PatientTag[]
@@ -1083,4 +1100,75 @@ model JobLock {
   name      String   @id
   holder    String
   expiresAt DateTime
+}
+
+// ---------------------------------------------------------------------------
+// ATRIBUICAO DE ANUNCIOS (Click-to-WhatsApp). Uma linha por ENTRADA atribuivel (um clique/anuncio): o mesmo contato pode voltar por outro anuncio sem
+// apagar a origem anterior. Primeira origem = a mais antiga; origem da conversa atual = a mais recente; a conversao e ligada a uma entrada
+// (LeadClassification.attributionId). Nunca se infere anuncio por palavra-chave: so existe linha quando o referral trouxe source_id ou ctwa_clid.
+// ---------------------------------------------------------------------------
+model AdAttribution {
+  id                String   @id @default(cuid())
+  clinicId          String
+  patientId         String
+  patient           Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  conversationId    String?
+  messageExternalId String?  // id da mensagem no WhatsApp (reprocessar o webhook nao grava de novo)
+  receivedAt        DateTime
+  sourceId          String?  // referral.source_id = ID do anuncio
+  sourceType        String?  // referral.source_type (ad | post)
+  ctwaClid          String?  // identificador do clique
+  headline          String?
+  body              String?
+  sourceUrl         String?
+  mediaType         String?
+  platform          String?  // facebook | instagram (so quando da pra saber pela URL); null = Meta Ads sem plataforma
+  wabaId            String?  // WhatsApp Business Account ID (so existe na API oficial)
+  rawKeys           String?  // nomes dos campos recebidos (diagnostico; sem valores)
+  entryKind         String   @default("first") // first | new_ad | new_click
+  createdAt         DateTime @default(now())
+
+  @@unique([clinicId, messageExternalId])
+  @@index([patientId, receivedAt])
+  @@index([clinicId, sourceId])
+}
+
+// Nomes do anuncio/conjunto/campanha, buscados na Marketing API pelo source_id (o webhook NAO entrega esses nomes).
+model AdCatalog {
+  id           String   @id @default(cuid())
+  clinicId     String
+  sourceId     String
+  adName       String?
+  adsetName    String?
+  campaignName String?
+  status       String   @default("pending") // pending | resolved | unavailable
+  attempts     Int      @default(0)
+  error        String?
+  checkedAt    DateTime?
+  createdAt    DateTime @default(now())
+
+  @@unique([clinicId, sourceId])
+}
+
+// Historico de classificacoes comerciais do lead (quem, quando, por que). A atual = a ultima confirmada e nao substituida.
+model LeadClassification {
+  id            String   @id @default(cuid())
+  clinicId      String
+  patientId     String
+  patient       Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  status        String   // em_qualificacao | qualificado | desqualificado
+  reasonCode    String?  // interesse_real | pediu_agendamento | pediu_orcamento | quer_continuar | sem_interesse | fora_do_perfil | teste_ou_spam | vaga_emprego | outro
+  reason        String?  // motivo comercial objetivo (nunca dado de saude)
+  source        String   // manual | etapa | ia
+  confirmed     Boolean  @default(true) // false = sugestao da IA aguardando revisao humana (nao vira tag nem evento)
+  actorName     String?  // quem confirmou/classificou (null = sistema)
+  attributionId String?  // entrada de anuncio a que esta classificacao se refere (origem atribuida a conversao)
+  metaStatus    String?  // situacao do feedback pra Meta: enfileirado | enviado | somente_crm: ... | nao_elegivel: ...
+  metaEventId   String?  // MetaEvent.eventId
+  supersededAt  DateTime?
+  createdAt     DateTime @default(now())
+  decidedAt     DateTime?
+
+  @@index([patientId, createdAt])
+  @@index([clinicId, confirmed, createdAt])
 }

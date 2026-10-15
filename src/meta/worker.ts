@@ -21,9 +21,14 @@ function sanitizeResponse(r: { httpStatus: number; eventsReceived?: number; fbtr
   });
 }
 
-async function processOne(eventRow: { id: string; clinicId: string; eventId: string; payload: string; attempts: number; testEventCode: string | null }): Promise<void> {
+async function processOne(eventRow: { id: string; clinicId: string; eventId: string; payload: string; attempts: number; testEventCode: string | null; channel: string }): Promise<void> {
   const config = await prisma.metaConfig.findUnique({ where: { clinicId: eventRow.clinicId } });
-  if (!config || !config.capiEnabled || !config.pixelId || !config.accessTokenEnc) {
+  const messaging = eventRow.channel === "business_messaging";
+  // Mensagens comerciais (WhatsApp) tem chave propria (messagingEnabled) e usa o dataset do WABA; o envio "website" segue como sempre.
+  const ready = messaging
+    ? !!config && config.messagingEnabled && !!config.messagingDatasetId && !!config.accessTokenEnc
+    : !!config && config.capiEnabled && !!config.pixelId && !!config.accessTokenEnc;
+  if (!config || !ready) {
     await prisma.metaEvent.update({
       where: { id: eventRow.id },
       data: { status: "dead", lastError: "Meta desativada ou sem credenciais quando o evento seria enviado" },
@@ -39,7 +44,7 @@ async function processOne(eventRow: { id: string; clinicId: string; eventId: str
     return;
   }
 
-  const result = await sendCapiEvent(config, event, eventRow.testEventCode);
+  const result = await sendCapiEvent(config, event, eventRow.testEventCode, messaging ? config.messagingDatasetId : undefined);
   const attempts = eventRow.attempts + 1;
 
   if (result.ok) {
@@ -72,7 +77,7 @@ export async function processMetaEventQueue(): Promise<{ processed: number }> {
       where: dueEventsFilter(),
       orderBy: { createdAt: "asc" },
       take: BATCH,
-      select: { id: true, clinicId: true, eventId: true, payload: true, attempts: true, testEventCode: true },
+      select: { id: true, clinicId: true, eventId: true, payload: true, attempts: true, testEventCode: true, channel: true },
     });
     for (const row of due) {
       // trava otimista: so pega se ainda estiver retryable

@@ -527,8 +527,15 @@ state.contactsShown = CONTACTS_PAGE;
 
 function contactsFiltered() {
   const q = (document.getElementById("contacts-search").value || "").trim().toLowerCase();
+  const cls = document.getElementById("contacts-f-class")?.value || "";
+  const origin = document.getElementById("contacts-f-origin")?.value || "";
   const all = state.contacts || [];
-  return q ? all.filter((c) => (c.name ?? "").toLowerCase().includes(q) || c.phone.includes(q)) : all;
+  return all.filter(
+    (c) =>
+      (!q || (c.name ?? "").toLowerCase().includes(q) || c.phone.includes(q)) &&
+      (!cls || (cls === "sem_classificacao" ? !c.leadClass : c.leadClass === cls)) &&
+      (!origin || (c.tags || []).some((t) => t.label === origin)),
+  );
 }
 
 async function loadContacts() {
@@ -600,6 +607,12 @@ document.getElementById("contacts-search").addEventListener("input", () => {
   state.contactsShown = CONTACTS_PAGE;
   renderContactsTable(contactsFiltered());
 });
+for (const id of ["contacts-f-class", "contacts-f-origin"]) {
+  document.getElementById(id).addEventListener("change", () => {
+    state.contactsShown = CONTACTS_PAGE;
+    renderContactsTable(contactsFiltered());
+  });
+}
 
 document.getElementById("btn-toggle-contact-form").addEventListener("click", () => {
   const form = document.getElementById("contact-form");
@@ -709,9 +722,12 @@ function renderCrmBoard(columns, query) {
   board.innerHTML = "";
 
   for (const col of columns) {
-    const patients = q
-      ? col.patients.filter((p) => (p.name ?? "").toLowerCase().includes(q) || p.phone.includes(q))
-      : col.patients;
+    const clsFilter = document.getElementById("crm-f-class")?.value || "";
+    const patients = col.patients.filter(
+      (p) =>
+        (!q || (p.name ?? "").toLowerCase().includes(q) || p.phone.includes(q)) &&
+        (!clsFilter || (clsFilter === "sem_classificacao" ? !p.leadClass : p.leadClass === clsFilter)),
+    );
 
     const cardsBox = el("div", { class: "crm-cards-drop" });
     const crmLimit = state.crmShown[col.id] || CRM_COL_PAGE;
@@ -794,6 +810,9 @@ function renderCrmBoard(columns, query) {
 
 document.getElementById("crm-search").addEventListener("input", (e) => {
   if (state.crmColumns) renderCrmBoard(state.crmColumns, e.target.value);
+});
+document.getElementById("crm-f-class").addEventListener("change", () => {
+  if (state.crmColumns) renderCrmBoard(state.crmColumns, document.getElementById("crm-search").value);
 });
 
 const STAGE_KIND_LABELS = {
@@ -1697,7 +1716,161 @@ async function openContactPanel(patient) {
   renderCpTimeline(dossier.timeline);
 }
 
+// --- Origem do lead e classificação comercial (aba "Origem e qualificação" do contato) ---
+const LEAD_CLASS_LABEL = { qualificado: "Qualificado", desqualificado: "Desqualificado", em_qualificacao: "Em qualificação" };
+const LEAD_CLASS_COLOR = { qualificado: "#15803d", desqualificado: "#dc2626", em_qualificacao: "#f59e0b" };
+const REASON_LABEL = {
+  interesse_real: "Interesse real no serviço",
+  pediu_agendamento: "Pediu ou aceitou agendar",
+  pediu_orcamento: "Pediu valor ou orçamento",
+  quer_continuar: "Quer continuar o atendimento",
+  sem_interesse: "Declarou falta de interesse",
+  fora_do_perfil: "Fora do perfil atendido",
+  teste_ou_spam: "Contato de teste ou spam",
+  vaga_emprego: "Vaga de emprego (não é cliente)",
+  outro: "Outro motivo comercial",
+};
+const SOURCE_LABEL = { manual: "manual", etapa: "mudança de etapa", ia: "sugestão da IA" };
+
+function kvRow(label, value) {
+  return el("div", { class: "cp-kv-row" }, [el("span", { class: "cp-kv-label" }, [label]), el("span", {}, [value || "—"])]);
+}
+
+function classBadge(status) {
+  if (!status) return el("span", { class: "badge badge-neutral" }, ["Sem classificação"]);
+  return el("span", { class: "badge", style: `background:${LEAD_CLASS_COLOR[status] || "#64748b"};color:#fff` }, [LEAD_CLASS_LABEL[status] || status]);
+}
+
+async function loadCpOrigin() {
+  const box = document.getElementById("cpt-origem");
+  if (!cpState.patientId) return;
+  box.innerHTML = "";
+  box.appendChild(el("p", { class: "hint" }, ["Carregando…"]));
+  let d;
+  try {
+    d = await api(`/ads/lead/${cpState.patientId}`);
+  } catch {
+    box.innerHTML = "";
+    box.appendChild(el("p", { class: "hint" }, ["Não consegui carregar a origem deste lead."]));
+    return;
+  }
+  box.innerHTML = "";
+
+  // ----- Origem do lead -----
+  const fmt = (x) => (x ? new Date(x).toLocaleString("pt-BR") : "—");
+  const cur = d.current;
+  const origin = el("div", { class: "card", style: "margin:0 0 0.9rem;padding:0.8rem" }, [
+    el("div", { class: "section-header", style: "margin:0 0 0.5rem" }, ["Origem do lead"]),
+    kvRow("Origem", d.origin || "Não identificada (orgânico ou sem dados do anúncio)"),
+    ...(cur
+      ? [
+          kvRow("Plataforma", cur.platform === "instagram" ? "Instagram" : cur.platform === "facebook" ? "Facebook" : "Meta Ads (plataforma não identificada)"),
+          kvRow("Nome do anúncio", cur.adName || cur.headline || "ainda não identificado"),
+          kvRow("ID do anúncio", cur.adId || "—"),
+          kvRow("Campanha", cur.campaignName || "ainda não identificada"),
+          kvRow("Conjunto de anúncios", cur.adsetName || "ainda não identificado"),
+          kvRow("Data da entrada", fmt(cur.receivedAt)),
+        ]
+      : []),
+    kvRow("Status de atribuição", d.attribution),
+  ]);
+  if (cur && cur.note) origin.appendChild(el("p", { class: "hint", style: "margin:0.4rem 0 0" }, [cur.note]));
+  if (d.entries.length > 1) {
+    origin.appendChild(el("div", { class: "cp-section-title", style: "margin-top:0.7rem" }, [`Entradas por anúncio (${d.entries.length})`]));
+    for (const e of d.entries) {
+      origin.appendChild(
+        el("div", { class: "hint", style: "margin:0.2rem 0" }, [
+          `${fmt(e.receivedAt)} — ${e.label}${e.entryKind === "first" ? " (primeira origem)" : e.entryKind === "new_ad" ? " (voltou por outro anúncio)" : " (novo clique)"}${e.id === cur.id ? " · origem atual" : ""}`,
+        ])
+      );
+    }
+  }
+  box.appendChild(origin);
+
+  // ----- Classificação comercial -----
+  const c = d.classification;
+  const cls = el("div", { class: "card", style: "margin:0 0 0.9rem;padding:0.8rem" }, [
+    el("div", { class: "section-header", style: "margin:0 0 0.5rem" }, ["Classificação comercial"]),
+    el("div", { style: "display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap" }, [classBadge(c.current), c.currentAt ? el("span", { class: "hint", style: "margin:0" }, [`desde ${fmt(c.currentAt)}`]) : ""]),
+  ]);
+
+  if (c.pending) {
+    const p = c.pending;
+    const row = el("div", { class: "cp-pending" }, [
+      el("strong", {}, [`A IA sugere: ${LEAD_CLASS_LABEL[p.status] || p.status}`]),
+      el("div", { class: "hint", style: "margin:0.2rem 0" }, [`Motivo: ${p.reason || REASON_LABEL[p.reasonCode] || "—"} · só vale depois da sua confirmação (nada foi enviado à Meta).`]),
+    ]);
+    const ok = el("button", { type: "button", class: "btn-brand btn-brand--primary btn-brand--sm" }, ["Confirmar"]);
+    const no = el("button", { type: "button", class: "btn-brand btn-brand--secondary btn-brand--sm" }, ["Rejeitar"]);
+    ok.addEventListener("click", async () => { await api(`/ads/classifications/${p.id}/confirm`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); await afterClassifyChange(); });
+    no.addEventListener("click", async () => { await api(`/ads/classifications/${p.id}/reject`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); await afterClassifyChange(); });
+    row.append(el("div", { style: "display:flex;gap:0.4rem;margin-top:0.3rem" }, [ok, no]));
+    cls.appendChild(row);
+  }
+
+  // classificar na mão
+  const statusSel = el("select", { id: "cpo-status" }, [
+    el("option", { value: "qualificado" }, ["Qualificado"]),
+    el("option", { value: "desqualificado" }, ["Desqualificado"]),
+    el("option", { value: "em_qualificacao" }, ["Em qualificação"]),
+  ]);
+  const reasonSel = el("select", { id: "cpo-reason-code" }, Object.entries(REASON_LABEL).map(([k, v]) => el("option", { value: k }, [v])));
+  const reasonText = el("input", { id: "cpo-reason", type: "text", placeholder: "Motivo comercial (obrigatório para qualificar ou desqualificar)", style: "width:100%" });
+  const save = el("button", { type: "button", class: "btn-brand btn-brand--primary btn-brand--sm" }, ["Salvar classificação"]);
+  const suggest = el("button", { type: "button", class: "btn-brand btn-brand--secondary btn-brand--sm" }, ["Pedir sugestão da IA"]);
+  const msg = el("span", { class: "hint", style: "margin:0" }, []);
+  save.addEventListener("click", async () => {
+    msg.textContent = "Salvando…";
+    try {
+      await api(`/ads/lead/${cpState.patientId}/classify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: statusSel.value, reasonCode: reasonSel.value, reason: reasonText.value.trim() || REASON_LABEL[reasonSel.value] }),
+        silentStatuses: [400],
+      });
+      await afterClassifyChange();
+    } catch (err) {
+      msg.textContent = err.detail || "Não foi possível salvar.";
+    }
+  });
+  suggest.addEventListener("click", async () => {
+    msg.textContent = "Lendo a conversa…";
+    const r = await api(`/ads/lead/${cpState.patientId}/suggest`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    if (r.suggestion) await loadCpOrigin();
+    else msg.textContent = `Sem sugestão: ${r.skipped || "sem sinal comercial claro"}.`;
+  });
+  cls.append(
+    el("div", { class: "cp-section-title", style: "margin-top:0.8rem" }, ["Classificar"]),
+    el("div", { style: "display:flex;gap:0.5rem;flex-wrap:wrap;margin:0.3rem 0" }, [statusSel, reasonSel]),
+    reasonText,
+    el("div", { style: "display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-top:0.5rem" }, [save, suggest, msg]),
+  );
+
+  // histórico
+  if (c.history.length) {
+    cls.appendChild(el("div", { class: "cp-section-title", style: "margin-top:0.9rem" }, ["Histórico"]));
+    for (const h of c.history) {
+      cls.appendChild(
+        el("div", { class: "cp-hist-row" }, [
+          el("div", {}, [classBadge(h.status), " ", el("span", { class: "hint", style: "margin:0" }, [`${fmt(h.decidedAt || h.createdAt)} · ${SOURCE_LABEL[h.source] || h.source}${h.actorName ? ` · ${h.actorName}` : ""}${h.confirmed ? "" : " · não confirmada"}${h.current ? " · atual" : ""}`])]),
+          el("div", { class: "hint", style: "margin:0.1rem 0 0" }, [h.reason || REASON_LABEL[h.reasonCode] || "sem motivo informado"]),
+          h.metaStatus ? el("div", { class: "hint", style: "margin:0.1rem 0 0" }, [`Meta: ${h.metaStatus.replace(/^somente_crm:/, "somente na Alice:").replace(/^nao_elegivel:/, "não elegível:")}`]) : "",
+        ])
+      );
+    }
+  }
+  box.appendChild(cls);
+}
+
+async function afterClassifyChange() {
+  await loadCpOrigin();
+  // etiquetas automáticas mudaram: atualiza as listas que mostram etiquetas
+  loadTabData("contacts", true).catch(() => {});
+  if (state.crmColumns) loadCrmBoard().catch(() => {});
+}
+
 function switchCpTab(name) {
+  if (name === "origem") loadCpOrigin();
   document.querySelectorAll("#cp-tabs button[data-cpt]").forEach((b) => b.classList.toggle("active", b.dataset.cpt === name));
   document.querySelectorAll(".contact-panel-body").forEach((p) => p.classList.toggle("active", p.id === `cpt-${name}`));
 }
@@ -4614,10 +4787,105 @@ function kpiCard(label, value, hint) {
   ]);
 }
 
+// --- Desempenho dos Anúncios (Resultados) ---
+state.adsFilters = { campaign: "", adset: "", adId: "", staffId: "", status: "" };
+let adsStaffLoaded = false;
+
+async function loadAdsReport(start, end) {
+  const body = document.getElementById("ads-body");
+  if (!body) return;
+  const f = state.adsFilters;
+  const qs = new URLSearchParams({ start: start.toISOString(), end: end.toISOString() });
+  for (const [k, v] of Object.entries(f)) if (v) qs.set(k, v);
+  let d;
+  try {
+    d = await api(`/reports/ads?${qs.toString()}`);
+  } catch {
+    return;
+  }
+  document.getElementById("ads-criteria").textContent = d.criteria;
+
+  const fillSelect = (id, first, values, current) => {
+    const sel = document.getElementById(id);
+    sel.innerHTML = "";
+    sel.appendChild(el("option", { value: "" }, [first]));
+    for (const v of values) sel.appendChild(el("option", { value: v.value }, [v.label]));
+    sel.value = current || "";
+  };
+  fillSelect("ads-f-campaign", "Campanha: todas", d.options.campaigns.map((c) => ({ value: c, label: c })), f.campaign);
+  fillSelect("ads-f-adset", "Conjunto: todos", d.options.adsets.map((c) => ({ value: c, label: c })), f.adset);
+  fillSelect("ads-f-ad", "Anúncio: todos", d.options.ads.map((a) => ({ value: a.id, label: a.label })), f.adId);
+  if (!adsStaffLoaded) {
+    adsStaffLoaded = true;
+    try {
+      const staff = await api("/staff", { silentStatuses: [403] });
+      fillSelect("ads-f-staff", "Atendente: todos", staff.map((s) => ({ value: s.id, label: s.name })), f.staffId);
+    } catch {
+      document.getElementById("ads-f-staff").hidden = true;
+    }
+  }
+
+  body.innerHTML = "";
+  const num = (n) => String(n);
+  const rate = (n, r) => `${n} (${r}%)`;
+  for (const r of d.rows) {
+    body.appendChild(
+      el("tr", {}, [
+        el("td", {}, [
+          el("div", {}, [r.label]),
+          el("div", { class: "hint", style: "margin:0" }, [[r.campaignName, r.adsetName].filter(Boolean).join(" › ") || (r.nameStatus === "identificado" ? "" : "nome ainda não identificado")]),
+        ]),
+        el("td", {}, [num(r.leads)]),
+        el("td", {}, [rate(r.qualified, r.qualifiedRate)]),
+        el("td", {}, [rate(r.disqualified, r.disqualifiedRate)]),
+        el("td", {}, [rate(r.scheduled, r.scheduledRate)]),
+        el("td", {}, [r.soldRate == null ? "—" : rate(r.sold, r.soldRate)]),
+      ])
+    );
+  }
+  if (d.rows.length) {
+    const t = d.totals;
+    body.appendChild(el("tr", { style: "font-weight:700" }, [el("td", {}, ["Total"]), el("td", {}, [num(t.leads)]), el("td", {}, [num(t.qualified)]), el("td", {}, [num(t.disqualified)]), el("td", {}, [num(t.scheduled)]), el("td", {}, [num(t.sold)])]));
+  }
+  document.getElementById("ads-empty").style.display = d.rows.length ? "none" : "block";
+
+  // sugestões da IA aguardando revisão
+  try {
+    const pending = await api("/ads/pending");
+    const box = document.getElementById("ads-pending");
+    box.innerHTML = "";
+    document.getElementById("ads-pending-card").hidden = !pending.length;
+    for (const p of pending) {
+      const ok = el("button", { type: "button", class: "btn-brand btn-brand--primary btn-brand--sm" }, ["Confirmar"]);
+      const no = el("button", { type: "button", class: "btn-brand btn-brand--secondary btn-brand--sm" }, ["Rejeitar"]);
+      const act = async (kind) => {
+        await api(`/ads/classifications/${p.id}/${kind}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+        loadAdsReport(start, end);
+      };
+      ok.addEventListener("click", () => act("confirm"));
+      no.addEventListener("click", () => act("reject"));
+      box.appendChild(el("div", { class: "cp-hist-row", style: "display:flex;justify-content:space-between;gap:0.6rem;align-items:center;flex-wrap:wrap" }, [
+        el("div", {}, [el("strong", {}, [p.patient.name || p.patient.phone]), el("div", { class: "hint", style: "margin:0" }, [`${LEAD_CLASS_LABEL[p.status] || p.status} — ${p.reason || ""}`])]),
+        el("div", { style: "display:flex;gap:0.4rem" }, [ok, no]),
+      ]));
+    }
+  } catch {
+    // sem permissão de ver as sugestões: só não mostra
+  }
+}
+
+for (const [id, key] of [["ads-f-campaign", "campaign"], ["ads-f-adset", "adset"], ["ads-f-ad", "adId"], ["ads-f-staff", "staffId"], ["ads-f-status", "status"]]) {
+  document.getElementById(id)?.addEventListener("change", (e) => {
+    state.adsFilters[key] = e.target.value;
+    loadReports();
+  });
+}
+
 async function loadReports() {
   const end = new Date();
   const start = new Date(end.getTime() - state.reportDays * 24 * 60 * 60_000);
   document.getElementById("rp-range").textContent = `${start.toLocaleDateString("pt-BR")} — ${end.toLocaleDateString("pt-BR")}`;
+  loadAdsReport(start, end).catch(() => {});
   let d;
   try {
     d = await api(`/reports?start=${start.toISOString()}&end=${end.toISOString()}`);
@@ -7100,6 +7368,10 @@ async function loadMetaConfig() {
   document.getElementById("meta-testcode-warning").hidden = !c.testEventCode;
   document.getElementById("meta-pixel-enabled").checked = !!c.pixelEnabled;
   document.getElementById("meta-capi-enabled").checked = !!c.capiEnabled;
+  document.getElementById("meta-waba").value = c.wabaId || "";
+  document.getElementById("meta-msg-dataset").value = c.messagingDatasetId || "";
+  document.getElementById("meta-messaging-enabled").checked = !!c.messagingEnabled;
+  loadAdsSettings().catch(() => {});
   document.getElementById("meta-stage-qualified").value = c.stageQualified || "";
   document.getElementById("meta-stage-disqualified").value = c.stageDisqualified || "";
   document.getElementById("meta-stage-won").value = c.stageWon || "";
@@ -7114,6 +7386,62 @@ async function loadMetaConfig() {
   loadMetaEvents();
 }
 
+async function loadAdsSettings() {
+  const s = await api("/ads/settings");
+  document.getElementById("ads-criteria-input").value = s.criteria || "";
+  document.getElementById("ads-criteria-input").placeholder = "Padrão: " + s.defaultCriteria.slice(0, 120) + "…";
+  document.getElementById("ads-ai-enabled").checked = !!s.ai;
+  document.getElementById("ads-auto-approve").checked = !!s.autoApprove;
+}
+
+document.getElementById("ads-settings-save").addEventListener("click", async () => {
+  const st = document.getElementById("ads-settings-status");
+  if (document.getElementById("ads-auto-approve").checked && !(await showConfirm("Aprovar as sugestões da IA automaticamente? Os leads passam a ser qualificados (e o QualifiedLead enviado à Meta, quando elegível) sem revisão humana. Fica registrado no histórico."))) return;
+  await api("/ads/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ criteria: document.getElementById("ads-criteria-input").value, ai: document.getElementById("ads-ai-enabled").checked, autoApprove: document.getElementById("ads-auto-approve").checked }) });
+  st.textContent = "Salvo.";
+});
+
+document.getElementById("ads-btn-resolve").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const st = document.getElementById("ads-settings-status");
+  btn.disabled = true;
+  st.textContent = "Consultando a Marketing API…";
+  try {
+    const r = await api("/ads/resolve-names", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const sem = r.catalog.filter((c) => c.status !== "resolved");
+    st.textContent = `${r.resolved} nome(s) identificado(s); ${r.unavailable} sem acesso.${sem[0]?.error ? " Motivo: " + sem[0].error : ""}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("ads-btn-backfill").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const st = document.getElementById("ads-settings-status");
+  if (!(await showConfirm("Aplicar as etiquetas automáticas (origem e situação) a TODOS os leads desta clínica? Só mexe nas etiquetas automáticas; as suas não são tocadas."))) return;
+  btn.disabled = true;
+  let after = null;
+  let total = 0;
+  try {
+    for (let i = 0; i < 200; i++) {
+      const r = await api("/ads/backfill-tags", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ after }) });
+      total += r.processed;
+      st.textContent = `${total} lead(s) atualizados…`;
+      if (r.done || !r.last) break;
+      after = r.last;
+    }
+    st.textContent = `Pronto: ${total} lead(s) com etiquetas atualizadas.`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("ads-btn-requeue").addEventListener("click", async () => {
+  const st = document.getElementById("ads-settings-status");
+  const r = await api("/ads/messaging/requeue", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  st.textContent = `${r.checked} evento(s) não elegível(is) conferido(s); ${r.requeued} voltaram para a fila.`;
+});
+
 document.getElementById("meta-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const payload = {
@@ -7124,6 +7452,9 @@ document.getElementById("meta-form").addEventListener("submit", async (e) => {
     testEventCode: document.getElementById("meta-test-code").value.trim(),
     pixelEnabled: document.getElementById("meta-pixel-enabled").checked,
     capiEnabled: document.getElementById("meta-capi-enabled").checked,
+    messagingEnabled: document.getElementById("meta-messaging-enabled").checked,
+    wabaId: document.getElementById("meta-waba").value.trim(),
+    messagingDatasetId: document.getElementById("meta-msg-dataset").value.trim(),
     stageQualified: document.getElementById("meta-stage-qualified").value,
     stageDisqualified: document.getElementById("meta-stage-disqualified").value,
     stageWon: document.getElementById("meta-stage-won").value,

@@ -55,6 +55,13 @@ export interface IncomingReferralData {
   adCampaignName?: string;
   adsetName?: string;
   adName?: string;
+  // Campos CRUS do referral (atribuicao de anuncios): ID do anuncio, tipo, titulo, texto, midia e os nomes dos campos recebidos.
+  sourceId?: string;
+  sourceType?: string;
+  headline?: string;
+  body?: string;
+  mediaType?: string;
+  rawKeys?: string;
 }
 
 const REQUEST_TIMEOUT_MS = 25_000;
@@ -688,13 +695,27 @@ function extractReferral(message: JsonRecord): IncomingReferralData | undefined 
   const sourceUrl = textValue(message.source_url, ref?.source_url, ref?.sourceUrl, ref?.url);
   const adName = textValue(ref?.headline, ref?.title, ref?.source_id, ref?.sourceId);
   const adCampaignName = textValue(ref?.campaign_name, ref?.campaignName, ref?.body);
+  // Campos crus (o ID do anuncio NAO e nome: ele vai separado pra atribuicao).
+  const sourceId = textValue(ref?.source_id, ref?.sourceId, typeof ref?.source_id === "number" ? String(ref.source_id) : undefined);
+  const sourceType = textValue(ref?.source_type, ref?.sourceType);
+  const headline = textValue(ref?.headline, ref?.title);
+  const body = textValue(ref?.body);
+  const mediaTypeRaw = ref?.media_type ?? ref?.mediaType;
+  const mediaType = textValue(typeof mediaTypeRaw === "number" ? String(mediaTypeRaw) : mediaTypeRaw);
+  const rawKeys = ref ? Object.keys(ref).slice(0, 25).join(",") : undefined;
 
-  if (!ctwaClid && !sourceUrl && !adName && !adCampaignName) return undefined;
+  if (!ctwaClid && !sourceUrl && !adName && !adCampaignName && !sourceId) return undefined;
   return {
     ...(ctwaClid ? { ctwaClid } : {}),
     ...(sourceUrl ? { sourceUrl } : {}),
     ...(adName ? { adName } : {}),
     ...(adCampaignName ? { adCampaignName } : {}),
+    ...(sourceId ? { sourceId } : {}),
+    ...(sourceType ? { sourceType } : {}),
+    ...(headline ? { headline } : {}),
+    ...(body ? { body } : {}),
+    ...(mediaType ? { mediaType } : {}),
+    ...(rawKeys ? { rawKeys } : {}),
   };
 }
 

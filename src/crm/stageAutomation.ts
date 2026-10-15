@@ -1,6 +1,7 @@
 import { prisma } from "../db/client.js";
 import { getFunnelStages, type FunnelStageKind } from "./stages.js";
 import { enqueueStageChange } from "../meta/events.js";
+import { afterStageMove } from "../ads/classification.js";
 
 // Ordem de fallback quando a clinica nao tem uma etapa exatamente do "kind"
 // pedido (ex: removeu a coluna "Pos-procedimento" -> cai em "Ganho").
@@ -58,6 +59,9 @@ async function applyMove(
   } catch (err) {
     console.error("Falha ao registrar transicao de etapa:", err);
   }
+
+  // Etiquetas automaticas, classificacao por etapa (qualificado/desqualificado) e Purchase de mensagens comerciais (so decisao humana).
+  void afterStageMove({ clinicId, patientId, newStageId: targetStageId, newStageName: targetLabel, transitionId, actorName: opts.actorName ?? null, aiDriven: opts.aiDriven, saleValue: opts.saleValue }).catch(() => {});
 
   if (transitionId) {
     void enqueueStageChange({
