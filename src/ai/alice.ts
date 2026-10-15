@@ -37,6 +37,7 @@ import { closingReply, feedbackThanks, isCourtesyOnly, isPositiveFeedback } from
 import { capSlotLines } from "./slotText.js";
 import { absorbToolResult, checkSlotMentions, knownFrom, newSlotState, renderBooked, renderOffer, SLOT_FALLBACK_ASK, SLOT_NUDGE } from "./slotGuard.js";
 import { isJobSeeker } from "./jobSeeker.js";
+import { findChosenSlot, identifyWanted, offersSlots, staffConfirmedBooking } from "./bookingIntent.js";
 import { ceBookingReadiness } from "../clinicaexperts/procedureLink.js";
 import { buildConversationBrief } from "./conversationBrief.js";
 import { selectFocusProcedures } from "./procedureFocus.js";
@@ -318,7 +319,7 @@ async function procedureNotFoundMessage(clinicId: string, rawName: unknown): Pro
   // A pessoa pediu algo que nao esta no catalogo (ex.: oferta de anuncio, "Protocolo do Olhar"): nao fica repetindo "nao localizei".
   const evaluation = await prisma.procedure.findFirst({ where: { clinicId, internalOnly: false, name: { contains: "avalia" } }, select: { name: true } });
   const alt = evaluation
-    ? ` Se ela veio de um anuncio ou de uma oferta que nao esta no catalogo, NAO diga que nao encontrou e NAO repita a pergunta: ofereca a avaliacao gratuita (procedimento "${evaluation.name}", chame check_availability com esse nome); a equipe apresenta a oferta na avaliacao, sem voce prometer valor ou condicao.`
+    ? ` Se ela veio de um anuncio ou de uma oferta que nao esta no catalogo, NAO diga que nao encontrou e NAO repita a pergunta: agende a avaliacao gratuita (procedimento "${evaluation.name}"). Se ela JA escolheu dia e horario, use ESSE MESMO dia e horario (check_specific_time / book_appointment com date e time) e NAO ofereca horarios novos; so ofereca outros se esse nao estiver livre. A equipe apresenta a oferta na avaliacao, sem voce prometer valor ou condicao.`
     : " Pergunte ao paciente qual procedimento ele deseja, usando os nomes cadastrados.";
   return `Procedimento "${raw}" nao encontrado na clinica.${alt} Se a pessoa fez outra pergunta (endereco, valor, horario de funcionamento), RESPONDA essa pergunta primeiro e nunca repita a mensagem anterior.`;
 }
@@ -1161,7 +1162,7 @@ AGENDAMENTO PELA EQUIPE: voce NAO agenda, NAO remarca, NAO cancela e NAO oferece
       : "\nAVALIACAO: ofereca a avaliacao gratuita quando a conversa ja mostrou interesse, uma vez, e depois de responder o que a pessoa quis saber. Se ela pedir avaliacao ou agendar, agende na hora.";
   }
   const evalFirstLine = clinic.evaluationFirst
-    ? `\nAVALIACAO PRIMEIRO: nunca exija que o paciente saiba qual procedimento precisa. Sempre ofereca os dois caminhos ("voce ja tem algo em mente ou prefere uma avaliacao pra o profissional entender seu caso?"). Se ele nao sabe e quer ser avaliado, isso e intencao valida de agendamento - conduza direto, sem listar procedimentos. MAS se ele ja disse qual procedimento quer (ex.: limpeza de pele, drenagem), agende ESSE procedimento (nome exato do catalogo), nao a avaliacao: a avaliacao gratuita e so para quem pediu ou ainda nao sabe o que quer. Quem ja e paciente (ja foi atendido) nao recebe oferta de avaliacao gratuita.`
+    ? `\nAVALIACAO PRIMEIRO: nunca exija que o paciente saiba qual procedimento precisa. Sempre ofereca os dois caminhos ("voce ja tem algo em mente ou prefere uma avaliacao pra o profissional entender seu caso?"). Se ele nao sabe e quer ser avaliado, isso e intencao valida de agendamento - conduza direto, sem listar procedimentos. MAS se ele ja disse qual procedimento quer (ex.: limpeza de pele, drenagem, peeling), agende ESSE procedimento (nome exato do catalogo), nunca a avaliacao: a avaliacao gratuita e so para quem a pediu ou ainda nao sabe o que precisa. Identifique o procedimento pelo que a pessoa escreveu e pelo anuncio de origem; se houver mais de um parecido, pergunte qual. Quem ja e paciente (ja foi atendido) nao recebe oferta de avaliacao gratuita.`
     : "";
 
   const emojiLine = clinic.allowEmojis === false ? `\nNao use emojis em nenhuma mensagem.` : "";
@@ -2208,7 +2209,7 @@ async function generateReplyUnlocked(
     const lastUserText = history.filter((m) => m.role === "user").at(-1)?.content ?? "";
     if (isCourtesyOnly(lastUserText)) {
       const booked = await prisma.appointment.count({ where: { patientId: patient.id, status: "confirmed", scheduledAt: { gte: new Date() } } });
-      if (booked > 0) {
+      if (booked > 0 || staffConfirmedBooking(history)) {
         const text = closingReply(patient.name, history.filter((m) => m.role !== "user").at(-1)?.content ?? "");
         if (text) {
           await prisma.message.create({ data: { conversationId: conversation.id, role: "assistant", content: text, deliveryStatus: "pending" } });
@@ -2223,7 +2224,10 @@ async function generateReplyUnlocked(
   if (usageClinic && usageClinic.businessType !== "geral") {
     const lastUserText = history.filter((m) => m.role === "user").at(-1)?.content ?? "";
     const origin = await prisma.patient.findUnique({ where: { id: patient.id }, select: { adName: true, adCampaignName: true } });
-    if (isJobSeeker(lastUserText, [origin?.adName, origin?.adCampaignName].filter(Boolean).join(" "))) {
+    const adText = [origin?.adName, origin?.adCampaignName].filter(Boolean).join(" ");
+    const userRecent = history.filter((m) => m.role === "user").slice(-12);
+    // O curriculo chega como anexo e depois vem "obrigada": a vaga foi citada ANTES. Olha as ultimas mensagens, nao so a ultima.
+    if (isJobSeeker(lastUserText, adText) || userRecent.some((m) => isJobSeeker(m.content, adText)) || /curr[ií]culo/i.test(userRecent.map((m) => m.content).join(" "))) {
       try {
         await runTool(clinicId, patient.id, conversation.id, "transfer_to_human", {
           reason: "Candidata a vaga de emprego (currículo)",
@@ -2241,9 +2245,29 @@ async function generateReplyUnlocked(
   // prompt desliga as regras que conflitam com ela e a jogada vai na ultima instrucao ao modelo.
   const trailingNow: string[] = [];
   for (let i = history.length - 1; i >= 0 && history[i].role === "user"; i--) trailingNow.unshift(history[i].content);
-  const hasBooking = (await prisma.appointment.count({ where: { patientId: patient.id, status: "confirmed", scheduledAt: { gte: new Date() } } })) > 0;
+  const hasBooking = (await prisma.appointment.count({ where: { patientId: patient.id, status: "confirmed", scheduledAt: { gte: new Date() } } })) > 0 || staffConfirmedBooking(history);
   const pastVisitCount = await prisma.appointment.count({ where: { patientId: patient.id, status: { in: ["completed", "confirmed"] }, scheduledAt: { lt: new Date() } } });
-  const flow = analyzeFlow({ history, trailing: trailingNow, priceAsked: PRICE_ASK_RE.test(normalizeReply(trailingNow.join(" "))), hasBooking, pastVisits: pastVisitCount > 0 });
+  // QUAL PROCEDIMENTO ela quer (o catalogo inteiro, sem as descricoes) e QUAL HORARIO ela ja escolheu: a Alice agenda o procedimento pedido; a
+  // avaliacao e pra quem nao sabe o que quer (15/10/2026).
+  const bookingCatalog = await prisma.procedure.findMany({ where: { clinicId, internalOnly: false }, select: { name: true, aliases: true } });
+  const adForWanted = (await prisma.patient.findUnique({ where: { id: patient.id }, select: { adName: true } }))?.adName ?? "";
+  const wanted = identifyWanted(bookingCatalog, [adForWanted, ...history.filter((m) => m.role === "user").map((m) => m.content), ...trailingNow].filter(Boolean));
+  const flowTz = (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { timezone: true } }))?.timezone || "America/Sao_Paulo";
+  const chosen = findChosenSlot(history, trailingNow, isoDateInZone(new Date(), flowTz), bookingCatalog.map((p) => p.name));
+  const lastNameAsk = [...history].reverse().find((m) => m.role !== "user")?.content ?? "";
+  const nameReply = trailingNow.at(-1)?.trim() ?? "";
+  const givenFullName = /nome completo|sobrenome/i.test(lastNameAsk) && /^[\p{L}' .-]{5,80}$/u.test(nameReply) && nameReply.split(/\s+/).length >= 2 ? nameReply : (patient.name && patient.name.trim().split(/\s+/).length >= 2 ? patient.name.trim() : null);
+  const flow = analyzeFlow({
+    history,
+    trailing: trailingNow,
+    priceAsked: PRICE_ASK_RE.test(normalizeReply(trailingNow.join(" "))),
+    hasBooking,
+    pastVisits: pastVisitCount > 0,
+    wanted,
+    chosen,
+    chosenFullName: givenFullName,
+    evaluationName: bookingCatalog.find((p) => /avalia/i.test(p.name))?.name ?? null,
+  });
   const focusTexts = [
     ...history.filter((m) => m.role !== "user").slice(-3).map((m) => m.content),
     ...history.filter((m) => m.role === "user").slice(-8).map((m) => m.content),
@@ -2493,6 +2517,12 @@ async function generateReplyUnlocked(
         finalText = candidate;
       }
     }
+  }
+
+  // JA AGENDADA (pela Alice, pelo painel ou pela equipe) e so agradeceu/perguntou: nao recebe lista de horarios nem oferta de avaliacao (15/10).
+  if (flow.intent === "booked" && !didTransfer && !fixedReply && finalText.trim() && offersSlots(finalText) && !toolsUsed.some((n) => BOOKING_TOOLS.has(n))) {
+    console.warn(`[ja-agendada] resposta ofereceu horarios a quem ja tem horario - descartada (conv ${conversation.id}): ${finalText.slice(0, 100)}`);
+    finalText = closingReply(patient.name, lastAssistant ?? "");
   }
 
   // Redundante: a propria Alice acabou de mandar (quase) isso. Nao reenvia.

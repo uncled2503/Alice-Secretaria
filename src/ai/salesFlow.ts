@@ -6,6 +6,8 @@
 // pro modelo (e desliga as regras que conflitam com ela).
 // ---------------------------------------------------------------------------
 
+import { chosenSlotDirective, wantedDirective, type ChosenSlot, type Wanted } from "./bookingIntent.js";
+
 function fold(s: string): string {
   return s.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
 }
@@ -73,7 +75,17 @@ export function acceptsSchedulingOffer(trailing: string, lastAssistant: string):
 
 // priceAsked: o chamador diz se as mensagens novas perguntam valor (PRICE_ASK_RE vive em alice.ts).
 // hasBooking: ela ja tem agendamento futuro (nao empurra agendamento de novo).
-export function analyzeFlow(input: { history: FlowMessage[]; trailing: string[]; priceAsked: boolean; hasBooking: boolean; pastVisits?: boolean }): SalesFlow {
+export function analyzeFlow(input: {
+  history: FlowMessage[];
+  trailing: string[];
+  priceAsked: boolean;
+  hasBooking: boolean;
+  pastVisits?: boolean;
+  wanted?: Wanted; // qual procedimento ela quer (bookingIntent.identifyWanted)
+  chosen?: ChosenSlot | null; // horario que ela ja escolheu numa lista oferecida
+  chosenFullName?: string | null; // nome completo que ela ja deu (pra book_appointment)
+  evaluationName?: string | null; // nome da avaliacao no catalogo
+}): SalesFlow {
   const { history, trailing, priceAsked, hasBooking } = input;
   const pastVisits = input.pastVisits === true;
   const userAll = history.filter((m) => m.role === "user").map((m) => m.content);
@@ -100,7 +112,10 @@ export function analyzeFlow(input: { history: FlowMessage[]; trailing: string[];
   const lastOffered = OFFER_RE.test(fold(lastAssistant)) && /\?/.test(lastAssistant);
   const accepted = acceptsSchedulingOffer(trailText, lastAssistant);
   const gaveAvailability = lastOffered && DAYPART_RE.test(trailFold) && !REFUSE_RE.test(trailFold);
-  const wantsToBook = wantsSchedule(trailText) || accepted || gaveAvailability;
+  const chosen = hasBooking ? null : input.chosen ?? null; // ja agendada: nada a escolher
+  // "Quero uma limpeza de pele": pediu um procedimento do catalogo pelo nome = quer agendar ESSE (nao e so curiosidade). Pergunta de valor/informacao nao conta.
+  const namesProcedure = input.wanted !== undefined && input.wanted.kind !== "none" && /\b(quero|queria|gostaria|tenho interesse|interesse em|fazer|marcar)\b/.test(fold(trailText)) && !priceAsked && !/\b(saber|informac\w*|duvida|como funciona|explic\w*|o que e)\b/.test(fold(trailText));
+  const wantsToBook = wantsSchedule(trailText) || accepted || gaveAvailability || !!chosen || namesProcedure;
 
   let intent: Intent = "info";
   if (hasBooking && !wantsToBook) intent = "booked"; // ja agendou: so responde o que perguntou e para
@@ -111,12 +126,18 @@ export function analyzeFlow(input: { history: FlowMessage[]; trailing: string[];
   else if (priceAsked) intent = "price";
 
   const noPrice = priceAsked ? "" : " Ela NAO perguntou valor: nao fale de valor, investimento nem parcelas.";
+  const wanted: Wanted = input.wanted ?? { kind: "none" };
+  const evalName = input.evaluationName ?? null;
   let nextMove: string;
   switch (intent) {
     case "schedule":
       nextMove =
         "A cliente quer AGENDAR. Va DIRETO ao agendamento, sem perguntas de descoberta e sem repetir o que ja foi dito (se ela so disse 'sim'/'pode' a uma oferta sua, ACEITOU: ofereca os horarios agora, nao explique o procedimento de novo). " +
-        "QUAL PROCEDIMENTO: se ela quer um procedimento especifico do catalogo (ex.: limpeza de pele, drenagem), agende ESSE procedimento (nome exato do catalogo), nao a avaliacao. A avaliacao gratuita e para quem pediu avaliacao ou ainda nao sabe o que quer; se o procedimento citado ou a oferta do anuncio NAO estiver no catalogo, NAO diga que nao encontrou nem pergunte de novo: agende a AVALIACAO gratuita (a equipe apresenta a oferta, sem prometer valor ou condicao). " +
+        (chosen ? chosenSlotDirective(chosen, input.chosenFullName ?? null) : "") +
+        (input.wanted
+          ? wantedDirective(wanted, evalName)
+          : "QUAL PROCEDIMENTO: se ela quer um procedimento especifico do catalogo (ex.: limpeza de pele, drenagem), agende ESSE procedimento (nome exato do catalogo), nao a avaliacao. A avaliacao gratuita e para quem pediu avaliacao ou ainda nao sabe o que quer. ") +
+        "Se ela pediu a avaliacao gratuita de forma explicita, agende a avaliacao. Se o procedimento citado ou a oferta do anuncio NAO estiver no catalogo, NAO diga que nao encontrou nem pergunte de novo: se ja combinaram dia e hora, agende a AVALIACAO gratuita NESSE MESMO dia e hora (a equipe apresenta a oferta, sem prometer valor ou condicao); senao ofereca os horarios da avaliacao. " +
         "HORARIOS: chame check_availability (ja devolve os mais proximos) e ofereca NO MAXIMO 3 horarios reais, hoje e amanha primeiro; nunca liste mais de 3. Se ela disse o turno (manha, tarde ou noite), passe period e ofereca so desse turno; se ainda nao disse, pode perguntar UMA vez qual turno prefere. Se ela ja citou dia/hora, chame check_specific_time. " +
         "Se o horario pedido nao esta livre, diga so que 'esse horario nao esta disponivel' (NUNCA cite outro paciente) e ofereca os mais proximos. " +
         "NUNCA escreva 'conseguimos agendar', 'agendei' ou 'esta agendado' antes de book_appointment dar certo: ate la voce so OFERECE ('tenho estes horarios'). Horario escolhido: book_appointment. Se ela fez outra pergunta junto (endereco, valor), responda tambem." +
@@ -152,7 +173,12 @@ export function analyzeFlow(input: { history: FlowMessage[]; trailing: string[];
         ? evalOffered
           ? "Ela JA contou o que quer e voce JA falou de avaliacao sem que ela pedisse. NAO repita a oferta nem pergunte de novo o que ela quer melhorar. Converse de verdade: explique o procedimento do catalogo que resolve a queixa dela (o que e, para que serve, como funciona) em 2 ou 3 frases, sem despejar tudo, e termine com UMA pergunta NOVA sobre o interesse ou a duvida dela. So volte a falar de avaliacao se ela demonstrar interesse em agendar." +
             noPrice
-          : "Ela JA contou o que quer (queixa/regiao). NAO pergunte de novo 'o que voce gostaria de melhorar'. Reconheca a queixa com as palavras dela (1 frase), conecte a solucao do catalogo (1 frase) e feche com UMA pergunta concreta que leve a avaliacao ou ao horario (ex.: 'Quer que eu veja um horario pra sua avaliacao?')." +
+          : "Ela JA contou o que quer (queixa/regiao). NAO pergunte de novo 'o que voce gostaria de melhorar'. Reconheca a queixa com as palavras dela (1 frase), conecte a solucao do catalogo (1 frase) e feche com UMA pergunta concreta que leve ao horario: " +
+            (wanted.kind === "specific"
+              ? `ela quer "${wanted.procedure}", entao pergunte se quer que voce veja um horario pra esse procedimento (NAO fale de avaliacao).`
+              : wanted.kind === "options"
+                ? `o catalogo tem mais de um que serve (${wanted.options.map((o) => `"${o}"`).join(", ")}): pergunte qual ela prefere pra ver o horario; so se ela nao souber, ofereca a avaliacao.`
+                : "se ela nao sabe qual procedimento precisa, a avaliacao gratuita (ex.: 'Quer que eu veja um horario pra sua avaliacao?').") +
             noPrice
         : "Descubra o que ela quer com UMA pergunta especifica ao assunto dela (se veio de anuncio, use o procedimento do anuncio; ex.: gordura -> qual regiao). Curto, natural." + noPrice;
   }

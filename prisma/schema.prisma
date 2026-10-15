@@ -986,6 +986,7 @@ model PreProcedureRule {
   name         String
   message      String   // comeca agradecendo a confirmacao; aceita {primeiro_nome} e as demais variaveis das mensagens automaticas
   procedureIds String   @default("") // vazio = todos; senao ids separados por virgula
+  sendHoursBefore Int?  // preenchido (ex.: 48): o texto sai sozinho tantas horas antes do atendimento (job); vazio = so apos a cliente confirmar na conversa
   active       Boolean  @default(true)
   createdAt    DateTime @default(now())
 

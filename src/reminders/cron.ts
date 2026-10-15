@@ -7,6 +7,17 @@ import type { ReminderRule } from "@prisma/client";
 import { recordAutomatedMessage } from "../crm/conversationLog.js";
 import { isoDateInZone, zonedWallClockToUtc } from "../scheduling/time.js";
 import { localDayBounds } from "./firstOfDay.js";
+import { classifyReminder } from "../maintenance/restoreReminders.js";
+
+// PURO: dois textos de confirmacao sao "o mesmo lembrete"? Igual sem negrito (*) nem espacos, ou do mesmo tipo (os dois "amanha" ou os dois "hoje").
+// Uma regra copiada com o nome em negrito mandava a confirmacao do dia 2x (15/10, Renata): o texto nao era identico, so o negrito.
+export function isSameReminderText(a: string, b: string): boolean {
+  const norm = (t: string) => t.replace(/[*_~]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (norm(a) === norm(b)) return true;
+  const ka = classifyReminder(a);
+  return ka !== null && ka === classifyReminder(b);
+}
+export const DUPLICATE_REMINDER_WINDOW_MS = 20 * 3_600_000;
 
 const EARLIEST_SEND_HOUR = 7; // nunca manda lembrete antes das 7h (hora local da clinica)
 const SEND_TOLERANCE_MS = 40 * 60_000; // janela de disparo apos o horario previsto (cron roda a cada 15min)
@@ -253,21 +264,17 @@ export function startReminderJob(): void {
 
         // Duas regras IGUAIS (mesmo texto, mesmo horario) cadastradas por engano: se a irma
         // ja enviou este lembrete para este agendamento, esta nao envia de novo.
-        const sibling = await prisma.reminderSent.findFirst({
+        // Alem de regras identicas, vale texto igual sem negrito e o mesmo TIPO de confirmacao ("hoje" / "amanha") nas ultimas 20h.
+        const recentSiblings = await prisma.reminderSent.findMany({
           where: {
             appointmentId: appt.id,
             ruleId: { not: rule.id },
-            rule: {
-              clinicId: rule.clinicId,
-              message: rule.message,
-              parentRuleId: rule.parentRuleId,
-              dayOffset: rule.dayOffset,
-              ...(rule.dayOffset == null ? { hoursBefore: rule.hoursBefore } : {}),
-            },
+            sentAt: { gte: new Date(Date.now() - DUPLICATE_REMINDER_WINDOW_MS) },
+            rule: { clinicId: rule.clinicId, parentRuleId: rule.parentRuleId },
           },
-          select: { id: true },
+          select: { rule: { select: { message: true } } },
         });
-        if (sibling) continue;
+        if (recentSiblings.some((x) => isSameReminderText(x.rule.message, rule.message))) continue;
 
         // RESERVA atomica antes de enviar (chave unica agendamento+regra): se outro
         // processo ja pegou, nao envia de novo.

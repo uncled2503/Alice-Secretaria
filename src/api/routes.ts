@@ -3818,14 +3818,14 @@ apiRouter.get(
 apiRouter.post(
   "/pre-procedure-rules",
   asyncRoute(async (req, res) => {
-    const { name, message, procedureIds } = req.body as { name?: string; message?: string; procedureIds?: string[] };
+    const { name, message, procedureIds, sendHoursBefore } = req.body as { name?: string; message?: string; procedureIds?: string[]; sendHoursBefore?: number | null };
     if (!name?.trim() || !message?.trim()) {
       res.status(400).json({ error: "name e message sao obrigatorios" });
       return;
     }
     const clinic = await getClinic(req);
     const rule = await prisma.preProcedureRule.create({
-      data: { clinicId: clinic.id, name: name.trim(), message: message.trim(), procedureIds: (procedureIds ?? []).join(",") },
+      data: { clinicId: clinic.id, name: name.trim(), message: message.trim(), procedureIds: (procedureIds ?? []).join(","), sendHoursBefore: sendHoursBefore ? Math.min(Math.max(Math.round(sendHoursBefore), 2), 240) : null },
     });
     res.json(rule);
   })
@@ -3836,10 +3836,11 @@ apiRouter.put(
   asyncRoute(async (req, res) => {
     const existing = await prisma.preProcedureRule.findUniqueOrThrow({ where: { id: req.params.id } });
     if (!assertClinicAccess(req, res, existing.clinicId)) return;
-    const { name, message, procedureIds, active } = req.body as { name?: string; message?: string; procedureIds?: string[]; active?: boolean };
+    const { name, message, procedureIds, active, sendHoursBefore } = req.body as { name?: string; message?: string; procedureIds?: string[]; active?: boolean; sendHoursBefore?: number | null };
     const rule = await prisma.preProcedureRule.update({
       where: { id: req.params.id },
       data: {
+        ...(sendHoursBefore !== undefined ? { sendHoursBefore: sendHoursBefore ? Math.min(Math.max(Math.round(sendHoursBefore), 2), 240) : null } : {}),
         ...(name !== undefined ? { name: name.trim() } : {}),
         ...(message !== undefined ? { message: message.trim() } : {}),
         ...(procedureIds !== undefined ? { procedureIds: procedureIds.join(",") } : {}),
