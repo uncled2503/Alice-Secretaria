@@ -1,7 +1,8 @@
 import OpenAI from "openai";
 import type { ChatCompletion, ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
 import { prisma } from "../db/client.js";
-import { enrichPatientFromCe } from "../clinicaexperts/sync.js";
+import { ceMirrorEnabled, enrichPatientFromCe, syncAppointment } from "../clinicaexperts/sync.js";
+import { invalidateCeCache } from "../clinicaexperts/availability.js";
 import { fixRelativeDateLabels, fixRelativeDayLabels, fixWeekdayDatePairs } from "./relativeDays.js";
 import { pickSpread, filterByPeriod, findNearestSlots,
   findAvailableSlots,
@@ -15,7 +16,7 @@ import { pickSpread, filterByPeriod, findNearestSlots,
 import { offerFreedSlotToWaitlist } from "../scheduling/waitlist.js";
 import { formatInZone, formatDayInZone, formatDateTimeInZone, upcomingWeekdayTable, isoDateInZone, zonedWallClockToUtc, wallClockInZone } from "../scheduling/time.js";
 import { parseHolidayOpen, upcomingNationalHolidays } from "../scheduling/holidays.js";
-import { pushAppointmentInBackground, removeAppointmentInBackground } from "../integrations/calendarSync.js";
+import { pushAppointmentInBackground, pushGoogleInBackground, removeAppointmentInBackground } from "../integrations/calendarSync.js";
 import { sendMedia } from "../uazapi/client.js";
 import { getActiveRulesPrompt } from "./rules.js";
 import { getFunnelStages } from "../crm/stages.js";
@@ -620,12 +621,16 @@ async function runTool(
       });
     }
 
+    // Clinica Experts conectado: a agenda DELES e a verdade. A reserva so vale depois de entrar la - antes o espelho ia em segundo plano e,
+    // quando o CE recusava (ou a rede falhava), a Alice ja tinha dito "agendado" e o horario nao existia na agenda da clinica (15/10, Lavieen).
+    const mirrorCe = await ceMirrorEnabled(clinicId);
     const booking = await createBooking({
       clinicId,
       patientId,
       procedureId: procedure.id,
       professionalId,
       startUtc,
+      deferMirror: mirrorCe,
     });
 
     if (!booking.ok) {
@@ -634,6 +639,34 @@ async function runTool(
           ? "esse horario acabou de ser ocupado por outro paciente; ofereca outro horario"
           : SLOT_REASON_PT[booking.error] ?? "nao foi possivel agendar";
       return JSON.stringify({ agendado: false, motivo });
+    }
+
+    if (mirrorCe) {
+      const mirror = await syncAppointment(booking.appointmentId, { quiet: true });
+      if (!mirror.ok) {
+        // Desfaz: sem a reserva no CE o paciente nao pode receber "agendado". A equipe recebe o caso pela transferencia.
+        await prisma.appointment.update({ where: { id: booking.appointmentId }, data: { status: "cancelled" } });
+        invalidateCeCache(clinicId);
+        console.warn(`[clinicaexperts] agendamento da Alice desfeito (conv ${conversationId}): o CE nao aceitou - ${mirror.error}`);
+        await logActivity({
+          clinicId,
+          type: "ce_mirror_failed",
+          area: "agenda",
+          title: "Agendamento da Alice desfeito: o Clínica Experts não aceitou",
+          description: `${procedure.name} em ${formatDateTimeInZone(booking.scheduledAt, tz)}${booking.professionalName ? ` com ${booking.professionalName}` : ""}. Motivo: ${mirror.error}${mirror.definitive ? "" : " (não deu pra confirmar se o CE chegou a criar: confira a agenda dele)"}`,
+          actorName: null,
+          patientId,
+        });
+        if (/ocupad|conflit|indispon|overlap|sobrepo|occupied|conflict|unavailable|not available|already booked/i.test(mirror.error)) {
+          return JSON.stringify({ agendado: false, motivo: "esse horario acabou de ser ocupado por outro paciente; ofereca outro horario" });
+        }
+        return JSON.stringify({
+          agendado: false,
+          motivo: `a agenda da clinica (Clinica Experts) nao aceitou esse horario: ${mirror.error}`,
+          instrucao: "NAO diga que agendou, nem que nao ha horario, nem repita o motivo tecnico. Chame transfer_to_human com o procedimento, o dia e o horario combinados para a equipe lancar na agenda, e fique em silencio.",
+        });
+      }
+      pushGoogleInBackground(booking.appointmentId);
     }
 
     await prisma.conversation.updateMany({ where: { patientId }, data: { status: "scheduled" } });

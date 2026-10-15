@@ -16,6 +16,7 @@ export const ACTIVITY_TYPES: Record<string, string> = {
   human_takeover: "Atendimento assumido por uma pessoa",
   human_resume: "Atendimento devolvido para a Alice",
   appointment_booked: "Agendamento criado",
+  ce_mirror_failed: "Agendamento não chegou ao Clínica Experts",
   appointment_rescheduled: "Agendamento remarcado",
   appointment_cancelled: "Agendamento cancelado",
   appointment_completed: "Atendimento concluído",

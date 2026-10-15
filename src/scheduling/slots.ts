@@ -671,6 +671,8 @@ export async function createBooking(params: {
   professionalId?: string | null;
   source?: string | null;
   enforceHours?: boolean;
+  // true = quem chamou espelha no Clinica Experts (e confere o resultado) antes de confirmar; aqui so nao dispara o espelho em segundo plano.
+  deferMirror?: boolean;
 }): Promise<BookingSuccess | { ok: false; error: BookingErrorCode }> {
   const { clinicId, patientId, procedureId, startUtc } = params;
 
@@ -755,7 +757,7 @@ export async function createBooking(params: {
 
   // Espelha no Google Agenda depois do commit, sem segurar a resposta: o
   // paciente nao pode esperar o Google pra receber a confirmacao.
-  if (result.ok) pushAppointmentInBackground(result.appointmentId);
+  if (result.ok && !params.deferMirror) pushAppointmentInBackground(result.appointmentId);
   return result;
 }
 

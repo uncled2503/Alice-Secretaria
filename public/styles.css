@@ -1774,3 +1774,9 @@ button:focus-visible, a:focus-visible, summary:focus-visible { outline: 3px soli
 
 /* Cabecalho da Caixa de conversas: so no celular (no desktop a conversa ocupa a tela toda) */
 .chat-page-header { display: none; }
+
+/* Numeros do "Meu dia" esmaecidos enquanto o periodo novo carrega (nunca ficam parecendo os do periodo anterior) */
+.is-loading { opacity: 0.45; transition: opacity 0.15s ease; }
+
+/* No desktop o diretorio mostra o recurso aberto no cabecalho do conteudo: o rotulo repetido no resumo so aparece em tela estreita */
+@media (min-width: 1101px) { #settings-current-label { display: none; } }

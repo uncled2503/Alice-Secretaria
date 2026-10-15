@@ -1189,13 +1189,15 @@
             </label>
             <label style="display:flex;gap:0.5rem;align-items:flex-start">
               <input type="checkbox" id="ce-sync-out" style="margin-top:0.25rem" />
-              <span>Lançar no Clínica Experts o que a Alice agenda, remarca e cancela<br /><span class="hint">Cria o paciente lá se ainda não existir. Se der erro, a equipe é avisada para lançar à mão.</span></span>
+              <span>Lançar no Clínica Experts o que a Alice agenda, remarca e cancela<br /><span class="hint">Cria o paciente lá se ainda não existir. A Alice só confirma o horário ao paciente depois que o Clínica Experts aceitar; se ele recusar, o caso vai para a equipe lançar à mão.</span></span>
             </label>
           </div>
           <div class="card" id="ce-catalog" hidden>
             <div class="section-header">Profissionais e procedimentos</div>
             <p class="hint" style="margin-top:0">Importa do Clínica Experts os profissionais ativos e os procedimentos que podem ser vendidos (com preço e duração reais), ignorando cortesias, brindes e itens internos. Quem executa cada procedimento é deduzido do histórico dos últimos 120 dias. <strong>Só cria e vincula: nunca altera o que você já editou.</strong></p>
             <button type="button" id="btn-ce-sync" class="btn-brand btn-brand--secondary">Importar do Clínica Experts</button>
+            <button type="button" id="btn-ce-unmirrored" class="btn-brand btn-brand--secondary" title="Só consulta: não altera nada">Conferir agendamentos que não estão no Clínica Experts</button>
+            <button type="button" id="btn-ce-executors" class="btn-brand btn-brand--secondary" title="Só consulta: não altera nada">Conferir quem faz cada procedimento</button>
             <p id="ce-sync-result" class="hint" style="margin:0.6rem 0 0" hidden></p>
           </div>
         </div>

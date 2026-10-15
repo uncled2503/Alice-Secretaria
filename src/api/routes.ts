@@ -24,7 +24,8 @@ import { getFunnelStages, generateStageId } from "../crm/stages.js";
 import { movePatientToKind, movePatientToRecovery, movePatientToStage } from "../crm/stageAutomation.js";
 import { offerFreedSlotToWaitlist } from "../scheduling/waitlist.js";
 import { createBooking, checkSpecificTime, SLOT_REASON_PT } from "../scheduling/slots.js";
-import { wallClockInZone, zonedWallClockToUtc } from "../scheduling/time.js";
+import { isoDateInZone, wallClockInZone, zonedWallClockToUtc } from "../scheduling/time.js";
+import { periodWindow } from "../crm/period.js";
 import { upcomingNationalHolidays, parseHolidayOpen } from "../scheduling/holidays.js";
 import { patientDossier } from "../crm/dossier.js";
 import { buildReport } from "../crm/reports.js";
@@ -59,7 +60,7 @@ import { syncBirthdaysFromCe } from "../clinicaexperts/birthdays.js";
 import { lastBookingDiagnostics, pullClinicBookings } from "../clinicaexperts/pull.js";
 import { auditProcedureLinks } from "../clinicaexperts/procedureLink.js";
 import { connectAccount, disconnectAccount, ceStatusFor } from "../clinicaexperts/client.js";
-import { syncCatalog } from "../clinicaexperts/sync.js";
+import { auditExecutors, auditUnmirrored, syncCatalog } from "../clinicaexperts/sync.js";
 import { undoCeImport } from "../clinicaexperts/undo.js";
 import { removeCopiesOfClinic } from "../clinicaexperts/removeCopies.js";
 import { invalidateCeCache } from "../clinicaexperts/availability.js";
@@ -1600,30 +1601,54 @@ apiRouter.get(
   })
 );
 
+// Painel "Meu dia": o resultado de cada periodo fica ~45 s na memoria. O painel pede isso a cada poucos segundos e cada pedido
+// lia as mensagens do periodo inteiro (30/90 dias = dezenas de milhares de linhas) - a aba demorava a abrir e travava o servidor.
+const dashboardCache = new Map<string, { at: number; value: unknown }>();
+const DASHBOARD_TTL_MS = 45_000;
+
 apiRouter.get(
   "/dashboard/stats",
   asyncRoute(async (req, res) => {
     const clinic = await getClinic(req);
-    const { start, end } = req.query as { start?: string; end?: string };
-    const startDate = start ? parseDateParam(start) : new Date(Date.now() - 30 * 24 * 60 * 60_000);
-    const endDate = end ? parseDateParam(end) : new Date();
+    const { start, end, period } = req.query as { start?: string; end?: string; period?: string };
+    // period=0|1|7|30|90 (preferido): a janela e calculada aqui, no fuso da clinica. start/end continuam aceitos.
+    const periodDays = period !== undefined && period !== "" && Number.isFinite(Number(period)) ? Number(period) : null;
+    const win = periodDays !== null ? periodWindow(periodDays, clinic.timezone || "America/Sao_Paulo") : null;
+    const startDate = win ? win.start : start ? parseDateParam(start) : new Date(Date.now() - 30 * 24 * 60 * 60_000);
+    const endDate = win ? win.end : end ? parseDateParam(end) : new Date();
     if (!startDate || !endDate) {
       res.status(400).json({ error: "start/end invalidos" });
       return;
     }
+
+    const cacheKey = `${clinic.id}|${clinic.plan}|${startDate.getTime()}|${Math.floor(endDate.getTime() / 120_000)}`;
+    const hit = dashboardCache.get(cacheKey);
+    if (hit && Date.now() - hit.at < DASHBOARD_TTL_MS) {
+      res.json(hit.value);
+      return;
+    }
+
+    const tz = clinic.timezone || "America/Sao_Paulo";
+    // O grafico mostra pelo menos 14 dias (periodo curto, como "Hoje", viraria uma barra so); os numeros usam so o periodo escolhido.
+    const chartStart = new Date(Math.min(startDate.getTime(), endDate.getTime() - 13 * 24 * 60 * 60_000));
 
     // Numeros REAIS (ver crm/realStats.ts): so o que a Alice de fato fez. No plano
     // gratis a Alice nao atende - a agenda e o chat sao manuais - entao la os
     // cartoes seguem mostrando a operacao da clinica.
     const aliceMode = !isFreePlan(clinic.plan);
     const range = { gte: startDate, lte: endDate };
-    const [activity, appointments, agendaTotal, newContacts] = await Promise.all([
+    const wcNow = wallClockInZone(new Date(), tz);
+    const monthStart = zonedWallClockToUtc(tz, wcNow.year, wcNow.month, 1, 0, 0);
+    const monthEnd = wcNow.month === 12 ? zonedWallClockToUtc(tz, wcNow.year + 1, 1, 1, 0, 0) : zonedWallClockToUtc(tz, wcNow.year, wcNow.month + 1, 1, 0, 0);
+    const [activity, wideAppointments, agendaTotal, newContacts, monthAppointments] = await Promise.all([
       realActivity(clinic.id, startDate, endDate),
       aliceMode
-        ? aliceBookings(clinic.id, startDate, endDate)
-        : prisma.appointment.findMany({ where: { clinicId: clinic.id, scheduledAt: range }, select: { createdAt: true, scheduledAt: true, status: true } }),
+        ? aliceBookings(clinic.id, chartStart, endDate)
+        : prisma.appointment.findMany({ where: { clinicId: clinic.id, scheduledAt: { gte: chartStart, lte: endDate } }, select: { createdAt: true, scheduledAt: true, status: true } }),
       prisma.appointment.count({ where: { clinicId: clinic.id, scheduledAt: range } }),
       aliceMode ? realNewContacts(clinic.id, startDate, endDate) : prisma.patient.count({ where: { clinicId: clinic.id, createdAt: range } }),
+      // Mini calendario: os dias do MES com agendamento (agenda inteira da clinica), qualquer que seja o periodo escolhido.
+      prisma.appointment.findMany({ where: { clinicId: clinic.id, status: { in: ["confirmed", "completed"] }, scheduledAt: { gte: monthStart, lt: monthEnd } }, select: { scheduledAt: true } }),
     ]);
     const attendedIds = aliceMode ? activity.aliceRepliedPatients : activity.liveContactPatients;
     const attended = attendedIds.size;
@@ -1633,27 +1658,38 @@ apiRouter.get(
       ? await prisma.patient.findMany({ where: { clinicId: clinic.id, id: { in: [...attendedIds] } }, select: { phone: true } })
       : [];
 
+    // Alice: dia em que ela marcou; plano gratis (agenda manual): dia da consulta.
+    const stamp = (a: { createdAt: Date; scheduledAt: Date }) => (aliceMode ? a.createdAt : a.scheduledAt);
+    const appointments = wideAppointments.filter((a) => stamp(a).getTime() >= startDate.getTime() && stamp(a).getTime() <= endDate.getTime());
     const completed = appointments.filter((a) => a.status === "completed").length;
     const cancelled = appointments.filter((a) => a.status === "cancelled").length;
     const total = appointments.length;
 
+    // Dias pelo fuso da clinica (antes era UTC: um agendamento das 22h caia no dia seguinte) e SEM cortar em 60 dias (o periodo de
+    // 90 dias mostrava os 60 primeiros, nao os mais recentes).
     const dailyMap = new Map<string, number>();
-    for (const a of appointments) {
-      // Alice: dia em que ela marcou; plano gratis (agenda manual): dia da consulta.
-      const key = (aliceMode ? a.createdAt : a.scheduledAt).toISOString().slice(0, 10);
+    for (const a of wideAppointments) {
+      const key = isoDateInZone(stamp(a), tz);
       dailyMap.set(key, (dailyMap.get(key) ?? 0) + 1);
     }
     const daily: { date: string; count: number }[] = [];
-    const cursor = new Date(startDate);
-    cursor.setHours(0, 0, 0, 0);
-    const lastDay = new Date(endDate);
-    while (cursor <= lastDay && daily.length < 60) {
-      const key = cursor.toISOString().slice(0, 10);
+    const first = wallClockInZone(chartStart, tz);
+    let cursor = zonedWallClockToUtc(tz, first.year, first.month, first.day, 12, 0);
+    const lastKey = isoDateInZone(endDate, tz);
+    while (daily.length < 400) {
+      const key = isoDateInZone(cursor, tz);
+      if (key > lastKey) break;
       daily.push({ date: key, count: dailyMap.get(key) ?? 0 });
-      cursor.setDate(cursor.getDate() + 1);
+      cursor = new Date(cursor.getTime() + 24 * 60 * 60_000);
     }
 
-    res.json({
+    const monthDays: Record<string, number> = {};
+    for (const a of monthAppointments) {
+      const key = isoDateInZone(a.scheduledAt, tz);
+      monthDays[key] = (monthDays[key] ?? 0) + 1;
+    }
+
+    const payload = {
       attended,
       appointmentsTotal: total,
       appointmentsAgenda: agendaTotal, // agenda inteira da clinica no periodo (todas as origens), so pra contexto
@@ -1664,11 +1700,15 @@ apiRouter.get(
       activeConversations,
       byState: leadsByState(attendedPhones.map((p) => p.phone)),
       daily,
+      monthDays,
       usage: await usageSnapshot(clinic.id),
       // Plano gratis: os numeros do proprio historico que mostram o custo de
       // atender na mao (alimentam os blocos de upgrade do painel).
       upsell: isFreePlan(clinic.plan) ? await upsellStats(clinic.id, startDate, endDate) : null,
-    });
+    };
+    if (dashboardCache.size > 100) dashboardCache.clear();
+    dashboardCache.set(cacheKey, { at: Date.now(), value: payload });
+    res.json(payload);
   })
 );
 
@@ -4357,6 +4397,24 @@ apiRouter.get(
   asyncRoute(async (req, res) => {
     const clinic = await getClinic(req);
     res.json(await ceStatusFor(clinic.id));
+  })
+);
+
+// Somente leitura: profissionais que a Alice oferece num procedimento mas que nunca o fizeram (historico de 120 dias do Clinica Experts).
+apiRouter.get(
+  "/clinica-experts/executors",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    res.json(await auditExecutors(clinic.id));
+  })
+);
+
+// Somente leitura: agendamentos futuros que NAO estao no Clinica Experts (o motivo provavel e se ja foi lancado la a mao).
+apiRouter.get(
+  "/clinica-experts/unmirrored",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    res.json(await auditUnmirrored(clinic.id));
   })
 );
 

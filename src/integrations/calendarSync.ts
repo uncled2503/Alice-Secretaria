@@ -12,6 +12,11 @@ export function pushAppointmentInBackground(appointmentId: string): void {
   syncToClinicaExperts(appointmentId);
 }
 
+// So o Google Agenda (o Clinica Experts ja foi espelhado, e conferido, antes: ver book_appointment em ai/alice.ts).
+export function pushGoogleInBackground(appointmentId: string): void {
+  pushToGoogle(appointmentId);
+}
+
 export function removeAppointmentInBackground(appointmentId: string): void {
   removeFromGoogle(appointmentId);
   syncToClinicaExperts(appointmentId);

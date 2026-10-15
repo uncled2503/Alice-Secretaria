@@ -515,17 +515,42 @@ document.querySelectorAll(".nav-item").forEach((btn) => {
 });
 
 // --- Contatos ---
-async function loadContacts() {
-  const contacts = await api("/contacts");
-  state.contacts = contacts;
-  document.getElementById("contacts-count").textContent = `${contacts.length} pessoa(s)`;
-  renderContactsTable(contacts);
+// Assinatura barata de um texto grande (pra saber se a lista mudou sem redesenhar a tela toda).
+function quickHash(str) {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+  return str.length + ":" + h;
 }
 
+const CONTACTS_PAGE = 100;
+state.contactsShown = CONTACTS_PAGE;
+
+function contactsFiltered() {
+  const q = (document.getElementById("contacts-search").value || "").trim().toLowerCase();
+  const all = state.contacts || [];
+  return q ? all.filter((c) => (c.name ?? "").toLowerCase().includes(q) || c.phone.includes(q)) : all;
+}
+
+async function loadContacts() {
+  const body = document.getElementById("contacts-body");
+  if (!state.contacts) {
+    body.innerHTML = "";
+    body.appendChild(el("tr", {}, [el("td", { colspan: "6", class: "hint", style: "padding:1rem" }, ["Carregando pessoas…"])]));
+  }
+  const contacts = await api("/contacts");
+  const sig = quickHash(JSON.stringify(contacts)); // qualquer edicao (nome, etiqueta...) muda a assinatura
+  const changed = sig !== state._contactsSig || !body.querySelector(".contact-name-cell");
+  state.contacts = contacts;
+  state._contactsSig = sig;
+  document.getElementById("contacts-count").textContent = `${contacts.length} pessoa(s)`;
+  if (changed) renderContactsTable(contactsFiltered());
+}
+
+// Desenha so as primeiras linhas (a base inteira, com milhares de pessoas, travava a tela); o resto vem em "Mostrar mais".
 function renderContactsTable(contacts) {
   const body = document.getElementById("contacts-body");
   body.innerHTML = "";
-  for (const c of contacts) {
+  for (const c of contacts.slice(0, state.contactsShown)) {
     const deleteBtn = el("button", { type: "button", class: "btn-icon-danger", title: "Excluir contato" }, [
       el("span", { class: "nav-icon", "data-icon": "trash" }, []),
     ]);
@@ -553,6 +578,14 @@ function renderContactsTable(contacts) {
     row.addEventListener("click", () => openContactPanel(c));
     body.appendChild(row);
   }
+  if (contacts.length > state.contactsShown) {
+    const more = el("button", { type: "button", class: "btn-brand btn-brand--secondary btn-brand--sm" }, [`Mostrar mais (${contacts.length - state.contactsShown} restantes)`]);
+    more.addEventListener("click", () => {
+      state.contactsShown += CONTACTS_PAGE;
+      renderContactsTable(contacts);
+    });
+    body.appendChild(el("tr", {}, [el("td", { colspan: "6", style: "text-align:center;padding:0.8rem" }, [more])]));
+  }
   paintIcons(body);
 }
 
@@ -563,12 +596,9 @@ async function deleteContact(contact) {
   await loadContacts();
 }
 
-document.getElementById("contacts-search").addEventListener("input", (e) => {
-  const q = e.target.value.trim().toLowerCase();
-  const filtered = (state.contacts || []).filter(
-    (c) => (c.name ?? "").toLowerCase().includes(q) || c.phone.includes(q)
-  );
-  renderContactsTable(filtered);
+document.getElementById("contacts-search").addEventListener("input", () => {
+  state.contactsShown = CONTACTS_PAGE;
+  renderContactsTable(contactsFiltered());
 });
 
 document.getElementById("btn-toggle-contact-form").addEventListener("click", () => {
@@ -656,10 +686,19 @@ async function openCrmCard(patient) {
 }
 
 async function loadCrmBoard() {
+  const board = document.getElementById("crm-board");
+  if (!state.crmColumns) board.textContent = "Carregando a Jornada…";
   const columns = await api("/crm/board");
+  const sig = quickHash(JSON.stringify(columns));
+  const changed = sig !== state._crmSig || !board.querySelector(".crm-column");
   state.crmColumns = columns;
-  renderCrmBoard(columns, document.getElementById("crm-search").value);
+  state._crmSig = sig;
+  if (changed) renderCrmBoard(columns, document.getElementById("crm-search").value); // sem mudanca: nao refaz milhares de cards a cada ciclo
 }
+
+// Cada etapa desenha so os primeiros cards (cada card tem um menu de etapas: milhares deles travavam a tela); o resto vem em "Mostrar mais".
+const CRM_COL_PAGE = 40;
+state.crmShown = {};
 
 function renderCrmBoard(columns, query) {
   const q = (query || "").trim().toLowerCase();
@@ -675,7 +714,8 @@ function renderCrmBoard(columns, query) {
       : col.patients;
 
     const cardsBox = el("div", { class: "crm-cards-drop" });
-    for (const p of patients) {
+    const crmLimit = state.crmShown[col.id] || CRM_COL_PAGE;
+    for (const p of patients.slice(0, crmLimit)) {
       const select = el(
         "select",
         {},
@@ -715,6 +755,14 @@ function renderCrmBoard(columns, query) {
       });
 
       cardsBox.appendChild(card);
+    }
+    if (patients.length > crmLimit) {
+      const more = el("button", { type: "button", class: "btn-brand btn-brand--secondary btn-brand--sm" }, [`Mostrar mais (${patients.length - crmLimit})`]);
+      more.addEventListener("click", () => {
+        state.crmShown[col.id] = crmLimit + CRM_COL_PAGE;
+        renderCrmBoard(columns, query);
+      });
+      cardsBox.appendChild(more);
     }
 
     cardsBox.addEventListener("dragover", (e) => {
@@ -896,6 +944,10 @@ document.getElementById("chat-search")?.addEventListener("input", (e) => {
 
 async function loadConversations() {
   const conversations = await api("/conversations");
+  state._convAt = Date.now();
+  const sig = JSON.stringify(conversations);
+  if (sig === state._convSig && state.conversations) return; // nada mudou: nao redesenha 400 itens a cada 5 s
+  state._convSig = sig;
   state.conversations = conversations;
   notifyNewHandoffs(conversations);
   renderConversationsList();
@@ -2977,6 +3029,8 @@ document.getElementById("bc-target-mode").addEventListener("change", (e) => {
 });
 
 function renderBcContactsList() {
+  // A lista de pessoas so e carregada quando alguma tela precisa dela (nao fica mais sendo recarregada em segundo plano).
+  if (!state.contacts) loadContacts().then(renderBcContactsList).catch(() => {});
   const search = document.getElementById("bc-contacts-search").value.trim().toLowerCase();
   const contacts = (state.contacts || []).filter(
     (c) => !search || (c.name ?? "").toLowerCase().includes(search) || c.phone.includes(search)
@@ -3917,24 +3971,32 @@ function loadPersonalize() {
 }
 
 
-async function refreshAll() {
+// Cada aba pesada (Meu dia, Pessoas, Jornada) so recarrega quando esta aberta E o dado passou do prazo. Antes, a cada ~30 s as tres
+// eram recarregadas juntas (a base inteira + o desenho de milhares de cards) e trocar de aba esperava essa fila.
+const TAB_TTL_MS = { dashboard: 60_000, contacts: 60_000, crm: 20_000, agenda: 15_000 };
+state._loadedAt = {};
+async function loadTabData(tab, force = false) {
+  const loader = { dashboard: loadDashboard, contacts: loadContacts, crm: loadCrmBoard, agenda: loadAgenda }[tab];
+  if (!loader) return;
+  if (!force && Date.now() - (state._loadedAt[tab] || 0) < TAB_TTL_MS[tab]) return; // acabou de carregar: a tela ja esta atual
+  state._loadedAt[tab] = Date.now();
+  try {
+    await loader();
+  } catch (err) {
+    state._loadedAt[tab] = 0; // falhou: tenta de novo no proximo ciclo
+    throw err;
+  }
+}
+
+async function refreshAll(force = false) {
   const activeTab = document.querySelector(".nav-item.active")?.dataset.tab;
-  // Dashboard, contatos e quadro do CRM sao pesados no servidor (leem a base inteira): so recarregam a cada ciclo na
-  // propria aba; nas outras, a cada ~30 s (outras telas usam esses dados). As conversas sao leves e atualizam sempre.
-  state._tick = (state._tick || 0) + 1;
-  const full = state._tick % 6 === 1;
-  const need = (tab) => full || activeTab === tab;
   // allSettled: uma aba com erro nao pode travar as outras de carregar.
   await Promise.allSettled([
-    need("dashboard") ? loadDashboard() : Promise.resolve(),
-    need("contacts") ? loadContacts() : Promise.resolve(),
-    need("crm") ? loadCrmBoard() : Promise.resolve(),
-    loadConversations(),
-    state.chatFilter === "archived" ? loadArchivedConversations() : Promise.resolve(),
-    // Agenda so recarrega em background quando esta aberta - evita resetar
-    // a navegacao/filtros que o usuario acabou de mexer.
-    activeTab === "agenda" ? loadAgenda() : Promise.resolve(),
-    state.activeConversationId ? loadMessages(state.activeConversationId) : Promise.resolve(),
+    loadTabData(activeTab, force),
+    // Conversas alimentam o contador do menu: a cada ciclo (5 s) na aba Caixa de conversas, a cada ~10 s nas outras.
+    activeTab === "chat" || force || Date.now() - (state._convAt || 0) > 10_000 ? loadConversations() : Promise.resolve(),
+    state.chatFilter === "archived" && activeTab === "chat" ? loadArchivedConversations() : Promise.resolve(),
+    activeTab === "chat" && state.activeConversationId ? loadMessages(state.activeConversationId) : Promise.resolve(),
   ]);
 }
 
@@ -4134,7 +4196,7 @@ function openUpsell(key) {
   const proof = document.getElementById("upsell-modal-proof");
   const lines = upsellProofLines(state.upsell);
   if (lines.length) {
-    proof.innerHTML = `<div class="upsell-proof-title">No seu painel, nos últimos ${state.periodDays || 30} dias</div>` +
+    proof.innerHTML = `<div class="upsell-proof-title">No seu painel, ${periodPhrase(state.periodDays ?? 30)}</div>` +
       lines.map((l) => `<p>${l}</p>`).join("");
     proof.hidden = false;
   } else {
@@ -4344,10 +4406,25 @@ function renderUsageBar(usage) {
   );
 }
 
+// "nos ultimos 30 dias", "hoje", "ontem" (state.periodDays: 0 = hoje, 1 = ontem, N = ultimos N dias).
+function periodPhrase(days) {
+  return days === 0 ? "hoje" : days === 1 ? "ontem" : `nos últimos ${days} dias`;
+}
+
 async function loadDashboard() {
-  const end = new Date();
-  const start = new Date(end.getTime() - state.periodDays * 24 * 60 * 60_000);
-  const stats = await api(`/dashboard/stats?start=${start.toISOString()}&end=${end.toISOString()}`);
+  const seq = (state._dashSeq = (state._dashSeq || 0) + 1);
+  const busy = document.querySelectorAll("#tab-dashboard .stat-grid, #tab-dashboard .dash-chart-card");
+  busy.forEach((x) => x.classList.add("is-loading")); // os numeros antigos ficam esmaecidos ate os novos chegarem
+  let stats;
+  try {
+    // O servidor calcula a janela no fuso da clinica (0 = hoje, 1 = ontem, N = ultimos N dias).
+    stats = await api(`/dashboard/stats?period=${state.periodDays}`);
+  } catch (err) {
+    busy.forEach((x) => x.classList.remove("is-loading"));
+    throw err;
+  }
+  if (seq !== state._dashSeq) return; // o periodo foi trocado de novo enquanto esta resposta vinha: esta ja e velha
+  busy.forEach((x) => x.classList.remove("is-loading"));
 
   renderUsageBar(stats.usage);
   renderUpsellHero(stats.upsell);
@@ -4373,29 +4450,28 @@ async function loadDashboard() {
   // funciona, então o gráfico entra normal.)
   if (document.body.dataset.biz === "loja") return;
 
-  const totalAppts = stats.daily.reduce((sum, d) => sum + d.count, 0);
-  document.getElementById("chart-total").textContent = `${totalAppts} no período`;
+  document.getElementById("chart-total").textContent = `${stats.appointmentsTotal} no período`;
 
   const chart = document.getElementById("dash-chart");
   chart.innerHTML = "";
   const maxCount = Math.max(1, ...stats.daily.map((d) => d.count));
-  const shown = stats.daily.slice(-30);
+  const shown = stats.daily.slice(-31);
   for (const d of shown) {
     const heightPct = Math.round((d.count / maxCount) * 100);
-    const bar = el("div", { class: `dash-bar${d.count > 0 ? " has-value" : ""}`, style: `height:${Math.max(heightPct, 3)}%` }, []);
     const day = new Date(d.date + "T00:00:00");
+    const bar = el("div", { class: `dash-bar${d.count > 0 ? " has-value" : ""}`, style: `height:${Math.max(heightPct, 3)}%`, title: `${day.toLocaleDateString("pt-BR")}: ${d.count}` }, []);
     chart.appendChild(
       el("div", { class: "dash-bar-wrap" }, [bar, el("div", { class: "dash-bar-label" }, [String(day.getDate())])])
     );
   }
 
-  renderMiniCalendar(stats.daily);
+  renderMiniCalendar(stats.monthDays || {});
 }
 
-function renderMiniCalendar(daily) {
+// Mini calendario: os dias DESTE MES com agendamento (a agenda inteira), qualquer que seja o periodo escolhido nos cartoes.
+function renderMiniCalendar(monthDays) {
   const cal = document.getElementById("mini-calendar");
   cal.innerHTML = "";
-  const byDate = new Map(daily.map((d) => [d.date, d.count]));
 
   const now = new Date();
   const year = now.getFullYear();
@@ -4406,16 +4482,18 @@ function renderMiniCalendar(daily) {
 
   const firstDay = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const todayKey = now.toISOString().slice(0, 10);
+  const keyOf = (day) => `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  const todayKey = keyOf(now.getDate());
 
   for (let i = 0; i < firstDay; i++) cal.appendChild(el("div", { class: "day empty" }, []));
 
   for (let day = 1; day <= daysInMonth; day++) {
-    const key = new Date(year, month, day).toISOString().slice(0, 10);
+    const key = keyOf(day);
+    const count = monthDays[key] ?? 0;
     const classes = ["day"];
     if (key === todayKey) classes.push("today");
-    if ((byDate.get(key) ?? 0) > 0) classes.push("has-appt");
-    cal.appendChild(el("div", { class: classes.join(" ") }, [String(day)]));
+    if (count > 0) classes.push("has-appt");
+    cal.appendChild(el("div", { class: classes.join(" "), ...(count > 0 ? { title: `${count} agendamento(s)` } : {}) }, [String(day)]));
   }
 }
 
@@ -4424,8 +4502,10 @@ document.getElementById("period-row").addEventListener("click", (e) => {
   if (!btn) return;
   document.querySelectorAll("#period-row .period-btn").forEach((b) => b.classList.remove("active"));
   btn.classList.add("active");
-  state.periodDays = Number(btn.dataset.days) || 30;
-  loadDashboard();
+  const days = Number(btn.dataset.days);
+  state.periodDays = Number.isFinite(days) ? days : 30; // "Hoje" e 0: nao pode cair no "|| 30" (mostrava os numeros de 30 dias)
+  state._loadedAt.dashboard = Date.now();
+  loadDashboard().catch(() => { state._loadedAt.dashboard = 0; });
 });
 
 // --- Mapa de leads por estado (tile grid do Brasil) ---
@@ -4693,7 +4773,13 @@ async function loadClinics() {
     resetChatPane();
     updateBrandName();
     renderAlicePower();
-    refreshAll();
+    state._loadedAt = {};
+    state.contacts = null;
+    state._contactsSig = null;
+    state.crmColumns = null;
+    state._crmSig = null;
+    state._convSig = null;
+    refreshAll(true);
   });
 }
 
@@ -7371,6 +7457,45 @@ for (const [id, field] of [["ce-sync-out", "syncOut"], ["ce-block-busy", "blockB
   });
 }
 
+document.getElementById("btn-ce-unmirrored").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const out = document.getElementById("ce-sync-result");
+  btn.disabled = true;
+  try {
+    const r = await api("/clinica-experts/unmirrored");
+    if (r.error) { showError(r.error); return; }
+    const when = (d) => new Date(d).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+    out.textContent = r.items.length
+      ? `${r.items.length} agendamento(s) futuro(s) que NÃO estão no Clínica Experts:\n` +
+        r.items.map((x) => `• ${when(x.startsAt)} — ${x.patient} — ${x.procedure}${x.professional ? ` com ${x.professional}` : ""} (${x.source || "painel"})\n   ${x.alreadyInCe ? "JÁ existe uma reserva igual lá (lançada à mão): pode ignorar." : x.alreadyInCe === false ? "Não existe lá: lance no Clínica Experts ou cancele aqui." : "Não deu pra conferir o Clínica Experts agora."} Motivo provável: ${x.reason}`).join("\n")
+      : "Tudo certo: todos os agendamentos futuros já estão no Clínica Experts.";
+    out.style.whiteSpace = "pre-wrap";
+    out.hidden = false;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("btn-ce-executors").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const out = document.getElementById("ce-sync-result");
+  btn.disabled = true;
+  out.textContent = "Lendo o histórico do Clínica Experts…";
+  out.style.whiteSpace = "pre-wrap";
+  out.hidden = false;
+  try {
+    const r = await api("/clinica-experts/executors");
+    if (r.error) { out.hidden = true; showError(r.error); return; }
+    out.textContent = r.mismatches.length
+      ? `A Alice oferece estes profissionais, mas nos últimos 120 dias eles NÃO fizeram o procedimento no Clínica Experts (${r.historyBookings} atendimentos lidos, ${r.checkedProcedures} procedimentos conferidos):\n` +
+        r.mismatches.map((m) => `• ${m.procedure} — ${m.professional} (quem fez: ${m.doneByOthers.map((o) => `${o.name} ${o.count}x`).join(", ") || "ninguém"})`).join("\n") +
+        "\n\nSe algum desses não deve atender o procedimento, tire o vínculo em Quem atende."
+      : `Tudo certo: todo profissional oferecido pela Alice já fez o procedimento no histórico (${r.checkedProcedures} procedimentos conferidos).`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 document.getElementById("btn-ce-sync").addEventListener("click", async (e) => {
   const btn = e.currentTarget;
   const out = document.getElementById("ce-sync-result");
@@ -7473,7 +7598,7 @@ function goToTab(tab) {
   document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
   document.getElementById(`tab-${tab}`).classList.add("active");
-  if (typeof refreshAll === "function" && state.pollHandle) refreshAll(); // a aba nova carrega na hora (o ciclo so recarrega a aba aberta)
+  if (typeof refreshAll === "function" && state.pollHandle) refreshAll(); // a aba nova carrega na hora, so se o dado dela estiver velho
   const activeNav = document.querySelector(`.nav-item[data-tab="${tab}"]`);
   const title = document.getElementById("mobile-topbar-title");
   if (activeNav && title) title.textContent = navItemLabel(activeNav);

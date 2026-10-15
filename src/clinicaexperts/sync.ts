@@ -1,5 +1,6 @@
 import { prisma } from "../db/client.js";
 import { notifyStaff } from "../crm/notify.js";
+import { logActivity } from "../crm/activity.js";
 import { formatDateTimeInZone } from "../scheduling/time.js";
 import { ceRequest, dayBoundIso, getAccount, isoWithOffset, noteError } from "./client.js";
 import { invalidateCeCache } from "./availability.js";
@@ -12,14 +13,16 @@ import { procKey } from "./procKey.js";
 
 // Serializa as chamadas de um mesmo agendamento (criar e logo remarcar nao
 // podem correr em paralelo, senao o segundo nao enxerga o uuid do primeiro).
-const chains = new Map<string, Promise<void>>();
-function serial(key: string, job: () => Promise<void>): Promise<void> {
+const chains = new Map<string, Promise<unknown>>();
+function serial<T>(key: string, job: () => Promise<T>): Promise<T> {
   const prev = chains.get(key) ?? Promise.resolve();
   const next = prev.catch(() => undefined).then(job);
   chains.set(key, next);
-  void next.finally(() => {
-    if (chains.get(key) === next) chains.delete(key);
-  });
+  void next
+    .finally(() => {
+      if (chains.get(key) === next) chains.delete(key);
+    })
+    .catch(() => undefined);
   return next;
 }
 
@@ -48,13 +51,30 @@ async function ensurePatientUuid(
   return uuid;
 }
 
-async function alertFailure(clinicId: string, text: string): Promise<void> {
+// Resultado de espelhar um agendamento no Clinica Experts. definitive=false: nao deu pra saber se o CE criou (rede/tempo esgotado).
+export type SyncResult = { ok: true; skipped?: string } | { ok: false; error: string; definitive: boolean };
+
+// quiet: quem chamou (a Alice, ao agendar) vai tratar a falha na hora - desfaz o agendamento e passa pra equipe -, entao nao manda o
+// aviso de "lance manualmente". O erro exato fica no diario de atividades de qualquer jeito (antes so aparecia em um aviso que some).
+async function alertFailure(clinicId: string, text: string, quiet = false): Promise<void> {
   await noteError(clinicId, text);
+  await logActivity({ clinicId, type: "ce_mirror_failed", area: "agenda", title: "Agendamento não chegou ao Clínica Experts", description: text.slice(0, 480), actorName: null });
+  if (quiet) return;
   await notifyStaff(
     clinicId,
     "automation_failed",
     `⚠️ Não consegui espelhar um agendamento no Clínica Experts: ${text}. Confira e lance manualmente para evitar horário duplicado.`,
   );
+}
+
+// A reserva ja existe la? (depois de uma falha incerta: rede caiu, tempo esgotado, erro 5xx). Procura no dia pelo mesmo paciente e horario.
+async function findExistingBooking(clinicId: string, patientUuid: string, startsAt: Date, tz: string): Promise<string | null> {
+  const res = await ceRequest<{ data: { uuid: string; starts_at: string; status: string; patient: { uuid: string } | null }[] }>(clinicId, "/bookings", {
+    query: { starts_at: dayBoundIso(startsAt, tz, "start"), ends_at: dayBoundIso(startsAt, tz, "end"), per_page: 1000 },
+  });
+  if (!res.ok) return null;
+  const hit = res.data.data?.find((b) => b.patient?.uuid === patientUuid && b.status !== "canceled" && Date.parse(b.starts_at) === startsAt.getTime());
+  return hit?.uuid ?? null;
 }
 
 // Procura o paciente no Clinica Experts pelo telefone e, se achar, guarda o
@@ -89,37 +109,43 @@ export async function enrichPatientFromCe(clinicId: string, patient: { id: strin
   }
 }
 
-export function syncAppointment(appointmentId: string): Promise<void> {
-  return serial(appointmentId, async () => {
+// Espelha um agendamento da Alice (criar, remarcar, cancelar) no Clinica Experts e DEVOLVE o resultado. Quem agenda pela Alice espera
+// esse resultado antes de dizer "agendado" ao paciente (opts.quiet: trata a falha na hora, sem o aviso "lance manualmente").
+export function syncAppointment(appointmentId: string, opts: { quiet?: boolean } = {}): Promise<SyncResult> {
+  return serial(appointmentId, async (): Promise<SyncResult> => {
     const appt = await prisma.appointment.findUnique({
       where: { id: appointmentId },
       include: { patient: true, procedure: true, professional: true, clinic: true },
     });
-    if (!appt) return;
+    if (!appt) return { ok: true, skipped: "agendamento nao encontrado" };
     const account = await getAccount(appt.clinicId);
-    if (!account || !account.syncOut) return;
+    if (!account || !account.syncOut) return { ok: true, skipped: "Clinica Experts desligado" };
 
     const tz = appt.clinic.timezone || "America/Sao_Paulo";
     const label = `${appt.patient.name ?? appt.patient.phone} - ${appt.procedure.name} em ${formatDateTimeInZone(appt.scheduledAt, tz)}`;
+    const fail = async (text: string, error: string, definitive = true): Promise<SyncResult> => {
+      await alertFailure(appt.clinicId, text, opts.quiet === true);
+      return { ok: false, error, definitive };
+    };
 
     // Cancelamento: so cancela la se o agendamento tinha sido espelhado.
     if (appt.status === "cancelled") {
-      if (!appt.ceBookingUuid) return;
+      if (!appt.ceBookingUuid) return { ok: true, skipped: "nunca foi espelhado" };
       const res = await ceRequest(appt.clinicId, `/bookings/${appt.ceBookingUuid}/cancel`, { method: "PATCH" });
-      if (!res.ok) return alertFailure(appt.clinicId, `cancelamento de ${label} (${res.error})`);
+      if (!res.ok) return fail(`cancelamento de ${label} (${res.error})`, res.error, res.status > 0 && res.status < 500);
       await prisma.appointment.update({ where: { id: appt.id }, data: { ceBookingUuid: null } });
       invalidateCeCache(appt.clinicId);
-      return;
+      return { ok: true };
     }
     // Atendido/faltou: quem muda isso la e a equipe, no proprio Clinica Experts.
-    if (appt.status !== "confirmed") return;
+    if (appt.status !== "confirmed") return { ok: true, skipped: "status gerenciado no Clinica Experts" };
 
     if (!appt.procedure.ceId || !appt.professional?.ceUuid) {
       const faltando = [!appt.procedure.ceId ? `procedimento "${appt.procedure.name}"` : null, !appt.professional?.ceUuid ? (appt.professional ? `profissional ${appt.professional.name}` : "profissional (nenhum definido)") : null].filter(Boolean).join(" e ");
-      return alertFailure(appt.clinicId, `${label} (sem vínculo com o Clínica Experts: ${faltando}; use "Vincular procedimentos" ou "Sincronizar catálogo")`);
+      return fail(`${label} (sem vínculo com o Clínica Experts: ${faltando}; use "Vincular procedimentos" ou "Sincronizar catálogo")`, `sem vinculo com o Clinica Experts: ${faltando}`);
     }
     const patientUuid = await ensurePatientUuid(appt.clinicId, appt.patient);
-    if (!patientUuid) return alertFailure(appt.clinicId, `${label} (não consegui localizar nem criar o paciente)`);
+    if (!patientUuid) return fail(`${label} (não consegui localizar nem criar o paciente)`, "nao consegui localizar nem criar o paciente no Clinica Experts");
 
     const end = new Date(appt.scheduledAt.getTime() + appt.procedure.durationMin * 60_000);
     const body = {
@@ -132,16 +158,151 @@ export function syncAppointment(appointmentId: string): Promise<void> {
 
     if (appt.ceBookingUuid) {
       const res = await ceRequest(appt.clinicId, `/bookings/${appt.ceBookingUuid}`, { method: "PUT", body });
-      if (!res.ok) return alertFailure(appt.clinicId, `remarcação de ${label} (${res.error})`);
+      if (!res.ok) return fail(`remarcação de ${label} (${res.error})`, res.error, res.status > 0 && res.status < 500);
     } else {
       const res = await ceRequest<{ data: { uuid: string } }>(appt.clinicId, "/bookings", { method: "POST", body: { ...body, status: "scheduled" } });
-      if (!res.ok) return alertFailure(appt.clinicId, `${label} (${res.error})`);
-      const uuid = res.data.data?.uuid;
-      if (uuid) await prisma.appointment.update({ where: { id: appt.id }, data: { ceBookingUuid: uuid } });
+      let uuid = res.ok ? res.data.data?.uuid ?? null : null;
+      if (!uuid) {
+        // Erro 4xx = o CE recusou de vez. Rede/tempo esgotado/5xx (ou resposta sem uuid) = pode ter criado: confere antes de desistir.
+        const uncertain = res.ok || res.status === 0 || res.status >= 500;
+        if (uncertain) uuid = await findExistingBooking(appt.clinicId, patientUuid, appt.scheduledAt, tz);
+        if (!uuid) {
+          const error = res.ok ? "o Clinica Experts respondeu sem o codigo da reserva" : res.error;
+          return fail(`${label} (${error})`, error, !uncertain);
+        }
+      }
+      await prisma.appointment.update({ where: { id: appt.id }, data: { ceBookingUuid: uuid } });
     }
     invalidateCeCache(appt.clinicId);
     await prisma.clinicaExpertsAccount.updateMany({ where: { clinicId: appt.clinicId }, data: { lastSyncAt: new Date(), lastError: null } });
+    return { ok: true };
   });
+}
+
+// AUDITORIA (somente leitura): agendamentos FUTUROS da Alice/painel que ainda nao estao no Clinica Experts, com o motivo provavel e se ja
+// existe uma reserva igual la (lancada a mao pela recepcao). Serve pra equipe saber o que lancar ou cancelar.
+export interface UnmirroredItem {
+  id: string;
+  patient: string;
+  procedure: string;
+  professional: string | null;
+  startsAt: Date;
+  source: string | null;
+  bookedAt: Date;
+  reason: string;
+  alreadyInCe: boolean | null; // null = nao deu pra conferir
+}
+
+const foldName = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+
+export async function auditUnmirrored(clinicId: string): Promise<{ ok: boolean; error?: string; items: UnmirroredItem[] }> {
+  const account = await getAccount(clinicId);
+  if (!account) return { ok: false, error: "Clinica Experts nao conectado.", items: [] };
+  const clinic = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { timezone: true } });
+  const tz = clinic?.timezone || "America/Sao_Paulo";
+  const appts = await prisma.appointment.findMany({
+    where: { clinicId, status: "confirmed", ceBookingUuid: null, scheduledAt: { gte: new Date() } },
+    orderBy: { scheduledAt: "asc" },
+    take: 100,
+    include: { patient: { select: { name: true, phone: true, ceUuid: true } }, procedure: { select: { name: true, ceId: true } }, professional: { select: { name: true, ceUuid: true } } },
+  });
+
+  // Reservas do CE nos dias envolvidos (uma consulta por dia)
+  const dayKeys = [...new Set(appts.map((a) => dayBoundIso(a.scheduledAt, tz, "start")))];
+  const ceByDay = new Map<string, { starts_at: string; status: string; patient: { uuid: string; name: string } | null }[] | null>();
+  for (const key of dayKeys) {
+    const sample = appts.find((a) => dayBoundIso(a.scheduledAt, tz, "start") === key)!;
+    const res = await ceRequest<{ data: { starts_at: string; status: string; patient: { uuid: string; name: string } | null }[] }>(clinicId, "/bookings", {
+      query: { starts_at: key, ends_at: dayBoundIso(sample.scheduledAt, tz, "end"), per_page: 1000 },
+    });
+    ceByDay.set(key, res.ok ? res.data.data ?? [] : null);
+  }
+
+  const items: UnmirroredItem[] = appts.map((a) => {
+    const day = ceByDay.get(dayBoundIso(a.scheduledAt, tz, "start"));
+    const label = a.patient.name ?? a.patient.phone;
+    const alreadyInCe =
+      day == null
+        ? null
+        : day.some(
+            (b) =>
+              b.status !== "canceled" &&
+              Date.parse(b.starts_at) === a.scheduledAt.getTime() &&
+              ((a.patient.ceUuid && b.patient?.uuid === a.patient.ceUuid) || (b.patient?.name && foldName(b.patient.name) === foldName(label))),
+          );
+    const reason = !a.procedure.ceId
+      ? `procedimento "${a.procedure.name}" sem vínculo com o Clínica Experts`
+      : !a.professional?.ceUuid
+        ? a.professional
+          ? `profissional ${a.professional.name} sem vínculo com o Clínica Experts`
+          : "sem profissional definido"
+        : "o Clínica Experts não aceitou ou a conexão falhou (veja o Diário de atividades)";
+    return { id: a.id, patient: label, procedure: a.procedure.name, professional: a.professional?.name ?? null, startsAt: a.scheduledAt, source: a.source, bookedAt: a.createdAt, reason, alreadyInCe };
+  });
+  return { ok: true, items };
+}
+
+// AUDITORIA (somente leitura): QUEM FAZ O QUE. Compara os profissionais que a Alice oferece em cada procedimento com quem de fato o fez
+// nos ultimos 120 dias no Clinica Experts. Pega "a Alice marcou Lavieen com a Amanda, que nunca fez Lavieen" (15/10): a Alice so oferece
+// profissional VINCULADO ao procedimento, e o vinculo inicial vem de um palpite por grupo (injetavel/tecnologia).
+export interface ExecutorMismatch {
+  procedure: string;
+  professional: string;
+  doneByOthers: { name: string; count: number }[]; // quem fez de verdade
+  totalDone: number;
+}
+
+export async function auditExecutors(clinicId: string): Promise<{ ok: boolean; error?: string; checkedProcedures: number; historyBookings: number; mismatches: ExecutorMismatch[] }> {
+  const empty = { ok: false, checkedProcedures: 0, historyBookings: 0, mismatches: [] as ExecutorMismatch[] };
+  if (!(await getAccount(clinicId))) return { ...empty, error: "Clinica Experts nao conectado." };
+  const tz = (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { timezone: true } }))?.timezone || "America/Sao_Paulo";
+  const to = new Date(Date.now() - 24 * 3_600_000);
+  const from = new Date(to.getTime() - 120 * 24 * 3_600_000);
+  const history = await fetchAll<CeBooking>(clinicId, "/bookings", { starts_at: dayBoundIso(from, tz, "start"), ends_at: dayBoundIso(to, tz, "end") });
+  if (!history) return { ...empty, error: "Nao consegui ler o historico do Clinica Experts (veja o erro na tela)." };
+  const usable = history.filter((b) => b.status !== "canceled" && b.status !== "noshow" && b.professional?.uuid);
+
+  const doneBy = new Map<number, Map<string, number>>(); // ceId -> (uuid do profissional -> vezes)
+  for (const b of usable) {
+    for (const p of b.procedures ?? []) {
+      const m = doneBy.get(p.id) ?? new Map<string, number>();
+      m.set(b.professional!.uuid, (m.get(b.professional!.uuid) ?? 0) + 1);
+      doneBy.set(p.id, m);
+    }
+  }
+  const pros = await prisma.professional.findMany({ where: { clinicId }, select: { name: true, ceUuid: true } });
+  const nameByUuid = new Map(pros.filter((p) => p.ceUuid).map((p) => [p.ceUuid as string, p.name]));
+  const procs = await prisma.procedure.findMany({
+    where: { clinicId, ceId: { not: null }, internalOnly: false },
+    select: { name: true, ceId: true, professionals: { where: { active: true }, select: { name: true, ceUuid: true } } },
+  });
+
+  const mismatches: ExecutorMismatch[] = [];
+  for (const p of procs) {
+    const counts = doneBy.get(p.ceId as number);
+    const total = counts ? [...counts.values()].reduce((a, b) => a + b, 0) : 0;
+    if (total < 3) continue; // pouco historico: nao da pra afirmar nada
+    for (const pro of p.professionals) {
+      if (!pro.ceUuid || (counts?.get(pro.ceUuid) ?? 0) > 0) continue;
+      mismatches.push({
+        procedure: p.name,
+        professional: pro.name,
+        totalDone: total,
+        doneByOthers: [...(counts ?? new Map<string, number>()).entries()]
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 4)
+          .map(([uuid, count]) => ({ name: nameByUuid.get(uuid) ?? "outro profissional", count })),
+      });
+    }
+  }
+  mismatches.sort((a, b) => b.totalDone - a.totalDone);
+  return { ok: true, checkedProcedures: procs.length, historyBookings: usable.length, mismatches: mismatches.slice(0, 80) };
+}
+
+// O Clinica Experts esta conectado e a clinica espelha os agendamentos da Alice la? (entao a reserva so vale depois de entrar la)
+export async function ceMirrorEnabled(clinicId: string): Promise<boolean> {
+  const account = await getAccount(clinicId);
+  return !!account && account.syncOut;
 }
 
 export function syncAppointmentInBackground(appointmentId: string): void {
