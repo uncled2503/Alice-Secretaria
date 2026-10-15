@@ -21,7 +21,7 @@ const { syncAppointment, ceMirrorEnabled } = await import("../dist/clinicaexpert
 
 test.after(async () => {
   await prisma.$disconnect();
-  for (const ext of ["", "-wal", "-shm", "-journal"]) fs.rmSync(dbFile + ext, { force: true });
+  for (const ext of ["", "-wal", "-shm", "-journal"]) { try { fs.rmSync(dbFile + ext, { force: true }); } catch { /* Windows pode segurar o arquivo por um instante: e temporario */ } }
 });
 
 // ---- cenario ----

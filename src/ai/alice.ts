@@ -38,6 +38,8 @@ import { capSlotLines } from "./slotText.js";
 import { absorbToolResult, checkSlotMentions, knownFrom, newSlotState, renderBooked, renderOffer, SLOT_FALLBACK_ASK, SLOT_NUDGE } from "./slotGuard.js";
 import { isJobSeeker } from "./jobSeeker.js";
 import { findChosenSlot, identifyWanted, offersSlots, staffConfirmedBooking } from "./bookingIntent.js";
+import { statementsNote } from "./clinicStatements.js";
+import { checkClinicTimeConflicts } from "./timeConflict.js";
 import { ceBookingReadiness } from "../clinicaexperts/procedureLink.js";
 import { buildConversationBrief } from "./conversationBrief.js";
 import { selectFocusProcedures } from "./procedureFocus.js";
@@ -2159,7 +2161,10 @@ async function generateReplyUnlocked(
     const lastUserText = history.filter((m) => m.role === "user").at(-1)?.content ?? "";
     // so vale se a ULTIMA fala foi o proprio lembrete (senao o "sim" pode ser resposta a outra pergunta da conversa)
     const lastNonUser = history.filter((m) => m.role !== "user").at(-1);
-    if (isConfirmationReply(lastUserText) && lastNonUser?.authorName === "Lembrete de consulta") {
+    // Confirmacao pedida por uma PESSOA da equipe (celular/painel, "Passando para confirmar o seu agendamento...") vale igual ao lembrete
+    // automatico: a resposta "Confirmado" e confirmacao, nao pedido de horario (Helia, 15/10: a Alice respondeu com horarios de peeling).
+    const humanAskedConfirm = lastNonUser?.role === "human" && /\bconfirm\w*\b/i.test(lastNonUser.content) && /\b(agendamento|hor[aá]rio|atendimento)\b/i.test(lastNonUser.content);
+    if (isConfirmationReply(lastUserText) && (lastNonUser?.authorName === "Lembrete de consulta" || humanAskedConfirm)) {
       const now = new Date();
       const awaiting = await prisma.appointment.findFirst({
         where: {
@@ -2168,10 +2173,17 @@ async function generateReplyUnlocked(
           status: "confirmed",
           patientConfirmed: false,
           scheduledAt: { gte: now, lte: new Date(now.getTime() + 72 * 3_600_000) },
-          reminders: { some: { sentAt: { gte: new Date(now.getTime() - 36 * 3_600_000) }, rule: { hoursBefore: { gte: 12 } } } },
+          ...(humanAskedConfirm ? {} : { reminders: { some: { sentAt: { gte: new Date(now.getTime() - 36 * 3_600_000) }, rule: { hoursBefore: { gte: 12 } } } } }),
         },
         select: { id: true },
       });
+      if (!awaiting && humanAskedConfirm) {
+        // Confirmacao pedida pela equipe e a pessoa nao tem horario pendente aqui (agendado so no Clinica Experts): so agradece, sem oferecer nada.
+        const text = confirmationThanks(patient.name);
+        await prisma.message.create({ data: { conversationId: conversation.id, role: "assistant", content: text, deliveryStatus: "pending" } });
+        await prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: new Date() } });
+        return text;
+      }
       if (awaiting) {
         try {
           const raw = await runTool(clinicId, patient.id, conversation.id, "manage_my_appointment", { action: "confirm" });
@@ -2241,6 +2253,28 @@ async function generateReplyUnlocked(
   }
 
   await enrichPatientFromCe(clinicId, patient); // nome completo/vinculo pelo Clinica Experts (melhor esforco)
+
+  // O QUE A CLINICA JA ESCREVEU (equipe, celular, lembretes): vale tanto quanto a agenda. Se a mensagem da recepcao diz 09:30 e a agenda da Alice
+  // diz 08:00 (reserva movida no Clinica Experts), confere la e corrige; se nao der pra concluir, a Alice NAO afirma nenhum horario (15/10, Rita).
+  let statementsInfo = "";
+  if (usageClinic && usageClinic.businessType !== "geral") {
+    const tcTz = (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { timezone: true } }))?.timezone || "America/Sao_Paulo";
+    try {
+      const tc = await checkClinicTimeConflicts(clinicId, { id: patient.id, name: patient.name, ceUuid: patient.ceUuid }, history, tcTz);
+      if (tc.remaining.length) {
+        const c = tc.remaining[0];
+        console.warn(`[horario-divergente] conv ${conversation.id}: clinica escreveu ${c.clinicTime} em ${c.dd}/${c.mm}, agenda tem ${c.localTimes.join(",")} - passando pra equipe`);
+        await runTool(clinicId, patient.id, conversation.id, "transfer_to_human", {
+          reason: "Horário divergente entre a agenda e a mensagem da clínica",
+          summary: `A mensagem da clínica (${c.from}) diz ${c.clinicTime} em ${String(c.dd).padStart(2, "0")}/${String(c.mm).padStart(2, "0")}, mas a agenda da Alice tem ${c.localTimes.join(" / ")}. A Alice não afirmou nenhum horário. Confira o Clínica Experts e responda: "${c.quote}".`,
+        });
+        return "";
+      }
+      statementsInfo = statementsNote(tc.statements);
+    } catch (err) {
+      console.error("[horario-divergente] falha ao conferir:", err);
+    }
+  }
   // FLUXO DE VENDA: le a conversa (intencao agora, o que ela ja contou, se recusou horarios) e define a PROXIMA JOGADA. O
   // prompt desliga as regras que conflitam com ela e a jogada vai na ultima instrucao ao modelo.
   const trailingNow: string[] = [];
@@ -2333,7 +2367,7 @@ async function generateReplyUnlocked(
       const reading = await readConversation({ clinicId, patientId: patient.id, history, trailing, pastVisitCount, skipAnalysis: flow.intent === "booked" });
       messages.push({
         role: "system",
-        content: `${reading ? reading + "\n\n" : ""}JOGADA AGORA (siga isto): ${flow.nextMove}\n\n${memory ? memory + "\n\n" : ""}LEMBRETE FINAL: ${trailing.length > 1 ? "as mensagens novas da pessoa (ainda sem resposta) sao" : "a mensagem nova da pessoa e"}: ${trailing.map((t) => `"${t.slice(0, 300)}"`).join(" + ")}. Responda SOMENTE a isso, UMA vez${trailing.length > 1 ? ", juntando as mensagens numa resposta so" : ""}. O que ela perguntou ANTES ja foi respondido nas mensagens anteriores: NAO responda de novo, NAO repita valores, endereco, horarios, avisos nem frases que voce ja disse, e NAO feche com a mesma pergunta das mensagens anteriores (mude a pergunta ou so responda e pare). Fale como uma pessoa conversando: curto, direto, natural, continuando a conversa de onde ela parou.`,
+        content: `${reading ? reading + "\n\n" : ""}${statementsInfo ? statementsInfo + "\n\n" : ""}JOGADA AGORA (siga isto): ${flow.nextMove}\n\n${memory ? memory + "\n\n" : ""}LEMBRETE FINAL: ${trailing.length > 1 ? "as mensagens novas da pessoa (ainda sem resposta) sao" : "a mensagem nova da pessoa e"}: ${trailing.map((t) => `"${t.slice(0, 300)}"`).join(" + ")}. Responda SOMENTE a isso, UMA vez${trailing.length > 1 ? ", juntando as mensagens numa resposta so" : ""}. O que ela perguntou ANTES ja foi respondido nas mensagens anteriores: NAO responda de novo, NAO repita valores, endereco, horarios, avisos nem frases que voce ja disse, e NAO feche com a mesma pergunta das mensagens anteriores (mude a pergunta ou so responda e pare). Fale como uma pessoa conversando: curto, direto, natural, continuando a conversa de onde ela parou.`,
       });
     }
   }

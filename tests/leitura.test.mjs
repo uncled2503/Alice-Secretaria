@@ -100,5 +100,5 @@ test("o motor le 50 mensagens e injeta a leitura junto da JOGADA AGORA", () => {
   assert.match(src, /export const HISTORY_LIMIT = 50;/);
   assert.match(src, /take: HISTORY_LIMIT/);
   assert.match(src, /const reading = await readConversation\(/);
-  assert.match(src, /\$\{reading \? reading \+ "\\n\\n" : ""\}JOGADA AGORA/);
+  assert.match(src, /\$\{reading \? reading \+ "\\n\\n" : ""\}(\$\{statementsInfo \? statementsInfo \+ "\\n\\n" : ""\})?JOGADA AGORA/);
 });

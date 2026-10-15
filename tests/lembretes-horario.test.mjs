@@ -30,7 +30,7 @@ const put = (id, body) => fetch(`http://127.0.0.1:${port}/api/reminder-rules/${i
 test.after(async () => {
   server.close();
   await prisma.$disconnect();
-  for (const ext of ["", "-wal", "-shm", "-journal"]) fs.rmSync(dbFile + ext, { force: true });
+  for (const ext of ["", "-wal", "-shm", "-journal"]) { try { fs.rmSync(dbFile + ext, { force: true }); } catch { /* Windows pode segurar o arquivo por um instante: e temporario */ } }
 });
 
 const ONTEM = "Olá, *{primeiro_nome}*! 💖 Seu momento de autocuidado na Lisboa está chegando.\n📅 Data: {data} (amanhã)\n⏰ Horário: {hora}";

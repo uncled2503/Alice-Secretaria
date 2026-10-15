@@ -41,7 +41,7 @@ const stats = async (qs) => (await fetch(`http://127.0.0.1:${port}/api/dashboard
 test.after(async () => {
   server.close();
   await prisma.$disconnect();
-  for (const ext of ["", "-wal", "-shm", "-journal"]) fs.rmSync(dbFile + ext, { force: true });
+  for (const ext of ["", "-wal", "-shm", "-journal"]) { try { fs.rmSync(dbFile + ext, { force: true }); } catch { /* Windows pode segurar o arquivo por um instante: e temporario */ } }
 });
 
 test("Hoje, Ontem e 30 dias devolvem numeros DIFERENTES (antes Hoje mostrava os de 30 dias)", async () => {
