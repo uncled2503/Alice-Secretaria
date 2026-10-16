@@ -717,6 +717,7 @@ apiRouter.post(
             name,
             username: email,
             passwordHash: hashPassword(password),
+            passwordChangedAt: new Date(),
             role: "client",
           },
         });
@@ -785,12 +786,12 @@ apiRouter.put(
         data: {
           username: email,
           // Trocar a senha derruba as sessoes antigas dessa conta na hora.
-          ...(password ? { passwordHash: hashPassword(password), sessionEpoch: { increment: 1 } } : {}),
+          ...(password ? { passwordHash: hashPassword(password), passwordChangedAt: new Date(), sessionEpoch: { increment: 1 } } : {}),
         },
       });
     } else {
       await prisma.staffUser.create({
-        data: { clinicId, name: clinic.name, username: email, passwordHash: hashPassword(password), role: "client" },
+        data: { clinicId, name: clinic.name, username: email, passwordHash: hashPassword(password), passwordChangedAt: new Date(), role: "client" },
       });
     }
     res.json({ ok: true, clientLogin: email, sessionsRevoked: Boolean(current && password) });
@@ -815,6 +816,33 @@ apiRouter.post(
       data: { sessionEpoch: { increment: 1 } },
     });
     res.json({ ok: true, accounts: r.count });
+  })
+);
+
+// Diagnostico de "nao consigo entrar": contas da clinica (quando a senha foi trocada) + as ultimas tentativas que FALHARAM com o motivo. So admin.
+apiRouter.get(
+  "/clinics/:id/login-diagnostics",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinicId = req.params.id;
+    const accounts = await prisma.staffUser.findMany({
+      where: { clinicId },
+      orderBy: { createdAt: "asc" },
+      select: { username: true, role: true, createdAt: true, passwordChangedAt: true, sessionEpoch: true },
+    });
+    const select = { id: true, username: true, reason: true, hint: true, ip: true, userAgent: true, createdAt: true } as const;
+    const known = await prisma.loginFailure.findMany({
+      where: { OR: [{ clinicId }, { username: { in: accounts.map((a) => a.username) } }] },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+      select,
+    });
+    // E-mail digitado errado (nao existe, entao nao tem clinica): aparece aqui quando e PARECIDO com o de uma conta desta clinica (erro de digitacao).
+    const unknown = (await prisma.loginFailure.findMany({ where: { reason: "usuario_inexistente" }, orderBy: { createdAt: "desc" }, take: 200, select })).filter((x) =>
+      accounts.some((a) => loginNamesAreClose(x.username, a.username)),
+    );
+    const failures = [...known, ...unknown].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, 20);
+    res.json({ accounts, failures });
   })
 );
 
@@ -5454,12 +5482,50 @@ const DUMMY_HASH = hashPassword(randomBytes(24).toString("hex"));
 
 // So login/bootstrap aceitam requisicao sem sessao - sem limite de tentativas,
 // dariam pra forcar senha por tentativa e erro sem nenhum obstaculo.
+// PURO: o e-mail digitado e parecido com o da conta (mesma parte antes do @, ou ate 2 letras de diferenca)? Pega erro de digitacao no e-mail.
+export function loginNamesAreClose(typed: string, real: string): boolean {
+  const a = typed.trim().toLowerCase();
+  const b = real.trim().toLowerCase();
+  if (!a || !b) return false;
+  if (a === b || a.split("@")[0] === b.split("@")[0]) return true;
+  if (Math.abs(a.length - b.length) > 2) return false;
+  const prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    let diag = prev[0];
+    prev[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const keep = prev[j];
+      prev[j] = Math.min(prev[j] + 1, prev[j - 1] + 1, diag + (a[i - 1] === b[j - 1] ? 0 : 1));
+      diag = keep;
+    }
+  }
+  return prev[b.length] <= 2;
+}
+
+// Registra uma tentativa de login que falhou (motivo + dica; NUNCA a senha). Nunca derruba o login se falhar.
+async function logLoginFailure(req: Request, d: { username: string; staffId?: string | null; clinicId?: string | null; reason: string; hint?: string }): Promise<void> {
+  console.warn(`[login] falhou (${d.reason}) usuario="${d.username.slice(0, 60)}" ip=${req.ip ?? "?"}${d.hint ? ` | ${d.hint}` : ""}`);
+  await prisma.loginFailure
+    .create({
+      data: {
+        username: d.username.slice(0, 120), staffId: d.staffId ?? null, clinicId: d.clinicId ?? null, reason: d.reason, hint: (d.hint ?? "").slice(0, 200),
+        ip: (req.ip ?? "").slice(0, 45), userAgent: (req.get("user-agent") ?? "").slice(0, 300),
+      },
+    })
+    .catch((err) => console.error("[login] falha ao registrar LoginFailure:", err));
+}
+
 const loginRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 20,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Muitas tentativas de login. Aguarde alguns minutos e tente de novo." },
+  handler: (req, res, _next, options) => {
+    const u = typeof req.body?.username === "string" ? req.body.username.trim().toLowerCase() : "";
+    void logLoginFailure(req, { username: u || "(vazio)", reason: "limite_de_tentativas", hint: "mais de 20 tentativas em 15 min deste IP" });
+    res.status(options.statusCode).send(options.message);
+  },
 });
 
 apiRouter.get("/staff/me", (req, res) => {
@@ -5535,10 +5601,23 @@ apiRouter.post(
     const staff = await prisma.staffUser.findUnique({ where: { username } });
     // Verifica a senha mesmo quando o usuario nao existe (contra um dummy hash),
     // pra nao vazar por tempo de resposta quais usuarios existem.
-    const passwordOk = staff
+    let passwordOk = staff
       ? await verifyPasswordAsync(password, staff.passwordHash)
       : (await verifyPasswordAsync(password, DUMMY_HASH), false);
+    // Erro comum de copiar/colar: espaco sobrando antes/depois da senha. Aceita a senha sem o espaco (a senha certa continua exigida).
+    if (staff && !passwordOk && password !== password.trim() && password.trim()) {
+      passwordOk = await verifyPasswordAsync(password.trim(), staff.passwordHash);
+    }
     if (!staff || !passwordOk) {
+      // Diagnostico para o ADMIN (nunca mostrado a quem tentou, pra nao revelar quais contas existem): o que provavelmente deu errado.
+      let hint = "";
+      if (staff) {
+        const flipFirst = password.length > 1 ? (password[0] === password[0].toUpperCase() ? password[0].toLowerCase() : password[0].toUpperCase()) + password.slice(1) : "";
+        if (flipFirst && flipFirst !== password && (await verifyPasswordAsync(flipFirst, staff.passwordHash))) hint = "a senha esta certa, mas com a 1a letra em maiuscula/minuscula trocada";
+        else if (password !== password.toLowerCase() && (await verifyPasswordAsync(password.toLowerCase(), staff.passwordHash))) hint = "a senha esta certa, mas com maiusculas/minusculas trocadas";
+        else hint = `senha diferente da cadastrada (${password.length} caracteres digitados)${staff.passwordChangedAt ? `; senha trocada em ${staff.passwordChangedAt.toISOString().slice(0, 16).replace("T", " ")} UTC` : ""}`;
+      }
+      await logLoginFailure(req, { username, staffId: staff?.id, clinicId: staff?.clinicId, reason: staff ? "senha_incorreta" : "usuario_inexistente", hint });
       res.status(401).json({ error: "Usuario ou senha invalidos" });
       return;
     }
@@ -5547,6 +5626,7 @@ apiRouter.post(
     if (role === "client" && staff.clinicId) {
       const clinic = await prisma.clinic.findUnique({ where: { id: staff.clinicId }, select: { active: true } });
       if (!clinic || !clinic.active) {
+        await logLoginFailure(req, { username, staffId: staff.id, clinicId: staff.clinicId, reason: "conta_bloqueada", hint: "a clinica esta inativa" });
         res.status(403).json({ error: "Conta bloqueada temporariamente. Entre em contato com o suporte." });
         return;
       }
@@ -5625,7 +5705,7 @@ apiRouter.post(
     const clinicId = role === "admin" ? null : (await getClinic(req)).id;
 
     const staff = await prisma.staffUser.create({
-      data: { clinicId, name, username, passwordHash: hashPassword(password), role },
+      data: { clinicId, name, username, passwordHash: hashPassword(password), passwordChangedAt: new Date(), role },
       select: { id: true, name: true, username: true, role: true, createdAt: true },
     });
     res.json(staff);

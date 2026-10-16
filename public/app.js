@@ -5993,6 +5993,26 @@ async function loadClinicOwnerLogins(clinicId) {
   } catch {
     box.textContent = "Não foi possível carregar os acessos.";
   }
+  // Diagnóstico de "não consigo entrar": contas, quando a senha foi trocada e as tentativas que FALHARAM (com o motivo provável).
+  try {
+    const d = await api(`/clinics/${clinicId}/login-diagnostics`);
+    const fmt = (v) => (v ? new Date(v).toLocaleString("pt-BR") : "—");
+    const head = el("div", { style: "margin-top:0.75rem;font-weight:600" }, ["Contas de acesso desta clínica"]);
+    box.appendChild(head);
+    for (const a of d.accounts) {
+      box.appendChild(el("div", { style: "padding:0.2rem 0;border-bottom:1px solid var(--border)" }, [`${a.username} — senha trocada em ${fmt(a.passwordChangedAt)}`]));
+    }
+    box.appendChild(el("div", { style: "margin-top:0.75rem;font-weight:600" }, ["Tentativas que falharam (últimas 20)"]));
+    if (!d.failures.length) box.appendChild(el("div", { class: "hint" }, ["Nenhuma tentativa falha registrada."]));
+    const REASONS = { senha_incorreta: "senha incorreta", usuario_inexistente: "e-mail não cadastrado", conta_bloqueada: "conta bloqueada", limite_de_tentativas: "limite de tentativas" };
+    for (const fl of d.failures) {
+      box.appendChild(el("div", { style: "padding:0.25rem 0;border-bottom:1px solid var(--border)" }, [
+        `${fmt(fl.createdAt)} — ${fl.username} — ${REASONS[fl.reason] || fl.reason}${fl.hint ? ` (${fl.hint})` : ""} — ${fl.ip || "IP desconhecido"} — ${shortUserAgent(fl.userAgent)}`,
+      ]));
+    }
+  } catch {
+    /* diagnostico e so um complemento */
+  }
 }
 
 function openClinicOwnerModal(clinic) {

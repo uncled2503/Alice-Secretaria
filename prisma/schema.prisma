@@ -358,12 +358,29 @@ model StaffUser {
   // botao "desconectar todos os acessos") invalida na hora todo cookie antigo
   // dessa conta, sem mexer nas outras.
   sessionEpoch Int      @default(0)
+  passwordChangedAt DateTime? // quando a senha foi definida/trocada pela ultima vez (diagnostico de "nao consigo entrar")
   loginEvents  LoginEvent[]
   assignedPatients Patient[] @relation("PatientAssignedTo") // leads em que esta conta e a "Responsavel" no card do CRM
 }
 
 // Um registro por login bem-sucedido (IP + navegador + quando). So pra
 // auditoria e pro admin ver "quem entrou na conta do cliente".
+// Tentativas de login que FALHARAM (diagnostico: o motivo e uma dica, nunca a senha). Aparece no modal "Acesso do cliente" do painel adm.
+model LoginFailure {
+  id        String   @id @default(cuid())
+  username  String
+  staffId   String?
+  clinicId  String?
+  reason    String   // usuario_inexistente | senha_incorreta | conta_bloqueada | limite_de_tentativas
+  hint      String   @default("")
+  ip        String   @default("")
+  userAgent String   @default("")
+  createdAt DateTime @default(now())
+
+  @@index([clinicId, createdAt])
+  @@index([username, createdAt])
+}
+
 model LoginEvent {
   id        String    @id @default(cuid())
   staffId   String
