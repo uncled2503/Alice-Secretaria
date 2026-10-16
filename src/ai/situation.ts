@@ -32,7 +32,7 @@ export const RULE_HIERARCHY =
   "7) regras da clinica (valores, tom, postura); " +
   "8) padroes do sistema (avaliacao para quem nao sabe, descoberta).";
 
-export type SituationKind = "automation_ack" | "booking_claim" | "cancel" | "reschedule" | "staff_followup" | "default";
+export type SituationKind = "automation_ack" | "courtesy_ack" | "booking_claim" | "cancel" | "reschedule" | "staff_followup" | "plain_reply" | "default";
 
 export interface SituationMessage {
   role: string; // user | assistant | human
@@ -59,6 +59,7 @@ export interface SituationInput {
   todayIso: string;
   upcoming: UpcomingAppt[];
   pastVisits: number;
+  schedulingSignal: boolean; // esta mensagem pede/aceita/recusa horario (ou a conversa esta no meio do agendamento): so entao a Alice pode listar horarios
   resumedAfterStaffDelay?: boolean; // a equipe demorou e a Alice voltou
 }
 
@@ -71,7 +72,7 @@ export interface Situation {
   forceTransfer: { reason: string; summary: string } | null; // o codigo passa pra equipe, sem consultar o modelo
   forbidEvaluationOffer: boolean; // a resposta nao pode oferecer avaliacao
   forbidSlotOffer: boolean; // a resposta nao pode listar horarios
-  closeWith: "thanks" | null; // resposta fixa curta (agradece e para)
+  closeWith: "thanks" | "silence" | null; // resposta fixa curta (agradece e para) ou silencio
 }
 
 // ---------- mensagem automatica ----------
@@ -117,7 +118,9 @@ export function wantsCancel(text: string, hasBooking = true): boolean {
 }
 
 export function claimsExistingBooking(text: string): boolean {
-  return CLAIM_RE.test(fold(text));
+  const f = fold(text);
+  if (/\bhorario (de|do) (trabalho|saida|almoco|aula|folga|entrada|servico)\b|\bmeu horario (livre|flexivel|disponivel)\b/.test(f)) return false; // disponibilidade, nao agendamento
+  return CLAIM_RE.test(f);
 }
 
 const ACCEPT_SHORT_RE = /^(pode|pode ser|pode sim|fechado|combinado|ok|sim|beleza|blz|perfeito|otimo|tudo bem|ta bom|ta otimo|esse mesmo|aceito|quero|claro)\b/;
@@ -168,6 +171,9 @@ export function resolveSituation(i: SituationInput): Situation {
     briefing.push(`EQUIPE (pessoa de verdade) falou ${ageText(lastStaff.createdAt, i.now)}: "${clip(lastStaff.content, 110)}"${staffRecent ? " -> a conversa de horario estava com a equipe: continue de onde ela parou" : ""}`);
   }
   if (!isEmptyRequest(request)) briefing.push(`PEDIDO DE DIA/HORA DELA (respeite): ${describeSlotRequest(request)}`);
+  if (!i.schedulingSignal) briefing.push("ELA NAO PEDIU HORARIO NEM AGENDAMENTO nesta mensagem: NAO liste horarios e NAO tente agendar; responda so o que ela disse");
+  const patientLike = i.pastVisits > 0 || beforeTrailing.some((m) => { const k = automationKindOf(m); return k === "nps" || k === "pos"; });
+  if (patientLike) briefing.push("ELA JA E PACIENTE (ja foi atendida/avaliada): nao ofereca avaliacao gratuita nem trate como lead novo");
 
   const base = (kind: SituationKind, label: string, extra: Partial<Situation> = {}): Situation => ({
     kind,
@@ -189,6 +195,16 @@ export function resolveSituation(i: SituationInput): Situation {
       forbidEvaluationOffer: true,
       forbidSlotOffer: true,
       directive: "Ela so agradeceu a mensagem automatica da clinica. Responda com UMA frase curta de agradecimento e PARE: sem pergunta, sem oferta de avaliacao, sem horarios.",
+    });
+  }
+
+  // ----- 3b) so reconheceu ("ok", "obrigada") uma fala que NAO pedia resposta: silencio (nada de oferta, nada de despedida) -----
+  if (lastOut && i.trailing.length && i.trailing.every((t) => isCourtesyOnly(t)) && !/\?/.test(lastOut.content)) {
+    return base("courtesy_ack", "ela so reconheceu ('ok', 'obrigada') uma fala que nao pedia resposta", {
+      closeWith: "silence",
+      forbidEvaluationOffer: true,
+      forbidSlotOffer: true,
+      directive: "Ela so respondeu 'ok'/'obrigada' a uma fala que nao fazia pergunta. Nao responda (silencio): sem oferta de avaliacao, sem horarios, sem despedida repetida.",
     });
   }
 
@@ -289,5 +305,17 @@ export function resolveSituation(i: SituationInput): Situation {
     });
   }
 
-  return base("default", "fluxo normal de atendimento");
+  // ----- 6b) retomando depois que a equipe demorou, ou ja e paciente, e ela NAO pediu horario: responde so o que ela disse -----
+  if (!i.schedulingSignal && (patientLike || i.resumedAfterStaffDelay === true)) {
+    return base("plain_reply", "ela NAO pediu horario: responder so o que ela disse (sem venda, sem avaliacao, sem horarios)", {
+      forbidEvaluationOffer: true,
+      forbidSlotOffer: true,
+      directive:
+        "ELA NAO PEDIU HORARIO NEM AGENDAMENTO. Responda SO ao que ela escreveu agora, em ate 2 frases curtas, com naturalidade. NAO ofereca avaliacao, NAO liste horarios, NAO tente agendar e NAO puxe venda (voce esta " +
+        (i.resumedAfterStaffDelay ? "retomando uma conversa que a equipe estava conduzindo" : "falando com quem ja e paciente") +
+        "). Se ela fez uma pergunta, responda; se foi so um comentario, acolha em uma frase e pare. So volte a falar de horario se ELA pedir.",
+    });
+  }
+
+  return base("default", "fluxo normal de atendimento", { forbidSlotOffer: !i.schedulingSignal });
 }

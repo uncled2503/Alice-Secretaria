@@ -256,7 +256,7 @@ async function runFollowUpCheckInner(): Promise<void> {
     if (claimed.count !== 1) continue;
 
     try {
-      const outcome = await sendText(clinicId, conversation.patient.phone, text);
+      const outcome = await sendText(clinicId, conversation.patient.phone, text, { kind: "recontato" });
       if (outcome !== "sent") continue; // plano gratis ou texto duplicado: nada saiu, nao grava no chat (a reserva fica: nao insiste)
     } catch (err) {
       console.error(`Falha ao enviar recontato para ${conversation.patient.phone}:`, err);

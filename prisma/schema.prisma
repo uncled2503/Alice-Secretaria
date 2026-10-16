@@ -552,6 +552,8 @@ model Patient {
   hotAlertedAt        DateTime? // quando a equipe foi avisada de "lead quente parado" (uma vez por sinal)
   noInterest          Boolean   @default(false) // disse que nao tem (mais) interesse: sem recontato nem campanha
   noInterestAt        DateTime?
+  briefingNotes       String?   // MEMORIA DO LEAD: notas curtas escritas por IA com o que vale lembrar (ver ai/leadBriefing.ts); atualizada quando algo relevante acontece
+  briefingNotesAt     DateTime?
   callbackAt          DateTime? // pediu pra retomar numa data ("me chama depois do dia 20")
   callbackNote        String?
 

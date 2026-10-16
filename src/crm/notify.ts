@@ -31,7 +31,7 @@ export async function notifyStaff(clinicId: string, event: NotifyEvent, message:
   if (!events.includes(event) && !ALWAYS_ON_EVENTS.includes(event)) return;
 
   try {
-    await sendText(clinicId, clinic.notifyPhone, message);
+    await sendText(clinicId, clinic.notifyPhone, message, { kind: "interna" });
   } catch (err) {
     console.error(`Falha ao notificar equipe da clinica ${clinicId}:`, err);
   }

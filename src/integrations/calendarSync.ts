@@ -2,9 +2,11 @@ import { pushAppointmentInBackground as pushToGoogle, removeAppointmentInBackgro
 import { syncAppointmentInBackground as syncToClinicaExperts } from "../clinicaexperts/sync.js";
 import { prisma } from "../db/client.js";
 import { syncLeadTagsInBackground } from "../ads/tags.js";
+import { scheduleBriefingRefreshForAppointment } from "../ai/leadBriefing.js";
 
 // A etiqueta "Agendamento Realizado" acompanha o agendamento, de quem for (Alice, painel, API, importacao).
 function refreshLeadTags(appointmentId: string): void {
+  scheduleBriefingRefreshForAppointment(appointmentId); // agendamento criado/remarcado/cancelado: a memoria do lead e atualizada
   void prisma.appointment
     .findUnique({ where: { id: appointmentId }, select: { clinicId: true, patientId: true } })
     .then((a) => { if (a) syncLeadTagsInBackground(a.clinicId, a.patientId); })

@@ -66,6 +66,7 @@ import { diagnoseSlot } from "../scheduling/slots.js";
 import { syncBirthdaysFromCe } from "../clinicaexperts/birthdays.js";
 import { lastBookingDiagnostics, pullClinicBookings } from "../clinicaexperts/pull.js";
 import { auditProcedureLinks } from "../clinicaexperts/procedureLink.js";
+import { scheduleBriefingRefresh } from "../ai/leadBriefing.js";
 import { connectAccount, disconnectAccount, ceStatusFor } from "../clinicaexperts/client.js";
 import { auditExecutors, auditUnmirrored, syncCatalog } from "../clinicaexperts/sync.js";
 import { undoCeImport } from "../clinicaexperts/undo.js";
@@ -2601,6 +2602,7 @@ apiRouter.post(
 
     try {
       await sendText(conversation.patient.clinicId, conversation.patient.phone, text, { manual: true });
+      scheduleBriefingRefresh(conversation.patientId, { delayMs: 60_000 }); // a equipe falou pelo painel: a memoria do lead registra
     } catch (err) {
       console.error("Falha ao enviar mensagem via WhatsApp:", err);
       res.status(502).json({ ok: false, error: "Mensagem salva, mas falhou ao enviar pelo WhatsApp" });

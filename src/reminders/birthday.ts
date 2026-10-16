@@ -65,7 +65,7 @@ export function startBirthdayJob(): void {
         });
 
         try {
-          const outcome = await sendText(rule.clinicId, patient.phone, text);
+          const outcome = await sendText(rule.clinicId, patient.phone, text, { kind: "aniversario" });
           await prisma.birthdaySent.create({ data: { patientId: patient.id, ruleId: rule.id, year } });
           if (outcome === "sent") await recordAutomatedMessage(patient.id, text, rule.name || "Aniversário automático");
         } catch (err) {

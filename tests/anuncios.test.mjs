@@ -521,7 +521,7 @@ test("ponta a ponta: a PRIMEIRA mensagem do anuncio ja grava a origem, a convers
   const rows = await prisma.adAttribution.findMany({ where: { patientId: patient.id } });
   assert.equal(rows.length, 1);
   assert.deepEqual([rows[0].sourceId, rows[0].ctwaClid, rows[0].conversationId, rows[0].platform, rows[0].entryKind], [ref.sourceId, ref.ctwaClid, r1.conversationId, "instagram", "first"]);
-  await new Promise((r) => setTimeout(r, 400)); // etiquetas rodam em segundo plano
+  for (let i = 0; i < 50 && (await labelsOf(patient.id)).length < 3; i++) await new Promise((r) => setTimeout(r, 100)); // etiquetas rodam em segundo plano
   assert.deepEqual(await labelsOf(patient.id), ["Instagram Ads", "Lead Novo", "Meta Ads"]);
   // webhook reprocessado e mensagem seguinte (sem referral): nada novo
   await recordIncomingMessage({ clinicId: clinic.id, patientPhone: phone, patientName: "Maria", text: "Olá, vi o anúncio", referral: ref, externalId: "wamid.E2E1" });

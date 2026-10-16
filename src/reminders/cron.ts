@@ -204,8 +204,8 @@ export async function selectDueAppointments(rule: ReminderRule, now: Date, tz: s
 // Roda a cada 15min. Cada regra ativa dispara uma vez por agendamento (marca
 // em ReminderSent) - assim da pra ter mais de uma regra (ex: 24h antes e 2h
 // antes) sem mandar a mesma coisa duas vezes nem perder uma por causa da outra.
-export function startReminderJob(): void {
-  scheduleLocked("lembretes", "*/15 * * * *", async () => {
+// Uma rodada de lembretes (exportada para teste; o cron so chama isto a cada 15 min).
+export async function runReminderCycle(): Promise<void> {
     if (reminderRunning) return; // rodada anterior (com pausas) ainda em andamento
     reminderRunning = true;
     try {
@@ -293,7 +293,7 @@ export function startReminderJob(): void {
           continue;
         }
         try {
-          const outcome = await sendText(appt.clinicId, appt.patient.phone, text);
+          const outcome = await sendText(appt.clinicId, appt.patient.phone, text, { kind: "lembrete" });
           if (outcome === "sent") await recordAutomatedMessage(appt.patientId, text, "Lembrete de consulta");
         } catch (err) {
           console.error(`Falha ao enviar lembrete (regra ${rule.id}) para ${appt.patient.phone}:`, err);
@@ -306,5 +306,8 @@ export function startReminderJob(): void {
     } finally {
       reminderRunning = false;
     }
-  });
+}
+
+export function startReminderJob(): void {
+  scheduleLocked("lembretes", "*/15 * * * *", runReminderCycle);
 }

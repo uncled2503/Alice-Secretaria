@@ -215,7 +215,7 @@ async function sendNextBatch(): Promise<void> {
       }
       const text = renderTemplate(campaign.message, recipient.patient.name, recipient.patient.phone, clinicInfo, recipient.patient.interestNote);
       try {
-        const outcome = await sendText(clinic.id, recipient.patient.phone, text);
+        const outcome = await sendText(clinic.id, recipient.patient.phone, text, { kind: "campanha" });
         await prisma.broadcastRecipient.update({
           where: { id: recipient.id },
           data: { status: outcome === "sent" ? "sent" : "skipped", sentAt: new Date() },

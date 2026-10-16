@@ -35,6 +35,8 @@ export function isPositiveFeedback(text: string): boolean {
   const t = normalized(text);
   if (!t || t.split(" ").length > 20) return false;
   if (text.includes("?")) return false; // pergunta: nao e so feedback (a normalizacao tira a pontuacao, por isso olha o texto original)
+  // pedido/pergunta sem "?" ("estou otima, queria saber o endereco", "amei, quero marcar outra"): tambem nao e so feedback
+  if (/\b(queria|quero|gostaria|saber|qual|quais|quanto|onde|como|quando|endereco|valor|preco|posso|podem|tem como|agendar|marcar|remarcar|horario|telefone|contato)\b/.test(t)) return false;
   // "sem roxinho" / "sem dor" sao positivos: tira esses trechos antes de procurar problema.
   const withoutNegatedProblem = t.replace(/\bsem (dor|roxo|roxinho|incha\w*|problema\w*|vermelh\w*|nada)\b/g, " ").replace(/\bnada de (dor|incha\w*|roxo)\b/g, " ");
   return POSITIVE_RE.test(t) && !PROBLEM_RE.test(withoutNegatedProblem);

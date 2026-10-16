@@ -6,6 +6,7 @@ import { PAID_CLINIC_WHERE } from "../crm/plan.js";
 import { notifyStaff } from "../crm/notify.js";
 import { recordAutomatedMessage } from "../crm/conversationLog.js";
 import { wallClockInZone } from "../scheduling/time.js";
+import { PLACEHOLDER_PROCEDURE_NAME } from "../clinicaexperts/placeholderProcedure.js";
 
 function intervalMs(value: number, unit: string): number {
   const hourMs = 60 * 60_000;
@@ -59,6 +60,7 @@ export function startPostProcedureJob(): void {
           ...(rule.onlyIfCompleted ? { status: "completed" } : { status: { notIn: ["cancelled", "no_show"] } }),
           scheduledAt: { lte: cutoff, gte: floor },
           ...(procedureFilter.length ? { procedureId: { in: procedureFilter } } : {}),
+          procedure: { name: { not: PLACEHOLDER_PROCEDURE_NAME } }, // "horario sem procedimento" (reserva do CE sem procedimento) nao tem o que acompanhar
           postProcedureSent: { none: { ruleId: rule.id } },
           patient: {
             optedOut: false, // quem pediu pra parar nao recebe mensagem automatica
@@ -106,7 +108,7 @@ export function startPostProcedureJob(): void {
           continue; // reserva atomica: outro processo ja pegou
         }
         try {
-          const outcome = await sendText(appt.clinicId, appt.patient.phone, text);
+          const outcome = await sendText(appt.clinicId, appt.patient.phone, text, { kind: "pos" });
           if (outcome === "sent") await recordAutomatedMessage(appt.patientId, text, rule.name || "Pós-procedimento automático");
         } catch (err) {
           if (isPermanentSendError(err)) {

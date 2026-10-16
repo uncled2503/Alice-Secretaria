@@ -5,6 +5,7 @@ import { ceRequest, dayBoundIso, noteError } from "./client.js";
 import { zonedWallClockToUtc } from "../scheduling/time.js";
 import { ensurePlaceholderProcedure, isPlaceholderProcedure } from "./placeholderProcedure.js";
 import { reconcileMissingBookings } from "./liveCheck.js";
+import { scheduleBriefingRefreshForAppointment } from "../ai/leadBriefing.js";
 import { syncAppointmentInBackground } from "./sync.js";
 import { notifyStaff } from "../crm/notify.js";
 import { listCeProcedures, linkMissingProcedures } from "./autoLink.js";
@@ -299,6 +300,7 @@ export async function pullClinicBookings(clinicId: string): Promise<PullResult> 
       if (Object.keys(data).length) {
         await prisma.appointment.update({ where: { id: existing.id }, data });
         result.updated++;
+        scheduleBriefingRefreshForAppointment(existing.id); // mudou la (status/horario/procedimento): a memoria do lead acompanha
       }
       continue;
     }
@@ -365,13 +367,14 @@ export async function pullClinicBookings(clinicId: string): Promise<PullResult> 
     });
     const birth = parseCeBirthDate(birthFieldOf(b.patient).raw); // aniversario do CE (so preenche se a Alice nao tem)
     if (birth) await prisma.patient.updateMany({ where: { id: patient.id, birthDate: null }, data: { birthDate: birth } });
-    await prisma.appointment.create({
+    const createdAppt = await prisma.appointment.create({
       data: {
         clinicId, patientId: patient.id, procedureId: procedureForBooking.id, professionalId: professional?.id ?? null,
         scheduledAt: when, status, source: "presencial", ceBookingUuid: b.uuid,
       },
     });
     result.created++;
+    scheduleBriefingRefreshForAppointment(createdAppt.id);
   }
   lastPullSkips.set(clinicId, { at: new Date(), skips: result.skipDetails });
 

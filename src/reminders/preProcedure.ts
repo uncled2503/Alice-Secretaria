@@ -6,6 +6,7 @@ import { PAID_CLINIC_WHERE } from "../crm/plan.js";
 import { notifyStaff } from "../crm/notify.js";
 import { recordAutomatedMessage } from "../crm/conversationLog.js";
 import { isoDateInZone, wallClockInZone } from "../scheduling/time.js";
+import { PLACEHOLDER_PROCEDURE_NAME } from "../clinicaexperts/placeholderProcedure.js";
 
 // ---------------------------------------------------------------------------
 // PRE-PROCEDIMENTO (pedido da Lisboa, 14/10/2026): logo depois que a cliente CONFIRMA o horario na conversa com a Alice, sai a
@@ -66,6 +67,7 @@ export async function buildPreProcedureText(appts: ConfirmedAppointment[]): Prom
     for (const rule of rules) {
       if (usedRules.has(rule.id) || alreadyRule.has(rule.id) || sentKeys.has(`${appt.id}|${rule.id}`)) continue;
       if (!ruleCoversProcedure(rule.procedureIds, appt.procedureId)) continue;
+      if (appt.procedure.name === PLACEHOLDER_PROCEDURE_NAME) continue; // reserva sem procedimento: nao ha preparo a orientar
       try {
         await prisma.preProcedureSent.create({ data: { appointmentId: appt.id, ruleId: rule.id } }); // reserva atomica
       } catch {
@@ -164,6 +166,7 @@ export async function sendAdvancePreProcedure(now: Date = new Date()): Promise<n
           if (usedRules.has(rule.id) || sentKeys.has(`${appt.id}|${rule.id}`)) continue;
           if (!isPreProcedureDue(appt.scheduledAt, now, rule.sendHoursBefore ?? 0)) continue;
           if (!ruleCoversProcedure(rule.procedureIds, appt.procedureId)) continue;
+          if (appt.procedure.name === PLACEHOLDER_PROCEDURE_NAME) continue; // reserva sem procedimento: nao ha preparo a orientar
           try {
             await prisma.preProcedureSent.create({ data: { appointmentId: appt.id, ruleId: rule.id } }); // reserva atomica
           } catch {
@@ -188,7 +191,7 @@ export async function sendAdvancePreProcedure(now: Date = new Date()): Promise<n
       if (!texts.length) continue;
       const text = tidyGreeting(combinePreProcedureTexts(texts));
       try {
-        const outcome = await sendText(clinicId, patient.phone, text);
+        const outcome = await sendText(clinicId, patient.phone, text, { kind: "preparo" });
         if (outcome === "sent") await recordAutomatedMessage(patient.id, text, "Preparo da visita (48h antes)");
         sentPatients++;
       } catch (err) {

@@ -2,6 +2,7 @@ import { prisma } from "../db/client.js";
 import { ceRequest } from "./client.js";
 import { logActivity } from "../crm/activity.js";
 import { mapCeStatus, parseCeInstant } from "./pull.js";
+import { scheduleBriefingRefreshForAppointment } from "../ai/leadBriefing.js";
 
 // ---------------------------------------------------------------------------
 // CONFERE NO CLINICA EXPERTS ANTES DE MANDAR (pedido da Lisboa, 16/10/2026: "todos os clientes que cancelaram ou remarcaram continuam
@@ -23,21 +24,27 @@ export function judgeLiveBooking(
   const root = res.data as { data?: unknown } | null;
   const b = ((root && typeof root === "object" && "data" in root ? root.data : root) ?? null) as { status?: string; starts_at?: string } | null;
   if (!b || typeof b !== "object") return { kind: "unknown" };
-  const st = mapCeStatus(b.status);
+  const st = typeof b.status === "string" ? mapCeStatus(b.status) : "confirmed"; // formato inesperado: nao conclui nada
   if (st === "cancelled") return { kind: "gone", why: "a reserva foi cancelada no Clínica Experts" };
   if (st === "no_show") return { kind: "gone", why: "a reserva foi marcada como falta no Clínica Experts" };
   if (st === "completed") return { kind: "gone", why: "a reserva já consta como atendida no Clínica Experts" };
-  if (typeof b.starts_at === "string" && b.starts_at) {
+  // So considera "trocou de horario" quando o CE devolve o instante COM fuso (Z ou +hh:mm): sem fuso a leitura poderia deslocar 3h e corromper o horario.
+  if (typeof b.starts_at === "string" && /(Z|[+-]\d{2}:?\d{2})$/i.test(b.starts_at.trim())) {
     const at = parseCeInstant(b.starts_at, tz);
-    if (!Number.isNaN(at.getTime()) && Math.abs(at.getTime() - appt.scheduledAt.getTime()) >= 60_000) return { kind: "moved", to: at };
+    if (!Number.isNaN(at.getTime()) && at.getTime() > Date.now() && Math.abs(at.getTime() - appt.scheduledAt.getTime()) >= 60_000) return { kind: "moved", to: at };
   }
   return { kind: "ok" };
 }
 
 export async function verifyBookingLive(appt: { clinicId: string; ceBookingUuid: string | null; scheduledAt: Date }, tz: string): Promise<LiveVerdict> {
   if (!appt.ceBookingUuid) return { kind: "ok" }; // nao veio do CE nem foi espelhado: nada pra conferir la
-  const res = await ceRequest<unknown>(appt.clinicId, `/bookings/${appt.ceBookingUuid}`);
-  return judgeLiveBooking(appt, res.ok ? { ok: true, data: res.data } : { ok: false, status: res.status }, tz);
+  try {
+    const res = await ceRequest<unknown>(appt.clinicId, `/bookings/${appt.ceBookingUuid}`);
+    return judgeLiveBooking(appt, res.ok ? { ok: true, data: res.data } : { ok: false, status: res.status }, tz);
+  } catch (err) {
+    console.error("[lembrete] falha ao conferir a reserva no CE (segue sem conferir):", err);
+    return { kind: "unknown" }; // a conferencia nunca derruba o disparo dos lembretes
+  }
 }
 
 // Aplica o veredito na copia local. Devolve true se o lembrete DEVE ser pulado (a copia estava velha).
@@ -54,6 +61,7 @@ export async function applyLiveVerdict(
       description: `${label}: ${verdict.why}. A confirmação automática não foi enviada.`, actorName: null,
     }).catch(() => undefined);
     console.warn(`[lembrete] ${label}: ${verdict.why} - lembrete NAO enviado e agendamento cancelado aqui`);
+    scheduleBriefingRefreshForAppointment(appt.id);
     return true;
   }
   if (verdict.kind === "moved") {
@@ -61,6 +69,7 @@ export async function applyLiveVerdict(
     await prisma.appointment.update({ where: { id: appt.id }, data: { scheduledAt: verdict.to, patientConfirmed: false, confirmedAt: null } });
     await prisma.reminderSent.deleteMany({ where: { appointmentId: appt.id } });
     console.warn(`[lembrete] ${label}: o horario mudou no Clínica Experts - corrigido; lembrete do horario antigo NAO enviado`);
+    scheduleBriefingRefreshForAppointment(appt.id);
     return true;
   }
   return false;

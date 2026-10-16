@@ -44,6 +44,7 @@ export const ACTIVITY_TYPES: Record<string, string> = {
   patient_created: "Card criado",
   crm_card_updated: "Card do CRM atualizado",
   crm_card_removed: "Removido do CRM",
+  message_blocked_ai: "Mensagem barrada pela revisão da IA",
   patient_opted_out: "Pediu para não receber mensagens",
   patient_opted_in: "Voltou a poder receber mensagens",
 };

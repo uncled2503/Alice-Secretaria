@@ -110,7 +110,7 @@ test("entrega da Alice: timeout nao reenvia (6 mensagens iguais p/ a Elaine) e r
   assert.equal(isAmbiguousSendError(new Error("not on whatsapp")), false);
   const src = fs.readFileSync(new URL("../src/uazapi/client.ts", import.meta.url), "utf8");
   const i = src.indexOf("export async function deliverAliceReply");
-  const corpo = src.slice(i, i + 2500);
+  const corpo = src.slice(i, i + 5000); // a revisao por IA da resposta (antes do envio) alongou a funcao
   assert.match(corpo, /alreadySent/);
   assert.match(corpo, /isAmbiguousSendError\(err\)/);
 });

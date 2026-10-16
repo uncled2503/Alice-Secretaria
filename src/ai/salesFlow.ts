@@ -24,6 +24,7 @@ export interface SalesFlow {
   askedPrice: boolean; // as mensagens novas perguntam valor
   statedGoal: boolean; // ela ja contou o que quer (queixa/regiao/procedimento)
   scheduleAsked: boolean; // em algum momento pediu avaliacao/agendamento (e ainda nao tem horario marcado)
+  schedulingSignal: boolean; // ESTA mensagem (ou a conversa em andamento) pede/aceita/recusa horario: so entao a Alice pode listar horarios
   slotsOffered: boolean; // a ultima fala da Alice ofereceu horarios
   evalOffered: boolean; // a Alice ja falou de avaliacao nesta conversa
   hasBooking: boolean; // ela ja tem agendamento futuro (nao e lead em descoberta)
@@ -60,7 +61,7 @@ export function statesGoal(messages: string[]): boolean {
 }
 
 // A ultima fala da Alice ofereceu avaliacao/horario/agendamento (e terminou em pergunta)?
-const OFFER_RE = /avalia|horario|agend|marcar|disponibilidade|vaga/;
+const OFFER_RE = /avalia|horario|agend|marcar|disponibilidade|vaga|turno|periodo|prefere (de )?(manha|tarde|noite)|(manha|tarde|noite) ou (a |de )?(manha|tarde|noite)|qual dia|que dia|que horas/;
 const ACCEPT_RE = /^(sim|pode|pode sim|quero|quero sim|claro|com certeza|por favor|pode ser|bora|vamos|ok|isso|isso mesmo|aceito|topo|blz|beleza|gostaria|tenho interesse|tenho sim|pode marcar|pode agendar|fechado|combinado|perfeito|otimo)\b/;
 const REFUSE_RE = /\b(nao|nem|talvez|depois|outra hora|so queria|so estou)\b/;
 const DAYPART_RE = /\b(amanha|hoje|depois de amanha|segunda|terca|quarta|quinta|sexta|sabado|domingo|manha|tarde|noite|folga|de manha|a tarde)\b/;
@@ -117,11 +118,18 @@ export function analyzeFlow(input: {
   const namesProcedure = input.wanted !== undefined && (input.wanted.kind === "specific" || input.wanted.kind === "options") && /\b(quero|queria|gostaria|tenho interesse|interesse em|fazer|marcar)\b/.test(fold(trailText)) && !priceAsked && !/\b(saber|informac\w*|duvida|como funciona|explic\w*|o que e)\b/.test(fold(trailText));
   const wantsToBook = wantsSchedule(trailText) || accepted || gaveAvailability || !!chosen || namesProcedure;
 
+  // Pedido ANTIGO de horario (scheduleAsked) so conta se a conversa ainda esta no meio do agendamento (a ultima fala ofereceu horario ou perguntou
+  // de agendar). Antes valia pra sempre: depois de a pessoa pedir horario uma vez, TODA mensagem ("Ok.", "Nao.", "Pra minha amiga.") virava "va
+  // direto ao agendamento" e a Alice listava horarios de avaliacao do nada (Clarinda, 16/10).
+  // "Recente" = pediu horario numa das ULTIMAS 4 falas dela (a conversa ainda e de agendamento: ela responde as perguntas de qualificacao da Alice).
+  const scheduleRecent = !hasBooking && userAll.slice(-4).some((m) => wantsSchedule(m));
+  const midScheduling = slotsOffered || lastOffered;
+  const schedulingSignal = wantsToBook || (declined && midScheduling) || scheduleRecent;
   let intent: Intent = "info";
   if (hasBooking && !wantsToBook) intent = "booked"; // ja agendou: so responde o que perguntou e para
   else if (hesitates) intent = "hesitate";
   else if (declined) intent = "decline";
-  else if (wantsToBook || scheduleAsked) intent = "schedule";
+  else if (wantsToBook || scheduleRecent) intent = "schedule";
   else if (pastVisits) intent = "returning"; // ja e paciente: nao e lead, nao recebe oferta de avaliacao
   else if (priceAsked) intent = "price";
 
@@ -185,7 +193,7 @@ export function analyzeFlow(input: {
         : "Descubra o que ela quer com UMA pergunta especifica ao assunto dela (se veio de anuncio, use o procedimento do anuncio; ex.: gordura -> qual regiao). Curto, natural." + noPrice;
   }
 
-  return { intent, askedPrice: priceAsked, statedGoal, scheduleAsked, slotsOffered, evalOffered, hasBooking, nextMove };
+  return { intent, askedPrice: priceAsked, statedGoal, scheduleAsked, schedulingSignal, slotsOffered, evalOffered, hasBooking, nextMove };
 }
 
 // Reclamacao direta do atendimento automatico ("a IA de voces e pessima", "repetitiva", "nao ajuda em nada"): pessoa de verdade.

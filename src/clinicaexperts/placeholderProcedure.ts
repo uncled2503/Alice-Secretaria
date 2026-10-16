@@ -15,6 +15,11 @@ export function isPlaceholderProcedure(p: { name: string }): boolean {
   return p.name === PLACEHOLDER_PROCEDURE_NAME;
 }
 
+// Como a Alice (e o paciente) enxergam esse procedimento: nunca o nome tecnico.
+export function displayProcedureName(name: string): string {
+  return name === PLACEHOLDER_PROCEDURE_NAME ? "horario ja marcado (procedimento a confirmar com a recepcao)" : name;
+}
+
 // So cria uma vez por clinica. internalOnly: a Alice nunca oferece nem agenda isso.
 export async function ensurePlaceholderProcedure(clinicId: string): Promise<Procedure> {
   const found = await prisma.procedure.findFirst({ where: { clinicId, name: PLACEHOLDER_PROCEDURE_NAME } });

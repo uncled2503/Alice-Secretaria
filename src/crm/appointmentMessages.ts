@@ -38,7 +38,7 @@ export async function sendAppointmentConfirmationToPatient(appointmentId: string
   const text = `Oi${firstName ? `, ${firstName}` : ""}! Confirmando seu horário: ${appt.procedure.name}${withWho} em ${when}.`;
 
   try {
-    const outcome = await sendText(appt.clinicId, appt.patient.phone, text);
+    const outcome = await sendText(appt.clinicId, appt.patient.phone, text, { kind: "agendamento" });
     // "blocked" (plano gratis) ou "duplicate": nada saiu, entao nao grava no chat como se tivesse saido.
     if (outcome === "sent") await recordAutomatedMessage(appt.patientId, text, "Confirmação de agendamento");
   } catch (err) {

@@ -1,5 +1,6 @@
 import { prisma } from "../db/client.js";
 import { formatDateTimeInZone } from "../scheduling/time.js";
+import { displayProcedureName } from "../clinicaexperts/placeholderProcedure.js";
 
 // ---------------------------------------------------------------------------
 // ETIQUETA INTERNA DO LEAD (pedido do dono, 15/10/2026): "Agendado" (com a data) ou "Nao agendado", que SO A ALICE ENXERGA (nao aparece no painel
@@ -29,7 +30,7 @@ export async function getBookingTag(patientId: string, tz: string): Promise<Book
     take: 10,
     select: { scheduledAt: true, procedure: { select: { name: true } }, professional: { select: { name: true } } },
   });
-  const items = appts.map((a) => ({ when: a.scheduledAt, label: formatDateTimeInZone(a.scheduledAt, tz), procedure: a.procedure.name, professional: a.professional?.name ?? null }));
+  const items = appts.map((a) => ({ when: a.scheduledAt, label: formatDateTimeInZone(a.scheduledAt, tz), procedure: displayProcedureName(a.procedure.name), professional: a.professional?.name ?? null }));
   return { status: items.length ? "agendado" : "nao_agendado", items, text: renderBookingTag(items) };
 }
 

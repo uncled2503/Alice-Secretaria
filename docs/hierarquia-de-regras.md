@@ -47,6 +47,17 @@ Cada situação traz a **ordem exata** para o modelo (substitui a jogada genéri
 - "vou cancelar" / "cancelei" / "remarquei" sem a ferramenta ter dado certo → o modelo é obrigado a executar;
 - lista de horários que não respeita "só sábados", "antes das 18:40" ou o dia pedido (que nem foi consultado) → o modelo refaz.
 
+### Regra de ouro: horário só quando a pessoa pede (caso Clarinda, 16/10)
+
+A Alice **só lista horários ou oferece avaliação quando a pessoa está em conversa de agendamento** (pediu, aceitou, escolheu, recusou uma oferta ou está respondendo a uma pergunta de dia/turno). Isso é conferido pelo código a cada mensagem (`schedulingSignal`):
+
+- `Ok.`, `Não.`, `Vou tentar.`, `Pra minha amiga.`, agradecimento, comentário: **sem sinal** → nada de lista de horários e nada de venda.
+- Resposta curta ("ok", "obrigada") a uma fala que **não fez pergunta**: a Alice fica em **silêncio**.
+- Quem **já é paciente** (já foi atendida/avaliada, ou recebeu pesquisa/pós) ou a conversa que a **equipe estava conduzindo** e a Alice retomou: só responde o que foi dito, **sem avaliação e sem horários**.
+- Se o modelo oferecer mesmo assim, o código manda refazer uma vez e, se insistir, **tira a oferta** da mensagem (nunca fica sem resposta: sobra uma frase neutra).
+
+A causa do print: um pedido de horário **antigo** deixava a conversa em "modo agendar" para sempre, e qualquer mensagem depois virava "vá direto ao agendamento". Agora um pedido antigo só vale se a conversa ainda está no meio do agendamento.
+
 ## 3. O que a Alice lê antes de responder (a ficha)
 
 Em toda resposta, no topo da última instrução:
@@ -75,3 +86,16 @@ Remarcar pela Alice agora só vale **depois que o CE aceita** (como o agendament
 - **Recontatos**: o relatório das 20h agora lista cada recontato ativo, quando dispara e quantos saíram no dia, e mostra as **conversas esperando a equipe há mais de 12h**. A Alice não recontata conversa em atendimento humano; se a equipe não responde uma transferência silenciosa, o lead fica parado e nunca é recontatado. Isso pode explicar parte dos "recontatos que não saíram". Confirmar também qual horário vale (8h ou 12h): a regra hoje tem janela de 8h às 12h.
 - **Terça "a clínica não atende"** (Vânia): o motivo agora diz que é o expediente do **profissional**. Falta conferir o expediente da profissional do Hipro no cadastro.
 - **Procedimentos fora do catálogo** (Protocolo do Olhar): continua sem agendar direto até ser cadastrado, mas quem já tem horário ou já é paciente vai para a equipe em vez de ganhar avaliação.
+
+## 6. Revisão por IA de TODA mensagem antes de sair + memória do lead sempre atualizada (pedido de 16/10)
+
+**Revisão de envio (`src/ai/sendGate.ts`).** Antes de qualquer mensagem automática (lembrete, recontato, pós, pesquisa, aniversário, renovação, campanha, preparo, lista de espera) ou resposta da Alice sair para o WhatsApp de uma pessoa, uma chamada curta à IA lê a ficha dela e decide: **enviar**, **não enviar** ou (só resposta da Alice) **reescrever** um trecho.
+- Barra quando há motivo concreto na ficha: horário cancelado/remarcado/diferente da agenda; pessoa pediu para não receber ou não tem interesse; mensagem igual enviada nas últimas ~20h; oferta de avaliação/horário a quem já tem horário, já foi avaliada ou não pediu; contradiz o que a equipe combinou ou a equipe está falando agora; momento inadequado (pesquisa logo após reclamação, recontato a quem disse que não pode); resposta da Alice que inventa valor/horário.
+- **Só barra com confiança "alta"**; dúvida = envia. Reescrita só para resposta da Alice e **nunca com fato novo** (número, data, horário, valor).
+- **IA fora do ar ou resposta estranha = envia** (a revisão nunca trava o atendimento). Aviso interno da equipe, número que não é paciente e mensagem escrita pela equipe não passam pela revisão.
+- Toda mensagem barrada fica no **Diário de atividades** (com o motivo) e entra no **relatório das 20h**. Resposta da Alice barrada vira conversa **não lida** com aviso para a equipe responder.
+- Desligar (emergência): variável `AI_SEND_REVIEW=off`. Modelo: `OPENAI_GATE_MODEL` (padrão `gpt-4o-mini`). Custo: 1 chamada curta por mensagem enviada; o resultado de uma mesma mensagem é lembrado (10 min; barrada 3 h).
+
+**Memória do lead (`src/ai/leadBriefing.ts`).** Duas camadas, sempre lidas pela Alice e pela revisão:
+1. **Fatos ao vivo** (montados na hora do banco, nunca velhos): agenda, atendimentos anteriores, cancelamentos dos últimos 14 dias, mensagens automáticas das últimas 24h, o que a equipe falou, últimas mensagens, opt-out/sem interesse/retorno combinado.
+2. **Notas da memória** (`Patient.briefingNotes`, escritas por IA): o que quer, restrições de dia/hora, o que a equipe combinou, "já foi avaliada em 14/10", "vai pensar até sexta", o que **não** fazer. Atualizadas quando algo relevante acontece: mensagem da pessoa (após a conversa assentar), fala da equipe (celular ou painel), resposta da Alice entregue, agendamento criado/cancelado/remarcado (Alice, painel, Clínica Experts), mais um job a cada 20 min que atualiza quem teve conversa nova. Desligar: `AI_BRIEFING=off`.

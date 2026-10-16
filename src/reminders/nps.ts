@@ -100,7 +100,7 @@ export function startNpsJob(): void {
           .trim();
 
         try {
-          const outcome = await sendText(clinic.id, appt.patient.phone, text);
+          const outcome = await sendText(clinic.id, appt.patient.phone, text, { kind: "pesquisa" });
           if (outcome !== "sent") continue;
         } catch (err) {
           console.error(`NPS: falha ao enviar para ${appt.patient.phone}:`, err);

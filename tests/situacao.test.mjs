@@ -25,7 +25,7 @@ const hipro = {
 };
 
 function situation(over) {
-  return resolveSituation({ history: [], trailing: [], now: NOW, todayIso: TODAY, upcoming: [], pastVisits: 0, ...over });
+  return resolveSituation({ history: [], trailing: [], now: NOW, todayIso: TODAY, upcoming: [], pastVisits: 0, schedulingSignal: true, ...over });
 }
 
 test("Vania: 'trocar meu horario na terca pra 12:30' e REMARCAR o horario que ja tem, nunca avaliacao", () => {
@@ -121,10 +121,11 @@ test("Andreia: a equipe propos 'amanha as 12h30', ela aceitou ('pode ser...') ->
   assert.deepEqual(s.request.weekdays, [6]);
 });
 
-test("equipe falou de outro assunto (endereco): nao vira retomada de horario", () => {
+test("equipe falou de outro assunto (endereco) e ela so disse 'ok': nao vira retomada de horario (e a Alice fica em silencio)", () => {
   const history = [msg("human", "Enviei o endereço pra você"), msg("user", "ok")];
   const s = situation({ history, trailing: ["ok"] });
-  assert.equal(s.kind, "default");
+  assert.notEqual(s.kind, "staff_followup");
+  assert.equal(s.closeWith, "silence");
 });
 
 test("Aline: 'Obrigada' a pesquisa/pos automatica so agradece (sem 3 horarios de avaliacao)", () => {
@@ -248,4 +249,106 @@ test("NPS espera o pos-procedimento que ainda vai sair (e nao espera por avaliac
   assert.equal(postStillComing(limpeza, rules, 1, now), false); // o pos ja saiu (a regra de 4h cuida do resto)
   assert.equal(postStillComing({ ...limpeza, procedure: { name: "Avaliação" } }, rules, 0, now), false);
   assert.equal(postStillComing(limpeza, [], 0, now), false);
+});
+
+// ===== Clarinda (16/10): "Ok.", "Nao.", "Pra minha amiga." viravam lista de horarios de avaliacao =====
+const { analyzeFlow } = await import("../dist/ai/salesFlow.js");
+const { stripSlotOffers } = await import("../dist/ai/slotText.js");
+
+test("Clarinda: 'Ok.' depois de uma fala sem pergunta -> silencio (nada de oferta)", () => {
+  const history = [
+    msg("human", "Voce ja conhece o nossos protocolos e tratamentos. ☺"),
+    msg("assistant", "Ótimo ouvir que você vai tentar! Qualquer coisa que precisar, é só avisar! 💖"),
+    msg("user", "Ok."),
+  ];
+  const s = situation({ history, trailing: ["Ok."], schedulingSignal: false });
+  assert.equal(s.kind, "courtesy_ack");
+  assert.equal(s.closeWith, "silence");
+  assert.equal(s.forbidSlotOffer, true);
+});
+
+test("'Ok.' respondendo a uma PERGUNTA/oferta nao e silencio (pode ser aceite)", () => {
+  const history = [msg("assistant", "Posso ver um horário pra você?"), msg("user", "Ok.")];
+  const s = situation({ history, trailing: ["Ok."], schedulingSignal: true });
+  assert.notEqual(s.kind, "courtesy_ack");
+});
+
+test("Clarinda: retomando depois da equipe e ela so comentou ('Pra minha amiga.') -> responde so isso, sem horario nem avaliacao", () => {
+  const history = [
+    msg("assistant", "Oi, Clarinda! Tudo bem? Gostaríamos de saber como foi sua experiência durante a avaliação.", { authorName: "Pós Avaliação - 1 dia" }),
+    msg("user", "Muito bem atendida."),
+    msg("human", "Entendi! Gostaria de saber mais sobre algum procedimento Cla ? ☺️"),
+    msg("user", "Pra minha amiga."),
+  ];
+  const s = situation({ history, trailing: ["Pra minha amiga."], schedulingSignal: false, resumedAfterStaffDelay: true, pastVisits: 0 });
+  assert.equal(s.kind, "plain_reply");
+  assert.equal(s.forbidSlotOffer, true);
+  assert.equal(s.forbidEvaluationOffer, true);
+  assert.match(s.directive, /NAO PEDIU HORARIO/);
+  assert.ok(s.briefing.some((l) => /JA E PACIENTE/.test(l)), "a pesquisa/pos de avaliacao mostra que ela ja foi avaliada");
+});
+
+test("lead novo sem pedido de horario: nunca lista horarios, mas ainda pode CONVIDAR pra avaliacao (venda normal)", () => {
+  const trailing = ["Oi, queria saber do botox"];
+  const s = situation({ history: [msg("user", trailing[0])], trailing, schedulingSignal: false });
+  assert.equal(s.kind, "default");
+  assert.equal(s.forbidSlotOffer, true);
+  assert.equal(s.forbidEvaluationOffer, false);
+  const pediu = situation({ history: [msg("user", "Quero marcar")], trailing: ["Quero marcar"], schedulingSignal: true });
+  assert.equal(pediu.forbidSlotOffer, false);
+});
+
+test("fluxo de venda: pedido ANTIGO de horario nao deixa 'Ok.'/'Nao.'/'Pra minha amiga.' em modo agendar", () => {
+  const history = [
+    { role: "user", content: "pode ser 13h00?" },
+    { role: "assistant", content: "Hoje à tarde consigo 13h30. Está bom pra você?" },
+    { role: "user", content: "Muito bem atendida." },
+    { role: "user", content: "Parabéns pela sua equipe." },
+    { role: "user", content: "Eu indico, mais gente." },
+    { role: "user", content: "Manda o tel daí da recepção." },
+    { role: "assistant", content: "Ótimo ouvir que você vai tentar! Qualquer coisa que precisar, é só avisar!" },
+    { role: "user", content: "Ok." },
+  ];
+  const f = analyzeFlow({ history, trailing: ["Ok."], priceAsked: false, hasBooking: false });
+  assert.notEqual(f.intent, "schedule");
+  assert.equal(f.schedulingSignal, false);
+  for (const t of ["Pra minha amiga.", "Não.", "Vou tentar."]) {
+    const g = analyzeFlow({ history: [...history.slice(0, -1), { role: "user", content: t }], trailing: [t], priceAsked: false, hasBooking: false });
+    assert.equal(g.schedulingSignal, false, t);
+    assert.notEqual(g.intent, "schedule", t);
+  }
+});
+
+test("fluxo de venda: pediu horario ha pouco e esta respondendo as perguntas de qualificacao -> segue em agendamento", () => {
+  const h = [
+    { role: "user", content: "Prefiro uma avaliação" },
+    { role: "assistant", content: "O que você gostaria de melhorar?" },
+    { role: "user", content: "Gordura localizada e flacidez" },
+  ];
+  const f = analyzeFlow({ history: h, trailing: ["Gordura localizada e flacidez"], priceAsked: false, hasBooking: false });
+  assert.equal(f.intent, "schedule");
+  assert.equal(f.schedulingSignal, true);
+});
+
+test("fluxo de venda: pedir/aceitar/escolher horario CONTINUA sendo sinal de agendamento", () => {
+  const base = [{ role: "assistant", content: "Quer que eu veja um horário pra sua avaliação?" }];
+  for (const t of ["Sim", "pode ser amanhã às 15h", "quero marcar", "tem horário hoje?", "tarde"]) {
+    const f = analyzeFlow({ history: [...base, { role: "user", content: t }], trailing: [t], priceAsked: false, hasBooking: false });
+    assert.equal(f.schedulingSignal, true, t);
+  }
+  const turno = analyzeFlow({
+    history: [{ role: "assistant", content: "Você prefere de manhã ou à tarde?" }, { role: "user", content: "de manhã" }],
+    trailing: ["de manhã"], priceAsked: false, hasBooking: false,
+  });
+  assert.equal(turno.schedulingSignal, true);
+});
+
+test("tirar a lista de horarios da resposta (texto real do print da Clarinda)", () => {
+  const texto = "Para agendar a avaliação, temos alguns horários disponíveis:\n\n- hoje, sexta-feira, 16/10 às 15:00 com a Fabíola\n- hoje, sexta-feira, 16/10 às 16:00 com a Fabíola\n- hoje, sexta-feira, 16/10 às 16:30 com a Fabíola\n\nQual desses funciona melhor pra você? 😊";
+  const out = stripSlotOffers(texto);
+  assert.ok(!/\d{1,2}:\d{2}|horários|Qual desses/.test(out), out);
+  // texto que nao e oferta fica igual
+  assert.equal(stripSlotOffers("Entendi, Clarinda! Se precisar de algo é só chamar. 💗"), "Entendi, Clarinda! Se precisar de algo é só chamar. 💗");
+  // a frase de endereco com horario de funcionamento nao e lista de horarios
+  assert.match(stripSlotOffers("Funcionamos de segunda a sexta, das 9h às 19h. Estamos na Av. Índico."), /Funcionamos/);
 });

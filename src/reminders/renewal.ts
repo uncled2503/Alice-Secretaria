@@ -5,6 +5,7 @@ import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js
 import { PAID_CLINIC_WHERE } from "../crm/plan.js";
 import { recordAutomatedMessage } from "../crm/conversationLog.js";
 import { wallClockInZone } from "../scheduling/time.js";
+import { PLACEHOLDER_PROCEDURE_NAME } from "../clinicaexperts/placeholderProcedure.js";
 
 const DAY_MS = 24 * 60 * 60_000;
 const MAX_DAYS = 2 * 365; // limite de 2 anos
@@ -58,6 +59,7 @@ export function startRenewalJob(): void {
           ...(rule.onlyIfCompleted ? { status: "completed" } : { status: { in: ["confirmed", "completed"] } }),
           scheduledAt: { lte: cutoff, gte: floor },
           ...(procedureFilter.length ? { procedureId: { in: procedureFilter } } : {}),
+          procedure: { name: { not: PLACEHOLDER_PROCEDURE_NAME } }, // reserva sem procedimento nao tem o que renovar
           renewalSent: { none: { ruleId: rule.id } },
           patient: { optedOut: false }, // quem pediu pra parar nao recebe mensagem automatica
         },
@@ -94,7 +96,7 @@ export function startRenewalJob(): void {
         });
 
         try {
-          const outcome = await sendText(appt.clinicId, appt.patient.phone, text);
+          const outcome = await sendText(appt.clinicId, appt.patient.phone, text, { kind: "renovacao" });
           await prisma.renewalSent.create({ data: { appointmentId: appt.id, ruleId: rule.id } });
           if (outcome === "sent") await recordAutomatedMessage(appt.patientId, text, rule.name || "Renovação automática");
         } catch (err) {

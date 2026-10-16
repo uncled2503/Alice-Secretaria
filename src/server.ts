@@ -19,6 +19,7 @@ import { startProfessionalBackfillJob } from "./scheduling/professionalBackfillJ
 import { startMetaEventWorker } from "./meta/worker.js";
 import { startLearningJob } from "./ai/learning.js";
 import { startFollowUpJob } from "./crm/followup.js";
+import { startBriefingJob } from "./ai/leadBriefing.js";
 import { startLeadSummaryJob } from "./crm/leadSummary.js";
 import { startCeBookingPullJob } from "./clinicaexperts/pull.js";
 import { startCeBirthdayJob } from "./clinicaexperts/birthdays.js";
@@ -353,6 +354,7 @@ const httpServer = app.listen(port, () => {
   startRenewalJob();
   startBirthdayJob();
   startFollowUpJob();
+  startBriefingJob(); // memoria do lead: atualiza quem teve conversa nova
   startBroadcastJob();
   startNpsJob();
   startPlanExpiryJob();

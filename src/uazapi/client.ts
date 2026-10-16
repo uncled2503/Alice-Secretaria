@@ -7,6 +7,8 @@ import { prisma } from "../db/client.js";
 import { recordIncomingMessage, generateReply, recordOutgoingFromDevice } from "../ai/alice.js";
 import { isFreePlan } from "../crm/plan.js";
 import { isOptOutRequest, applyOptOut, OPTOUT_CONFIRMATION } from "../crm/optout.js";
+import { reviewOutbound, type OutboundKind } from "../ai/sendGate.js";
+import { scheduleBriefingRefresh } from "../ai/leadBriefing.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -455,9 +457,10 @@ const placeholderAlerted = new Map<string, number>();
 
 // "sent" = saiu pelo WhatsApp. "blocked" = plano gratis (nada automatico sai). "duplicate" = o mesmo texto ja saiu
 // ha pouco para o mesmo numero. Quem grava a mensagem no chat so deve fazer isso quando o resultado e "sent".
-export type SendOutcome = "sent" | "blocked" | "duplicate";
+// "vetoed" = a revisao por IA barrou (nao faz sentido enviar agora): nada saiu, o motivo fica no Diario de atividades.
+export type SendOutcome = "sent" | "blocked" | "duplicate" | "vetoed";
 
-export async function sendText(clinicId: string, phone: string, text: string, opts: { manual?: boolean; alice?: boolean } = {}): Promise<SendOutcome> {
+export async function sendText(clinicId: string, phone: string, text: string, opts: { manual?: boolean; alice?: boolean; kind?: OutboundKind } = {}): Promise<SendOutcome> {
   if (await automatedSendBlocked(clinicId, opts.manual === true)) return "blocked";
   let reservedDuplicateKey = false;
   if (opts.manual !== true) {
@@ -494,6 +497,14 @@ export async function sendText(clinicId: string, phone: string, text: string, op
           return "duplicate";
         }
       }
+    }
+  }
+  // REVISAO POR IA de toda mensagem automatica (a resposta da Alice e revisada em deliverAliceReply; envio manual da equipe nao e revisado).
+  if (opts.manual !== true && opts.alice !== true) {
+    const verdict = await reviewOutbound({ clinicId, phone, text, kind: opts.kind ?? "outra" });
+    if (!verdict.send) {
+      if (reservedDuplicateKey) forgetSend(clinicId, phone, text);
+      return "vetoed";
     }
   }
   try {
@@ -546,7 +557,8 @@ export function isAmbiguousSendError(err: unknown): boolean {
 
 export const BURST_DUPLICATE_MS = 3 * 60_000;
 
-export async function deliverAliceReply(clinicId: string, phone: string, conversationId: string, reply: string): Promise<void> {
+export async function deliverAliceReply(clinicId: string, phone: string, conversationId: string, replyIn: string): Promise<void> {
+  let reply = replyIn;
   const pending = await prisma.message.findFirst({
     where: { conversationId, role: "assistant", authorName: null, content: reply, deliveryStatus: { in: ["pending", "failed"] } },
     orderBy: { createdAt: "desc" },
@@ -566,9 +578,22 @@ export async function deliverAliceReply(clinicId: string, phone: string, convers
     if (pending) await prisma.message.update({ where: { id: pending.id }, data: { deliveryStatus: null } }).catch(() => undefined);
     return;
   }
+  // REVISAO POR IA da resposta (ficha da pessoa + a mensagem): barra o que nao faz sentido agora ou reescreve um trecho errado, sem inventar fato novo.
+  const verdict = await reviewOutbound({ clinicId, phone, text: reply, kind: "resposta_alice" });
+  if (!verdict.send) {
+    if (pending) await prisma.message.update({ where: { id: pending.id }, data: { deliveryStatus: null } }).catch(() => undefined);
+    await prisma.message.create({ data: { conversationId, role: "system", content: `A revisão da IA barrou uma resposta da Alice antes de enviar: ${verdict.reason}. Confira a conversa e responda.`, authorName: null } }).catch(() => undefined);
+    await prisma.conversation.update({ where: { id: conversationId }, data: { handoffPending: true, handoffReason: "Resposta da Alice barrada pela revisão" } }).catch(() => undefined);
+    return;
+  }
+  if (verdict.rewritten) {
+    if (pending) await prisma.message.update({ where: { id: pending.id }, data: { content: verdict.rewritten } }).catch(() => undefined);
+    reply = verdict.rewritten;
+  }
   try {
     await sendText(clinicId, phone, reply, { alice: true });
     if (pending) await prisma.message.update({ where: { id: pending.id }, data: { deliveryStatus: "sent" } });
+    void prisma.conversation.findUnique({ where: { id: conversationId }, select: { patientId: true } }).then((c) => { if (c) scheduleBriefingRefresh(c.patientId, { delayMs: 60_000 }); }).catch(() => undefined);
   } catch (err) {
     if (isAmbiguousSendError(err)) {
       // Pode ter chegado: marca como enviada e NAO deixa o reenvio automatico repetir.

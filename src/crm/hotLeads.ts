@@ -119,7 +119,7 @@ export async function runCallbackCheck(now = new Date()): Promise<number> {
           await notifyStaff(clinic.id, "human_handoff", `⏰ Retorno combinado: ${p.name ?? p.phone} pediu para ser chamada nesta data${p.callbackNote ? ` (${p.callbackNote})` : ""}. A conversa está com a equipe.`);
         } else {
           const text = renderCallbackMessage(p.name);
-          const outcome = await sendText(clinic.id, p.phone, text);
+          const outcome = await sendText(clinic.id, p.phone, text, { kind: "recontato" });
           if (outcome === "sent") await recordAutomatedMessage(p.id, text, "Retorno combinado");
         }
         handled++;

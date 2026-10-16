@@ -151,6 +151,13 @@ export async function buildDailyReport(clinicId: string, tz: string): Promise<st
     for (const w of waitingStaff.slice(0, 5)) lines.push(`   - ${w.patient.name ?? w.patient.phone}${w.handoffReason ? ` (${w.handoffReason.slice(0, 40)})` : ""}`);
     if (waitingStaff.length > 5) lines.push(`   …e mais ${waitingStaff.length - 5}.`);
   }
+  // Mensagens que a revisao por IA barrou hoje (lembrete para horario cancelado, oferta nao pedida...): a equipe ve o que foi evitado e por que.
+  const blocked = await prisma.activityLog.findMany({ where: { clinicId, type: "message_blocked_ai", createdAt: { gte: today.from, lt: today.to } }, select: { description: true }, orderBy: { createdAt: "desc" }, take: 20 });
+  if (blocked.length) {
+    lines.push("", `🛡️ *Revisão da IA barrou ${blocked.length} mensagem(ns) hoje*`);
+    for (const b of blocked.slice(0, 4)) lines.push(`   - ${(b.description ?? "").slice(0, 110)}`);
+    if (blocked.length > 4) lines.push(`   …e mais ${blocked.length - 4} (veja o Diário de atividades).`);
+  }
   if (followRules.length) lines.push("", `🔁 *Recontatos*: ${followSent.length} enviado(s) hoje`, ...followUpRuleLines(followRules));
   if (failures) lines.push("", `⚠️ ${failures} resposta(s) da Alice não foram entregues hoje (o sistema tenta de novo).`);
 
