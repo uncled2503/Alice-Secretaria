@@ -6,6 +6,7 @@ import { formatDateTimeInZone } from "../scheduling/time.js";
 import { automationKindOf } from "./situation.js";
 import { aiExtraEnabled } from "./aiSwitch.js";
 import { displayProcedureName } from "../clinicaexperts/placeholderProcedure.js";
+import { recordUsage } from "./usageStats.js";
 
 // ---------------------------------------------------------------------------
 // BRIEFING DO LEAD, SEMPRE ATUAL (pedido do dono, 16/10/2026: "a Alice sempre recebe um briefing de cada cliente... quero que seja atualizado sempre
@@ -45,7 +46,16 @@ export interface PatientFacts {
 }
 
 // FATOS AO VIVO de uma pessoa. `clinicId + phone` (envio) ou `patientId` (Alice/job).
-export async function patientFacts(ref: { clinicId: string; phone: string } | { patientId: string }, now = new Date()): Promise<PatientFacts | null> {
+export interface FactsOptions {
+  messages?: number; // quantas das ultimas mensagens entram (padrao 14; 0 = nenhuma)
+  clip?: number; // tamanho maximo de cada mensagem
+  notes?: boolean; // inclui a memoria do lead (padrao sim)
+  excludePendingText?: string; // a resposta da Alice que esta SENDO entregue (ja gravada como "pending"): nao conta como mensagem enviada
+}
+
+export async function patientFacts(ref: { clinicId: string; phone: string } | { patientId: string }, now = new Date(), opts: FactsOptions = {}): Promise<PatientFacts | null> {
+  const maxMessages = opts.messages ?? 14;
+  const clipChars = opts.clip ?? 140;
   const patient =
     "patientId" in ref
       ? await prisma.patient.findUnique({ where: { id: ref.patientId } })
@@ -75,10 +85,18 @@ export async function patientFacts(ref: { clinicId: string; phone: string } | { 
   const messages = conversation
     ? (await prisma.message.findMany({
         where: { conversationId: conversation.id, role: { in: ["user", "assistant", "human"] } },
-        orderBy: { createdAt: "desc" }, take: 14,
-        select: { role: true, content: true, authorName: true, createdAt: true },
+        orderBy: { createdAt: "desc" }, take: Math.max(maxMessages, 4),
+        select: { role: true, content: true, authorName: true, createdAt: true, deliveryStatus: true },
       })).reverse()
     : [];
+  // A resposta que a Alice acabou de gerar ja esta gravada no chat como "pending" enquanto a revisao a le: se entrasse na ficha como "ultima mensagem",
+  // a revisao a tomaria por REPETIDA e barraria TODAS as respostas (16/10).
+  if (opts.excludePendingText !== undefined) {
+    const pendingText = opts.excludePendingText.trim();
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "assistant" && (messages[i].deliveryStatus === "pending" || messages[i].content.trim() === pendingText)) { messages.splice(i, 1); break; }
+    }
+  }
 
   const lines: string[] = [];
   const first = patient.name?.trim() || "(sem nome)";
@@ -104,13 +122,13 @@ export async function patientFacts(ref: { clinicId: string; phone: string } | { 
   const lastHumanMinutesAgo = lastHuman ? Math.round((now.getTime() - lastHuman.createdAt.getTime()) / 60_000) : null;
   if (lastHuman) lines.push(`EQUIPE (pessoa de verdade) falou pela ultima vez ${ago(lastHuman.createdAt, now)}: "${clip(oneLine(lastHuman.content), 100)}"`);
 
-  if (messages.length) {
+  if (messages.length && maxMessages > 0) {
     lines.push(
       "ULTIMAS MENSAGENS (a de baixo e a mais recente):\n" +
-        messages.map((m) => `  ${m.role === "user" ? "PESSOA" : m.role === "human" ? "EQUIPE" : automationKindOf(m) ? "AUTOMATICA" : "ALICE"} (${ago(m.createdAt, now)}): ${clip(oneLine(m.content), 140)}`).join("\n"),
+        messages.slice(-maxMessages).map((m) => `  ${m.role === "user" ? "PESSOA" : m.role === "human" ? "EQUIPE" : automationKindOf(m) ? "AUTOMATICA" : "ALICE"} (${ago(m.createdAt, now)}): ${clip(oneLine(m.content), clipChars)}`).join("\n"),
     );
   }
-  if (patient.briefingNotes?.trim()) lines.push(`MEMORIA DO LEAD (notas atualizadas ${patient.briefingNotesAt ? ago(patient.briefingNotesAt, now) : ""}):\n${patient.briefingNotes.trim()}`);
+  if (opts.notes !== false && patient.briefingNotes?.trim()) lines.push(`MEMORIA DO LEAD (notas atualizadas ${patient.briefingNotesAt ? ago(patient.briefingNotesAt, now) : ""}):\n${patient.briefingNotes.trim()}`);
 
   return {
     patientId: patient.id,
@@ -157,6 +175,7 @@ const defaultCall: NotesCall = async (system, user) => {
     model: MODEL, temperature: 0.1, max_tokens: 500, response_format: { type: "json_object" },
     messages: [{ role: "system", content: system }, { role: "user", content: user }],
   });
+  recordUsage("memoria_do_lead", res.usage);
   return res.choices[0]?.message?.content ?? null;
 };
 
@@ -170,18 +189,25 @@ export async function refreshBriefingNotes(patientId: string, opts: { force?: bo
     if (!patient) return null;
     const conversation = await prisma.conversation.findFirst({ where: { patientId }, orderBy: { lastMessageAt: "desc" }, select: { id: true } });
     if (!conversation) return null;
-    const msgs = (await prisma.message.findMany({
+    const all = (await prisma.message.findMany({
       where: { conversationId: conversation.id, role: { in: ["user", "assistant", "human"] } },
-      orderBy: { createdAt: "desc" }, take: 40,
+      orderBy: { createdAt: "desc" }, take: 24,
       select: { role: true, content: true, authorName: true, createdAt: true },
     })).reverse();
-    if (msgs.length < 2 && !opts.force) return null;
-    const newest = msgs.at(-1)?.createdAt;
+    // So "oi"/"ok" e uma resposta: nada que lembrar (uma mensagem com conteudo, mesmo curta conversa, ja vale).
+    if (!opts.force && (all.length < 2 || !all.some((m) => m.role === "user" && m.content.trim().length >= 20))) return null;
+    const newest = all.at(-1)?.createdAt;
     if (!opts.force && patient.briefingNotesAt && newest && newest <= patient.briefingNotesAt) return null; // nada novo desde a ultima atualizacao
+    // Ja existem notas: manda so as mensagens NOVAS (e 2 de contexto antes delas), nao a conversa inteira de novo.
+    let msgs = all;
+    if (patient.briefingNotes?.trim() && patient.briefingNotesAt) {
+      const firstNew = all.findIndex((m) => m.createdAt > patient.briefingNotesAt!);
+      msgs = firstNew < 0 ? all.slice(-2) : all.slice(Math.max(0, firstNew - 2));
+    }
 
-    const facts = await patientFacts({ patientId });
+    const facts = await patientFacts({ patientId }, new Date(), { messages: 0, notes: false }); // a conversa vai separada; as notas atuais tambem
     const transcript = msgs
-      .map((m) => `${m.role === "user" ? "PESSOA" : m.role === "human" ? "EQUIPE" : automationKindOf(m) ? "AUTOMATICA" : "ALICE"}: ${clip(oneLine(m.content), 260)}`)
+      .map((m) => `${m.role === "user" ? "PESSOA" : m.role === "human" ? "EQUIPE" : automationKindOf(m) ? "AUTOMATICA" : "ALICE"}: ${clip(oneLine(m.content), 200)}`)
       .join("\n");
     const user = `NOTAS ATUAIS:\n${patient.briefingNotes?.trim() || "(nenhuma)"}\n\nFICHA AO VIVO:\n${facts?.text ?? ""}\n\nCONVERSA (a ultima e a mais recente):\n${transcript}`;
     const raw = await (opts.call ?? defaultCall)(NOTES_SYSTEM, user);
@@ -199,13 +225,19 @@ export async function refreshBriefingNotes(patientId: string, opts: { force?: bo
 
 // Agenda a atualizacao (agrupa varios eventos seguidos numa so chamada). Nunca lanca; nao segura o processo.
 const timers = new Map<string, NodeJS.Timeout>();
+const lastRun = new Map<string, number>();
 export function scheduleBriefingRefresh(patientId: string, opts: { delayMs?: number; force?: boolean } = {}): void {
   if (!aiExtraEnabled("AI_BRIEFING")) return;
   const prev = timers.get(patientId);
   if (prev) clearTimeout(prev);
+  const force = opts.force ?? false;
   const t = setTimeout(() => {
     timers.delete(patientId);
-    void refreshBriefingNotes(patientId, { force: opts.force ?? true });
+    // Economia: no maximo 1 atualizacao a cada 15 min por pessoa (3 min quando algo mudou na agenda); o job de 20 min pega o resto.
+    if (Date.now() - (lastRun.get(patientId) ?? 0) < (force ? 3 : 15) * 60_000) return;
+    lastRun.set(patientId, Date.now());
+    if (lastRun.size > 5000) for (const [k, v] of lastRun) if (Date.now() - v > 3_600_000) lastRun.delete(k);
+    void refreshBriefingNotes(patientId, { force });
   }, opts.delayMs ?? 90_000);
   t.unref?.();
   timers.set(patientId, t);

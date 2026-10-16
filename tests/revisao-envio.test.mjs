@@ -1,7 +1,7 @@
 // REVISAO DE ENVIO POR IA + MEMORIA DO LEAD, com banco de verdade (SQLite temporario) e OpenAI/UAZAPI simulados por um fetch falso.
 // Pedido do dono (16/10/2026): toda mensagem passa pela IA antes de sair ("faz sentido enviar isso agora?") e o briefing de cada lead fica sempre atualizado.
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { beforeEach } from "node:test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -31,7 +31,7 @@ globalThis.fetch = async (url, init = {}) => {
     if (openaiDown) return jsonRes(500, { error: { message: "fora do ar" } });
     const body = JSON.parse(init.body);
     const system = body.messages[0].content;
-    if (/REVISOR DE ENVIO/.test(system)) {
+    if (/REVISOR (DE ENVIO|das respostas)/.test(system)) {
       reviews.push(body);
       return jsonRes(200, completion(reviewAnswer(body)));
     }
@@ -53,6 +53,13 @@ const { sendText, deliverAliceReply } = await import("../dist/uazapi/client.js")
 const { decide, acceptsRewrite, reviewOutbound } = await import("../dist/ai/sendGate.js");
 const { patientFacts, parseNotes, refreshBriefingNotes, runBriefingJob } = await import("../dist/ai/leadBriefing.js");
 const { aiExtraEnabled } = await import("../dist/ai/aiSwitch.js");
+const { usageSnapshot, resetUsageForTests } = await import("../dist/ai/usageStats.js");
+const { isFixedReply } = await import("../dist/ai/fixedReplies.js");
+const { resetBreakerForTests } = await import("../dist/ai/sendGate.js");
+beforeEach(() => resetBreakerForTests());
+const { closingReply, feedbackThanks } = await import("../dist/ai/courtesy.js");
+const { confirmationThanks } = await import("../dist/ai/confirmation.js");
+const { scheduleBriefingRefresh } = await import("../dist/ai/leadBriefing.js");
 const { ensurePlaceholderProcedure } = await import("../dist/clinicaexperts/placeholderProcedure.js");
 
 test.after(async () => {
@@ -72,18 +79,36 @@ async function pessoa(nome, { optedOut = false } = {}) {
 const HOUR = 3_600_000;
 const unico = (t) => `${t} ${Math.random().toString(36).slice(2)} (texto longo o bastante para a trava de duplicados do envio)`;
 
-test("politica: so barra com confianca ALTA; reescreve so resposta da Alice e sem fato novo; resposta estranha envia", () => {
+test("politica: a mensagem AUTOMATICA so e barrada com confianca ALTA; a resposta da ALICE nunca e barrada (reescreve sem fato inventado, ou sai a original)", () => {
   const j = (o) => JSON.stringify(o);
   assert.equal(decide(j({ decisao: "nao_enviar", confianca: "alta", motivo: "cancelado" }), "lembrete", "x").send, false);
   assert.equal(decide(j({ decisao: "nao_enviar", confianca: "media", motivo: "talvez" }), "lembrete", "x").send, true);
   assert.equal(decide(j({ decisao: "nao_enviar", confianca: "baixa", motivo: "?" }), "lembrete", "x").send, true);
   assert.equal(decide(j({ decisao: "enviar", confianca: "alta", motivo: "ok" }), "lembrete", "x").send, true);
+  assert.equal(decide(j({ decisao: "reescrever", confianca: "alta", motivo: "m", texto: "Claro! O endereço é Av. Índico, 294." }), "lembrete", "x").rewritten, undefined, "automatica nunca e reescrita");
+  // RESPOSTA DA ALICE: nunca send:false
   const orig = "Claro! Posso agendar uma avaliação pra você? O endereço é Av. Índico, 294.";
   const r = decide(j({ decisao: "reescrever", confianca: "alta", motivo: "oferta nao pedida", texto: "Claro! O endereço é Av. Índico, 294." }), "resposta_alice", orig);
+  assert.equal(r.send, true);
   assert.equal(r.rewritten, "Claro! O endereço é Av. Índico, 294.");
-  assert.equal(decide(j({ decisao: "reescrever", confianca: "alta", motivo: "m", texto: "Claro! O endereço é Av. Índico, 294." }), "lembrete", orig).rewritten, undefined, "automatica nunca e reescrita");
-  assert.equal(decide(j({ decisao: "reescrever", confianca: "alta", motivo: "m", texto: "Tenho horário às 15:00 com desconto de R$ 50" }), "resposta_alice", orig).rewritten, undefined, "reescrita com fato novo e recusada");
-  for (const lixo of [null, "", "nao e json", "[]", "{}", j({ decisao: "talvez" })]) assert.equal(decide(lixo, "lembrete", "x").send, true, String(lixo));
+  // ate "nao_enviar" vira a resposta melhor (ou a original), nunca silencio
+  const n = decide(j({ decisao: "nao_enviar", confianca: "alta", motivo: "oferta nao pedida", texto: "Claro! O endereço é Av. Índico, 294." }), "resposta_alice", orig);
+  assert.equal(n.send, true);
+  assert.equal(n.rewritten, "Claro! O endereço é Av. Índico, 294.");
+  const semTexto = decide(j({ decisao: "nao_enviar", confianca: "alta", motivo: "ruim" }), "resposta_alice", orig);
+  assert.equal(semTexto.send, true);
+  assert.equal(semTexto.rewritten, undefined, "sem resposta melhor: sai a original");
+  // fato inventado na reescrita: recusa a reescrita, mas a original SAI
+  const inventado = decide(j({ decisao: "reescrever", confianca: "alta", motivo: "m", texto: "Tenho horário às 15:00 com desconto de R$ 50" }), "resposta_alice", orig);
+  assert.equal(inventado.send, true);
+  assert.equal(inventado.rewritten, undefined);
+  // mas fato que esta na FICHA (a agenda da pessoa) pode entrar na resposta melhor
+  const comFicha = decide(j({ decisao: "reescrever", confianca: "media", motivo: "agenda", texto: "Seu horário continua amanhã às 15:00, tudo certo!" }), "resposta_alice", "Posso agendar uma avaliação?", "AGENDA (proximos horarios): Hipro em quarta-feira, 21/10 as 15:00");
+  assert.equal(comFicha.rewritten, "Seu horário continua amanhã às 15:00, tudo certo!");
+  for (const lixo of [null, "", "nao e json", "[]", "{}", j({ decisao: "talvez" })]) {
+    assert.equal(decide(lixo, "lembrete", "x").send, true, String(lixo));
+    assert.equal(decide(lixo, "resposta_alice", "x").send, true, String(lixo));
+  }
   assert.equal(acceptsRewrite("Seu horário é 15:00 amanhã.", "Seu horário é 16:00 amanhã."), false);
   assert.equal(acceptsRewrite("Seu horário é 15:00 amanhã.", "Seu horário é 15:00."), true);
 });
@@ -192,22 +217,103 @@ test("a mesma mensagem barrada nao pergunta de novo a IA (reenvios do job)", asy
   reviewAnswer = () => ({ decisao: "enviar", confianca: "alta", motivo: "ok" });
 });
 
-test("resposta da Alice barrada: nao sai, vira aviso pra equipe na conversa (nao fica muda sem ninguem saber)", async () => {
-  posts.length = 0;
-  const p = await pessoa("Clarinda Alice");
+// ===== 16/10: a revisao barrou TODAS as respostas da Alice =====
+// Causa: a resposta que estava sendo entregue ja estava gravada no chat ("pending") e aparecia na ficha como "ultima mensagem da Alice"; a IA a tomava por repetida.
+// Regra do dono: lead NUNCA fica sem resposta. A revisao reformula e a melhor resposta sai.
+test("REGRESSAO: a resposta que esta sendo entregue NAO aparece na ficha como ja enviada (a IA via 'repetida' e barrava tudo)", async () => {
+  posts.length = 0; reviews.length = 0;
+  const p = await pessoa("Clarinda Regressao");
   const conv = await prisma.conversation.create({ data: { patientId: p.id } });
-  const reply = unico("Para agendar a avaliação, temos alguns horários disponíveis: 15:00 e 16:00");
+  await prisma.message.create({ data: { conversationId: conv.id, role: "user", content: "Oi, qual o endereço da clínica de vocês?", createdAt: new Date(Date.now() - 60_000) } });
+  const reply = unico("Estamos na Av. Índico, 294, Jardim do Mar. Quer que eu veja um horário?");
   await prisma.message.create({ data: { conversationId: conv.id, role: "assistant", content: reply, deliveryStatus: "pending" } });
-  reviewAnswer = () => ({ decisao: "nao_enviar", confianca: "alta", motivo: "ela nao pediu horario e ja foi avaliada" });
+  // uma IA "de verdade": se achar a MESMA resposta ja entre as mensagens enviadas, barra como repetida
+  reviewAnswer = (body) => {
+    const user = body.messages[1].content;
+    const naFicha = user.split(reply.slice(0, 40)).length - 1; // vezes que o texto aparece (uma e a propria mensagem a enviar)
+    return naFicha >= 2 ? { decisao: "nao_enviar", confianca: "alta", motivo: "mensagem repetida: ja foi enviada" } : { decisao: "enviar", confianca: "alta", motivo: "ok" };
+  };
   await deliverAliceReply(clinic.id, p.phone, conv.id, reply);
-  assert.equal(posts.length, 0);
+  assert.equal(posts.length, 1, "a resposta SAI");
+  assert.equal(posts[0].text, reply);
+  const user = reviews.at(-1).messages[1].content;
+  assert.match(user, /PESSOA \([^)]*\): Oi, qual o endere/, "a ficha mostra o que a pessoa escreveu");
+  assert.equal(user.split(reply.slice(0, 40)).length - 1, 1, "a resposta aparece UMA vez (como a mensagem a enviar), nao na lista de enviadas");
+  assert.match(reviews.at(-1).messages[0].content, /REVISOR das respostas da Alice/, "resposta da Alice usa o prompt proprio (reescreve, nunca barra)");
+  reviewAnswer = () => ({ decisao: "enviar", confianca: "alta", motivo: "ok" });
+});
+
+test("a IA acha problema na resposta da Alice: a MELHOR resposta que ela escreveu e a que sai (a pessoa nao fica sem resposta)", async () => {
+  posts.length = 0;
+  const p = await pessoa("Clarinda Melhor");
+  const conv = await prisma.conversation.create({ data: { patientId: p.id } });
+  const reply = unico("Para agendar a avaliação, temos alguns horários disponíveis: 15:00 e 16:00. Qual prefere?");
+  await prisma.message.create({ data: { conversationId: conv.id, role: "user", content: "Ok", createdAt: new Date(Date.now() - 60_000) } });
+  await prisma.message.create({ data: { conversationId: conv.id, role: "assistant", content: reply, deliveryStatus: "pending" } });
+  reviewAnswer = () => ({ decisao: "reescrever", confianca: "alta", motivo: "ela so disse ok e ja foi avaliada", texto: "Combinado, qualquer coisa é só me chamar por aqui. 💗" });
+  await deliverAliceReply(clinic.id, p.phone, conv.id, reply);
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].text, "Combinado, qualquer coisa é só me chamar por aqui. 💗");
   const msg = await prisma.message.findFirst({ where: { conversationId: conv.id, role: "assistant" } });
-  assert.equal(msg.deliveryStatus, null);
-  const aviso = await prisma.message.findFirst({ where: { conversationId: conv.id, role: "system" } });
-  assert.match(aviso.content, /revisão da IA barrou/);
-  const c = await prisma.conversation.findUnique({ where: { id: conv.id } });
-  assert.equal(c.handoffPending, true);
-  assert.match(c.handoffReason, /barrada pela revisão/);
+  assert.equal(msg.content, "Combinado, qualquer coisa é só me chamar por aqui. 💗");
+  assert.equal(msg.deliveryStatus, "sent");
+  assert.equal((await prisma.conversation.findUnique({ where: { id: conv.id } })).handoffPending, false);
+});
+
+test("a IA manda 'nao_enviar' pra uma resposta da Alice e nao escreve alternativa: a ORIGINAL sai (nunca silencio)", async () => {
+  posts.length = 0;
+  const p = await pessoa("Clarinda Original");
+  const conv = await prisma.conversation.create({ data: { patientId: p.id } });
+  const reply = unico("Oi! Temos sim. Me conta o que você gostaria de melhorar?");
+  await prisma.message.create({ data: { conversationId: conv.id, role: "assistant", content: reply, deliveryStatus: "pending" } });
+  reviewAnswer = () => ({ decisao: "nao_enviar", confianca: "alta", motivo: "nao gostei" });
+  await deliverAliceReply(clinic.id, p.phone, conv.id, reply);
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].text, reply);
+  reviewAnswer = () => ({ decisao: "enviar", confianca: "alta", motivo: "ok" });
+});
+
+test("a IA inventa fato na resposta nova (horario/valor que nao esta na ficha): a reescrita e recusada e a ORIGINAL sai", async () => {
+  posts.length = 0;
+  const p = await pessoa("Clarinda Invento");
+  const conv = await prisma.conversation.create({ data: { patientId: p.id } });
+  const reply = unico("Entendi! O Hipro ajuda na firmeza da pele. Quer saber mais?");
+  await prisma.message.create({ data: { conversationId: conv.id, role: "assistant", content: reply, deliveryStatus: "pending" } });
+  reviewAnswer = () => ({ decisao: "reescrever", confianca: "alta", motivo: "m", texto: "O Hipro custa R$ 890 e tenho horário amanhã às 14:00!" });
+  await deliverAliceReply(clinic.id, p.phone, conv.id, reply);
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].text, reply);
+  reviewAnswer = () => ({ decisao: "enviar", confianca: "alta", motivo: "ok" });
+});
+
+test("a revisao fora do ar ou lenta: a resposta da Alice sai igual (nunca trava)", async () => {
+  posts.length = 0;
+  const p = await pessoa("Clarinda Fora");
+  const conv = await prisma.conversation.create({ data: { patientId: p.id } });
+  const reply = unico("Claro! Estou por aqui para te ajudar. Qual procedimento te interessa?");
+  await prisma.message.create({ data: { conversationId: conv.id, role: "assistant", content: reply, deliveryStatus: "pending" } });
+  openaiDown = true;
+  try { await deliverAliceReply(clinic.id, p.phone, conv.id, reply); } finally { openaiDown = false; }
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].text, reply);
+});
+
+test("DISJUNTOR: se a revisao barrar quase tudo (erro dela), desliga sozinha por 30 min e as mensagens saem sem revisar", async () => {
+  posts.length = 0; reviews.length = 0;
+  reviewAnswer = () => ({ decisao: "nao_enviar", confianca: "alta", motivo: "barrar tudo (revisao com defeito)" });
+  const resultados = [];
+  for (let i = 0; i < 8; i++) {
+    const p = await pessoa("Disjuntor " + i);
+    resultados.push(await sendText(clinic.id, p.phone, unico("Confirmando seu horário " + i), { kind: "lembrete" }));
+  }
+  // as primeiras sao barradas; quando 6 de 6 foram barradas o disjuntor abre e o resto SAI sem consultar a IA
+  assert.deepEqual(resultados.slice(0, 6), ["vetoed", "vetoed", "vetoed", "vetoed", "vetoed", "vetoed"]);
+  assert.deepEqual(resultados.slice(6), ["sent", "sent"]);
+  assert.equal(reviews.length, 6, "depois de aberto, nem chama a IA");
+  let aviso = null; // o aviso e gravado em segundo plano: espera ate 3s
+  for (let i = 0; i < 30 && !aviso; i++) { aviso = await prisma.activityLog.findFirst({ where: { clinicId: clinic.id, title: "Revisão da IA desligada por 30 min" } }); if (!aviso) await new Promise((r) => setTimeout(r, 100)); }
+  assert.ok(aviso);
+  reviewAnswer = () => ({ decisao: "enviar", confianca: "alta", motivo: "ok" });
 });
 
 test("resposta da Alice reescrita: sai a versao corrigida e o chat guarda a que foi enviada", async () => {
@@ -308,5 +414,106 @@ test("rodada de lembretes COM a revisao: o barrado nao sai, os outros saem (kind
   assert.ok(reviews.every((b) => /lembrete\/confirmacao automatica/.test(b.messages[1].content)));
   const bloqueio = await prisma.activityLog.findFirst({ where: { clinicId: c2.id, type: "message_blocked_ai" } });
   assert.ok(bloqueio);
+  reviewAnswer = () => ({ decisao: "enviar", confianca: "alta", motivo: "ok" });
+});
+
+// ===== economia de tokens (16/10) =====
+test("economia: respostas FIXAS do sistema (agradecimento, urgencia, 'sou a assistente') nao passam pela IA - e as de seguranca nunca podem ser barradas", async () => {
+  for (const t of [closingReply("Clarinda", ""), confirmationThanks("Ana"), feedbackThanks("Bia"), "Combinado! Qualquer coisa é só me chamar. 💗",
+    "Sinto muito que isso esteja acontecendo. Se você está com falta de ar, procure agora um pronto-socorro ou ligue para o SAMU (192).",
+    "Sou a Alice, assistente virtual da equipe da Lisboa. 😊 Posso te ajudar por aqui."]) {
+    assert.equal(isFixedReply(t), true, t);
+  }
+  assert.equal(isFixedReply("Oi! Tenho horário amanhã às 10:00. Quer?"), false);
+  posts.length = 0; reviews.length = 0;
+  reviewAnswer = () => ({ decisao: "nao_enviar", confianca: "alta", motivo: "barrar tudo" });
+  const p = await pessoa("Fixa Alice");
+  const conv = await prisma.conversation.create({ data: { patientId: p.id } });
+  const urgente = "Sinto muito que isso esteja acontecendo. Se você está com falta de ar ou sangramento intenso, procure agora um pronto-socorro ou ligue para o SAMU (192). Já estou avisando a equipe. " + Math.random();
+  await prisma.message.create({ data: { conversationId: conv.id, role: "assistant", content: urgente, deliveryStatus: "pending" } });
+  await deliverAliceReply(clinic.id, p.phone, conv.id, urgente);
+  assert.equal(posts.length, 1, "o aviso de urgencia sai mesmo com a IA mandando barrar tudo");
+  assert.equal(reviews.length, 0, "e nem gasta a chamada");
+  reviewAnswer = () => ({ decisao: "enviar", confianca: "alta", motivo: "ok" });
+});
+
+test("economia: a revisao recebe uma ficha enxuta (so as 8 ultimas mensagens, cortadas) e responde com poucas palavras", async () => {
+  reviews.length = 0;
+  const p = await pessoa("Ficha Enxuta");
+  const conv = await prisma.conversation.create({ data: { patientId: p.id } });
+  for (let i = 0; i < 20; i++) await prisma.message.create({ data: { conversationId: conv.id, role: i % 2 ? "assistant" : "user", content: "Mensagem numero " + i + " " + "x".repeat(200), createdAt: new Date(Date.now() - (30 - i) * 60_000) } });
+  await sendText(clinic.id, p.phone, unico("Confirmando seu horário"), { kind: "lembrete" });
+  const user = reviews.at(-1).messages[1].content;
+  const linhas = user.split("\n").filter((l) => /^  (PESSOA|ALICE|EQUIPE|AUTOMATICA) \(/.test(l));
+  assert.equal(linhas.length, 8);
+  assert.ok(linhas.every((l) => l.length < 150), "cada mensagem cortada");
+  assert.ok(user.includes("Mensagem numero 19") && !user.includes("Mensagem numero 5 "));
+  assert.equal(reviews.at(-1).max_tokens, 140);
+});
+
+test("economia: a memoria so manda as mensagens NOVAS (as notas anteriores carregam o resto) e nao refaz a cada mensagem (intervalo minimo)", async () => {
+  const p = await pessoa("Memoria Delta");
+  const conv = await prisma.conversation.create({ data: { patientId: p.id } });
+  const t0 = Date.now() - 60 * 60_000;
+  const add = (role, content, min) => prisma.message.create({ data: { conversationId: conv.id, role, content, createdAt: new Date(t0 + min * 60_000) } });
+  await add("user", "Mensagem ANTIGA sobre botox", 0);
+  await add("assistant", "Resposta antiga", 1);
+  await add("user", "Outra antiga", 2);
+  let corpos = [];
+  notesAnswer = (body) => { corpos.push(body.messages[1].content); return { notas: ["Quer botox"] }; };
+  await refreshBriefingNotes(p.id);
+  assert.match(corpos[0], /Mensagem ANTIGA sobre botox/, "primeira vez: le a conversa");
+  // chegam mensagens novas depois da memoria
+  await prisma.patient.update({ where: { id: p.id }, data: { briefingNotesAt: new Date(t0 + 10 * 60_000) } });
+  await add("user", "Mensagem NOVA sobre horario de sabado", 30);
+  await add("assistant", "Resposta nova", 31);
+  corpos = [];
+  await refreshBriefingNotes(p.id);
+  assert.equal(corpos.length, 1);
+  assert.match(corpos[0], /Mensagem NOVA sobre horario de sabado/);
+  assert.ok(!/Mensagem ANTIGA sobre botox/.test(corpos[0]), "a conversa antiga nao e mandada de novo");
+  assert.match(corpos[0], /NOTAS ATUAIS:\n- Quer botox/, "as notas atuais seguem junto");
+  assert.ok(!/ULTIMAS MENSAGENS/.test(corpos[0]), "a ficha nao repete a conversa");
+  // intervalo minimo: duas agendas seguidas = uma atualizacao so
+  const q = await pessoa("Memoria Intervalo");
+  const cq = await prisma.conversation.create({ data: { patientId: q.id } });
+  for (let i = 0; i < 4; i++) await prisma.message.create({ data: { conversationId: cq.id, role: i % 2 ? "assistant" : "user", content: "papo mais longo da conversa numero " + i, createdAt: new Date(Date.now() - (20 - i) * 60_000) } });
+  corpos = [];
+  scheduleBriefingRefresh(q.id, { delayMs: 20 });
+  await new Promise((r) => setTimeout(r, 400));
+  const primeira = corpos.length;
+  await prisma.message.create({ data: { conversationId: cq.id, role: "user", content: "mais uma mensagem", createdAt: new Date() } });
+  scheduleBriefingRefresh(q.id, { delayMs: 20 });
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal(primeira, 1);
+  assert.equal(corpos.length, 1, "a segunda dentro de 15 min nao chama a IA (o job de 20 min pega depois)");
+});
+
+test("economia: o painel mostra onde vao os tokens, por finalidade", async () => {
+  const snap = usageSnapshot();
+  const nomes = snap.purposes.map((p) => p.purpose);
+  assert.ok(nomes.includes("revisao_envio") && nomes.includes("memoria_do_lead"), nomes.join(","));
+  const r = snap.purposes.find((p) => p.purpose === "revisao_envio");
+  assert.ok(r.calls > 0 && r.input > 0 && r.estimatedUsd >= 0);
+  assert.ok(snap.totalEstimatedUsd >= 0 && snap.since);
+  resetUsageForTests();
+  assert.equal(usageSnapshot().purposes.length, 0);
+});
+
+test("DISJUNTOR tambem vale se a revisao REESCREVE quase todas as respostas da Alice (e as respostas seguem saindo)", async () => {
+  posts.length = 0; reviews.length = 0;
+  reviewAnswer = () => ({ decisao: "reescrever", confianca: "alta", motivo: "sempre acha ruim", texto: "Certo! Já te respondo por aqui. 💗" });
+  const enviados = [];
+  for (let i = 0; i < 9; i++) {
+    const p = await pessoa("Reescreve " + i);
+    const conv = await prisma.conversation.create({ data: { patientId: p.id } });
+    const reply = unico("Resposta numero " + i + " da Alice sobre o procedimento escolhido");
+    await prisma.message.create({ data: { conversationId: conv.id, role: "assistant", content: reply, deliveryStatus: "pending" } });
+    await deliverAliceReply(clinic.id, p.phone, conv.id, reply);
+    enviados.push(posts.at(-1).text === reply ? "original" : "reescrita");
+  }
+  assert.equal(posts.length, 9, "toda pessoa recebeu resposta");
+  assert.equal(reviews.length, 6, "depois de 6 reescritas seguidas o disjuntor abre e para de chamar a IA");
+  assert.deepEqual(enviados.slice(6), ["original", "original", "original"]);
   reviewAnswer = () => ({ decisao: "enviar", confianca: "alta", motivo: "ok" });
 });

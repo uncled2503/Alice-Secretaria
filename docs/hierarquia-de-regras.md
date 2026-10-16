@@ -91,7 +91,9 @@ Remarcar pela Alice agora só vale **depois que o CE aceita** (como o agendament
 
 **Revisão de envio (`src/ai/sendGate.ts`).** Antes de qualquer mensagem automática (lembrete, recontato, pós, pesquisa, aniversário, renovação, campanha, preparo, lista de espera) ou resposta da Alice sair para o WhatsApp de uma pessoa, uma chamada curta à IA lê a ficha dela e decide: **enviar**, **não enviar** ou (só resposta da Alice) **reescrever** um trecho.
 - Barra quando há motivo concreto na ficha: horário cancelado/remarcado/diferente da agenda; pessoa pediu para não receber ou não tem interesse; mensagem igual enviada nas últimas ~20h; oferta de avaliação/horário a quem já tem horário, já foi avaliada ou não pediu; contradiz o que a equipe combinou ou a equipe está falando agora; momento inadequado (pesquisa logo após reclamação, recontato a quem disse que não pode); resposta da Alice que inventa valor/horário.
-- **Só barra com confiança "alta"**; dúvida = envia. Reescrita só para resposta da Alice e **nunca com fato novo** (número, data, horário, valor).
+- **Resposta da Alice NUNCA é barrada** (lead sem resposta é o pior erro): se a revisão acha problema, **ela mesma escreve uma resposta melhor** (natural, curta, que responde ao que a pessoa escreveu, usando só fatos da ficha ou da resposta original) e **essa é a que sai**. Se a IA não devolver uma alternativa aceitável (vazia, ou com horário/valor inventado), sai a resposta original. A revisão lê a ficha **sem** a resposta que está sendo entregue (antes ela aparecia como "já enviada" e a IA a barrava como repetida).
+- **Mensagem automática** (lembrete, recontato, pós, pesquisa...) pode ser barrada, só com confiança "alta" (ex.: lembrete de horário cancelado).
+- **Disjuntor:** se a revisão barrar ou reescrever 60% ou mais das últimas mensagens (mínimo 6 em 15 min), ela se desliga sozinha por 30 min e tudo sai sem revisão (fica no Diário de atividades).
 - **IA fora do ar ou resposta estranha = envia** (a revisão nunca trava o atendimento). Aviso interno da equipe, número que não é paciente e mensagem escrita pela equipe não passam pela revisão.
 - Toda mensagem barrada fica no **Diário de atividades** (com o motivo) e entra no **relatório das 20h**. Resposta da Alice barrada vira conversa **não lida** com aviso para a equipe responder.
 - Desligar (emergência): variável `AI_SEND_REVIEW=off`. Modelo: `OPENAI_GATE_MODEL` (padrão `gpt-4o-mini`). Custo: 1 chamada curta por mensagem enviada; o resultado de uma mesma mensagem é lembrado (10 min; barrada 3 h).
@@ -99,3 +101,18 @@ Remarcar pela Alice agora só vale **depois que o CE aceita** (como o agendament
 **Memória do lead (`src/ai/leadBriefing.ts`).** Duas camadas, sempre lidas pela Alice e pela revisão:
 1. **Fatos ao vivo** (montados na hora do banco, nunca velhos): agenda, atendimentos anteriores, cancelamentos dos últimos 14 dias, mensagens automáticas das últimas 24h, o que a equipe falou, últimas mensagens, opt-out/sem interesse/retorno combinado.
 2. **Notas da memória** (`Patient.briefingNotes`, escritas por IA): o que quer, restrições de dia/hora, o que a equipe combinou, "já foi avaliada em 14/10", "vai pensar até sexta", o que **não** fazer. Atualizadas quando algo relevante acontece: mensagem da pessoa (após a conversa assentar), fala da equipe (celular ou painel), resposta da Alice entregue, agendamento criado/cancelado/remarcado (Alice, painel, Clínica Experts), mais um job a cada 20 min que atualiza quem teve conversa nova. Desligar: `AI_BRIEFING=off`.
+
+## 7. Economia de tokens da OpenAI (sem mudar o fluxo)
+
+Onde cada chamada gasta (estimativa com a Lisboa semeada, sem o catálogo do Clínica Experts): o **prompt da conversa** tem ~16 mil tokens (regras ~5 mil) e é reaproveitado do cache da OpenAI (desconto de 50%) quando o início não muda; a **segunda leitura** da conversa custa ~3 mil; a **revisão de envio** ~1,3 mil; a **memória do lead** ~1 mil.
+
+O que foi feito:
+- **Segunda leitura** só roda quando o código ainda não decidiu o caminho (ela é descartada quando a situação já foi definida: cancelar, remarcar, equipe negociando, "ok", retomada sem pedido, já agendada).
+- **Hierarquia de regras** passou para o início do prompt (parte cacheada), em vez de ir na última mensagem (paga a cada resposta).
+- **Mensagens bem antigas** da conversa (além das 10 últimas) vão cortadas em 320 caracteres; as recentes seguem inteiras.
+- **Revisão de envio:** respostas fixas do sistema (agradecimentos, aviso de urgência, "sou a assistente virtual") não gastam a chamada — e as de segurança nunca podem ser barradas; a ficha vai enxuta (8 últimas mensagens, cortadas) e a resposta é curta.
+- **Memória do lead:** só manda as mensagens **novas** (as notas anteriores carregam o resto), no máximo 1 atualização a cada 15 min por pessoa (3 min quando a agenda muda), e ignora conversa que é só "oi/ok".
+- **Medição:** `GET /api/ai-usage` (só admin) mostra, desde que o servidor subiu, chamadas, tokens de entrada/cache/saída e custo estimado **por finalidade** (conversa, segunda leitura, revisão de envio, memória, resumo do CRM, juiz de recontato).
+- Interruptores extras: `AI_SECOND_READING=off` (desliga a segunda leitura de vez), `AI_BRIEFING=off`, `AI_SEND_REVIEW=off`.
+
+Para conferir o custo real: abrir `/api/ai-usage` depois de um dia de uso. Se a **conversa da Alice** dominar, o que mais pesa é o tamanho do prompt (regras ativas) e o modelo configurado por clínica (`Clinic.aiModel`: modelo maior que o `gpt-4o-mini` multiplica o custo).

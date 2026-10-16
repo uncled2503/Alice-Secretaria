@@ -579,13 +579,8 @@ export async function deliverAliceReply(clinicId: string, phone: string, convers
     return;
   }
   // REVISAO POR IA da resposta (ficha da pessoa + a mensagem): barra o que nao faz sentido agora ou reescreve um trecho errado, sem inventar fato novo.
+  // NUNCA fica sem resposta: se a revisao achou problema, ela escreve uma resposta MELHOR e essa e a que sai; sem alternativa valida, sai a original.
   const verdict = await reviewOutbound({ clinicId, phone, text: reply, kind: "resposta_alice" });
-  if (!verdict.send) {
-    if (pending) await prisma.message.update({ where: { id: pending.id }, data: { deliveryStatus: null } }).catch(() => undefined);
-    await prisma.message.create({ data: { conversationId, role: "system", content: `A revisão da IA barrou uma resposta da Alice antes de enviar: ${verdict.reason}. Confira a conversa e responda.`, authorName: null } }).catch(() => undefined);
-    await prisma.conversation.update({ where: { id: conversationId }, data: { handoffPending: true, handoffReason: "Resposta da Alice barrada pela revisão" } }).catch(() => undefined);
-    return;
-  }
   if (verdict.rewritten) {
     if (pending) await prisma.message.update({ where: { id: pending.id }, data: { content: verdict.rewritten } }).catch(() => undefined);
     reply = verdict.rewritten;

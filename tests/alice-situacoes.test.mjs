@@ -19,13 +19,14 @@ execFileSync(process.execPath, ["node_modules/prisma/build/index.js", "db", "pus
 
 // fetch falso ANTES de carregar a Alice (o cliente da OpenAI pega o fetch na criacao)
 const openaiCalls = []; // corpo de cada chamada com ferramentas
+const auxCalls = []; // chamadas SEM ferramentas (segunda leitura da conversa)
 let script = []; // respostas do "modelo", na ordem
 const jsonRes = (status, body) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 globalThis.fetch = async (url, init = {}) => {
   const u = new URL(String(url));
   if (u.hostname.includes("openai.com")) {
     const body = JSON.parse(init.body);
-    if (!body.tools) return jsonRes(200, completion({ content: "{}" })); // leitura/analise ou reescrita: sem ferramentas
+    if (!body.tools) { auxCalls.push(body); return jsonRes(200, completion({ content: "{}" })); } // segunda leitura ou reescrita: sem ferramentas
     openaiCalls.push(body);
     const next = script.shift();
     if (!next) throw new Error("o roteiro do modelo acabou (chamada a mais do que o esperado)");
@@ -349,4 +350,61 @@ test("a memoria do lead (notas atualizadas) vai na ficha que a Alice le antes de
   assert.match(systems, /MEMORIA DO LEAD/);
   assert.match(systems, /So consegue aos sabados/);
   assert.match(systems, /Ja foi avaliada em 14\/10/);
+});
+
+// ===== economia de tokens (16/10): sem mudar o que a Alice responde =====
+test("economia: a segunda leitura da conversa (uma chamada a mais) so roda quando o caminho NAO esta decidido pelo codigo", async () => {
+  // lead em conversa comum, com 4+ mensagens: a leitura roda
+  auxCalls.length = 0; openaiCalls.length = 0;
+  const lead = await cenario("Lead Comum", [
+    ["user", "Oi, queria saber de botox"], ["assistant", "Oi! Claro. O que você gostaria de melhorar?"],
+    ["user", "As linhas da testa"], ["assistant", "Entendi. Você já fez botox antes?"], ["user", "Nunca fiz, tenho receio"],
+  ]);
+  script = [{ content: "Entendo o receio! O botox é aplicado com cuidado. Quer saber como funciona?" }];
+  await generateReply(lead.conv.id);
+  assert.equal(auxCalls.length, 1, "conversa comum: a segunda leitura roda");
+  // retomando depois da equipe, sem pedido de horario (plano ja decidido pelo codigo): nao gasta a leitura
+  auxCalls.length = 0; openaiCalls.length = 0;
+  const retomada = await cenario("Retomada Sem Pedido", [
+    ["user", "Muito bem atendida"], ["human", "Posso te auxiliar em algo? 🥰", "Fabiola"], ["user", "Não, obrigada"],
+    ["human", "Qualquer coisa estamos aqui", "Fabiola"], ["user", "Pra minha amiga, depois eu falo"],
+  ]);
+  script = [{ content: "Tudo bem! Se sua amiga quiser saber mais, é só chamar. 💗" }];
+  await generateReply(retomada.conv.id, { resumedAfterStaffDelay: true });
+  assert.equal(auxCalls.length, 0, "situacao decidida pelo codigo: sem segunda leitura");
+  // cancelar (situacao decidida) tambem nao gasta
+  auxCalls.length = 0; openaiCalls.length = 0;
+  const cancela = await cenario("Cancela Sem Leitura", [
+    ["assistant", "Lembrete do seu horário", "Lembrete de consulta"], ["user", "Oi"], ["assistant", "Oi!"], ["user", "Preciso cancelar meu horário"],
+  ], { appt: { procedureId: hipro.id, when: new Date(Date.now() + 6 * HOUR) } });
+  script = [{ tool: { name: "manage_my_appointment", args: { action: "cancel" } } }, { content: "Pronto, cancelei seu horário. Quando quiser remarcar é só avisar! 💗" }];
+  await generateReply(cancela.conv.id);
+  assert.equal(auxCalls.length, 0);
+});
+
+test("economia: a hierarquia de regras fica no INICIO do prompt (parte reaproveitada do cache da OpenAI), nao na ultima mensagem", async () => {
+  openaiCalls.length = 0;
+  const c = await cenario("Cache Teste", [["user", "Oi, queria saber do Hipro"]]);
+  script = [{ content: "Oi! O Hipro é um procedimento. O que você gostaria de melhorar?" }];
+  await generateReply(c.conv.id);
+  const msgs = openaiCalls[0].messages.filter((m) => m.role === "system");
+  assert.match(msgs[0].content, /ORDEM DE PRIORIDADE DAS REGRAS/, "no inicio (parte fixa)");
+  const ultima = msgs.at(-1).content;
+  assert.doesNotMatch(ultima, /ORDEM DE PRIORIDADE DAS REGRAS/, "nao repete na parte que muda a cada mensagem");
+  assert.match(ultima, /FICHA DESTA PESSOA/);
+});
+
+test("economia: mensagens bem antigas e longas da conversa vao cortadas; as recentes ficam inteiras", async () => {
+  openaiCalls.length = 0;
+  const longa = "Texto longo da clínica. ".repeat(40); // ~960 caracteres
+  const msgs = [];
+  for (let i = 0; i < 14; i++) msgs.push([i % 2 === 0 ? "assistant" : "user", i === 0 ? longa : i === 12 ? longa + " fim" : "Mensagem curta " + i, null]);
+  msgs.push(["user", "E agora, qual o endereço?"]);
+  const c = await cenario("Historico Longo", msgs);
+  script = [{ content: "Estamos na Av. Índico, 294." }];
+  await generateReply(c.conv.id);
+  const hist = openaiCalls[0].messages.filter((m) => m.role === "assistant" || m.role === "user");
+  assert.ok(hist[0].content.length <= 321, "a mais antiga foi cortada: " + hist[0].content.length);
+  const recente = hist.find((m) => typeof m.content === "string" && m.content.endsWith("fim"));
+  assert.ok(recente && recente.content.length > 700, "a recente fica inteira (so corta alem de 700)");
 });

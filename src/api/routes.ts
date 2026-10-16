@@ -67,6 +67,7 @@ import { syncBirthdaysFromCe } from "../clinicaexperts/birthdays.js";
 import { lastBookingDiagnostics, pullClinicBookings } from "../clinicaexperts/pull.js";
 import { auditProcedureLinks } from "../clinicaexperts/procedureLink.js";
 import { scheduleBriefingRefresh } from "../ai/leadBriefing.js";
+import { usageSnapshot as aiUsageSnapshot } from "../ai/usageStats.js";
 import { connectAccount, disconnectAccount, ceStatusFor } from "../clinicaexperts/client.js";
 import { auditExecutors, auditUnmirrored, syncCatalog } from "../clinicaexperts/sync.js";
 import { undoCeImport } from "../clinicaexperts/undo.js";
@@ -818,6 +819,12 @@ apiRouter.post(
     res.json({ ok: true, accounts: r.count });
   })
 );
+
+// Onde vao os tokens da OpenAI (por finalidade, desde que o servidor subiu). So admin.
+apiRouter.get("/ai-usage", (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  res.json(aiUsageSnapshot());
+});
 
 // Diagnostico de "nao consigo entrar": contas da clinica (quando a senha foi trocada) + as ultimas tentativas que FALHARAM com o motivo. So admin.
 apiRouter.get(

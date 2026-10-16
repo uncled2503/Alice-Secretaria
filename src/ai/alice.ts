@@ -41,6 +41,7 @@ import { findChosenSlot, identifyWanted, offersSlots, staffConfirmedBooking } fr
 import { statementsNote } from "./clinicStatements.js";
 import { resolveSituation, RULE_HIERARCHY } from "./situation.js";
 import { scheduleBriefingRefresh } from "./leadBriefing.js";
+import { recordUsage } from "./usageStats.js";
 import { displayProcedureName } from "../clinicaexperts/placeholderProcedure.js";
 import { describeSlotRequest, isEmptyRequest, requestViolation } from "./slotRequest.js";
 import { captureAdReferral } from "../ads/attribution.js";
@@ -1531,6 +1532,8 @@ Responda sempre em portugues do Brasil, em mensagens curtas como quem digita no 
   return `Voce e a ${a}, atendente da ${clinicNoun} "${clinic.name}".${areaLine}
 ${openingStyleLine}
 
+${RULE_HIERARCHY}
+
 COMO VOCE SE APRESENTA (regra fixa, vale pra toda conversa):
 ${personaInstruction(clinic)}
 NUNCA se apresente nem se descreva como IA, inteligencia artificial, assistente virtual, secretaria virtual, atendimento automatico, bot, robo, sistema ou programa, e nao use linguagem robotica ("processando", "de acordo com meu sistema", etc.). Se perguntarem DIRETAMENTE se e um robo, IA ou atendimento automatico, nunca negue nem desvie: responda com leveza e honestidade que e a assistente virtual da equipe, que pode chamar uma pessoa se preferirem, e siga ajudando.
@@ -1968,6 +1971,7 @@ function samplingFor(model: string): Record<string, unknown> {
 function logUsage(model: string, res: ChatCompletion): void {
   const u = res.usage as (ChatCompletion["usage"] & { prompt_tokens_details?: { cached_tokens?: number } }) | undefined;
   if (!u) return;
+  recordUsage("conversa_alice", u);
   const cached = u.prompt_tokens_details?.cached_tokens ?? 0;
   console.log(`[tokens] ${model} entrada=${u.prompt_tokens} cache=${cached} (${u.prompt_tokens ? Math.round((cached / u.prompt_tokens) * 100) : 0}%) saida=${u.completion_tokens}`);
 }
@@ -2024,7 +2028,7 @@ async function readConversation(p: {
     });
     // Segunda leitura so quando ha conversa suficiente para valer a chamada.
     let analysisText = "";
-    if (!p.skipAnalysis && p.history.filter((m) => m.role !== "system").length >= 4) {
+    if (!p.skipAnalysis && process.env.AI_SECOND_READING !== "off" && p.history.filter((m) => m.role !== "system").length >= 4) {
       const analysis = await analyzeConversation(
         async (system, user) => {
           const res = await openai.chat.completions.create({
@@ -2036,6 +2040,7 @@ async function readConversation(p: {
               { role: "user", content: user },
             ],
           });
+          recordUsage("segunda_leitura", res.usage);
           return res.choices[0]?.message?.content ?? null;
         },
         { brief, history: p.history, trailing: p.trailing },
@@ -2487,7 +2492,8 @@ async function generateReplyUnlocked(
     { role: "system", content: system },
     ...history.map((m, idx): ChatCompletionMessageParam => ({
       role: m.role === "user" ? "user" : "assistant",
-      content: idx < history.length - 6 && m.content.length > 700 ? `${m.content.slice(0, 700)}…` : m.content, // economia: mensagem antiga e longa (automacao, descricao) vai cortada
+      // economia: mensagem antiga e longa (automacao, descricao) vai cortada; as bem antigas (alem das 10 ultimas) vao ainda mais curtas
+      content: idx < history.length - 10 && m.content.length > 320 ? `${m.content.slice(0, 320)}…` : idx < history.length - 6 && m.content.length > 700 ? `${m.content.slice(0, 700)}…` : m.content,
     })),
   ];
 
@@ -2539,10 +2545,10 @@ async function generateReplyUnlocked(
     const trailing = trailingUser;
     if (trailing.length) {
       const memory = conversationMemory(priorReplies, answeredUser);
-      const reading = await readConversation({ clinicId, patientId: patient.id, history, trailing, pastVisitCount, skipAnalysis: flow.intent === "booked" });
+      const reading = await readConversation({ clinicId, patientId: patient.id, history, trailing, pastVisitCount, skipAnalysis: flow.intent === "booked" || flow.intent === "manage" || flow.intent === "staff" || situation.kind !== "default" || trailing.every((t) => isCourtesyOnly(t)) });
       messages.push({
         role: "system",
-        content: `${RULE_HIERARCHY}\n\nFICHA DESTA PESSOA (leia ANTES de responder; a SITUACAO abaixo manda mais que qualquer outra regra):\n${situation.briefing.join("\n")}\n\n${reading ? reading + "\n\n" : ""}${statementsInfo ? statementsInfo + "\n\n" : ""}${bookingTagLine ? bookingTagLine + "\n\n" : ""}JOGADA AGORA (siga isto): ${flow.nextMove}\n\n${memory ? memory + "\n\n" : ""}LEMBRETE FINAL: ${trailing.length > 1 ? "as mensagens novas da pessoa (ainda sem resposta) sao" : "a mensagem nova da pessoa e"}: ${trailing.map((t) => `"${t.slice(0, 300)}"`).join(" + ")}. Responda SOMENTE a isso, UMA vez${trailing.length > 1 ? ", juntando as mensagens numa resposta so" : ""}. O que ela perguntou ANTES ja foi respondido nas mensagens anteriores: NAO responda de novo, NAO repita valores, endereco, horarios, avisos nem frases que voce ja disse, e NAO feche com a mesma pergunta das mensagens anteriores (mude a pergunta ou so responda e pare). Fale como uma pessoa conversando: curto, direto, natural, continuando a conversa de onde ela parou.`,
+        content: `FICHA DESTA PESSOA (leia ANTES de responder; a SITUACAO abaixo manda mais que qualquer outra regra):\n${situation.briefing.join("\n")}\n\n${reading ? reading + "\n\n" : ""}${statementsInfo ? statementsInfo + "\n\n" : ""}${bookingTagLine ? bookingTagLine + "\n\n" : ""}JOGADA AGORA (siga isto): ${flow.nextMove}\n\n${memory ? memory + "\n\n" : ""}LEMBRETE FINAL: ${trailing.length > 1 ? "as mensagens novas da pessoa (ainda sem resposta) sao" : "a mensagem nova da pessoa e"}: ${trailing.map((t) => `"${t.slice(0, 300)}"`).join(" + ")}. Responda SOMENTE a isso, UMA vez${trailing.length > 1 ? ", juntando as mensagens numa resposta so" : ""}. O que ela perguntou ANTES ja foi respondido nas mensagens anteriores: NAO responda de novo, NAO repita valores, endereco, horarios, avisos nem frases que voce ja disse, e NAO feche com a mesma pergunta das mensagens anteriores (mude a pergunta ou so responda e pare). Fale como uma pessoa conversando: curto, direto, natural, continuando a conversa de onde ela parou.`,
       });
     }
   }

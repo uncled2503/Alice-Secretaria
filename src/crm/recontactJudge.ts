@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { prisma } from "../db/client.js";
+import { recordUsage } from "../ai/usageStats.js";
 
 // ---------------------------------------------------------------------------
 // "Juiz" do recontato: antes de mandar o recontato automatico, uma IA le o
@@ -75,6 +76,7 @@ export async function judgeRecontact(input: JudgeInput): Promise<JudgeVerdict | 
         { role: "user", content: formatConversation(input) },
       ],
     });
+    recordUsage("juiz_recontato", res.usage);
     const raw = res.choices[0]?.message?.content ?? "";
     const parsed = JSON.parse(raw) as { recontact?: unknown; reason?: unknown };
     if (typeof parsed.recontact !== "boolean") return null;

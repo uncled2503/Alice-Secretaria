@@ -3,6 +3,7 @@ import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
 import { FREE_PLAN } from "./plan.js";
+import { recordUsage } from "../ai/usageStats.js";
 import { formatDayInZone, isoDateInZone, zonedWallClockToUtc } from "../scheduling/time.js";
 
 // ---------------------------------------------------------------------------
@@ -182,6 +183,7 @@ ${transcript}` },
     tool_choice: { type: "function", function: { name: "salvar_resumo" } },
   });
 
+  recordUsage("resumo_crm", response.usage);
   const call = response.choices[0]?.message?.tool_calls?.[0];
   if (!call || call.type !== "function") return null;
 
