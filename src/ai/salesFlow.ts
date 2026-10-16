@@ -12,7 +12,7 @@ function fold(s: string): string {
   return s.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
 }
 
-export type Intent = "schedule" | "decline" | "hesitate" | "price" | "info" | "booked" | "returning";
+export type Intent = "schedule" | "decline" | "hesitate" | "price" | "info" | "booked" | "returning" | "manage" | "staff";
 
 export interface FlowMessage {
   role: string;
@@ -114,7 +114,7 @@ export function analyzeFlow(input: {
   const gaveAvailability = lastOffered && DAYPART_RE.test(trailFold) && !REFUSE_RE.test(trailFold);
   const chosen = hasBooking ? null : input.chosen ?? null; // ja agendada: nada a escolher
   // "Quero uma limpeza de pele": pediu um procedimento do catalogo pelo nome = quer agendar ESSE (nao e so curiosidade). Pergunta de valor/informacao nao conta.
-  const namesProcedure = input.wanted !== undefined && input.wanted.kind !== "none" && /\b(quero|queria|gostaria|tenho interesse|interesse em|fazer|marcar)\b/.test(fold(trailText)) && !priceAsked && !/\b(saber|informac\w*|duvida|como funciona|explic\w*|o que e)\b/.test(fold(trailText));
+  const namesProcedure = input.wanted !== undefined && (input.wanted.kind === "specific" || input.wanted.kind === "options") && /\b(quero|queria|gostaria|tenho interesse|interesse em|fazer|marcar)\b/.test(fold(trailText)) && !priceAsked && !/\b(saber|informac\w*|duvida|como funciona|explic\w*|o que e)\b/.test(fold(trailText));
   const wantsToBook = wantsSchedule(trailText) || accepted || gaveAvailability || !!chosen || namesProcedure;
 
   let intent: Intent = "info";
@@ -178,7 +178,9 @@ export function analyzeFlow(input: {
               ? `ela quer "${wanted.procedure}", entao pergunte se quer que voce veja um horario pra esse procedimento (NAO fale de avaliacao).`
               : wanted.kind === "options"
                 ? `o catalogo tem mais de um que serve (${wanted.options.map((o) => `"${o}"`).join(", ")}): pergunte qual ela prefere pra ver o horario; so se ela nao souber, ofereca a avaliacao.`
-                : "se ela nao sabe qual procedimento precisa, a avaliacao gratuita (ex.: 'Quer que eu veja um horario pra sua avaliacao?').") +
+                : wanted.kind === "need"
+                  ? `ela contou uma NECESSIDADE, nao escolheu procedimento: NAO escolha um por ela e NAO ofereca horarios agora. Em 1 ou 2 frases acolha, diga que a clinica tem opcoes para isso (${wanted.options.map((o) => `"${o}"`).join(", ")}) sem despejar detalhes e pergunte UMA coisa (qual regiao mais incomoda, ou se ja conhece algum). A avaliacao gratuita e o caminho quando ela nao souber qual escolher.`
+                  : "se ela nao sabe qual procedimento precisa, a avaliacao gratuita (ex.: 'Quer que eu veja um horario pra sua avaliacao?').") +
             noPrice
         : "Descubra o que ela quer com UMA pergunta especifica ao assunto dela (se veio de anuncio, use o procedimento do anuncio; ex.: gordura -> qual regiao). Curto, natural." + noPrice;
   }

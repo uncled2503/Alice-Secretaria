@@ -329,6 +329,7 @@ test("aviso do Clinica Experts: 'reserva sem procedimento' em vez de '?', e rese
   assert.match(skipReasonText({ reason: "procedimento_sem_vinculo", procedureNames: [] }), /reserva sem procedimento no Clínica Experts/);
   const src = fs.readFileSync(new URL("../src/clinicaexperts/pull.ts", import.meta.url), "utf8");
   const casar = src.indexOf("if (!procedure && phone) {");
-  const desistir = src.indexOf("if (!procedure || !phone) {");
-  assert.ok(casar > 0 && desistir > casar, "o casamento com o agendamento existente tem que vir ANTES de descartar a reserva");
+  const semProcedimento = src.indexOf("ensurePlaceholderProcedure(clinicId)");
+  assert.ok(casar > 0 && semProcedimento > casar, "o casamento com o agendamento existente tem que vir ANTES de criar a reserva sem procedimento");
+  assert.ok(src.indexOf("if (!phone) {") > casar, "sem telefone continua sendo descartado, depois do casamento");
 });

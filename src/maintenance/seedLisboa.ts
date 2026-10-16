@@ -611,6 +611,7 @@ export async function seedLisboa(): Promise<SeedLisboaResult> {
     softSell: true, // 09/10/2026: sem insistir em avaliacao
     saveContactsToPhone: true, // 09/10/2026 (Aline): salvar contatos na agenda do celular
     npsEvaluationMessage: "Olá, {primeiro_nome}! Tudo bem? 💕\n\nAqui é da Lisboa Beauty Center! ✨\n\nGostaríamos de saber como foi sua experiência durante a avaliação conosco. 💗\n\nVocê se sentiu bem atendida? Conseguiu esclarecer suas dúvidas sobre os procedimentos indicados?\n\nSua opinião é muito importante para nós, pois estamos sempre buscando melhorar nosso atendimento! 🥰\n\nPode compartilhar seu feedback com a gente? 💕", // 14/10/2026 (Aline): pesquisa depois da AVALIACAO
+    googleReviewUrl: "https://g.page/r/CVxcf78iE5IhEAE/review", // 16/10/2026: link da avaliacao no Google (enviado depois de nota alta na pesquisa de satisfacao)
     handoffOnPrice: false, // 14/10/2026 (Aline): a Alice informa o preco cadastrado e vigente; so duvida/negociacao vai para a equipe
     humanizedTone: true, // 09/10/2026 (Aline): atendimento humano e natural
     silentHandoff: true, // idem: o que nao souber responder, fica em silencio pra equipe responder

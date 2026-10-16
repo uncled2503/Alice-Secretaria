@@ -35,9 +35,18 @@ export interface CatalogProc {
 export type Wanted =
   | { kind: "specific"; procedure: string } // ela pediu (ou deixou claro) um procedimento so
   | { kind: "options"; options: string[] } // falou de uma area/familia: 2 a 4 procedimentos servem
+  | { kind: "need"; options: string[] } // contou so uma QUEIXA/necessidade ("gordura localizada"): nao escolheu procedimento, a Alice nao escolhe por ela
   | { kind: "none" }; // nao sabe / nao disse: avaliacao
 
 const isEvaluation = (n: string) => /avalia/i.test(n);
+
+// Palavras de QUEIXA/necessidade (nao nome de procedimento). Se o que a pessoa disse bate com um procedimento SO por palavras assim (via apelido),
+// ela contou uma necessidade: nao escolheu o procedimento. Caso Jandira, 16/10: "queria um tratamento pra tirar gordura localizada" e a Alice
+// ja listou horarios de Enzimas, sem ela ter escolhido nada.
+const NEED_WORDS = new Set(
+  "gordura localizada flacidez flacida celulite estria estrias papada olheira olheiras mancha manchas ruga rugas acne barriga abdomen abdominal culote coxa coxas braco bracos gluteo gluteos bumbum cicatriz cicatrizes poros melasma vasinho vasinhos cabelo queda emagrecer emagrecimento peso pele rosto facial corporal rejuvenescimento envelhecimento medidas contorno firmeza".split(" ").map((w) => stem(w)),
+);
+const allNeedWords = (words: string[]) => words.length > 0 && words.every((w) => NEED_WORDS.has(w));
 
 // PURO: `texts` = mensagens da pessoa (e o anuncio de origem), em ordem; as ultimas pesam mais. Ignora avaliacao.
 export function identifyWanted(catalog: CatalogProc[], texts: string[]): Wanted {
@@ -55,16 +64,22 @@ export function identifyWanted(catalog: CatalogProc[], texts: string[]): Wanted 
         .map((a) => [...new Set(wordsOf(a))])
         .filter((w) => w.length);
       const sets = [nameWords, ...aliasWords].filter((w) => w.length);
-      let best = { cover: 0, size: 0 };
+      let best = { cover: 0, size: 0, needOnly: false };
       for (const set of sets) {
-        const hit = set.filter((w) => said.has(w)).length;
+        const hitWords = set.filter((w) => said.has(w));
+        const hit = hitWords.length;
         const cover = hit / set.length;
-        if (hit > 0 && (cover > best.cover || (cover === best.cover && set.length > best.size))) best = { cover, size: set.length };
+        // veio so do apelido (nao do nome) e so por palavras de queixa = necessidade, nao pedido do procedimento
+        const needOnly = set !== nameWords && allNeedWords(hitWords);
+        if (hit > 0 && (cover > best.cover || (cover === best.cover && set.length > best.size))) best = { cover, size: set.length, needOnly };
       }
       return { name: p.name, ...best };
     })
     .filter((r) => r.cover > 0);
   if (!rows.length) return { kind: "none" };
+
+  // 0) tudo o que bateu foi so queixa/necessidade (via apelido): ela contou o que quer resolver, nao escolheu o procedimento.
+  if (rows.every((r) => r.needOnly)) return { kind: "need", options: rows.slice(0, 4).map((r) => r.name) };
 
   // 1) o nome inteiro (ou um apelido inteiro) foi dito: o mais especifico (mais palavras) ganha.
   const full = rows.filter((r) => r.cover === 1);
@@ -167,6 +182,9 @@ export function findChosenSlot(
 
 export function wantedDirective(w: Wanted, evaluationName: string | null): string {
   const evalPart = evaluationName ? `a avaliacao gratuita ("${evaluationName}")` : "a avaliacao gratuita";
+  if (w.kind === "need") {
+    return `PROCEDIMENTO: ela contou so uma NECESSIDADE/QUEIXA (o catalogo tem opcoes como ${w.options.map((o) => `"${o}"`).join(", ")}), mas NAO escolheu procedimento. NAO escolha um por ela e NAO liste horarios de procedimento. Se ela quer agendar mesmo assim, ofereca ${evalPart} (a profissional indica o caminho certo); so agende um procedimento especifico depois que ELA o escolher pelo nome. `;
+  }
   if (w.kind === "specific") {
     return `PROCEDIMENTO IDENTIFICADO: a pessoa quer "${w.procedure}". Agende ESSE procedimento (procedure_name exatamente "${w.procedure}"; check_availability / check_specific_time / book_appointment com esse nome). NAO ofereca nem mencione avaliacao: ela ja sabe o que quer. So ofereca ${evalPart} se ela disser que nao tem certeza. `;
   }

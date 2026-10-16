@@ -3,6 +3,8 @@ import { birthFieldOf, parseCeBirthDate } from "./birthdays.js";
 import { prisma } from "../db/client.js";
 import { ceRequest, dayBoundIso, noteError } from "./client.js";
 import { zonedWallClockToUtc } from "../scheduling/time.js";
+import { ensurePlaceholderProcedure, isPlaceholderProcedure } from "./placeholderProcedure.js";
+import { reconcileMissingBookings } from "./liveCheck.js";
 import { syncAppointmentInBackground } from "./sync.js";
 import { notifyStaff } from "../crm/notify.js";
 import { listCeProcedures, linkMissingProcedures } from "./autoLink.js";
@@ -167,6 +169,11 @@ export interface PullResult {
 // Ultimo resultado da importacao por clinica (so em memoria): alimenta o relatorio de cobertura das confirmacoes.
 export const lastPullSkips = new Map<string, { at: Date; skips: PullSkip[] }>();
 
+function ymd(d: Date, tz: string): [number, number, number] {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(d).split("-").map(Number);
+  return [parts[0], parts[1], parts[2]];
+}
+
 export async function pullClinicBookings(clinicId: string): Promise<PullResult> {
   const result: PullResult = { created: 0, updated: 0, skipped: 0, skippedNote: [], skipDetails: [] };
   const clinic = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { timezone: true } });
@@ -275,7 +282,14 @@ export async function pullClinicBookings(clinicId: string): Promise<PullResult> 
       const data: { scheduledAt?: Date; status?: string; professionalId?: string | null; procedureId?: string } = {};
       // Importado antes como "Avaliacao" mas a reserva tem o procedimento de verdade: corrige.
       if (picked && picked.id !== existing.procedureId && isEvaluationName(existing.procedure.name) && !isEvaluationName(picked.name)) data.procedureId = picked.id;
-      if (existing.scheduledAt.getTime() !== when.getTime()) data.scheduledAt = when;
+      // Entrou sem procedimento (a recepcao ainda nao tinha escolhido) e agora tem: passa a ser o de verdade.
+      if (picked && picked.id !== existing.procedureId && isPlaceholderProcedure(existing.procedure)) data.procedureId = picked.id;
+      if (existing.scheduledAt.getTime() !== when.getTime()) {
+        data.scheduledAt = when;
+        // A recepcao trocou o horario la: a confirmacao enviada era do horario ANTIGO. Zera e libera os lembretes pro horario novo.
+        await prisma.appointment.update({ where: { id: existing.id }, data: { patientConfirmed: false, confirmedAt: null } });
+        await prisma.reminderSent.deleteMany({ where: { appointmentId: existing.id } });
+      }
       // "confirmed" nunca rebaixa um atendimento que ja foi concluido/faltou aqui.
       if (status !== "confirmed" && existing.status !== status) data.status = status;
       // Cancelado AQUI mas ainda "confirmado" la: o cancelamento nao chegou no Clinica Experts (o espelho so perde o
@@ -310,20 +324,23 @@ export async function pullClinicBookings(clinicId: string): Promise<PullResult> 
         continue;
       }
     }
-    if (!procedure || !phone) {
-      // sem procedimento vinculado ou sem telefone: nada a lembrar
+    if (!phone) {
+      // sem telefone: nao ha como lembrar
       result.skipped++;
-      result.skippedNote.push(!phone ? "sem telefone" : "procedimento sem vínculo");
+      result.skippedNote.push("sem telefone");
       result.skipDetails.push({
         uuid: b.uuid,
         startsAt: when.toISOString(),
-        patient: b.patient?.name?.trim() || b.patient?.phone || "(sem nome)",
-        reason: !phone ? "sem_telefone" : "procedimento_sem_vinculo",
+        patient: b.patient?.name?.trim() || "(sem nome)",
+        reason: "sem_telefone",
         procedureIds: (b.procedures ?? []).map((p) => p.id),
         procedureNames: (b.procedures ?? []).map((p) => ceNames.get(p.id) ?? `#${p.id}`),
       });
       continue;
     }
+    // Sem procedimento (ou procedimento que nao existe aqui): ENTRA mesmo assim, com o procedimento interno "horario sem procedimento", e a
+    // confirmacao sai so com data e horario. Antes a pessoa ficava sem confirmacao nenhuma (pedido da Lisboa, 16/10).
+    const procedureForBooking = procedure ?? (await ensurePlaceholderProcedure(clinicId));
 
     const professional = b.professional?.uuid ? proByUuid.get(b.professional.uuid) ?? null : null;
 
@@ -350,13 +367,23 @@ export async function pullClinicBookings(clinicId: string): Promise<PullResult> 
     if (birth) await prisma.patient.updateMany({ where: { id: patient.id, birthDate: null }, data: { birthDate: birth } });
     await prisma.appointment.create({
       data: {
-        clinicId, patientId: patient.id, procedureId: procedure.id, professionalId: professional?.id ?? null,
+        clinicId, patientId: patient.id, procedureId: procedureForBooking.id, professionalId: professional?.id ?? null,
         scheduledAt: when, status, source: "presencial", ceBookingUuid: b.uuid,
       },
     });
     result.created++;
   }
   lastPullSkips.set(clinicId, { at: new Date(), skips: result.skipDetails });
+
+  // Reservas que a Alice tem como confirmadas mas o CE nao devolveu mais (apagadas ou trocadas la): confere ao vivo e cancela aqui.
+  try {
+    const todayStart = zonedWallClockToUtc(tz, ...ymd(new Date(), tz), 0, 0);
+    const windowEnd = new Date(todayStart.getTime() + (DAYS_AHEAD + 1) * 24 * 3_600_000);
+    const rec = await reconcileMissingBookings(clinicId, new Set(bookings.map((b) => b.uuid).filter((u): u is string => !!u)), { from: new Date(), to: windowEnd }, tz);
+    if (rec.cancelled || rec.moved) console.log(`[clinicaexperts] ${rec.cancelled} agendamento(s) cancelado(s) e ${rec.moved} corrigido(s) por terem sumido/mudado no CE`);
+  } catch (err) {
+    console.error("[clinicaexperts] reconciliacao:", err);
+  }
   return result;
 }
 

@@ -420,7 +420,7 @@ export async function findAvailableDays(
 export async function findNearestSlots(
   clinicId: string,
   procedureId: string,
-  opts: { professionalIds?: string[]; limit?: number; daysAhead?: number; period?: Period | null } = {},
+  opts: { professionalIds?: string[]; limit?: number; daysAhead?: number; period?: Period | null; accept?: (slot: Slot) => boolean } = {},
 ): Promise<Slot[]> {
   const procedure = await prisma.procedure.findFirst({ where: { id: procedureId, clinicId } });
   if (!procedure) return [];
@@ -435,7 +435,7 @@ export async function findNearestSlots(
     procedure.allowConcurrentBooking ? procedure.id : undefined,
   );
   const inPeriodSlots = filterByPeriod(dedupeByStart(all), clinic.timezone || "America/Sao_Paulo", opts.period);
-  return inPeriodSlots.slice(0, opts.limit ?? 3);
+  return (opts.accept ? inPeriodSlots.filter(opts.accept) : inPeriodSlots).slice(0, opts.limit ?? 3);
 }
 
 // Turno que a pessoa prefere (a Alice pergunta e oferece so os horarios desse turno).
@@ -450,6 +450,25 @@ export function periodOfHour(hour: number): Period {
 export function filterByPeriod<T extends { start: Date }>(slots: T[], timeZone: string, period?: Period | null): T[] {
   if (!period) return slots;
   return slots.filter((x) => periodOfHour(wallClockInZone(x.start, timeZone).hour) === period);
+}
+
+// PURO: so os horarios que respeitam a janela que a pessoa pediu: comecam a partir de `from` ("HH:MM") e TERMINAM ate `until` ("HH:MM", ex.:
+// "tenho aula as 18:40" = o atendimento tem que acabar antes). Sem janela = todos.
+export function filterByTimeWindow<T extends { start: Date }>(slots: T[], timeZone: string, durationMin: number, from?: string | null, until?: string | null): T[] {
+  const toMin = (t: string | null | undefined) => {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(String(t ?? "").trim());
+    return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+  };
+  const f = toMin(from);
+  const u = toMin(until);
+  if (f === null && u === null) return slots;
+  return slots.filter((x) => {
+    const wc = wallClockInZone(x.start, timeZone);
+    const start = wc.hour * 60 + wc.minute;
+    if (f !== null && start < f) return false;
+    if (u !== null && start + durationMin > u) return false;
+    return true;
+  });
 }
 
 // PURO: ate N horarios espalhados pelo dia (primeiro, do meio e ultimo) em vez dos N primeiros: a pessoa ve opcoes de verdade.

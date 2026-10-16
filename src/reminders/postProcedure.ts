@@ -26,6 +26,12 @@ export function appointmentEndedBy(appt: { scheduledAt: Date; procedure: { durat
   return appt.scheduledAt.getTime() + appt.procedure.durationMin * 60_000 <= limit.getTime();
 }
 
+// PURO: avaliacao nao recebe "pos-procedimento" (nao houve procedimento), a menos que a regra liste esse procedimento de
+// proposito (procedureIds). Pedido da Lisboa (checklist 15/10): "nao enviar pos de avaliacao".
+export function skipsPostForEvaluation(appt: { procedureId: string; procedure: { name: string } }, procedureFilter: string[]): boolean {
+  return /avalia/i.test(appt.procedure.name) && !procedureFilter.includes(appt.procedureId);
+}
+
 // Roda a cada 15min. So dispara uma vez por agendamento por regra (marca em
 // PostProcedureSent), respeitando "so apos concluido" e o filtro de
 // procedimentos (procedureIds vazio = vale pra todos).
@@ -61,8 +67,12 @@ export function startPostProcedureJob(): void {
           },
         },
         include: { patient: true, procedure: true, professional: true },
-        take: MAX_PER_TICK,
+        take: MAX_PER_TICK * 4, // margem: as avaliacoes saem no filtro abaixo e nao podem esgotar o teto
       });
+      for (let i = due.length - 1; i >= 0; i--) {
+        if (skipsPostForEvaluation(due[i], procedureFilter)) due.splice(i, 1);
+      }
+      due.splice(MAX_PER_TICK);
       // Regra em HORAS conta a partir do FIM do atendimento (inicio + duracao): "1h depois" nao pode chegar com a
       // paciente ainda na cadeira (criolipolise e outros passam de 1h).
       if (rule.intervalUnit === "hours") {

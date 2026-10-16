@@ -60,6 +60,19 @@ export async function confirmationAudit(clinicId: string, from: Date, to: Date):
   });
 }
 
+// PURO: uma linha por regra de recontato ativa, dizendo QUANDO ela dispara (horario fixo do dia seguinte x silencio corrido). Foi
+// assim que o "recontato das 8h" que nao saiu ficou invisivel: ninguem via qual regra estava de fato com horario fixo.
+export function followUpRuleLines(
+  rules: { order: number; name: string; afterMinutes: number; afterDays: number; nextDayHour: number | null }[],
+): string[] {
+  return rules.map((r) => {
+    const when = r.nextDayHour != null
+      ? `dia seguinte às ${r.nextDayHour}h`
+      : `${r.afterMinutes > 0 ? (r.afterMinutes % 1440 === 0 ? `${r.afterMinutes / 1440} dia(s)` : r.afterMinutes % 60 === 0 ? `${r.afterMinutes / 60}h` : `${r.afterMinutes} min`) : `${r.afterDays} dia(s)`} de silêncio`;
+    return `   - ${r.name} (${when})`;
+  });
+}
+
 export async function buildDailyReport(clinicId: string, tz: string): Promise<string | null> {
   const today = dayBounds(tz, 0);
   const tomorrow = dayBounds(tz, 1);
@@ -114,6 +127,31 @@ export async function buildDailyReport(clinicId: string, tz: string): Promise<st
     for (const u of unconfirmed.slice(0, 6)) lines.push(`   - ${u.patient.name ?? u.patient.phone}`);
     if (unconfirmed.length > 6) lines.push(`   …e mais ${unconfirmed.length - 6}.`);
   }
+  // Recontatos: o que esta ligado, quando dispara e quantos sairam hoje (pedido da Lisboa 15/10: o recontato das 8h precisa aparecer na auditoria).
+  const [followRules, followSent] = await Promise.all([
+    prisma.followUpRule.findMany({ where: { clinicId, active: true }, orderBy: { order: "asc" }, select: { order: true, name: true, afterMinutes: true, afterDays: true, nextDayHour: true } }),
+    prisma.message.findMany({ where: { role: "assistant", authorName: "Recontato automático", createdAt: { gte: today.from, lt: today.to }, conversation: { patient: { clinicId } } }, select: { id: true } }),
+  ]);
+  // Conversas paradas com a equipe: a Alice NAO recontata conversa em atendimento humano (transferida em silencio e ninguem respondeu). Era
+  // um jeito de "o recontato nao saiu" sem ninguem ver: agora aparece aqui, com nome.
+  const waitingStaff = await prisma.conversation.findMany({
+    where: {
+      patient: { clinicId, optedOut: false },
+      humanTakeover: true,
+      handoffPending: true,
+      status: { in: ["active", "qualified", "scheduled"] },
+      lastMessageAt: { lt: new Date(Date.now() - 12 * 3_600_000), gt: new Date(Date.now() - 7 * DAY_MS) },
+    },
+    select: { patient: { select: { name: true, phone: true } }, handoffReason: true },
+    orderBy: { lastMessageAt: "desc" },
+    take: 30,
+  });
+  if (waitingStaff.length) {
+    lines.push("", `⏳ *Esperando a equipe há mais de 12h*: ${waitingStaff.length} conversa(s) (a Alice não recontata estas)`);
+    for (const w of waitingStaff.slice(0, 5)) lines.push(`   - ${w.patient.name ?? w.patient.phone}${w.handoffReason ? ` (${w.handoffReason.slice(0, 40)})` : ""}`);
+    if (waitingStaff.length > 5) lines.push(`   …e mais ${waitingStaff.length - 5}.`);
+  }
+  if (followRules.length) lines.push("", `🔁 *Recontatos*: ${followSent.length} enviado(s) hoje`, ...followUpRuleLines(followRules));
   if (failures) lines.push("", `⚠️ ${failures} resposta(s) da Alice não foram entregues hoje (o sistema tenta de novo).`);
 
   // Segunda-feira: qualidade da semana + campanhas com baixa conversao

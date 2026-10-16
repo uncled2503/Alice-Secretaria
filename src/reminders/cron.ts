@@ -8,6 +8,8 @@ import { recordAutomatedMessage } from "../crm/conversationLog.js";
 import { isoDateInZone, zonedWallClockToUtc } from "../scheduling/time.js";
 import { localDayBounds } from "./firstOfDay.js";
 import { classifyReminder } from "../maintenance/restoreReminders.js";
+import { verifyBookingLive, applyLiveVerdict } from "../clinicaexperts/liveCheck.js";
+import { stripProcedureLines, isPlaceholderProcedure } from "../clinicaexperts/placeholderProcedure.js";
 
 // PURO: dois textos de confirmacao sao "o mesmo lembrete"? Igual sem negrito (*) nem espacos, ou do mesmo tipo (os dois "amanha" ou os dois "hoje").
 // Uma regra copiada com o nome em negrito mandava a confirmacao do dia 2x (15/10, Renata): o texto nao era identico, so o negrito.
@@ -251,13 +253,20 @@ export function startReminderJob(): void {
       const clinicInfo = clinicInfoCache.get(rule.clinicId)!;
 
       for (const appt of due) {
-        const text = renderMessageTemplate(rule.message, {
+        // Confere no Clinica Experts ANTES de mandar: cancelado/apagado/trocado la = a copia daqui estava velha (16/10: quem cancelou ou
+        // remarcou continuava recebendo a confirmacao). Cancela/corrige aqui e nao manda.
+        if (appt.ceBookingUuid) {
+          const verdict = await verifyBookingLive(appt, tz);
+          if (await applyLiveVerdict(appt, verdict, appt.patient.name ?? appt.patient.phone)) continue;
+        }
+        const noProcedure = isPlaceholderProcedure(appt.procedure);
+        const text = renderMessageTemplate(noProcedure ? stripProcedureLines(rule.message) : rule.message, {
           patientName: appt.patient.name,
           patientPhone: appt.patient.phone,
           clinicName: clinicInfo.name,
           locationName: clinicInfo.primaryLocation?.name,
           locationAddress: clinicInfo.primaryLocation?.fullAddress,
-          procedureName: appt.procedure.name,
+          procedureName: noProcedure ? "seu atendimento" : appt.procedure.name,
           professionalName: appt.professional?.name,
           when: appt.scheduledAt,
         });

@@ -127,7 +127,7 @@ export function buildConversationBrief(i: BriefInput): string {
   const state: string[] = [];
   if (i.upcoming.length) {
     const u = i.upcoming[0];
-    state.push(`TEM HORARIO MARCADO: ${u.procedure} em ${formatInZone(u.when, i.tz)}${u.professional ? ` com ${u.professional}` : ""}${i.upcoming.length > 1 ? ` (+${i.upcoming.length - 1})` : ""} -> nao ofereca avaliacao nem outro horario`);
+    state.push(`TEM HORARIO MARCADO: ${u.procedure} em ${formatInZone(u.when, i.tz)}${u.professional ? ` com ${u.professional}` : ""}${i.upcoming.length > 1 ? ` (+${i.upcoming.length - 1})` : ""} -> nao ofereca avaliacao nem horario novo (se ela pedir para remarcar ou cancelar, atenda com a agenda DELA)`);
   } else state.push("sem horario marcado");
   if (STALL.test(userFold)) state.push("ja disse que vai pensar/se organizar");
   if (i.patient.callbackAt && i.patient.callbackAt > i.now) state.push(`retorno combinado para ${formatInZone(i.patient.callbackAt, i.tz)}`);
