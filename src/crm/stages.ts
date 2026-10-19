@@ -31,16 +31,22 @@ export async function getFunnelStages(clinicId: string) {
   let stages = await prisma.funnelStage.findMany({ where: { clinicId }, orderBy: { order: "asc" } });
 
   if (stages.length === 0) {
-    await prisma.funnelStage.createMany({
-      data: DEFAULT_FUNNEL_STAGES.map((s, i) => ({
-        clinicId,
-        stageId: s.id,
-        label: s.label,
-        color: s.color,
-        kind: s.kind,
-        order: i,
-      })),
-    });
+    try {
+      await prisma.funnelStage.createMany({
+        data: DEFAULT_FUNNEL_STAGES.map((s, i) => ({
+          clinicId,
+          stageId: s.id,
+          label: s.label,
+          color: s.color,
+          kind: s.kind,
+          order: i,
+        })),
+      });
+    } catch (err) {
+      // Duas chamadas ao mesmo tempo (ex.: relatorio que busca as etapas em paralelo) criam as etapas da clinica nova juntas: a segunda bate na unicidade.
+      // As etapas JA existem (a outra chamada criou): so le de novo. Qualquer outro erro continua subindo.
+      if ((err as { code?: string } | null)?.code !== "P2002") throw err;
+    }
     stages = await prisma.funnelStage.findMany({ where: { clinicId }, orderBy: { order: "asc" } });
   }
 

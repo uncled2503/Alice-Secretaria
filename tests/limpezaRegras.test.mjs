@@ -53,7 +53,7 @@ test("'vou pensar': regra, roteiro e jogada nao empurram avaliacao e combinam o 
   const flow = analyzeFlow({ history: [{ role: "assistant", content: "Quer ver um horário?" }, { role: "user", content: "vou pensar" }], trailing: ["vou pensar"], priceAsked: false, hasBooking: false });
   assert.equal(flow.intent, "hesitate");
   assert.match(flow.nextMove, /schedule_recontact/);
-  assert.match(flow.nextMove, /NAO proponha avaliacao/);
+  assert.match(flow.nextMove, /NAO (proponha|ofereca) avaliacao/); // (17/10: o texto da jogada passou a dizer "NAO ofereca avaliacao, NAO liste horarios"; o sentido e o mesmo)
 });
 
 test("a regra padrao antiga de 'desconverse' esta aposentada e a nova responde a verdade", async () => {

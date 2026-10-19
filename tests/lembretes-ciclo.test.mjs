@@ -104,7 +104,7 @@ test("rodada completa: so recebe quem tem horario valido; cancelado/trocado no C
   const recebeu = (c) => phones.has(c.patient.phone);
   assert.equal(recebeu(normal), true, "horario normal recebe");
   assert.equal(recebeu(ok), true, "reserva conferida no CE recebe");
-  assert.equal(recebeu(foraDoAr), true, "CE fora do ar: o lembrete segue");
+  assert.equal(recebeu(foraDoAr), false, "CE fora do ar: conferencia inconclusiva ADIA o lembrete (antes seguia sem conferir)");
   assert.equal(recebeu(sem), true, "reserva sem procedimento recebe");
   assert.equal(recebeu(cancelada), false, "cancelada no CE NAO recebe");
   assert.equal(recebeu(trocada), false, "trocada no CE NAO recebe o horario antigo");
@@ -114,6 +114,11 @@ test("rodada completa: so recebe quem tem horario valido; cancelado/trocado no C
   assert.equal(await status(cancelada), "cancelled");
   assert.equal(await status(apagada), "cancelled");
   assert.equal(await status(trocada), "confirmed");
+  assert.equal(await status(foraDoAr), "confirmed", "adiar NAO cancela nem altera a reserva");
+  assert.equal(await prisma.reminderSent.count({ where: { appointmentId: foraDoAr.appt.id } }), 0, "o lembrete adiado nao foi consumido");
+  const adiado = await prisma.reminderDispatch.findFirst({ where: { appointmentId: foraDoAr.appt.id } });
+  assert.equal(adiado?.state, "deferred");
+  assert.equal(adiado?.attempt, 1);
   assert.equal((await prisma.appointment.findUnique({ where: { id: trocada.appt.id } })).scheduledAt.getTime(), novoHorario.getTime());
   assert.equal(await prisma.reminderSent.count({ where: { appointmentId: cancelada.appt.id } }), 0, "nada foi reservado/enviado para a cancelada");
 
@@ -126,7 +131,8 @@ test("rodada completa: so recebe quem tem horario valido; cancelado/trocado no C
   // com procedimento: o texto traz o nome
   assert.match(enviados.find((e) => e.phone === normal.patient.phone).text, /Procedimento: Botox/);
   // cada uma recebeu UMA vez
-  for (const c of [normal, ok, foraDoAr, sem]) assert.equal(enviados.filter((e) => e.phone === c.patient.phone).length, 1);
+  for (const c of [normal, ok, sem]) assert.equal(enviados.filter((e) => e.phone === c.patient.phone).length, 1);
+  assert.equal(enviados.filter((e) => e.phone === foraDoAr.patient.phone).length, 0);
 
   // segunda rodada logo em seguida: ninguem recebe de novo
   const antes = enviados.length;

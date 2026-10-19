@@ -24,6 +24,7 @@ export const ACTIVITY_TYPES: Record<string, string> = {
   appointment_confirmed: "Presença confirmada pelo paciente",
   waitlist_added: "Paciente entrou na lista de espera",
   satisfaction_recorded: "Pesquisa de satisfação respondida",
+  google_review_pending: "Nota alta sem link do Google",
   waitlist_offer: "Vaga oferecida da lista de espera",
   schedule_block_added: "Bloqueio de agenda criado",
   stage_changed: "Paciente movido de etapa no funil",
@@ -45,6 +46,10 @@ export const ACTIVITY_TYPES: Record<string, string> = {
   crm_card_updated: "Card do CRM atualizado",
   crm_card_removed: "Removido do CRM",
   message_blocked_ai: "Mensagem barrada pela revisão da IA",
+  reply_failed: "Resposta da Alice não saiu (precisa de atenção)",
+  agenda_conflict: "Cadastro de agenda conflitante",
+  professional_hours_updated: "Jornada de profissionais atualizada",
+  reminder_deferred: "Lembretes adiados (Clínica Experts não respondeu)",
   patient_opted_out: "Pediu para não receber mensagens",
   patient_opted_in: "Voltou a poder receber mensagens",
 };

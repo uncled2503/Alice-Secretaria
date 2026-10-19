@@ -13,12 +13,15 @@ export interface TemplateContext {
   professionalName?: string | null;
   when?: Date | null;
   birthDate?: Date | null;
+  // Fuso da clinica para {data}, {data_hora} e {hora}. Sem ele vale America/Sao_Paulo (compatibilidade com quem ainda nao informa).
+  timeZone?: string | null;
 }
 
 export function renderMessageTemplate(template: string, ctx: TemplateContext): string {
   const fullName = ctx.patientName?.trim() ?? "";
   const firstName = fullName.split(" ")[0] ?? "";
   const when = ctx.when ?? new Date();
+  const tz = ctx.timeZone || "America/Sao_Paulo";
 
   // Texto escrito com colchetes ([PROCEDIMENTO], [NOME]) vale igual ao escrito com chaves.
   const normalized = template.replace(
@@ -34,9 +37,9 @@ export function renderMessageTemplate(template: string, ctx: TemplateContext): s
     .replace(/\{unidade\}/gi, ctx.locationName ?? ctx.clinicName)
     .replace(/\{procedimento\}/gi, ctx.procedureName ?? "")
     .replace(/\{profissional\}/gi, ctx.professionalName ?? "")
-    .replace(/\{data\}/gi, when.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", year: "numeric" }))
-    .replace(/\{data_hora\}/gi, when.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }))
-    .replace(/\{hora\}/gi, when.toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" }))
+    .replace(/\{data\}/gi, when.toLocaleDateString("pt-BR", { timeZone: tz, day: "2-digit", month: "2-digit", year: "numeric" }))
+    .replace(/\{data_hora\}/gi, when.toLocaleString("pt-BR", { timeZone: tz }))
+    .replace(/\{hora\}/gi, when.toLocaleTimeString("pt-BR", { timeZone: tz, hour: "2-digit", minute: "2-digit" }))
     .replace(/\{aniversario\}/gi, ctx.birthDate ? `${String(ctx.birthDate.getUTCDate()).padStart(2, "0")}/${String(ctx.birthDate.getUTCMonth() + 1).padStart(2, "0")}` : "")
     .trim();
 }

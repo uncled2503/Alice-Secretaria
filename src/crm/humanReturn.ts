@@ -6,6 +6,7 @@ import { logActivity } from "./activity.js";
 import { notifyStaff } from "./notify.js";
 import { generateReply } from "../ai/alice.js";
 import { deliverAliceReply } from "../uazapi/client.js";
+import { recordReplyFailure } from "../ai/replyFailure.js";
 
 // ---------------------------------------------------------------------------
 // ALICE VOLTA SE A EQUIPE DEMORAR (pedido da Lisboa, 14/10/2026): a equipe assumiu a conversa (respondeu pelo painel ou pelo
@@ -117,6 +118,8 @@ export async function resumeStalledConversations(now = new Date()): Promise<numb
         if (await resumeConversation(clinic, { id: c.id, staffTouchedAt: since, patient: c.patient })) resumed++;
       } catch (err) {
         console.error(`[equipe-demorou] falha na conversa ${c.id}:`, err);
+        // A conversa pode ja ter voltado pra Alice (humanTakeover desligado) sem a resposta ter sido gerada: sinaliza pra equipe em vez de ficar parada.
+        await recordReplyFailure({ clinicId: clinic.id, conversationId: c.id, stage: "geracao", error: err, note: "falha ao retomar a conversa depois da demora da equipe" });
       }
     }
   }

@@ -4,6 +4,8 @@ import { googleBusyIntervals } from "../google/calendar.js";
 import { pushAppointmentInBackground } from "../integrations/calendarSync.js";
 import { ceGateFor, type SlotGate } from "../clinicaexperts/availability.js";
 import { nationalHolidayOn, parseHolidayOpen } from "./holidays.js";
+import { procedureEligibility, candidateIds } from "./eligibility.js";
+import { REVISION } from "../version.js";
 
 export interface Slot {
   start: Date;
@@ -30,13 +32,19 @@ export interface ClinicHours {
   holidayOpen?: Set<string>; // feriados nacionais em que a clinica ABRE (aba Feriados)
 }
 
-export type SlotReason = "past" | "closed_day" | "outside_hours" | "lunch_break" | "conflict" | "blocked" | "holiday";
+export type SlotReason =
+  | "past" | "closed_day" | "outside_hours" | "lunch_break" | "conflict" | "blocked" | "holiday"
+  | "no_professional" | "professional_not_eligible" | "professional_required" | "ce_unavailable";
 export type SlotVerdict = { ok: true } | { ok: false; reason: SlotReason };
 
 // Texto em portugues de cada motivo de recusa - fonte unica usada pela Alice,
 // pelo painel e pela API externa, pra nunca ter tres traducoes divergentes do
 // mesmo motivo.
 export const SLOT_REASON_PT: Record<SlotReason | "procedure_not_found" | "invalid_datetime", string> = {
+  no_professional: "nenhuma profissional habilitada para esse procedimento tem agenda disponível",
+  professional_not_eligible: "essa profissional não realiza esse procedimento (ou o cadastro dela está incompleto)",
+  professional_required: "é preciso definir uma profissional habilitada para esse procedimento",
+  ce_unavailable: "não consegui confirmar a disponibilidade na agenda do Clínica Experts agora",
   past: "esse horário já passou",
   closed_day: "a clínica não atende nesse dia da semana",
   outside_hours: "esse horário está fora do expediente da clínica",
@@ -130,6 +138,15 @@ export function resolveHours(
   };
 }
 
+// PURO: a jornada resolvida desta pessoa e coerente? null = pode ofertar; texto = cadastro conflitante (bloqueia SO essa opcao).
+export function scheduleProblem(h: ClinicHours): string | null {
+  if (h.workDays.size === 0) return "sem dias de atendimento cadastrados";
+  if (h.workStartMinutes < 0 || h.workEndMinutes > 24 * 60) return "jornada fora do intervalo de um dia";
+  if (h.workStartMinutes >= h.workEndMinutes) return "jornada com início igual ou depois do fim";
+  if (h.lunchStartMinutes != null && h.lunchEndMinutes != null && h.lunchStartMinutes >= h.lunchEndMinutes) return "intervalo com início igual ou depois do fim";
+  return null;
+}
+
 // PURO: decide se um horario especifico pode receber um agendamento.
 export function evaluateSlot(params: {
   startUtc: Date;
@@ -188,6 +205,8 @@ export function evaluateSlot(params: {
     if (ceCovered && b.ce) continue; // o CE e a fonte da verdade desse dia
     if (s < b.end && e > b.start) return { ok: false, reason: "conflict" };
   }
+  // Clinica Experts e a fonte da agenda e NAO deu pra consulta-lo nesse dia: nao oferece (antes oferecia sem conferir e a reserva caia no CE ocupado).
+  if (params.gate?.unverified?.(s)) return { ok: false, reason: "ce_unavailable" };
   if (params.gate && !params.gate(s, durationMin)) return { ok: false, reason: "conflict" };
   return { ok: true };
 }
@@ -313,6 +332,23 @@ export interface AvailabilityResult {
   slots: Slot[];
 }
 
+type ClinicRowForSlots = Awaited<ReturnType<typeof prisma.clinic.findUniqueOrThrow>>;
+
+// Quem pode atender este procedimento (cruza o pedido com a elegibilidade). `enforce:false` = agendamento manual da clinica (decisao dela).
+// `blocked` = ninguem pode: quem chama devolve "sem horario" e NUNCA cai na agenda da clinica inteira.
+async function candidatesFor(clinic: ClinicRowForSlots, procedureId: string, requested: string[], enforce = true) {
+  if (!enforce) return { ids: requested, blocked: false as boolean, reason: undefined as SlotReason | undefined };
+  const el = await procedureEligibility(clinic, procedureId);
+  const c = candidateIds(el, requested);
+  return { ids: c.ids, blocked: c.blocked, reason: c.reason as SlotReason | undefined };
+}
+
+// Uma linha por consulta: o que foi decidido e com base em que (responde "por que a Alice ofereceu / recusou este horario?").
+function logAgenda(kind: string, clinicId: string, fields: Record<string, string | number | boolean | null | undefined>): void {
+  const parts = Object.entries(fields).filter(([, v]) => v !== undefined && v !== null && v !== "").map(([k, v]) => k + "=" + String(v));
+  console.log("[agenda] " + kind + " clinica=" + clinicId + " " + parts.join(" ") + " revisao=" + REVISION.split(":")[0]);
+}
+
 // Proximos horarios livres. Se professionalIds tiver mais de um, intercala os
 // horarios dos profissionais; se estiver vazio, usa a agenda da clinica toda.
 export async function findAvailableSlots(
@@ -326,7 +362,9 @@ export async function findAvailableSlots(
 
   const limit = opts.limit ?? 8;
   const daysAhead = opts.daysAhead ?? 10;
-  const ids = opts.professionalIds ?? [];
+  const cand = await candidatesFor(clinic, procedure.id, opts.professionalIds ?? []);
+  if (cand.blocked) return [];
+  const ids = cand.ids;
 
   const excludeProcedureId = procedure.allowConcurrentBooking ? procedure.id : undefined;
 
@@ -392,13 +430,15 @@ export async function findAvailableDays(
   const tz = clinic.timezone || "America/Sao_Paulo";
   const daysAhead = opts.daysAhead ?? 14;
   const maxDays = opts.maxDays ?? 5;
+  const cand = await candidatesFor(clinic, procedure.id, opts.professionalIds ?? []);
+  if (cand.blocked) return [];
 
   // Limite alto de proposito: aqui a gente quer varrer os dias todos pra saber
   // quais tem vaga, nao parar nos primeiros horarios.
   const slots = await findAvailableSlotsFrom(
     clinicId,
     procedure.durationMin,
-    opts.professionalIds ?? [],
+    cand.ids,
     new Date(),
     daysAhead,
     500,
@@ -424,11 +464,13 @@ export async function findNearestSlots(
 ): Promise<Slot[]> {
   const procedure = await prisma.procedure.findFirst({ where: { id: procedureId, clinicId } });
   if (!procedure) return [];
-  const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { timezone: true } });
+  const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId } });
+  const cand = await candidatesFor(clinic, procedure.id, opts.professionalIds ?? []);
+  if (cand.blocked) return [];
   const all = await findAvailableSlotsFrom(
     clinicId,
     procedure.durationMin,
-    opts.professionalIds ?? [],
+    cand.ids,
     new Date(),
     opts.daysAhead ?? 14,
     120,
@@ -504,13 +546,15 @@ export async function findAvailableSlotsOnDay(
   if (!procedure) return [];
 
   const tz = clinic.timezone || "America/Sao_Paulo";
+  const cand = await candidatesFor(clinic, procedure.id, opts.professionalIds ?? []);
+  if (cand.blocked) return [];
   // Meio-dia do dia pedido como ancora: generateSlots varre a partir do dia
   // desse instante, entao daysAhead=1 cobre exatamente esse dia.
   const anchor = zonedWallClockToUtc(tz, day.year, day.month, day.day, 12, 0);
   return findAvailableSlotsFrom(
     clinicId,
     procedure.durationMin,
-    opts.professionalIds ?? [],
+    cand.ids,
     anchor,
     1,
     opts.limit ?? 24,
@@ -548,7 +592,13 @@ export async function checkSpecificTime(
     requested.minute ?? 0,
   );
   const label = formatInZone(startUtc, tz);
-  const ids = opts.professionalIds ?? [];
+  const cand = await candidatesFor(clinic, procedure.id, opts.professionalIds ?? [], opts.enforceHours !== false);
+  if (cand.blocked) {
+    // Ninguem habilitada (ou a pedida nao e): recusa SO esta opcao, sem cair na agenda da clinica inteira.
+    logAgenda("horario-recusado", clinicId, { procedimento: procedure.name, quando: startUtc.toISOString(), motivo: cand.reason, pedido: (opts.professionalIds ?? []).join(",") });
+    return { available: false, reason: cand.reason ?? "no_professional", requestedIso: startUtc.toISOString(), requestedLabel: label, availableProfessionals: [], alternatives: [] };
+  }
+  const ids = cand.ids;
 
   const candidates: { id: string | null; professional: Awaited<ReturnType<typeof prisma.professional.findFirst>> | null }[] =
     ids.length === 0
@@ -559,6 +609,7 @@ export async function checkSpecificTime(
 
   const free: { id: string | null; name: string | null }[] = [];
   let lastReason: SlotReason = "conflict";
+  const verdicts: string[] = [];
 
   for (const c of candidates) {
     const hours = resolveHours(clinic, c.professional);
@@ -580,12 +631,14 @@ export async function checkSpecificTime(
       enforceHours: opts.enforceHours,
       gate,
     });
+    verdicts.push((c.professional?.name ?? "agenda-da-clinica") + ":" + (verdict.ok ? "livre" : verdict.reason) + "(jornada " + hhmm(hours.workStartMinutes) + "-" + hhmm(hours.workEndMinutes) + ", " + procedure.durationMin + "min" + (gate ? ", ce=" + (gate.unverified?.(startUtc.getTime()) ? "sem-resposta" : "ok") : "") + ")");
     if (verdict.ok) {
       free.push({ id: c.id, name: c.professional?.name ?? null });
     } else {
       lastReason = verdict.reason;
     }
   }
+  logAgenda(free.length ? "horario-livre" : "horario-recusado", clinicId, { procedimento: procedure.name, quando: startUtc.toISOString(), duracao: procedure.durationMin, decisao: verdicts.join(" | ") });
 
   if (free.length > 0) {
     return {
@@ -706,6 +759,20 @@ export async function createBooking(params: {
     : null;
   if (params.professionalId && !professional) return { ok: false, error: "procedure_not_found" };
 
+  // HABILITACAO: o texto que a Alice mostra nao e a unica barreira. Mesmo que o modelo chame a ferramenta direto, com um profissional que nao faz
+  // o procedimento (ou sem profissional, quando a agenda e de profissionais), a execucao recusa. Agendamento manual da clinica (enforceHours:false)
+  // e decisao dela e nao passa por aqui.
+  if (params.enforceHours !== false) {
+    const el = await procedureEligibility(clinic, procedureId);
+    if (el.mode === "professionals") {
+      const why = !professional ? (el.eligible.length ? "professional_required" : "no_professional") : !el.eligible.some((p) => p.id === professional.id) ? "professional_not_eligible" : null;
+      if (why) {
+        logAgenda("reserva-recusada", clinicId, { procedimento: procedure.name, quando: startUtc.toISOString(), profissional: professional?.id ?? "nenhuma", motivo: why, habilitadas: el.eligible.map((p) => p.name).join(",") });
+        return { ok: false, error: why };
+      }
+    }
+  }
+
   const hours = resolveHours(clinic, professional);
   const tz = clinic.timezone || "America/Sao_Paulo";
 
@@ -749,6 +816,11 @@ export async function createBooking(params: {
     ];
 
     const verdict = evaluateSlot({ startUtc, durationMin: procedure.durationMin, hours, busy, blocks, enforceHours: params.enforceHours, gate: ceGate });
+    logAgenda(verdict.ok ? "reserva-validada" : "reserva-recusada", clinicId, {
+      procedimento: procedure.name, quando: startUtc.toISOString(), profissional: professional?.name ?? "agenda-da-clinica", duracao: procedure.durationMin,
+      jornada: hhmm(hours.workStartMinutes) + "-" + hhmm(hours.workEndMinutes), ce: ceGate ? (ceGate.unverified?.(startUtc.getTime()) ? "sem-resposta" : "consultado") : "nao-aplica",
+      motivo: verdict.ok ? undefined : verdict.reason,
+    });
     if (!verdict.ok) return { ok: false as const, error: verdict.reason };
 
     const appointment = await tx.appointment.create({
@@ -780,6 +852,77 @@ export async function createBooking(params: {
   return result;
 }
 
+export interface RescheduleSuccess {
+  ok: true;
+  appointmentId: string;
+  scheduledAt: Date;
+  label: string;
+  before: { scheduledAt: Date; patientConfirmed: boolean; confirmedAt: Date | null };
+}
+
+// Remarca REVALIDANDO tudo dentro da transacao (a disponibilidade pode ter mudado entre a consulta e a gravacao): mesmo procedimento, mesma
+// profissional (precisa continuar habilitada), duracao inteira dentro da jornada, conflito, bloqueio, CE. Nao cria outra reserva e nao troca o
+// procedimento. Quem chama espelha no Clinica Experts e, se ele recusar, devolve `before` (ver a ferramenta da Alice).
+export async function rescheduleBooking(params: {
+  clinicId: string;
+  appointmentId: string;
+  startUtc: Date;
+  enforceHours?: boolean;
+}): Promise<RescheduleSuccess | { ok: false; error: BookingErrorCode }> {
+  const { clinicId, appointmentId, startUtc } = params;
+  if (isNaN(startUtc.getTime())) return { ok: false, error: "invalid_datetime" };
+  const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId } });
+  const appt = await prisma.appointment.findFirst({ where: { id: appointmentId, clinicId, status: "confirmed" }, include: { procedure: true, professional: true } });
+  if (!appt) return { ok: false, error: "procedure_not_found" };
+  const procedure = appt.procedure;
+  const professional = appt.professional;
+  const tz = clinic.timezone || "America/Sao_Paulo";
+
+  if (params.enforceHours !== false) {
+    const el = await procedureEligibility(clinic, procedure.id);
+    if (el.mode === "professionals") {
+      const why = !professional ? (el.eligible.length ? "professional_required" : "no_professional") : !el.eligible.some((p) => p.id === professional.id) ? "professional_not_eligible" : null;
+      if (why) {
+        logAgenda("remarcacao-recusada", clinicId, { agendamento: appt.id, ce: appt.ceBookingUuid, procedimento: procedure.name, profissional: professional?.id ?? "nenhuma", motivo: why });
+        return { ok: false, error: why };
+      }
+    }
+  }
+
+  const hours = resolveHours(clinic, professional);
+  const googleBusy = await googleBusyIntervals(clinicId);
+  const ceGate = params.enforceHours === false ? null : await ceGateFor(clinicId, professional, startUtc, 1, tz);
+
+  const result = await prisma.$transaction(async (tx) => {
+    const fresh = await tx.appointment.findFirst({ where: { id: appt.id, status: "confirmed" }, select: { scheduledAt: true, patientConfirmed: true, confirmedAt: true } });
+    if (!fresh) return { ok: false as const, error: "conflict" as BookingErrorCode };
+    const others = await tx.appointment.findMany({
+      where: {
+        clinicId, status: "confirmed", id: { not: appt.id },
+        ...(professional ? { OR: [{ professionalId: professional.id }, { professionalId: null }] } : {}),
+        ...(procedure.allowConcurrentBooking ? { procedureId: { not: procedure.id } } : {}),
+      },
+      select: { scheduledAt: true, ceBookingUuid: true, procedure: { select: { durationMin: true } } },
+    });
+    const blockRows = await tx.scheduleBlock.findMany({
+      where: { clinicId, ...(professional ? { OR: [{ professionalId: professional.id }, { professionalId: null }] } : { professionalId: null }) },
+      select: { startsAt: true, endsAt: true },
+    });
+    const busy: BusyInterval[] = others.map((a) => ({ start: a.scheduledAt.getTime(), end: a.scheduledAt.getTime() + a.procedure.durationMin * 60_000, ce: !!a.ceBookingUuid }));
+    const blocks: BusyInterval[] = [...blockRows.map((b) => ({ start: b.startsAt.getTime(), end: b.endsAt.getTime() })), ...googleBusy];
+    const verdict = evaluateSlot({ startUtc, durationMin: procedure.durationMin, hours, busy, blocks, enforceHours: params.enforceHours, gate: ceGate });
+    logAgenda(verdict.ok ? "remarcacao-validada" : "remarcacao-recusada", clinicId, {
+      agendamento: appt.id, ce: appt.ceBookingUuid, procedimento: procedure.name, profissional: professional?.name ?? "agenda-da-clinica", duracao: procedure.durationMin,
+      de: fresh.scheduledAt.toISOString(), para: startUtc.toISOString(), jornada: hhmm(hours.workStartMinutes) + "-" + hhmm(hours.workEndMinutes), motivo: verdict.ok ? undefined : verdict.reason,
+    });
+    if (!verdict.ok) return { ok: false as const, error: verdict.reason };
+    await tx.appointment.update({ where: { id: appt.id }, data: { scheduledAt: startUtc, patientConfirmed: false, confirmedAt: null } });
+    return { ok: true as const, before: { scheduledAt: fresh.scheduledAt, patientConfirmed: fresh.patientConfirmed, confirmedAt: fresh.confirmedAt } };
+  });
+  if (!result.ok) return result;
+  return { ok: true, appointmentId: appt.id, scheduledAt: startUtc, label: formatInZone(startUtc, tz), before: result.before };
+}
+
 // DIAGNOSTICO (somente leitura, admin): por que um horario aparece como indisponivel? Para cada profissional ATIVO da clinica diz se
 // ele esta vinculado ao procedimento (so os vinculados entram na busca da Alice), o expediente dele, e o veredito do horario com e sem
 // o portao do Clinica Experts. Serve pra achar "a equipe tem vaga e a Alice diz que nao": quase sempre e vinculo ou expediente.
@@ -795,6 +938,8 @@ export interface SlotDiagnosis {
     localVerdict: string;
     ceVerdict: string;
     free: boolean;
+    eligible: boolean; // habilitada (e com cadastro coerente) para ESTE procedimento: so assim entra nas ofertas da Alice
+    blockedReason: string | null;
   }[];
 }
 
@@ -817,6 +962,7 @@ export async function diagnoseSlot(
   const tz = clinic.timezone || "America/Sao_Paulo";
   const startUtc = zonedWallClockToUtc(tz, at.year, at.month, at.day, at.hour, at.minute);
   const linked = new Set(procedure.professionals.map((p) => p.id));
+  const el = await procedureEligibility(clinic, procedure.id);
   const pros = await prisma.professional.findMany({ where: { clinicId, active: true }, orderBy: { createdAt: "asc" } });
   const out: SlotDiagnosis["professionals"] = [];
   for (const p of pros) {
@@ -831,7 +977,9 @@ export async function diagnoseSlot(
       hours: hoursText(hours),
       localVerdict: local.ok ? "livre" : SLOT_REASON_PT[local.reason],
       ceVerdict: !gate ? "sem integração com o Clínica Experts" : gate.covers?.(startUtc.getTime()) ? (withGate.ok ? "CE: livre" : "CE: ocupado") : "CE não respondeu esse dia",
-      free: withGate.ok,
+      free: withGate.ok && (el.mode === "clinic" || el.eligible.some((e) => e.id === p.id)),
+      eligible: el.mode === "clinic" || el.eligible.some((e) => e.id === p.id),
+      blockedReason: el.blocked.find((b) => b.id === p.id)?.reason ?? (el.mode === "professionals" && !linked.has(p.id) ? "não vinculada a este procedimento" : null),
     });
   }
   return { procedure: procedure.name, durationMin: procedure.durationMin, when: formatInZone(startUtc, tz), clinicHours: hoursText(clinicHoursOf(clinic)), professionals: out };

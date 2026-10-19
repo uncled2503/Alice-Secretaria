@@ -83,6 +83,9 @@ model Clinic {
   servicePosture       String  @default("comercial") // comercial (proativo, empurra agenda) | consultivo (avaliacao primeiro, sem pressao)
   clinicKind           String  @default("estetica")  // estetica | medica | ambas - "medica"/"ambas" ativa as travas de seguranca medica
   evaluationFirst      Boolean @default(false) // nunca exige que o paciente saiba o procedimento; sempre oferece avaliacao
+  strictBookingRules   Boolean @default(false) // true = procedimento SEM regra de agendamento cadastrada (Procedure.bookingMode / texto aprovado) NAO agenda sozinho nem vira avaliacao: vai para a equipe validar. false = comportamento anterior (agenda o procedimento escolhido)
+  notOfferedServices   String? // servicos que a clinica NAO oferece, separados por virgula (ex.: "luz pulsada"): a Alice nunca os oferece nem os trata como equivalentes a outro
+  unmappedOffers       String? // ofertas que a clinica ANUNCIA mas ainda nao tem cadastro/mapeamento autorizado (ex.: "Protocolo do Olhar"), separadas por virgula: nunca viram avaliacao nem outro procedimento sozinhas
   allowEmojis          Boolean @default(true)
   schedulingLink       String? // link externo de auto-agendamento (fallback quando a clinica prefere que o paciente marque sozinho)
 
@@ -92,6 +95,11 @@ model Clinic {
   npsThreshold     Int     @default(9)   // nota >= isto -> pede avaliacao no Google
   npsMessage       String? // texto da pergunta (vazio = padrao)
   googleReviewUrl  String?
+  googleReviewConfirmedAt DateTime? // quando alguem confirmou que o link leva ao estabelecimento certo; sem isso o link NAO e enviado
+  googleReviewConfirmedBy String?   // quem confirmou (conta do painel / admin)
+  googleReviewPlace       String?   // nome do estabelecimento de destino conferido
+  followupRecoveryHours Int? // recontato: ate quantas horas DEPOIS que a janela abriu ainda pode sair um recontato que nao saiu na hora. null = padrao antigo (tolerancia de 3 dias, o de producao hoje); 0 = nao recupera; 1-72 = N horas. Decisao da clinica
+  googleReviewLegacyAllowed Boolean @default(false) // link ja cadastrado ANTES da exigencia de confirmacao: segue enviando por COMPATIBILIDADE, sem dizer que o destino foi conferido
 
   importStatus    String?   // null | "running" | "completed" - importacao de contatos/historico do WhatsApp
   importStats     String?   // JSON: {found,created,merged,ignored,conversations,partialHistory,contactsInBase}
@@ -426,6 +434,7 @@ model Procedure {
   allowConcurrentBooking Boolean @default(false)
   ceId           Int?      // id do procedimento no Clinica Experts (null = nao vinculado)
   internalOnly   Boolean   @default(false) // true = existe so pra agendamentos importados do Clinica Experts (retoque, cortesia...): a Alice NAO oferece nem agenda (src/clinicaexperts/autoLink.ts)
+  bookingMode    String?   // direct = agenda direto | evaluation = exige avaliacao previa | null = a clinica ainda nao definiu (ver ai/conduct.ts: bookingModeOf)
 
   appointments  Appointment[]
   professionals Professional[] @relation("ProfessionalProcedures")
@@ -645,6 +654,8 @@ model Conversation {
   recontactVerdict  String?   // veredito da IA sobre recontatar esta conversa: yes | no
   recontactReason   String?   // motivo curto dado pela IA
   recontactJudgedFor DateTime? // createdAt da ultima mensagem que a IA avaliou (se a conversa nao mudou, reaproveita o veredito)
+  recontactFingerprint String? // impressao digital do contexto (mensagens, agenda, equipe, retorno combinado) + etapa em que o veredito foi dado
+  recontactJudgedAt  DateTime? // quando o veredito foi dado: vale por poucas horas (o juiz tambem leva o tempo em conta)
   unansweredAlertAt DateTime? // quando a equipe foi avisada de que o paciente ficou sem resposta (uma vez por mensagem)
   createdAt         DateTime  @default(now())
 
@@ -835,7 +846,11 @@ model SatisfactionSurvey {
   comment        String?
   askedAt        DateTime  @default(now())
   answeredAt     DateTime?
-  reviewLinkSent Boolean   @default(false)
+  reviewLinkSent Boolean   @default(false) // true = o link do Google FOI na mensagem
+  answeredByMessageId String? // id da mensagem da pessoa que trouxe a nota (a mesma mensagem nunca grava duas vezes)
+  band           String?   // baixa | neutra | positiva
+  hasComplaint   Boolean   @default(false) // a nota veio com reclamacao: sem link nem convite de indicacao
+  linkState      String?   // enviado | pendente_confirmacao | ausente | invalido | nao_aplicavel
 
   @@index([clinicId, askedAt])
   @@index([patientId, answeredAt])
@@ -853,6 +868,7 @@ model Message {
   authorName     String?      // nome do atendente logado que enviou/transferiu (null = Alice, ou ninguem logado)
   externalId     String?      // id da mensagem no WhatsApp (so mensagens recebidas): evita gravar duas vezes quando o webhook e reprocessado
   deliveryStatus String?      // so respostas da Alice: pending (gravada, ainda nao enviada) | sent | failed. null = nao se aplica / legado
+  replyContext   String?      // so respostas da Alice AINDA NAO entregues: resumo compacto (JSON) do que a geracao fez/recebeu das ferramentas, para a entrega validar o texto mesmo apos reinicio. Apagado no estado final
   createdAt      DateTime     @default(now())
 
   @@index([conversationId, createdAt])
@@ -872,6 +888,8 @@ model Appointment {
   professional   Professional? @relation(fields: [professionalId], references: [id])
   scheduledAt    DateTime
   status         String        @default("confirmed") // confirmed | completed | cancelled | no_show
+  cancelledAt    DateTime?     // quando virou "cancelled" (null = cancelado antes deste registro existir: origem NAO comprovada)
+  cancelSource   String?       // paciente_whatsapp | equipe_painel | api_externa | ce_cancelada (CE disse cancelada) | ce_apagada (CE nao tem mais a reserva: NAO prova cancelamento) | sistema_desfeito (a Alice desfez porque o CE recusou)
   source         String?       // whatsapp | instagram | presencial | telefone (null = nao informado)
   googleEventId  String?       // id do evento espelhado no Google Agenda (null = nao sincronizado)
   ceBookingUuid  String?       // uuid do agendamento espelhado no Clinica Experts (null = nao sincronizado)
@@ -1190,4 +1208,135 @@ model LeadClassification {
 
   @@index([patientId, createdAt])
   @@index([clinicId, confirmed, createdAt])
+}
+
+// Controle PERSISTENTE dos lembretes/confirmacoes automaticas (16/10/2026, Lisboa: confirmacao repetida no mesmo dia e com horario velho).
+// Uma linha por (reserva, regra, horario do agendamento): e adquirida de forma ATOMICA (indice unico) ANTES do envio, sobrevive a reinicio e a
+// copias do mesmo agendamento (a chave e o uuid da reserva no Clinica Experts, ou o id local quando nao ha CE) e NAO e apagada quando o
+// agendamento e remarcado: o historico do horario antigo fica, e o horario novo ganha o proprio controle. Sem relacao com Appointment de proposito
+// (e trilha: continua mesmo se o agendamento sumir).
+model ReminderDispatch {
+  id            String   @id @default(cuid())
+  clinicId      String
+  bookingKey    String   // "ce:<uuid da reserva>" ou "appt:<id local>"
+  appointmentId String?
+  patientId     String
+  ruleId        String
+  kind          String   // dia_seguinte | do_dia | cobranca | outro:<ruleId>
+  startsAt      DateTime // horario do agendamento a que a mensagem se refere
+  sendDay       String   // AAAA-MM-DD (fuso da clinica) do envio
+  state         String   // deferred | reserved | sent | unconfirmed | blocked | vetoed | duplicate | failed | failed_permanent | exhausted
+  attempt       Int      @default(1)
+  detail        String?  // motivo da decisao (sem dados pessoais)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([bookingKey, ruleId, startsAt])
+  @@unique([bookingKey, kind, startsAt, sendDay])
+  @@index([clinicId, patientId, sendDay])
+}
+
+// Controle PERSISTENTE dos recontatos e retomadas (17/10/2026, Lisboa: "os recontatos nao foram feitos" sem nenhum rastro do motivo). Uma linha por
+// (pessoa, fluxo, etapa, ciclo), reservada de forma ATOMICA antes de qualquer envio; guarda tambem a decisao (camada, motivo, se pode ser reavaliada).
+// Sem relacao de proposito (e trilha de auditoria). Ver src/crm/followupLedger.ts.
+model FollowUpDispatch {
+  id             String    @id @default(cuid())
+  clinicId       String
+  patientId      String
+  conversationId String?
+  flow           String    // recontato | avaliacao_cancelada | avaliacao_sem_fechamento
+  ruleId         String?
+  step           Int       @default(0) // ordem da regra (recontato) ou 1
+  cycleKey       String    // evento de origem: ultima mensagem da pessoa (recontato) ou a reserva (retomada)
+  dueAt          DateTime?
+  state          String    // deferred | reserved | sent | unconfirmed | blocked | vetoed | duplicate | failed | failed_permanent | expired | skipped
+  attempt        Int       @default(1) // quantas vezes a etapa foi reservada (informativo)
+  vetoes         Int       @default(0) // vetos (juiz de IA ou revisao de envio): 2 = definitivo
+  deferrals      Int       @default(0) // adiamentos por falha tecnica da IA / conferencia inconclusiva
+  failures       Int       @default(0) // falhas definitivas de envio (nada saiu)
+  layer          String?   // janela | expediente | elegibilidade | concorrencia | juiz_ia | revisao_envio | envio | politica
+  reason         String?   // motivo curto, sem conteudo de conversa
+  temporary      Boolean   @default(false)
+  reevaluateAt   DateTime?
+  fingerprint    String?
+  runMode        String?   // modo em que a decisao foi tomada: normal | restrito (validacao controlada)
+  version        String?
+  decidedAt      DateTime  @default(now()) // quando a decisao foi tomada, pelo RELOGIO DA RODADA (nos testes e nas rodadas dirigidas nao e o do banco)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([patientId, flow, step, cycleKey])
+  @@index([clinicId, flow, state, decidedAt])
+  @@index([patientId, createdAt])
+}
+
+// Resumo de cada rodada de um job por clinica (o que viu e o que fez): distingue "o job nao rodou" de "rodou sem candidatas", "todas excluidas",
+// "a IA barrou" e "o provedor falhou". So contagens e codigos de motivo. Ver src/crm/automationRuns.ts.
+model AutomationRun {
+  id         String   @id @default(cuid())
+  job        String
+  clinicId   String?
+  startedAt  DateTime
+  finishedAt DateTime
+  outcome    String   // ok | erro
+  candidates Int      @default(0)
+  eligible   Int      @default(0)
+  sent       Int      @default(0)
+  deferred   Int      @default(0)
+  ignored    Int      @default(0)
+  vetoed     Int      @default(0)
+  failed     Int      @default(0)
+  uncertain  Int      @default(0)
+  reasons    String?  // JSON { "ignorado:ja_tem_horario": 3, ... }
+  mode       String?  // modo de execucao da rodada: normal | restrito (validacao controlada com contatos de teste)
+  error      String?
+  version    String?
+
+  @@index([job, clinicId, startedAt])
+  @@index([startedAt])
+}
+
+// Configuracao das RETOMADAS por clinica (avaliacao cancelada / avaliacao realizada sem fechamento). NASCE DESLIGADA e sem texto: so envia depois que a
+// clinica liga e aprova o texto. Nada de dia, horario ou publico e presumido aqui. Ver src/crm/resumeFlows.ts.
+model ResumeFlowConfig {
+  id           String    @id @default(cuid())
+  clinicId     String
+  flow         String    // avaliacao_cancelada | avaliacao_sem_fechamento
+  enabled      Boolean   @default(false)
+  weekday      Int?      // 0-6 (0 = domingo): dia em que a retomada sai; null = qualquer dia de atendimento
+  startHour    Int?      // janela de envio (hora local da clinica)
+  endHour      Int?
+  lookbackDays Int       @default(7)  // so considera cancelamentos / avaliacoes dos ultimos N dias (nada de mensagem antiga em massa)
+  maxPerRun    Int       @default(10)
+  maxPerDay    Int       @default(20)
+  message      String?   // texto aprovado pela clinica; sem texto nao envia
+  runMode      String    @default("normal") // normal | restrito (validacao controlada: so os contatos de teste abaixo, com limite; qualquer outro valor BLOQUEIA)
+  testPatientIds String?  // modo restrito: JSON com os ids dos pacientes DESTA clinica autorizados para o teste (lista vazia/invalida = nada e enviado)
+  testMaxSends Int?      // modo restrito: quantos envios o teste pode fazer (obrigatorio)
+  testStartedAt DateTime? // modo restrito: desde quando o limite conta
+  delayMinutes Int?      // so no fluxo "indicacao": quanto tempo depois do agradecimento (sem isso o convite fica desligado: a clinica ainda nao definiu o intervalo)
+  enabledAt    DateTime?
+  updatedBy    String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([clinicId, flow])
+}
+
+// Selecao EXPLICITA da equipe para a retomada de "avaliacao realizada sem fechamento": o sistema nao tem como saber, sozinho, quem avaliou e nao fechou
+// (fechamento acontece fora da Alice); so quem a equipe marcar entra, uma a uma. Ver src/crm/resumeFlows.ts.
+model ResumeTarget {
+  id         String   @id @default(cuid())
+  clinicId   String
+  patientId  String
+  flow       String   // avaliacao_sem_fechamento
+  note       String?
+  markedBy   String?
+  markedAt   DateTime @default(now())
+  status     String   @default("pending") // pending | sent | cancelled | ineligible
+  resultNote String?
+  updatedAt  DateTime @updatedAt
+
+  @@unique([patientId, flow])
+  @@index([clinicId, flow, status])
 }

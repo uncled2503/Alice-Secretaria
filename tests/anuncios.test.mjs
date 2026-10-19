@@ -417,19 +417,30 @@ test("as etiquetas da equipe nunca sao tocadas e etiquetas de uma clinica nao va
   assert.equal(await tagsMod.syncLeadTags(clinic.id, o.id), null, "lead de outra clinica nao e processado");
 });
 
+// Espera (ate 15 s) a tarefa em segundo plano deixar o estado "pending" do catalogo; o teste continua falhando se o estado final nao for o esperado.
+async function catalogoResolvido(clinicId, sourceId) {
+  const t0 = Date.now();
+  for (;;) {
+    const c = await prisma.adCatalog.findUnique({ where: { clinicId_sourceId: { clinicId, sourceId } } });
+    if (c && c.status !== "pending") return c;
+    if (Date.now() - t0 > 15_000) return c;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
+
 test("nomes do anuncio: a Marketing API preenche; sem permissao fica o ID e o aviso (e a mensagem nunca e bloqueada)", async () => {
   await configureMessaging();
   const p = await mk();
   handler = (u) => (u.pathname.endsWith(`/${REF_N1.sourceId}`) ? json({ name: "Drenagem - Outubro", adset: { name: "Mulheres 25-45" }, campaign: { name: "Campanha Outubro Rosa" } }) : json({ error: { code: 200, message: "Missing permissions" } }, 403));
   await att.captureAdReferral({ clinicId: clinic.id, patientId: p.id, externalId: "wamid.N1", referral: REF_N1 });
-  await new Promise((r) => setTimeout(r, 250)); // a busca de nomes roda em segundo plano
+  await catalogoResolvido(clinic.id, REF_N1.sourceId); // a busca de nomes roda em segundo plano: espera o estado final, nao um tempo fixo (sob carga levou ~1 s)
   const ok = await prisma.adCatalog.findUnique({ where: { clinicId_sourceId: { clinicId: clinic.id, sourceId: REF_N1.sourceId } } });
   assert.deepEqual([ok.status, ok.adName, ok.adsetName, ok.campaignName], ["resolved", "Drenagem - Outubro", "Mulheres 25-45", "Campanha Outubro Rosa"]);
 
   const q = await mk();
   const entry = await att.captureAdReferral({ clinicId: clinic.id, patientId: q.id, externalId: "wamid.N2", referral: REF_N2 });
   assert.ok(entry, "a mensagem entrou mesmo com a Marketing API recusando");
-  await new Promise((r) => setTimeout(r, 250));
+  await catalogoResolvido(clinic.id, REF_N2.sourceId);
   const bad = await prisma.adCatalog.findUnique({ where: { clinicId_sourceId: { clinicId: clinic.id, sourceId: REF_N2.sourceId } } });
   assert.equal(bad.status, "unavailable");
   assert.match(bad.error, /403/);

@@ -6,6 +6,8 @@
 // serve para qualquer regiao do rosto; "Peeling" sem regiao nunca e barrado).
 // ---------------------------------------------------------------------------
 
+import { CONCERN_LABEL, eligibleProcedures, procedureFitsObjective, type Objective, type ProcedureInfo } from "./concerns.js";
+
 function fold(s: string): string {
   return s.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
 }
@@ -69,7 +71,7 @@ export function procedureFitsComplaint(procAreas: Set<Area>, complaintAreas: Set
 
 export interface RelevanceMismatch {
   procedure: string;
-  complaintArea: Area;
+  complaintArea: Area | "objetivo";
   complaintLabel: string;
 }
 
@@ -77,8 +79,26 @@ export interface RelevanceMismatch {
 export function findRelevanceMismatch(params: {
   complaintTexts: string[]; // mensagens da pessoa (as novas; se nao citam regiao, as ultimas)
   reply: string;
-  procedures: { name: string; aliases?: string | null }[];
+  procedures: ProcedureInfo[];
+  // OBJETIVO identificado (queixa, nao so regiao - ver concerns.ts). Quando existe, ele manda: o procedimento citado precisa ter, no cadastro aprovado,
+  // indicacao para essa queixa; sem indicacao declarada (informacao insuficiente) tambem nao pode ser indicado.
+  objective?: Pick<Objective, "concerns" | "regions">;
+  // procedimentos que a PESSOA mesma escolheu/ja tem agendado: citar o nome deles e responder o que ela pediu, nao e indicacao
+  allowed?: string[];
 }): RelevanceMismatch | null {
+  if (params.objective && params.objective.concerns.length) {
+    const replyFolded0 = fold(params.reply);
+    const allowed = new Set((params.allowed ?? []).map((n) => fold(n).trim()));
+    for (const p of params.procedures) {
+      const name = fold(p.name).trim();
+      if (name.length < 6 || !replyFolded0.includes(name) || allowed.has(name)) continue;
+      if (/avalia/.test(name)) continue;
+      if (!procedureFitsObjective(p, params.objective)) {
+        return { procedure: p.name, complaintArea: "objetivo", complaintLabel: params.objective.concerns.map((c) => CONCERN_LABEL[c]).join(" + ") };
+      }
+    }
+    return null;
+  }
   const complaint = new Set<Area>();
   for (const t of params.complaintTexts) for (const a of areasIn(t)) complaint.add(a);
   if (complaint.size === 0) return null;
@@ -97,10 +117,16 @@ export function findRelevanceMismatch(params: {
 }
 
 // Resposta segura no lugar da errada: nao cita procedimento nenhum.
-export function safeReplyForMismatch(m: RelevanceMismatch, evalOffered: boolean): string {
-  return evalOffered
-    ? `Entendi! Para ${m.complaintLabel}, o melhor caminho é a profissional indicar na avaliação. Me conta um pouco mais: o que mais te incomoda aí hoje? 💗`
-    : `Entendi! Para ${m.complaintLabel}, quem indica o melhor caminho é a profissional, na avaliação gratuita. 💗 Quer que eu veja um horário pra você?`;
+// (Antes a versao sem avaliacao ja oferecida empurrava "avaliacao gratuita... quer que eu veja um horario?" mesmo quando ela so contou a queixa: era um dos
+// pontos que reiniciavam a venda. Agora so esclarece, sem oferta de agenda.)
+export function safeReplyForMismatch(m: RelevanceMismatch, _evalOffered: boolean): string {
+  void _evalOffered;
+  return `Entendi! Para ${m.complaintLabel}, quem indica o melhor caminho com segurança é a profissional. Me conta um pouco mais: o que mais te incomoda aí hoje? 💗`;
+}
+
+// PURO: procedimentos aprovados no cadastro para o objetivo (familias em ate 5 nomes), para a reescrita indicar so o que serve.
+export function fittingForObjective(objective: Pick<Objective, "concerns" | "regions">, procedures: ProcedureInfo[]): string[] {
+  return eligibleProcedures(objective, procedures).eligible.slice(0, 5);
 }
 
 // PURO: procedimentos do catalogo que SERVEM a queixa (a regiao do nome bate com a regiao da queixa). Usado para a Alice indicar so esses.

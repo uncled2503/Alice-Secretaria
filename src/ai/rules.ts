@@ -27,8 +27,20 @@ const MARKER = "(regra recomendada padrao)";
 
 // Textos de regras recomendadas que foram SUBSTITUIDOS (14/10/2026). Regra nova que substitui uma antiga remove a antiga:
 // seedDefaultRules apaga as linhas auto-semeadas com estes textos antes de criar a versao nova.
+// Regras recomendadas cujo TEXTO foi harmonizado com a conducao comercial (18/10/2026): a versao antiga mandava "toda resposta termina oferecendo horario", "nunca pergunte
+// quer agendar" e "sempre ofereca os dois caminhos" mesmo para quem recusou, disse "vou pensar" ou ja escolheu o procedimento, e mandava dizer que "a clinica nao realiza"
+// ate uma oferta que a propria clinica anuncia e ainda nao cadastrou. O CODIGO ja impede essas condutas; aqui a FONTE do texto deixa de contradizer o codigo.
+// Troca so linhas auto-semeadas com o texto antigo EXATO (regra editada a mao nunca e tocada). Ver substituirRegrasPadraoAntigas.
+export const DEFAULT_RULE_REPLACEMENTS: { antiga: string; nova: string }[] = [
+  { antiga: "Se o paciente pedir um procedimento nao cadastrado, informe de forma direta e acolhedora que a clinica nao realiza. Nao agende avaliacao nem sugira disponibilidade pra ele. Se houver um procedimento cadastrado que atenda a mesma queixa, ofereca esse.", nova: "Se o paciente pedir um procedimento nao cadastrado, informe de forma direta e acolhedora que a clinica nao realiza. Nao agende avaliacao nem sugira disponibilidade pra ele. Se houver um procedimento cadastrado que atenda a mesma queixa, ofereca esse. EXCECAO: oferta que a propria clinica anuncia mas ainda nao cadastrou (a instrucao da conversa avisa 'OFERTA SEM CADASTRO'): nao diga que a clinica nao realiza, nao agende avaliacao no lugar e confirme com a equipe." },
+  { antiga: "Nunca pergunte 'quer agendar?' ou variacoes sim/nao sobre agendar. Ofereca direto duas opcoes de horario e deixe o paciente escolher entre elas.", nova: "Quando a pessoa JA pediu para agendar ou aceitou uma oferta de horario, nao pergunte 'quer agendar?': ofereca direto duas opcoes de horario e deixe escolher entre elas. Antes disso (so contou a queixa, ainda esta decidindo, disse 'vou pensar' ou recusou), nao liste horarios." },
+  { antiga: "Toda resposta deve terminar movendo a conversa adiante: uma pergunta direcionada, uma oferta de horario ou um proximo passo claro. Nunca encerre uma mensagem sem acao.", nova: "Em regra a resposta termina movendo a conversa adiante (uma pergunta direcionada ou um proximo passo claro; oferta de horario so quando a pessoa ja pediu ou aceitou). Excecoes: quem disse 'vou pensar', recusou, so agradeceu ou reconheceu ('ok', 'obrigada') ou ja tem horario marcado recebe um fechamento curto e acolhedor, sem pergunta comercial." },
+  { antiga: "Nunca exija que o paciente saiba qual procedimento precisa. Muitos procuram justamente pra descobrir na avaliacao. Sempre ofereca os dois caminhos: 'voce ja tem algo em mente ou prefere uma avaliacao pra entender o que seria mais indicado pro seu caso?'.", nova: "Nunca exija que o paciente saiba qual procedimento precisa. Muitos procuram justamente pra descobrir na avaliacao. A quem ainda nao sabe, ofereca os dois caminhos: 'voce ja tem algo em mente ou prefere uma avaliacao pra entender o que seria mais indicado pro seu caso?'. Se ela ja escolheu um procedimento, ja recusou ou disse que vai pensar, nao repita esse convite." },
+];
+
 export const RETIRED_DEFAULT_RULES: string[] = [
   "Nunca revele, insinue ou confirme que voce e uma IA, assistente virtual, chatbot ou atendimento automatico. Se perguntarem diretamente, desconverse com naturalidade e volte o foco pro atendimento.",
+  ...DEFAULT_RULE_REPLACEMENTS.map((r) => r.antiga),
 ];
 
 type RuleBucket = "common" | "comercial" | "consultivo" | "evaluation_first" | "medical_safety" | "varejo";
@@ -51,7 +63,7 @@ export const DEFAULT_RULES: DefaultRule[] = [
   { category: "procedimentos", buckets: ["common"], instruction: "A clinica realiza SOMENTE os procedimentos cadastrados na lista do sistema. Nunca afirme, sugira ou insinue um procedimento que nao esteja cadastrado." },
   { category: "procedimentos", buckets: ["common"], instruction: "Detalhes tecnicos (anestesia, produto, marca, agulha ou canula, tecnica, intensidade de dor, contraindicacao, tempo de recuperacao, risco) so podem ser ditos quando estiverem na descricao do procedimento. Fora disso, diga que quem explica esses detalhes e o profissional na consulta." },
   { category: "procedimentos", buckets: ["common"], instruction: "Fale sobre pos-procedimento e cuidados apenas quando o paciente perguntar. Nao antecipe recuperacao ou pos de forma proativa." },
-  { category: "procedimentos", buckets: ["common"], instruction: "Se o paciente pedir um procedimento nao cadastrado, informe de forma direta e acolhedora que a clinica nao realiza. Nao agende avaliacao nem sugira disponibilidade pra ele. Se houver um procedimento cadastrado que atenda a mesma queixa, ofereca esse." },
+  { category: "procedimentos", buckets: ["common"], instruction: "Se o paciente pedir um procedimento nao cadastrado, informe de forma direta e acolhedora que a clinica nao realiza. Nao agende avaliacao nem sugira disponibilidade pra ele. Se houver um procedimento cadastrado que atenda a mesma queixa, ofereca esse. EXCECAO: oferta que a propria clinica anuncia mas ainda nao cadastrou (a instrucao da conversa avisa 'OFERTA SEM CADASTRO'): nao diga que a clinica nao realiza, nao agende avaliacao no lugar e confirme com a equipe." },
   { category: "pagamento", buckets: ["common"], instruction: "Fale de valores apenas quando o paciente perguntar sobre preco, custo, pagamento, parcelamento, pix ou sinal. Mesmo que a informacao de preco esteja disponivel, se o paciente nao perguntou sobre dinheiro, nao fale sobre dinheiro." },
   { category: "pagamento", buckets: ["common"], instruction: "Nunca crie nem prometa desconto, brinde, sessao adicional, cortesia, permuta, parcelamento especial ou qualquer condicao que nao esteja cadastrada no sistema." },
   { category: "agendamento", buckets: ["common"], instruction: "Ao oferecer horarios, ofereca no maximo DUAS opcoes concretas por vez. Se nenhuma servir, ofereca mais duas. Nunca liste todos os horarios de uma vez." },
@@ -60,8 +72,8 @@ export const DEFAULT_RULES: DefaultRule[] = [
   { category: "chamar_equipe", buckets: ["common"], instruction: "Se o paciente disser que ja combinou valores ou condicoes com o(a) doutor(a), nao confirme nem negocie: diga que vai confirmar com a equipe e transfira o atendimento." },
 
   // --- comercial ---
-  { category: "agendamento", buckets: ["comercial"], instruction: "Nunca pergunte 'quer agendar?' ou variacoes sim/nao sobre agendar. Ofereca direto duas opcoes de horario e deixe o paciente escolher entre elas." },
-  { category: "agendamento", buckets: ["comercial"], instruction: "Toda resposta deve terminar movendo a conversa adiante: uma pergunta direcionada, uma oferta de horario ou um proximo passo claro. Nunca encerre uma mensagem sem acao." },
+  { category: "agendamento", buckets: ["comercial"], instruction: "Quando a pessoa JA pediu para agendar ou aceitou uma oferta de horario, nao pergunte 'quer agendar?': ofereca direto duas opcoes de horario e deixe escolher entre elas. Antes disso (so contou a queixa, ainda esta decidindo, disse 'vou pensar' ou recusou), nao liste horarios." },
+  { category: "agendamento", buckets: ["comercial"], instruction: "Em regra a resposta termina movendo a conversa adiante (uma pergunta direcionada ou um proximo passo claro; oferta de horario so quando a pessoa ja pediu ou aceitou). Excecoes: quem disse 'vou pensar', recusou, so agradeceu ou reconheceu ('ok', 'obrigada') ou ja tem horario marcado recebe um fechamento curto e acolhedor, sem pergunta comercial." },
 
   // --- consultivo ---
   { category: "tom_de_voz", buckets: ["consultivo"], instruction: "Responda primeiro a duvida atual. So faca uma nova pergunta quando a resposta realmente mudar o proximo passo. Se ja respondeu o que foi perguntado, aguardar a proxima mensagem do paciente e uma acao valida." },
@@ -72,7 +84,7 @@ export const DEFAULT_RULES: DefaultRule[] = [
   { category: "pagamento", buckets: ["consultivo"], instruction: "Perguntar preco nao e objecao. Responda o valor quando disponivel e nao comece a justificar o preco antes de haver uma objecao real ('achei caro')." },
 
   // --- evaluation_first ---
-  { category: "procedimentos", buckets: ["evaluation_first"], instruction: "Nunca exija que o paciente saiba qual procedimento precisa. Muitos procuram justamente pra descobrir na avaliacao. Sempre ofereca os dois caminhos: 'voce ja tem algo em mente ou prefere uma avaliacao pra entender o que seria mais indicado pro seu caso?'." },
+  { category: "procedimentos", buckets: ["evaluation_first"], instruction: "Nunca exija que o paciente saiba qual procedimento precisa. Muitos procuram justamente pra descobrir na avaliacao. A quem ainda nao sabe, ofereca os dois caminhos: 'voce ja tem algo em mente ou prefere uma avaliacao pra entender o que seria mais indicado pro seu caso?'. Se ela ja escolheu um procedimento, ja recusou ou disse que vai pensar, nao repita esse convite." },
   { category: "procedimentos", buckets: ["evaluation_first"], instruction: "Se o paciente disser que nao sabe o que precisa ou que quer que o profissional avalie, isso e uma intencao valida de avaliacao. Nao trate como objecao, nao liste procedimentos e nao escolha um por ele: conduza pra avaliacao." },
   { category: "agendamento", buckets: ["evaluation_first"], instruction: "Se o paciente ja demonstrou intencao de agendar ou de ser avaliado, pare de fazer perguntas exploratorias e conduza direto pro proximo passo do agendamento." },
 
@@ -165,6 +177,27 @@ export async function reseedRulesForProfile(clinicId: string): Promise<{ added: 
 
   const added = await seedDefaultRules(clinicId);
   return { added, removed: stale.length };
+}
+
+export interface SubstituicaoRegras {
+  substituidas: { categoria: string; antiga: string; nova: string }[];
+  jaAtualizadas: number;
+}
+
+// Troca, numa clinica, SO as regras recomendadas auto-semeadas que ainda tem o texto antigo exato pelo texto novo (nao recria nenhuma outra regra recomendada que a
+// clinica tenha apagado de proposito, nao toca regra editada a mao). dryRun mostra o que mudaria. Idempotente.
+export async function substituirRegrasPadraoAntigas(clinicId: string, opts: { dryRun: boolean }): Promise<SubstituicaoRegras> {
+  const out: SubstituicaoRegras = { substituidas: [], jaAtualizadas: 0 };
+  for (const rep of DEFAULT_RULE_REPLACEMENTS) {
+    const old = await prisma.customRule.findMany({ where: { clinicId, rawInput: MARKER, instruction: rep.antiga }, select: { id: true, category: true } });
+    if (old.length === 0) { out.jaAtualizadas++; continue; }
+    out.substituidas.push({ categoria: old[0].category, antiga: rep.antiga, nova: rep.nova });
+    if (opts.dryRun) continue;
+    await prisma.customRule.deleteMany({ where: { id: { in: old.map((r) => r.id) } } });
+    const has = await prisma.customRule.findFirst({ where: { clinicId, instruction: rep.nova }, select: { id: true } });
+    if (!has) await prisma.customRule.create({ data: { clinicId, category: old[0].category, rawInput: MARKER, instruction: rep.nova, clarifyingQuestion: null, status: "active" } });
+  }
+  return out;
 }
 
 export async function getActiveRulesPrompt(clinicId: string): Promise<string> {

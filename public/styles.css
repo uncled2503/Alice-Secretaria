@@ -1681,6 +1681,10 @@ code { background: var(--accent-50); color: var(--accent-dark); padding: 0.1rem 
 .alice-power .alice-power-dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: #10b981; box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.25); flex-shrink: 0; }
 .alice-power.is-off { background: rgba(148, 163, 184, 0.14); }
 .alice-power.is-off .alice-power-dot { background: #94a3b8; box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.25); }
+.alice-power.is-warn { background: rgba(245, 158, 11, 0.14); }
+.alice-power.is-warn .alice-power-dot { background: #f59e0b; box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.25); }
+.alice-power.is-bad { background: rgba(239, 68, 68, 0.14); }
+.alice-power.is-bad .alice-power-dot { background: #ef4444; box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.25); }
 
 
 /* ===== Renovacao visual (14/10/2026): identidade mais acolhedora, diretorio de configuracoes e responsividade =====

@@ -62,12 +62,25 @@ import { seedLisboa } from "../maintenance/seedLisboa.js";
 import { applyLisboaServicos } from "../maintenance/applyLisboaServicos.js";
 import { applyLisboaDescritivos } from "../maintenance/applyLisboaDescritivos.js";
 import { cleanLisboaRules, listActiveRules, listAutomations } from "../maintenance/cleanLisboaRules.js";
+import { ajustarJornadasLisboa } from "../maintenance/lisboaJornadas.js";
+import { ajustarCondutaLisboa } from "../maintenance/lisboaConduta.js";
+import { prepararGoogleLisboa } from "../maintenance/lisboaGoogle.js";
+import { preflightLisboa } from "../maintenance/lisboaPreflight.js";
+import { validateReviewUrl } from "../reminders/reviewLink.js";
+import { surveyTrail } from "../reminders/surveyFlow.js";
+import { conferirRecontatosLisboa } from "../maintenance/lisboaRecontatos.js";
+import { diagnoseJobs, STATE_LABEL } from "../crm/automationRuns.js";
+import { describeRule } from "../crm/followupSchedule.js";
+import { getResumeConfig, markResumeTarget, suggestNoCloseCandidates, RESUME_CANCELLED, RESUME_NOCLOSE } from "../crm/resumeFlows.js";
+import { REVISION } from "../version.js";
 import { diagnoseSlot } from "../scheduling/slots.js";
 import { syncBirthdaysFromCe } from "../clinicaexperts/birthdays.js";
 import { lastBookingDiagnostics, pullClinicBookings } from "../clinicaexperts/pull.js";
 import { auditProcedureLinks } from "../clinicaexperts/procedureLink.js";
 import { scheduleBriefingRefresh } from "../ai/leadBriefing.js";
 import { usageSnapshot as aiUsageSnapshot } from "../ai/usageStats.js";
+import { attendanceHealth } from "../crm/attendanceHealth.js";
+import { dispatchTrail } from "../reminders/ledger.js";
 import { connectAccount, disconnectAccount, ceStatusFor } from "../clinicaexperts/client.js";
 import { auditExecutors, auditUnmirrored, syncCatalog } from "../clinicaexperts/sync.js";
 import { undoCeImport } from "../clinicaexperts/undo.js";
@@ -285,6 +298,32 @@ apiRouter.post(
       actorName: req.staff?.name ?? null,
     });
     res.json({ ok: true, aliceActive: active });
+  })
+);
+
+// Trilha dos lembretes de UMA reserva: o que foi decidido/enviado, por qual regra, para qual horario, em que tentativa e com que resultado.
+// Responde "o que a Alice recebeu e por que decidiu isso". Aceita ?appointmentId= (id local). Sem dados pessoais alem do id.
+apiRouter.get(
+  "/clinic/reminder-trail",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const appointmentId = typeof req.query.appointmentId === "string" ? req.query.appointmentId : undefined;
+    if (!appointmentId) {
+      res.status(400).json({ error: "Informe appointmentId." });
+      return;
+    }
+    res.set("Cache-Control", "no-store");
+    res.json({ appointmentId, trail: await dispatchTrail(clinic.id, { appointmentId }) });
+  })
+);
+
+// Saude do ATENDIMENTO desta clinica (mensagens sem resposta, respostas que nao sairam, eventos que falharam). Nao e o /health do servidor.
+apiRouter.get(
+  "/clinic/attendance-health",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    res.set("Cache-Control", "no-store");
+    res.json(await attendanceHealth(clinic.id));
   })
 );
 
@@ -533,10 +572,29 @@ apiRouter.put(
     // O numero de avisos pode ser o proprio numero conectado (cai na conversa
     // "Mensagem pra mim"; o eco e ignorado no webhook, sem loop).
 
+    let googleData: Record<string, unknown> = {};
+    if (b.googleReviewUrl !== undefined) {
+      const url = (b.googleReviewUrl ?? "").trim();
+      if (!url) {
+        googleData = { googleReviewUrl: null, googleReviewConfirmedAt: null, googleReviewConfirmedBy: null, googleReviewPlace: null, googleReviewLegacyAllowed: false };
+      } else {
+        const v = validateReviewUrl(url);
+        if (!v.ok) {
+          res.status(400).json({ error: `Link de avaliação do Google recusado: ${v.detail}.` });
+          return;
+        }
+        const current = await prisma.clinic.findUnique({ where: { id: req.params.id }, select: { googleReviewUrl: true } });
+        const changed = current?.googleReviewUrl?.trim() !== v.url;
+        // digitar/colar um link NOVO e o ato de confirmar (a clinica e dona do perfil); salvar outra configuracao com o mesmo link NAO confirma
+        googleData = { googleReviewUrl: v.url, ...(changed ? { googleReviewConfirmedAt: new Date(), googleReviewConfirmedBy: req.staff?.name ?? "painel", googleReviewPlace: null, googleReviewLegacyAllowed: false } : {}) };
+      }
+    }
+
     try {
       const clinic = await prisma.clinic.update({
         where: { id: req.params.id },
         data: {
+          ...googleData,
           ...(name !== undefined ? { name } : {}),
           ...(whatsappPhone !== undefined ? { whatsappPhone: whatsappPhone.replace(/\D/g, "") } : {}),
           ...(timezone !== undefined ? { timezone } : {}),
@@ -586,7 +644,6 @@ apiRouter.put(
           ...(b.npsHoursAfter !== undefined ? { npsHoursAfter: Math.min(Math.max(Math.round(b.npsHoursAfter), 1), 168) } : {}),
           ...(b.npsThreshold !== undefined ? { npsThreshold: Math.min(Math.max(Math.round(b.npsThreshold), 0), 10) } : {}),
           ...(b.npsMessage !== undefined ? { npsMessage: b.npsMessage?.trim() || null } : {}),
-          ...(b.googleReviewUrl !== undefined ? { googleReviewUrl: b.googleReviewUrl?.trim() || null } : {}),
         },
       });
 
@@ -1213,6 +1270,261 @@ apiRouter.post(
       });
     }
     res.json(result);
+  })
+);
+
+// Jornadas da Lisboa (Suelen 12-21h, Adriana 12-21h, Talita 8-17h). dryRun (padrao) so mostra a previa e as pendencias (identidade ambigua,
+// conflitos com almoco/agendamentos); com dryRun:false aplica so o que nao e ambiguo. Idempotente. So admin e SO a Lisboa.
+apiRouter.post(
+  "/clinics/lisboa-jornadas",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinics = await prisma.clinic.findMany({ where: { name: "Lisboa Beauty Center" }, select: { id: true } });
+    if (clinics.length === 0) {
+      res.status(404).json({ error: "Clínica Lisboa não encontrada." });
+      return;
+    }
+    if (clinics.length > 1) {
+      res.status(409).json({ error: "Há mais de uma clínica com o nome da Lisboa; nada foi alterado.", clinicIds: clinics.map((c) => c.id) });
+      return;
+    }
+    const { dryRun, escolhas } = (req.body ?? {}) as { dryRun?: boolean; escolhas?: Record<string, string> };
+    res.json(await ajustarJornadasLisboa(clinics[0].id, { dryRun: dryRun !== false, escolhas: escolhas && typeof escolhas === "object" ? escolhas : undefined, actorName: req.staff?.name ?? null }));
+  })
+);
+
+// Conduta comercial da Lisboa: servicos que NAO oferece (luz pulsada), apelidos a limpar, como cada procedimento agenda (direto x avaliacao), regras antigas
+// que empurram avaliacao. dryRun (padrao) so mostra a previa e as pendencias. Idempotente. So admin e SO a Lisboa.
+apiRouter.post(
+  "/clinics/lisboa-conduta",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinics = await prisma.clinic.findMany({ where: { name: "Lisboa Beauty Center" }, select: { id: true } });
+    if (clinics.length === 0) {
+      res.status(404).json({ error: "Clínica Lisboa não encontrada." });
+      return;
+    }
+    if (clinics.length > 1) {
+      res.status(409).json({ error: "Há mais de uma clínica com o nome da Lisboa; nada foi alterado.", clinicIds: clinics.map((c) => c.id) });
+      return;
+    }
+    const b = (req.body ?? {}) as { dryRun?: boolean; naoOferecidos?: string[]; ofertasSemCadastro?: string[]; marcar?: { direct?: string[]; evaluation?: string[] }; ativarModoEstrito?: boolean };
+    res.json(
+      await ajustarCondutaLisboa(clinics[0].id, {
+        dryRun: b.dryRun !== false,
+        naoOferecidos: Array.isArray(b.naoOferecidos) ? b.naoOferecidos.map(String) : undefined,
+        ofertasSemCadastro: Array.isArray(b.ofertasSemCadastro) ? b.ofertasSemCadastro.map(String) : undefined,
+        marcar: b.marcar && typeof b.marcar === "object" ? { direct: (b.marcar.direct ?? []).map(String), evaluation: (b.marcar.evaluation ?? []).map(String) } : undefined,
+        ativarModoEstrito: b.ativarModoEstrito === true,
+        actorName: req.staff?.name ?? null,
+      }),
+    );
+  })
+);
+
+// Reconferencia dos recontatos da Lisboa + preparo (desligado) das retomadas de avaliacao. dryRun (padrao) so mostra a matriz, os conflitos e as perguntas
+// pendentes; nao liga nem reescreve nenhum recontato. Ligar uma retomada exige `ativar` com quem aprovou e o texto. Idempotente. So admin e SO a Lisboa.
+apiRouter.post(
+  "/clinics/lisboa-recontatos",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinics = await prisma.clinic.findMany({ where: { name: "Lisboa Beauty Center" }, select: { id: true } });
+    if (clinics.length === 0) {
+      res.status(404).json({ error: "Clínica Lisboa não encontrada." });
+      return;
+    }
+    if (clinics.length > 1) {
+      res.status(409).json({ error: "Há mais de uma clínica com o nome da Lisboa; nada foi alterado.", clinicIds: clinics.map((c) => c.id) });
+      return;
+    }
+    const b = (req.body ?? {}) as { dryRun?: boolean; ativar?: { fluxo?: string; aprovadoPor?: string; mensagem?: string; diaDaSemana?: number | null; horaInicio?: number | null; horaFim?: number | null }; modoRestrito?: { fluxo?: string; aprovadoPor?: string; telefones?: unknown; limite?: unknown }; voltarAoNormal?: { fluxo?: string; aprovadoPor?: string }; recuperacao?: { horas?: unknown; aprovadoPor?: string } };
+    const validFlow = (x: unknown) => x === RESUME_CANCELLED || x === RESUME_NOCLOSE || x === "indicacao";
+    if ((b.modoRestrito && !validFlow(b.modoRestrito.fluxo)) || (b.voltarAoNormal && !validFlow(b.voltarAoNormal.fluxo))) {
+      res.status(400).json({ error: "fluxo invalido" });
+      return;
+    }
+    const a = b.ativar;
+    if (a && a.fluxo !== RESUME_CANCELLED && a.fluxo !== RESUME_NOCLOSE) {
+      res.status(400).json({ error: "fluxo invalido" });
+      return;
+    }
+    try {
+      res.json(
+        await conferirRecontatosLisboa(clinics[0].id, {
+          dryRun: b.dryRun !== false,
+          actorName: req.staff?.name ?? null,
+          ...(a ? { ativar: { fluxo: a.fluxo as typeof RESUME_CANCELLED | typeof RESUME_NOCLOSE, aprovadoPor: String(a.aprovadoPor ?? ""), mensagem: a.mensagem, diaDaSemana: a.diaDaSemana, horaInicio: a.horaInicio, horaFim: a.horaFim } } : {}),
+          ...(b.modoRestrito ? { modoRestrito: { fluxo: b.modoRestrito.fluxo as "avaliacao_cancelada" | "avaliacao_sem_fechamento" | "indicacao", aprovadoPor: String(b.modoRestrito.aprovadoPor ?? ""), telefones: Array.isArray(b.modoRestrito.telefones) ? b.modoRestrito.telefones.map(String) : [], limite: Number(b.modoRestrito.limite) } } : {}),
+          ...(b.recuperacao ? { recuperacao: { horas: b.recuperacao.horas === null ? null : Number(b.recuperacao.horas), aprovadoPor: String(b.recuperacao.aprovadoPor ?? "") } } : {}),
+          ...(b.voltarAoNormal ? { voltarAoNormal: { fluxo: b.voltarAoNormal.fluxo as "avaliacao_cancelada" | "avaliacao_sem_fechamento" | "indicacao", aprovadoPor: String(b.voltarAoNormal.aprovadoPor ?? "") } } : {}),
+        }),
+      );
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : "nao foi possivel concluir" });
+    }
+  })
+);
+
+// DIAGNOSTICO das automacoes de recontato e retomada (so contagens e codigos de motivo, sem conteudo de conversa): por job, a ultima e a proxima rodada,
+// quantas candidatas, elegiveis, enviadas, adiadas, ignoradas, barradas pela IA, com falha ou incertas, e os motivos principais; mais o resultado
+// persistido por etapa e a matriz das regras. Distingue "o job nao rodou" de "rodou sem candidatas", "todas excluidas" e "o provedor falhou".
+apiRouter.get(
+  "/automations/diagnostico",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const days = Math.min(14, Math.max(1, Number(req.query.days) || 1));
+    const now = new Date();
+    const from = new Date(now.getTime() - days * 24 * 3_600_000);
+    const [jobs, ledger, rules, flows, stalled] = await Promise.all([
+      diagnoseJobs(clinic.id, from, now, now),
+      prisma.followUpDispatch.groupBy({ by: ["flow", "state", "layer"], where: { clinicId: clinic.id, decidedAt: { gte: from } }, _count: { _all: true } }),
+      prisma.followUpRule.findMany({ where: { clinicId: clinic.id }, orderBy: { order: "asc" } }),
+      Promise.all([RESUME_CANCELLED, RESUME_NOCLOSE].map((flow) => getResumeConfig(clinic.id, flow))),
+      prisma.conversation.count({ where: { patient: { clinicId: clinic.id, optedOut: false }, humanTakeover: true, handoffPending: true, staffTouchedAt: null, lastMessageAt: { lt: new Date(now.getTime() - 12 * 3_600_000), gt: new Date(now.getTime() - 7 * 24 * 3_600_000) } } }),
+    ]);
+    res.json({
+      clinica: { id: clinic.id, nome: clinic.name, fusoHorario: clinic.timezone },
+      versao: REVISION.split(":")[0],
+      periodo: { de: from, ate: now, dias: days },
+      automacoes: jobs.map((j) => ({ ...j, situacao: STATE_LABEL[j.state] })),
+      resultadoPorEtapa: ledger.map((l) => ({ fluxo: l.flow, estado: l.state, camada: l.layer, total: l._count._all })),
+      regrasDeRecontato: rules.map((r) => ({ ordem: r.order, nome: r.name, ativa: r.active, quando: describeRule(r) })),
+      retomadas: flows.map((c, i) => ({ fluxo: i === 0 ? RESUME_CANCELLED : RESUME_NOCLOSE, configurada: !!c, ligada: !!c?.enabled, temTexto: !!c?.message?.trim(), diaDaSemana: c?.weekday ?? null })),
+      conversasParadasComAEquipe: stalled,
+    });
+  })
+);
+
+// Retomada: configuracao da clinica (nasce desligada e sem texto; nada e presumido).
+apiRouter.get(
+  "/retomadas/config",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    res.json({ avaliacao_cancelada: await getResumeConfig(clinic.id, RESUME_CANCELLED), avaliacao_sem_fechamento: await getResumeConfig(clinic.id, RESUME_NOCLOSE) });
+  })
+);
+
+apiRouter.put(
+  "/retomadas/config/:flow",
+  asyncRoute(async (req, res) => {
+    const flow = req.params.flow;
+    if (flow !== RESUME_CANCELLED && flow !== RESUME_NOCLOSE) {
+      res.status(400).json({ error: "fluxo invalido" });
+      return;
+    }
+    const clinic = await getClinic(req);
+    const b = (req.body ?? {}) as { enabled?: boolean; weekday?: number | null; startHour?: number | null; endHour?: number | null; lookbackDays?: number; maxPerRun?: number; maxPerDay?: number; message?: string | null };
+    const int = (v: unknown, lo: number, hi: number) => (typeof v === "number" && Number.isInteger(v) && v >= lo && v <= hi ? v : undefined);
+    const current = await prisma.resumeFlowConfig.findUnique({ where: { clinicId_flow: { clinicId: clinic.id, flow } } });
+    const message = b.message === undefined ? current?.message ?? null : (b.message ?? "").trim() || null;
+    if (b.enabled === true && !message) {
+      res.status(400).json({ error: "Para ligar a retomada informe o texto aprovado pela clinica." });
+      return;
+    }
+    if ((b.startHour == null) !== (b.endHour == null) && (b.startHour !== undefined || b.endHour !== undefined)) {
+      res.status(400).json({ error: "Informe a hora de inicio e a de fim juntas (ou nenhuma)." });
+      return;
+    }
+    const data = {
+      ...(b.enabled !== undefined ? { enabled: b.enabled === true, ...(b.enabled === true && !current?.enabled ? { enabledAt: new Date() } : {}) } : {}),
+      ...(b.weekday !== undefined ? { weekday: b.weekday === null ? null : int(b.weekday, 0, 6) ?? null } : {}),
+      ...(b.startHour !== undefined ? { startHour: b.startHour === null ? null : int(b.startHour, 0, 23) ?? null } : {}),
+      ...(b.endHour !== undefined ? { endHour: b.endHour === null ? null : int(b.endHour, 0, 24) ?? null } : {}),
+      ...(int(b.lookbackDays, 1, 30) !== undefined ? { lookbackDays: int(b.lookbackDays, 1, 30)! } : {}),
+      ...(int(b.maxPerRun, 1, 50) !== undefined ? { maxPerRun: int(b.maxPerRun, 1, 50)! } : {}),
+      ...(int(b.maxPerDay, 1, 100) !== undefined ? { maxPerDay: int(b.maxPerDay, 1, 100)! } : {}),
+      message,
+      updatedBy: req.staff?.name ?? null,
+    };
+    const row = await prisma.resumeFlowConfig.upsert({ where: { clinicId_flow: { clinicId: clinic.id, flow } }, create: { clinicId: clinic.id, flow, ...data }, update: data });
+    void logActivity({ clinicId: clinic.id, type: "briefing_applied", area: "automacoes", title: "Retomada de avaliação configurada", description: `${flow}: ${row.enabled ? "ligada" : "desligada"}`, actorName: req.staff?.name ?? null });
+    res.json(await getResumeConfig(clinic.id, flow));
+  })
+);
+
+// Avaliacao realizada sem fechamento: a equipe marca, uma a uma, quem deve receber a retomada (o sistema nao enxerga o "fechou"). A lista de sugestoes
+// so ajuda a equipe a escolher: NUNCA dispara sozinha.
+apiRouter.get(
+  "/retomadas/sugestoes-sem-fechamento",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    res.json(await suggestNoCloseCandidates(clinic.id, Math.min(60, Math.max(1, Number(req.query.days) || 30))));
+  })
+);
+
+apiRouter.post(
+  "/patients/:id/retomada-pos-avaliacao",
+  asyncRoute(async (req, res) => {
+    const patient = await prisma.patient.findUniqueOrThrow({ where: { id: req.params.id }, select: { clinicId: true } });
+    if (!assertClinicAccess(req, res, patient.clinicId)) return;
+    const r = await markResumeTarget(patient.clinicId, req.params.id, req.staff?.name ?? null, typeof req.body?.note === "string" ? req.body.note.slice(0, 200) : null);
+    if (!r.ok) {
+      res.status(409).json({ error: r.error });
+      return;
+    }
+    void logActivity({ clinicId: patient.clinicId, patientId: req.params.id, type: "briefing_applied", area: "automacoes", title: "Marcada para retomada pós-avaliação", actorName: req.staff?.name ?? null });
+    res.json({ ok: true, id: r.id });
+  })
+);
+
+// Conferencia de prontidao da Lisboa (SO LEITURA, nunca grava): o que esta aplicado, o que e so codigo, o que esta preparado e nao aplicado e o que depende da clinica,
+// com a evidencia lida agora do banco e do ambiente. Rodar depois de CADA implantacao. Admin.
+apiRouter.get(
+  "/clinics/lisboa-preflight",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinics = await prisma.clinic.findMany({ where: { name: "Lisboa Beauty Center" }, select: { id: true } });
+    if (clinics.length === 0) {
+      res.status(404).json({ error: "Clínica Lisboa não encontrada." });
+      return;
+    }
+    if (clinics.length > 1) {
+      res.status(409).json({ error: "Há mais de uma clínica com o nome da Lisboa.", clinicIds: clinics.map((c) => c.id) });
+      return;
+    }
+    res.json(await preflightLisboa(clinics[0].id));
+  })
+);
+
+// Link do Google e convite de indicacao da Lisboa. dryRun (padrao) mostra o que existe, os conflitos e as perguntas; `confirmar` recebe o link CONFIRMADO
+// (com quem conferiu e o nome do estabelecimento de destino) e so entao libera o envio; `convite` prepara/liga o convite (texto e intervalo da clinica). Idempotente. Admin, SO a Lisboa.
+apiRouter.post(
+  "/clinics/lisboa-google",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinics = await prisma.clinic.findMany({ where: { name: "Lisboa Beauty Center" }, select: { id: true } });
+    if (clinics.length === 0) {
+      res.status(404).json({ error: "Clínica Lisboa não encontrada." });
+      return;
+    }
+    if (clinics.length > 1) {
+      res.status(409).json({ error: "Há mais de uma clínica com o nome da Lisboa; nada foi alterado.", clinicIds: clinics.map((c) => c.id) });
+      return;
+    }
+    const b = (req.body ?? {}) as { dryRun?: boolean; confirmar?: { url?: string; confirmadoPor?: string; estabelecimento?: string }; convite?: { ligar?: boolean; mensagem?: string; intervaloMinutos?: number | null; horaInicio?: number | null; horaFim?: number | null; aprovadoPor?: string } };
+    try {
+      res.json(
+        await prepararGoogleLisboa(clinics[0].id, {
+          dryRun: b.dryRun !== false,
+          actorName: req.staff?.name ?? null,
+          ...(b.confirmar ? { confirmar: { url: String(b.confirmar.url ?? ""), confirmadoPor: String(b.confirmar.confirmadoPor ?? ""), estabelecimento: String(b.confirmar.estabelecimento ?? "") } } : {}),
+          ...(b.convite ? { convite: b.convite } : {}),
+        }),
+      );
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : "nao foi possivel concluir" });
+    }
+  })
+);
+
+// Diagnostico de UMA pessoa na pesquisa de satisfacao: atendimento de origem, ultima pesquisa, se pode receber agora (e quando), nota e pesquisa associada,
+// etapas (pesquisa, convite) com estado/camada/motivo, e a situacao do link do Google (origem, confirmacao, versao do codigo).
+apiRouter.get(
+  "/patients/:id/pesquisa-diagnostico",
+  asyncRoute(async (req, res) => {
+    const patient = await prisma.patient.findUniqueOrThrow({ where: { id: req.params.id }, select: { clinicId: true } });
+    if (!assertClinicAccess(req, res, patient.clinicId)) return;
+    res.json(await surveyTrail(patient.clinicId, req.params.id));
   })
 );
 
@@ -2011,6 +2323,7 @@ type ProcedureBody = {
   durationMin?: number;
   description?: string;
   allowConcurrentBooking?: boolean;
+  bookingMode?: "direct" | "evaluation" | null; // como agenda: direto | exige avaliacao previa | null = a clinica ainda nao definiu
   price?: number | null;
   priceVariable?: boolean;
   offerInstallments?: boolean;
@@ -2033,6 +2346,7 @@ function procedureWriteData(body: ProcedureBody) {
     ...(body.durationMin !== undefined ? { durationMin: body.durationMin && body.durationMin > 0 ? body.durationMin : 60 } : {}),
     ...(body.description !== undefined ? { description: body.description || null } : {}),
     ...(body.allowConcurrentBooking !== undefined ? { allowConcurrentBooking: !!body.allowConcurrentBooking } : {}),
+    ...(body.bookingMode !== undefined ? { bookingMode: body.bookingMode === "direct" || body.bookingMode === "evaluation" ? body.bookingMode : null } : {}),
     ...(body.price !== undefined ? { price: body.price === null ? null : Number(body.price) } : {}),
     ...(body.priceVariable !== undefined ? { priceVariable: !!body.priceVariable } : {}),
     ...(body.offerInstallments !== undefined ? { offerInstallments: !!body.offerInstallments } : {}),
@@ -3502,6 +3816,7 @@ apiRouter.put(
         ...(professionalId !== undefined ? { professionalId: professionalId || null } : {}),
         ...(parsedNewStart ? { scheduledAt: parsedNewStart } : {}),
         ...(status !== undefined ? { status } : {}),
+        ...(status === "cancelled" && existing.status !== "cancelled" ? { cancelledAt: new Date(), cancelSource: "equipe_painel" } : {}),
         ...(source !== undefined ? { source: source || null } : {}),
         ...(patientConfirmed !== undefined
           ? { patientConfirmed, confirmedAt: patientConfirmed ? new Date() : null }

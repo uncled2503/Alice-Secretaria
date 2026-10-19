@@ -175,7 +175,20 @@ function ymd(d: Date, tz: string): [number, number, number] {
   return [parts[0], parts[1], parts[2]];
 }
 
-export async function pullClinicBookings(clinicId: string): Promise<PullResult> {
+// UMA importacao por clinica de cada vez: o cron (a cada 10 min) e o botao "Importar do Clinica Experts" podiam rodar juntos, ler "esta reserva ainda
+// nao existe" ao mesmo tempo e criar a MESMA reserva duas vezes (duas copias locais da mesma reserva = duas confirmacoes). Quem chega durante uma
+// importacao em andamento recebe o resultado dela. (Entre varias copias do servidor na troca de versao o risco continua pequeno: o controle de
+// lembretes usa a identidade da reserva no CE, nao o id local.)
+const pullsInFlight = new Map<string, Promise<PullResult>>();
+export function pullClinicBookings(clinicId: string): Promise<PullResult> {
+  const running = pullsInFlight.get(clinicId);
+  if (running) return running;
+  const p = pullClinicBookingsNow(clinicId).finally(() => pullsInFlight.delete(clinicId));
+  pullsInFlight.set(clinicId, p);
+  return p;
+}
+
+async function pullClinicBookingsNow(clinicId: string): Promise<PullResult> {
   const result: PullResult = { created: 0, updated: 0, skipped: 0, skippedNote: [], skipDetails: [] };
   const clinic = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { timezone: true } });
   const tz = clinic?.timezone || "America/Sao_Paulo";
@@ -280,7 +293,7 @@ export async function pullClinicBookings(clinicId: string): Promise<PullResult> 
     const picked = pickProcedure(b, procByCeId);
     const existing = existingByUuid.get(b.uuid) ?? null;
     if (existing) {
-      const data: { scheduledAt?: Date; status?: string; professionalId?: string | null; procedureId?: string } = {};
+      const data: { scheduledAt?: Date; status?: string; professionalId?: string | null; procedureId?: string; cancelledAt?: Date; cancelSource?: string } = {};
       // Importado antes como "Avaliacao" mas a reserva tem o procedimento de verdade: corrige.
       if (picked && picked.id !== existing.procedureId && isEvaluationName(existing.procedure.name) && !isEvaluationName(picked.name)) data.procedureId = picked.id;
       // Entrou sem procedimento (a recepcao ainda nao tinha escolhido) e agora tem: passa a ser o de verdade.
@@ -292,7 +305,10 @@ export async function pullClinicBookings(clinicId: string): Promise<PullResult> 
         await prisma.reminderSent.deleteMany({ where: { appointmentId: existing.id } });
       }
       // "confirmed" nunca rebaixa um atendimento que ja foi concluido/faltou aqui.
-      if (status !== "confirmed" && existing.status !== status) data.status = status;
+      if (status !== "confirmed" && existing.status !== status) {
+        data.status = status;
+        if (status === "cancelled") { data.cancelledAt = new Date(); data.cancelSource = "ce_cancelada"; } // o CE disse "cancelada" (prova)
+      }
       // Cancelado AQUI mas ainda "confirmado" la: o cancelamento nao chegou no Clinica Experts (o espelho so perde o
       // vinculo quando o cancelamento da certo). Reativar aqui desfazia o cancelamento da clinica e o paciente voltava a
       // receber lembrete; o certo e tentar cancelar la de novo.

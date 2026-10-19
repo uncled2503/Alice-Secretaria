@@ -4,11 +4,14 @@ const FIXED: RegExp[] = [
   /^Por nada(, [^!]+)?!/i,
   /^Obrigada pela confirma[cç][aã]o/i,
   /^Que bom saber/i,
+  /^Obrigada pelo retorno/i, // agradecimento a nota da pesquisa (surveyFlow.thankYouText)
+  /^Obrigada pela sinceridade/i,
   /^Combinado! Qualquer coisa/i,
   /^Sinto muito que isso esteja acontecendo/i,
   /^Poxa, desculpa por isso!/i,
   /^Vou pedir pra uma pessoa da equipe/i,
   /^Sou a [^,]+, assistente virtual/i,
+  /^Tudo bem, n[aã]o vamos mais te enviar mensagens autom[aá]ticas/i, // confirmacao de "pare de me mandar mensagem"
 ];
 const SAFETY = /\bsamu\b|pronto[- ]socorro|emerg[eê]ncia/i;
 

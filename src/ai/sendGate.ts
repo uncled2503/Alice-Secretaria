@@ -21,12 +21,14 @@ import { isFixedReply } from "./fixedReplies.js";
 // ---------------------------------------------------------------------------
 
 export type OutboundKind =
-  | "resposta_alice" | "lembrete" | "recontato" | "pos" | "pesquisa" | "aniversario" | "renovacao" | "campanha" | "preparo" | "lista_espera" | "agendamento" | "outra" | "interna";
+  | "resposta_alice" | "lembrete" | "recontato" | "retomada" | "indicacao" | "pos" | "pesquisa" | "aniversario" | "renovacao" | "campanha" | "preparo" | "lista_espera" | "agendamento" | "outra" | "interna";
 
 const KIND_LABEL: Record<OutboundKind, string> = {
   resposta_alice: "resposta da Alice a uma mensagem da pessoa",
   lembrete: "lembrete/confirmacao automatica de um agendamento",
   recontato: "recontato automatico (pessoa que parou de responder)",
+  indicacao: "convite de indicacao automatico (mensagem separada, depois do agradecimento a nota alta da pesquisa)",
+  retomada: "retomada automatica de avaliacao (convite sem compromisso para quem cancelou a avaliacao ou foi avaliada e nao fechou)",
   pos: "acompanhamento automatico depois do procedimento",
   pesquisa: "pesquisa de satisfacao automatica",
   aniversario: "parabens de aniversario automatico",
@@ -58,6 +60,7 @@ O padrao e ENVIAR. Use nao_enviar so com motivo CONCRETO e verificavel na ficha,
 6. Momento inadequado: pesquisa ou promocao logo apos reclamacao/problema; acompanhamento pos-procedimento para quem relatou problema; recontato/convite para quem acabou de dizer que nao pode, esta doente/no hospital ou combinou retornar em data futura (retorno combinado na ficha).
 7. (resposta da Alice) inventa valor, desconto, horario, profissional ou procedimento que nao esta na ficha, ou promete algo que ela nao consegue fazer, ou ignora a pergunta da pessoa.
 Se so um trecho esta errado e o resto serve, e a mensagem e RESPOSTA DA ALICE, use "reescrever": devolva o texto corrigido, curto, SEM acrescentar nenhum fato, horario ou valor novo. Para mensagens automaticas nunca reescreva.
+A AGENDA e os cancelamentos da ficha valem mais que a MEMORIA DO LEAD (notas antigas escritas pela IA): se a memoria diz uma coisa e a agenda outra, vale a agenda.
 Lembretes de confirmacao para agendamentos que ESTAO na agenda e sem ressalva na ficha devem ser enviados. Em duvida, ENVIAR.`;
 
 // Resposta da ALICE a uma pessoa: a revisao NUNCA barra (lead sem resposta e o pior erro). Se a resposta tem problema, a propria revisao escreve uma MELHOR.
@@ -131,32 +134,60 @@ const defaultCall: GateCall = async (system, user) => {
   return res.choices[0]?.message?.content ?? null;
 };
 
-// DISJUNTOR: se a revisao comecar a barrar quase tudo (ficha errada, IA "travada" num criterio), ela mesma se desliga por 30 min e as mensagens saem
-// sem revisao. Mais vale uma mensagem sem revisar do que o atendimento parado (16/10: ela barrou todas as respostas da Alice).
-const recent: { at: number; blocked: boolean }[] = [];
-let breakerUntil = 0;
-export function breakerOpen(_kind: OutboundKind, now = Date.now()): boolean {
-  return now < breakerUntil;
-}
-export function noteVerdict(kind: OutboundKind, v: GateVerdict, clinicId: string, now = Date.now()): void {
-  if (!v.reviewed) return;
-  recent.push({ at: now, blocked: !v.send || !!v.rewritten }); // barrar OU reescrever muito = a revisao pode estar com defeito
-  while (recent.length && now - recent[0].at > 15 * 60_000) recent.shift();
-  const blocked = recent.filter((r) => r.blocked).length;
-  if (recent.length >= 6 && blocked / recent.length >= 0.6 && now >= breakerUntil) {
-    const total = recent.length;
-    breakerUntil = now + 30 * 60_000;
-    recent.length = 0;
-    console.error(`[revisao-envio] DISJUNTOR ABERTO: ${blocked} de ${total} mensagens barradas em 15 min - a revisao fica desligada por 30 min`);
-    void logActivity({
-      clinicId, type: "message_blocked_ai", area: "automacoes", title: "Revisão da IA desligada por 30 min",
-      description: "A revisão barrou mensagens demais em pouco tempo (provável erro da revisão). As mensagens voltam a sair sem revisão por 30 minutos.", actorName: null,
-    }).catch(() => undefined);
+// DISJUNTOR (POR CLINICA): se a revisao de uma clinica comecar a barrar/reescrever quase tudo (ficha errada, IA "travada" num criterio), ela mesma se
+// desliga nessa clinica por 30 min e as mensagens dela saem sem a revisao POR IA. Mais vale uma mensagem sem revisar do que o atendimento parado (16/10: ela
+// barrou todas as respostas da Alice). O estado e separado por clinica: o problema de uma nao desliga a revisao das outras. O disjuntor so afeta a chamada
+// a IA: as validacoes deterministicas da resposta final (replyGuard) e a conferencia da reserva no Clinica Experts NAO passam por aqui e seguem sempre ligadas.
+export const BREAKER_WINDOW_MS = 15 * 60_000;
+export const BREAKER_OPEN_MS = 30 * 60_000;
+interface BreakerState { recent: { at: number; blocked: boolean }[]; until: number }
+const breakers = new Map<string, BreakerState>();
+
+// Tira da memoria o estado de clinica sem evento recente e sem disjuntor aberto (nao cresce sem limite).
+function pruneBreakers(now: number): void {
+  for (const [id, st] of breakers) {
+    const lastAt = st.recent.length ? st.recent[st.recent.length - 1].at : 0;
+    if (now >= st.until && now - lastAt > BREAKER_WINDOW_MS) breakers.delete(id);
   }
 }
-export function resetBreakerForTests(): void {
-  recent.length = 0;
-  breakerUntil = 0;
+
+export function breakerOpen(clinicId: string, now = Date.now()): boolean {
+  const st = breakers.get(clinicId);
+  return !!st && now < st.until;
+}
+
+export function noteVerdict(clinicId: string, v: GateVerdict, now = Date.now()): void {
+  if (!v.reviewed) return;
+  let st = breakers.get(clinicId);
+  if (!st) {
+    if (breakers.size >= 500) pruneBreakers(now);
+    st = { recent: [], until: 0 };
+    breakers.set(clinicId, st);
+  }
+  st.recent.push({ at: now, blocked: !v.send || !!v.rewritten }); // barrar OU reescrever muito = a revisao pode estar com defeito
+  while (st.recent.length && now - st.recent[0].at > BREAKER_WINDOW_MS) st.recent.shift();
+  const blocked = st.recent.filter((r) => r.blocked).length;
+  if (st.recent.length >= 6 && blocked / st.recent.length >= 0.6 && now >= st.until) {
+    const total = st.recent.length;
+    st.until = now + BREAKER_OPEN_MS;
+    st.recent.length = 0;
+    console.error(`[revisao-envio] DISJUNTOR ABERTO na clinica ${clinicId}: ${blocked} de ${total} mensagens barradas/reescritas em 15 min - a revisao fica desligada nessa clinica por 30 min`);
+    void logActivity({
+      clinicId, type: "message_blocked_ai", area: "automacoes", title: "Revisão da IA desligada por 30 min",
+      description: "A revisão barrou mensagens demais em pouco tempo (provável erro da revisão). As mensagens voltam a sair sem a revisão por IA por 30 minutos.", actorName: null,
+    }).catch(() => undefined);
+  }
+  if (breakers.size > 200) pruneBreakers(now);
+}
+
+// Testes: sem argumento zera tudo; com clinicId zera so aquela clinica.
+export function resetBreakerForTests(clinicId?: string): void {
+  if (clinicId) breakers.delete(clinicId);
+  else breakers.clear();
+}
+
+export function breakerStateSize(): number {
+  return breakers.size;
 }
 
 // Mesma mensagem para a mesma pessoa: nao pergunta de novo (reenvios/tentativas do job). Enviar vale 10 min; barrar vale 3 h.
@@ -175,7 +206,9 @@ export async function reviewOutbound(
     const facts = await patientFacts({ clinicId: p.clinicId, phone: p.phone }, deps.now, { messages: 8, clip: 100, ...(p.kind === "resposta_alice" ? { excludePendingText: p.text } : {}) });
     if (!facts) return skip("numero sem ficha (nao e paciente)");
 
-    const key = `${facts.patientId}|${p.kind}|${hash(p.text)}`;
+    // O veredito em cache so vale para o MESMO contexto: se a pessoa escreveu, a equipe falou, a agenda mudou ou ela pediu para parar desde a ultima
+    // revisao, a mesma mensagem e revisada de novo (antes um "nao enviar" valia por 3 h mesmo com tudo diferente).
+    const key = `${facts.patientId}|${p.kind}|${hash(p.text)}|${hash(facts.fingerprint)}`;
     const hit = cache.get(key);
     const ttl = hit && !hit.verdict.send ? 3 * 3_600_000 : 10 * 60_000;
     if (hit && Date.now() - hit.at < ttl) return hit.verdict;
@@ -184,10 +217,10 @@ export async function reviewOutbound(
     const tz = clinic?.timezone || "America/Sao_Paulo";
     const now = deps.now ?? new Date();
     const nowLabel = new Intl.DateTimeFormat("pt-BR", { timeZone: tz, dateStyle: "full", timeStyle: "short" }).format(now);
-    if (breakerOpen(p.kind)) return skip("disjuntor aberto: a revisao barrou demais, enviando sem revisar por um tempo");
+    if (breakerOpen(p.clinicId)) return skip("disjuntor desta clinica aberto: a revisao barrou demais, enviando sem revisar por um tempo");
     const raw = await (deps.call ?? defaultCall)(p.kind === "resposta_alice" ? REPLY_REVIEW_SYSTEM : GATE_SYSTEM, buildGateUser({ kind: p.kind, text: p.text, nowLabel, facts: facts.text }));
-    const verdict = decide(raw, p.kind, p.text, facts.text);
-    noteVerdict(p.kind, verdict, p.clinicId);
+    const verdict = decide(raw, p.kind, p.text, facts.grounding);
+    noteVerdict(p.clinicId, verdict);
     cache.set(key, { at: Date.now(), verdict });
     if (cache.size > 2000) for (const [k, v] of cache) if (Date.now() - v.at > 3 * 3_600_000) cache.delete(k);
 

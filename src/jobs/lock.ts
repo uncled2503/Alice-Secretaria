@@ -31,6 +31,13 @@ export async function acquireJobLock(name: string, ttlMs = DEFAULT_TTL_MS, now =
   }
 }
 
+// Ao DESLIGAR (deploy/reinicio), devolve as concessoes desta copia: sem isto a copia nova esperava ate 15 min (o TTL) para assumir as tarefas, e
+// janelas curtas (confirmacao das 8h as 11h, recontato 8h-12h) podiam passar sem rodar. So solta o que e DESTA copia; as das outras ficam como estao.
+export async function releaseMyLocks(me = INSTANCE_ID): Promise<number> {
+  const r = await prisma.jobLock.updateMany({ where: { holder: me }, data: { expiresAt: new Date(0) } });
+  return r.count;
+}
+
 export function scheduleLocked(name: string, expression: string, fn: () => unknown | Promise<unknown>, opts: { ttlMs?: number; timezone?: string } = {}): void {
   const ttl = opts.ttlMs ?? DEFAULT_TTL_MS;
   cron.schedule(

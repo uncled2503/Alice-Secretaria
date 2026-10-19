@@ -87,21 +87,35 @@ export async function judgeRecontact(input: JudgeInput): Promise<JudgeVerdict | 
   }
 }
 
-// Junta o contexto no banco e julga. Reaproveita o veredito se a conversa nao
-// mudou desde a ultima avaliacao (nao paga a IA de novo a cada 15 minutos).
-export async function judgeConversation(conversationId: string, patientId: string, clinicName: string): Promise<JudgeVerdict | null> {
+// O veredito em cache so vale enquanto o CONTEXTO nao muda (mensagem nova, agendamento, atendimento da equipe, retorno combinado, etapa da cascata) E por
+// pouco tempo: o juiz tambem leva em conta o tempo ("respondeu ha pouco", "recontato recente"), entao um "nao" de 4 horas atras nao pode valer para sempre
+// (era um dos jeitos de a cascata inteira ficar parada: o primeiro "nao" ficava gravado enquanto a conversa nao tivesse mensagem nova).
+export const JUDGE_TTL_MS = 4 * 3_600_000;
+
+export type JudgeResult =
+  | { kind: "verdict"; verdict: JudgeVerdict; source: "cache" | "ia" }
+  | { kind: "unavailable"; why: string }; // falha TECNICA (IA fora do ar, sem chave, resposta ilegivel): nao e decisao de negocio
+
+// Junta o contexto no banco e julga. Reaproveita o veredito so se o contexto (impressao digital + etapa) e o prazo ainda valem.
+export async function judgeConversation(
+  conversationId: string,
+  patientId: string,
+  clinicName: string,
+  opts: { fingerprint: string; ruleOrder: number; now?: Date },
+): Promise<JudgeResult> {
+  const now = opts.now ?? new Date();
+  const stamp = `${opts.fingerprint}#${opts.ruleOrder}`;
   const conversation = await prisma.conversation.findUnique({
     where: { id: conversationId },
-    select: { recontactVerdict: true, recontactReason: true, recontactJudgedFor: true },
+    select: { recontactVerdict: true, recontactReason: true, recontactFingerprint: true, recontactJudgedAt: true },
   });
-  const last = await prisma.message.findFirst({
-    where: { conversationId, role: { in: ["user", "assistant", "human"] } },
-    orderBy: { createdAt: "desc" },
-    select: { createdAt: true },
-  });
-  if (!last) return null;
-  if (conversation?.recontactVerdict && conversation.recontactJudgedFor && conversation.recontactJudgedFor.getTime() === last.createdAt.getTime()) {
-    return { recontact: conversation.recontactVerdict === "yes", reason: conversation.recontactReason ?? "" };
+  if (
+    conversation?.recontactVerdict &&
+    conversation.recontactFingerprint === stamp &&
+    conversation.recontactJudgedAt &&
+    now.getTime() - conversation.recontactJudgedAt.getTime() < JUDGE_TTL_MS
+  ) {
+    return { kind: "verdict", verdict: { recontact: conversation.recontactVerdict === "yes", reason: conversation.recontactReason ?? "" }, source: "cache" };
   }
 
   const [messages, appointments] = await Promise.all([
@@ -118,16 +132,72 @@ export async function judgeConversation(conversationId: string, patientId: strin
       select: { status: true, scheduledAt: true, procedure: { select: { name: true } } },
     }),
   ]);
+  const lastAt = messages[0]?.createdAt ?? now; // (a lista vem da mais nova para a mais antiga)
   const verdict = await judgeRecontact({
     clinicName,
     messages: messages.reverse(),
     appointments: appointments.map((a) => ({ status: a.status, scheduledAt: a.scheduledAt, procedure: a.procedure.name })),
+    now,
   });
-  if (!verdict) return null; // falha: nao grava, tenta de novo no proximo ciclo (e nao envia)
+  if (!verdict) return { kind: "unavailable", why: process.env.OPENAI_API_KEY ? "a IA nao respondeu ou devolveu algo ilegivel" : "sem chave da OpenAI" }; // falha: nao grava, tenta de novo (e nao envia)
 
   await prisma.conversation.update({
     where: { id: conversationId },
-    data: { recontactVerdict: verdict.recontact ? "yes" : "no", recontactReason: verdict.reason, recontactJudgedFor: last.createdAt },
+    data: { recontactVerdict: verdict.recontact ? "yes" : "no", recontactReason: verdict.reason, recontactJudgedFor: lastAt, recontactFingerprint: stamp, recontactJudgedAt: now },
   });
-  return verdict;
+  return { kind: "verdict", verdict, source: "ia" };
+}
+
+// ---------------------------------------------------------------------------
+// JUIZ DAS RETOMADAS (avaliacao cancelada / avaliacao sem fechamento). Mesma politica do recontato: falha TECNICA da IA nao e decisao de negocio
+// (devolve "unavailable" e quem chamou adia), e o veredito nao fica em cache (cada tentativa le a conversa de agora).
+// ---------------------------------------------------------------------------
+const RESUME_SYSTEM = `Voce decide se a clinica deve mandar uma mensagem de RETOMADA a uma pessoa que cancelou a avaliacao (ou que fez a avaliacao e ainda nao fechou).
+
+A retomada e um convite gentil e sem compromisso para voltar a conversar. Ela NAO deve sair quando seria sem sentido ou incomodo.
+
+Responda recontact=true quando nada na conversa nem nos agendamentos indica que a pessoa nao quer ou nao pode ser contatada.
+
+Responda recontact=false quando:
+- a pessoa recusou, disse que nao tem interesse, que ja resolveu por outro canal, que vai procurar outro lugar, ou pediu para parar de receber mensagens;
+- ha reclamacao, assunto clinico/sensivel em aberto, ou a pessoa esta doente/internada/passando por um momento dificil;
+- a equipe esta conversando com ela agora ou combinou um retorno em outra data;
+- ja remarcou ou ja tem atendimento/horario (inclusive por outro caminho);
+- e fornecedor, spam, engano ou nao e uma paciente em potencial;
+- nao ha informacao suficiente para saber o que aconteceu.
+Na duvida, recontact=false.
+
+Responda APENAS um JSON: {"recontact": true|false, "reason": "motivo em ate 15 palavras"}.`;
+
+export async function judgeResumeContact(flow: string, input: { patientId: string; clinicName: string; now?: Date }): Promise<JudgeResult> {
+  const now = input.now ?? new Date();
+  if (process.env.RECONTACT_AI_GATE === "off") return { kind: "verdict", verdict: { recontact: true, reason: "juiz desligado (RECONTACT_AI_GATE=off)" }, source: "ia" };
+  if (!process.env.OPENAI_API_KEY) return { kind: "unavailable", why: "sem chave da OpenAI" };
+  const [messages, appointments] = await Promise.all([
+    prisma.message.findMany({
+      where: { conversation: { patientId: input.patientId }, role: { in: ["user", "assistant", "human"] } },
+      orderBy: { createdAt: "desc" },
+      take: 18,
+      select: { role: true, content: true, authorName: true, createdAt: true },
+    }),
+    prisma.appointment.findMany({ where: { patientId: input.patientId }, orderBy: { scheduledAt: "desc" }, take: 6, select: { status: true, scheduledAt: true, procedure: { select: { name: true } } } }),
+  ]);
+  try {
+    const res = await openai.chat.completions.create({
+      model: MODEL,
+      temperature: 0,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: RESUME_SYSTEM },
+        { role: "user", content: `Fluxo: ${flow === "avaliacao_cancelada" ? "avaliacao cancelada" : "avaliacao realizada sem fechamento"}\n${formatConversation({ clinicName: input.clinicName, messages: messages.reverse(), appointments: appointments.map((a) => ({ status: a.status, scheduledAt: a.scheduledAt, procedure: a.procedure.name })), now })}` },
+      ],
+    });
+    recordUsage("juiz_recontato", res.usage);
+    const parsed = JSON.parse(res.choices[0]?.message?.content ?? "") as { recontact?: unknown; reason?: unknown };
+    if (typeof parsed.recontact !== "boolean") return { kind: "unavailable", why: "resposta da IA ilegivel" };
+    return { kind: "verdict", verdict: { recontact: parsed.recontact, reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 200) : "" }, source: "ia" };
+  } catch (err) {
+    console.error("[retomada] juiz de IA falhou:", err instanceof Error ? err.message : err);
+    return { kind: "unavailable", why: "a IA nao respondeu" };
+  }
 }

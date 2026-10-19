@@ -38,8 +38,9 @@ Agora a decisão é do código, não do modelo. A cada mensagem o sistema olha o
    - cita um horário que **não bate** com a agenda → equipe, sem a Alice afirmar nada.
 5. **A equipe estava negociando o horário** → continua de onde a equipe parou (aceitou a proposta? agenda esse; recusou? respeita o pedido).
 6. **O pedido explícito dela** (dia, hora, limite, turno) vale mais que "horários mais próximos".
-7. Regras da clínica (valores, tom, postura comercial).
-8. Padrões do sistema (avaliação para quem não sabe, descoberta).
+7. **Conduta comercial** (17/10, `src/ai/conduct.ts`): recusa e "vou pensar" são respeitados; queixa **não** é procedimento escolhido; só se indica o que o cadastro aprovado diz atender a queixa; serviço que a clínica não oferece nunca é citado. Detalhes na seção 8.
+8. Regras da clínica (valores, tom, postura comercial).
+9. Padrões do sistema (avaliação para quem não sabe, descoberta).
 
 Cada situação traz a **ordem exata** para o modelo (substitui a jogada genérica) e travas que o **código** confere depois de o modelo responder:
 
@@ -116,3 +117,16 @@ O que foi feito:
 - Interruptores extras: `AI_SECOND_READING=off` (desliga a segunda leitura de vez), `AI_BRIEFING=off`, `AI_SEND_REVIEW=off`.
 
 Para conferir o custo real: abrir `/api/ai-usage` depois de um dia de uso. Se a **conversa da Alice** dominar, o que mais pesa é o tamanho do prompt (regras ativas) e o modelo configurado por clínica (`Clinic.aiModel`: modelo maior que o `gpt-4o-mini` multiplica o custo).
+
+## 8. Conduta comercial e entendimento da conversa (pedido de 17/10)
+
+Código: `src/ai/concerns.ts` (leitura da queixa), `src/ai/conduct.ts` (plano da conduta + trava das ferramentas), `src/maintenance/lisboaConduta.ts` (ajuste de cadastro da Lisboa, com prévia).
+
+- **Queixa x procedimento escolhido.** "Gordura localizada" é queixa; só vira escolha quando a pessoa **nomeia** o procedimento. A queixa é lida por frase (negação, correção, duas demandas, tom de pele ≠ queixa, queixa antiga ou de outra pessoa não contamina).
+- **Região sozinha nunca recomenda.** A relação queixa ↔ procedimento vem do **cadastro aprovado** (objetivos, nome, apelidos; descrição só como reserva), não do conhecimento do modelo. Sem procedimento aprovado para a queixa: pergunta curta ou transferência para a equipe.
+- **Como cada procedimento agenda.** `Procedure.bookingMode` (`direct` / `evaluation`); sem o campo, vale o texto aprovado; sem nenhum dos dois, o modo é "desconhecido". Com `Clinic.strictBookingRules` ligado (decisão da clínica), desconhecido vai para a equipe — a Alice não presume agenda direta nem cria avaliação substituta.
+- **Trava no código.** As ferramentas de agenda passam por `ConductGate`: sem sinal de agendamento não consulta nem reserva; procedimento diferente do escolhido, bloqueado ou não oferecido é recusado; reserva duplicada no mesmo dia não é criada.
+- **Recusa / "vou pensar" / "ok".** Respeitados e registrados (histórico + `lead_decision` + `Patient.objections`); sem opt-out permanente e sem nova automação.
+- **Serviço que a clínica não oferece** (`Clinic.notOfferedServices`, Lisboa: luz pulsada): nunca citado; LEDterapia não é substituta automática.
+- **Contatos não comerciais** (currículo, fornecedor, parceria, cobrança) seguem para a equipe em silêncio; "Última vaga da semana" em anúncio **não** é vaga de emprego.
+- **Limite:** os testes usam modelo e serviços simulados — provam o que o código envia ao modelo, quais ferramentas executa e o que sai depois das travas, **não** o comportamento real do modelo em produção.

@@ -15,7 +15,11 @@ export const CELL_MIN = 15;
 // (ja inclui agendamentos, remarcacoes e cancelamentos feitos la), entao os agendamentos que a Alice espelhou/importou
 // do CE (ceBookingUuid) NAO contam de novo como ocupado - a copia local pode estar velha (cancelado/movido no CE) ou ter
 // duracao diferente, e era isso que fazia a Alice dizer "ocupado" pra horario vago.
-export type SlotGate = ((startMs: number, durationMin: number) => boolean) & { covers?: (startMs: number) => boolean };
+// `unverified`: o CE e a fonte da agenda e NAO foi consultado com sucesso pro DIA desse horario - nao da pra afirmar que esta livre.
+export type SlotGate = ((startMs: number, durationMin: number) => boolean) & { covers?: (startMs: number) => boolean; unverified?: (startMs: number) => boolean };
+
+// Escape de emergencia (variavel de ambiente): volta ao comportamento antigo, em que o dia que o CE nao respondeu NAO bloqueia a oferta.
+const failOpen = () => (process.env.CE_GATE_FAIL_OPEN ?? "").trim().toLowerCase() === "on";
 
 // PURO: "08:30" no dia (fuso da clinica) -> epoch ms.
 export function cellStarts(timeZone: string, date: { year: number; month: number; day: number }, hhmm: string[]): number[] {
@@ -30,10 +34,12 @@ export function cellStarts(timeZone: string, date: { year: number; month: number
 
 // PURO: monta o portao a partir das celulas livres conhecidas e dos dias
 // efetivamente carregados. Dia que nao foi carregado (CE fora do ar naquele
-// dia) nao bloqueia: nunca derrubamos a agenda por falha de integracao.
-export function buildGate(freeCells: Set<number>, loadedDays: Set<string>, timeZone: string): SlotGate {
+// dia): por padrao NAO oferece (`unverified` - a disponibilidade nao foi confirmada, e o CE e a fonte da agenda);
+// com `failOpen` volta ao comportamento antigo (nao bloqueia).
+export function buildGate(freeCells: Set<number>, loadedDays: Set<string>, timeZone: string, opts: { failOpen?: boolean } = {}): SlotGate {
+  const failOpenMode = opts.failOpen ?? false;
   const gate: SlotGate = (startMs, durationMin) => {
-    if (!loadedDays.has(isoDateInZone(new Date(startMs), timeZone))) return true;
+    if (!loadedDays.has(isoDateInZone(new Date(startMs), timeZone))) return failOpenMode;
     const cells = Math.max(1, Math.ceil(durationMin / CELL_MIN));
     for (let i = 0; i < cells; i++) {
       if (!freeCells.has(startMs + i * CELL_MIN * 60_000)) return false;
@@ -41,6 +47,7 @@ export function buildGate(freeCells: Set<number>, loadedDays: Set<string>, timeZ
     return true;
   };
   gate.covers = (startMs) => loadedDays.has(isoDateInZone(new Date(startMs), timeZone));
+  if (!failOpenMode) gate.unverified = (startMs) => !loadedDays.has(isoDateInZone(new Date(startMs), timeZone));
   return gate;
 }
 
@@ -49,6 +56,7 @@ export function buildGate(freeCells: Set<number>, loadedDays: Set<string>, timeZ
 // uma. 45s e curto o bastante pra um agendamento recem-feito aparecer.
 const dayCache = new Map<string, { at: number; hours: string[] | null }>();
 const CACHE_MS = 45_000;
+const FAILURE_CACHE_MS = 10_000; // falha do CE vale por pouco: nao martela um CE fora do ar, mas volta a oferecer logo que ele responde
 
 export function invalidateCeCache(clinicId: string): void {
   for (const k of dayCache.keys()) if (k.startsWith(`${clinicId}|`)) dayCache.delete(k);
@@ -62,17 +70,16 @@ async function hoursForDay(
 ): Promise<string[] | null> {
   const key = `${clinicId}|${uuid}|${date.year}-${date.month}-${date.day}`;
   const hit = dayCache.get(key);
-  if (hit && Date.now() - hit.at < CACHE_MS) return hit.hours;
+  if (hit && Date.now() - hit.at < (hit.hours ? CACHE_MS : FAILURE_CACHE_MS)) return hit.hours;
 
   const midnight = zonedWallClockToUtc(timeZone, date.year, date.month, date.day, 0, 0);
   const res = await ceRequest<{ data: string[] }>(clinicId, "/available-hours", {
     query: { professional_uuid: uuid, date: isoWithOffset(midnight, timeZone), interval: CELL_MIN },
   });
   const hours = res.ok && Array.isArray(res.data?.data) ? res.data.data : null;
-  // Falha aqui faz o portao "abrir" (nunca derrubamos a agenda por falha de
-  // integracao) - entao a falha PRECISA aparecer, senao a Alice oferece horario
-  // ocupado sem ninguem saber por que. Aparece em Configuracoes > Clinica Experts.
-  if (!hours) await noteError(clinicId, `Consulta de disponibilidade falhou (a Alice pode oferecer horário já ocupado): ${res.ok ? "resposta inesperada" : res.error}`);
+  // Falha aqui FECHA o portao pra esse dia (a disponibilidade nao foi confirmada) - entao a falha PRECISA aparecer, senao a Alice
+  // some com os horarios dessa profissional sem ninguem saber por que. Aparece em Configuracoes > Clinica Experts.
+  if (!hours) await noteError(clinicId, `Consulta de disponibilidade falhou (a Alice não oferece horários dessa profissional até o Clínica Experts responder): ${res.ok ? "resposta inesperada" : res.error}`);
   dayCache.set(key, { at: Date.now(), hours });
   return hours;
 }
@@ -111,8 +118,12 @@ export async function ceGateFor(
       for (const ms of cellStarts(timeZone, day, hours)) free.add(ms);
     }),
   );
-  if (loaded.size === 0) return null;
-  return buildGate(free, loaded, timeZone);
+  if (loaded.size === 0) {
+    // O CE nao respondeu nenhum dia: com ele como fonte da agenda, nao ha como afirmar disponibilidade (o portao fecha pros dias pedidos).
+    if (failOpen()) return null;
+    console.warn(`[agenda] Clinica Experts nao respondeu a disponibilidade (clinica=${clinicId} profissional=${professional.ceUuid}): horarios dessa profissional nao serao oferecidos ate ele responder`);
+  }
+  return buildGate(free, loaded, timeZone, { failOpen: failOpen() });
 }
 
 export async function professionalCeUuid(clinicId: string, professionalId: string | null | undefined): Promise<{ ceUuid: string | null } | null> {

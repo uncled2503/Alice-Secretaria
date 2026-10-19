@@ -10,9 +10,11 @@ import { pickSpread, filterByPeriod, filterByTimeWindow, findNearestSlots,
   findAvailableDays,
   checkSpecificTime,
   createBooking,
+  rescheduleBooking,
   professionalsForProcedure,
   SLOT_REASON_PT,
 } from "../scheduling/slots.js";
+import { procedureEligibility } from "../scheduling/eligibility.js";
 import { offerFreedSlotToWaitlist } from "../scheduling/waitlist.js";
 import { formatInZone, formatDayInZone, formatDateTimeInZone, upcomingWeekdayTable, isoDateInZone, zonedWallClockToUtc, wallClockInZone } from "../scheduling/time.js";
 import { parseHolidayOpen, upcomingNationalHolidays } from "../scheduling/holidays.js";
@@ -31,7 +33,9 @@ import { recordIntentSignals } from "../crm/intent.js";
 import { handoffCard } from "../crm/handoffCard.js";
 import { findRepetitions, removeSentences, askedAgain, conversationMemory, splitSentences } from "./repetition.js";
 import { announcesAction, brokenPromise, PROMISE_NUDGE } from "./promises.js";
-import { analyzeFlow, complainsAboutBot, type SalesFlow } from "./salesFlow.js";
+import { analyzeFlow, askedForName, complainsAboutBot, wantsSchedule, type SalesFlow } from "./salesFlow.js";
+import { understandConversation, planConduct, gateDecision, parseNotOffered, notOfferedIn, stripNotOffered, NOT_OFFERED_REPLY, type ConductGate, type ConductPlan, type Understanding } from "./conduct.js";
+import { REVISION } from "../version.js";
 import { confirmationThanks, isConfirmationReply } from "./confirmation.js";
 import { closingReply, feedbackThanks, isCourtesyOnly, isPositiveFeedback } from "./courtesy.js";
 import { capSlotLines, stripSlotOffers } from "./slotText.js";
@@ -42,6 +46,8 @@ import { statementsNote } from "./clinicStatements.js";
 import { resolveSituation, RULE_HIERARCHY } from "./situation.js";
 import { scheduleBriefingRefresh } from "./leadBriefing.js";
 import { recordUsage } from "./usageStats.js";
+import { EVAL_OFFER_RE, NEUTRAL_REPLY, rememberReplyContext, serializeReplyContext, type ReplyContext } from "./replyGuard.js";
+import { deliveredOnly } from "./delivery.js";
 import { displayProcedureName } from "../clinicaexperts/placeholderProcedure.js";
 import { describeSlotRequest, isEmptyRequest, requestViolation } from "./slotRequest.js";
 import { captureAdReferral } from "../ads/attribution.js";
@@ -50,9 +56,13 @@ import { bookingTagPrompt, getBookingTag } from "../crm/bookingTag.js";
 import { checkClinicTimeConflicts } from "./timeConflict.js";
 import { ceBookingReadiness } from "../clinicaexperts/procedureLink.js";
 import { buildConversationBrief } from "./conversationBrief.js";
+import { readMessageConcerns } from "./concerns.js";
+import { trySurveyReply } from "../reminders/surveyHandler.js";
+import { recordSurveyAnswer } from "../reminders/surveyFlow.js";
+import { hasComplaint as hasSurveyComplaint } from "../reminders/surveyReply.js";
 import { selectFocusProcedures } from "./procedureFocus.js";
 import { analyzeConversation, renderAnalysis } from "./conversationAnalysis.js";
-import { areasIn, findRelevanceMismatch, fittingProcedures, safeReplyForMismatch } from "./relevance.js";
+import { areasIn, findRelevanceMismatch, fittingForObjective, fittingProcedures, safeReplyForMismatch } from "./relevance.js";
 import { buildPreProcedureText } from "../reminders/preProcedure.js";
 
 // Orientacao de PRE-procedimento que sai como resposta da Alice logo apos a cliente confirmar o horario (por conversa).
@@ -97,11 +107,8 @@ export const HISTORY_LIMIT = 50;
 
 const REPEAT_SIMILARITY = 0.82; // acima disso conta como "mesma resposta"
 
-// Frase que OFERECE avaliacao ("posso agendar uma avaliacao", "avaliacao gratuita"): barrada quando a pessoa nao pediu agendamento (Clarinda, 16/10).
-const EVAL_OFFER_RE = /(avaliacao gratuita|agendar (uma |a )?avaliacao|marcar (uma |a )?avaliacao|vamos (agendar|marcar) (uma |a )?avaliacao|(posso|quer que eu|gostaria de|que tal)[^.?!]{0,30}avaliacao)/;
 const NO_OFFER_NUDGE =
   "ATENCAO: a pessoa NAO pediu horario nem agendamento nesta mensagem (foi so uma resposta curta, um comentario ou um assunto que nao e de agenda). Refaca: responda SO ao que ela escreveu, em ate 2 frases, SEM listar horarios, SEM oferecer avaliacao e SEM puxar venda. Se nao ha pergunta a responder, acolha em uma frase curta e pare.";
-const NEUTRAL_REPLY = "Combinado! Qualquer coisa é só me chamar. 💗";
 
 const tools: ChatCompletionTool[] = [
   {
@@ -312,6 +319,20 @@ function slotReasonText(reason: keyof typeof SLOT_REASON_PT | undefined, withPro
   return SLOT_REASON_PT[r];
 }
 
+// Nenhuma profissional habilitada (ou o cadastro delas esta conflitante) para este procedimento: nao ha horario seguro pra oferecer. Devolve a
+// resposta da ferramenta (a equipe verifica a agenda) ou null quando ha quem atenda.
+async function noEligibleProfessional(clinic: Parameters<typeof procedureEligibility>[0], procedure: { id: string; name: string }): Promise<string | null> {
+  const el = await procedureEligibility(clinic, procedure.id);
+  if (el.mode === "clinic" || el.eligible.length > 0) return null;
+  return JSON.stringify({
+    disponivel: false,
+    horarios: [],
+    dias: [],
+    motivo: el.why === "all_blocked" ? "o cadastro das profissionais deste procedimento esta incompleto/conflitante na agenda" : "nenhuma profissional habilitada para este procedimento tem agenda cadastrada",
+    instrucao: "NAO ofereca horario e NAO diga que nao ha vaga. Chame transfer_to_human com o procedimento e a preferencia de dia/turno da pessoa para a equipe verificar a agenda, e fique em silencio.",
+  });
+}
+
 // A pessoa JA tem uma avaliacao marcada (futura)? A Alice nao agenda avaliacao em cima de avaliacao.
 async function futureEvaluation(patientId: string) {
   return prisma.appointment.findFirst({
@@ -353,6 +374,19 @@ async function procedureNotFoundMessage(clinicId: string, rawName: unknown, pati
     ]);
     if (future > 0 || past > 0) {
       return `Procedimento "${raw}" nao esta no catalogo e esta pessoa ${future > 0 ? "JA TEM horario marcado" : "JA E PACIENTE"}: NAO agende avaliacao nem outro procedimento no lugar. Chame transfer_to_human (motivo: procedimento fora do catalogo / horario que nao consta na agenda) com o que ela pediu e fique em silencio.`;
+    }
+  }
+  // Servico que a clinica diz que NAO oferece (ex.: luz pulsada): honestidade, sem avaliacao substituta e sem trocar por outra tecnologia.
+  {
+    const cfg = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { notOfferedServices: true, strictBookingRules: true, unmappedOffers: true } });
+    // Oferta anunciada SEM cadastro (ex.: "Protocolo do Olhar"): nunca vira avaliacao nem outro procedimento sozinha - encaminha para a equipe.
+    const unmapped = notOfferedIn(raw, parseNotOffered(cfg?.unmappedOffers));
+    if (unmapped) return `"${unmapped}" e uma oferta da clinica que AINDA NAO esta cadastrada no sistema (sem procedimento nem agenda). NAO agende avaliacao no lugar, NAO associe a outro procedimento e NAO invente valor, condicao ou horario: diga em uma frase que vai confirmar com a equipe e chame transfer_to_human com o que ela pediu.`;
+    const no = notOfferedIn(raw, parseNotOffered(cfg?.notOfferedServices));
+    if (no) return `A clinica NAO oferece "${no}". Diga isso com honestidade e naturalidade (1 frase). NAO agende avaliacao no lugar, NAO troque por outro procedimento ou tecnologia como se fosse equivalente e NAO invente alternativa. Se ela quiser entender as opcoes, chame transfer_to_human para a equipe orientar.`;
+    if (cfg?.strictBookingRules) {
+      // modo estrito: sem cadastro/regra nao se presume nada - nem a origem em anuncio justifica uma avaliacao substituta
+      return `Procedimento "${raw}" nao esta no cadastro desta clinica e ela exige regra cadastrada para agendar. NAO agende avaliacao no lugar nem invente: chame transfer_to_human com o que ela pediu e fique em silencio para a equipe validar.`;
     }
   }
   // A pessoa pediu algo que nao esta no catalogo (ex.: oferta de anuncio, "Protocolo do Olhar"): nao fica repetindo "nao localizei".
@@ -416,6 +450,7 @@ async function runTool(
   conversationId: string,
   name: string,
   input: any,
+  gate?: ConductGate,
 ): Promise<string> {
   const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId } });
   if (!clinic.aliceCanBook && BOOKING_TOOLS.has(name)) {
@@ -451,6 +486,7 @@ async function runTool(
     );
     await logActivity({
       clinicId,
+      patientId, // vai pra Timeline do card e permite rastrear a transferencia desta conversa
       type: "human_takeover",
       area: "atendimento",
       title: "Atendimento transferido pela Alice",
@@ -475,6 +511,15 @@ async function runTool(
       }
     }
 
+    if (gate) {
+      const g = gateDecision(gate, "check_availability", String(input.procedure_name ?? ""), procedure.name);
+      if (!g.allow) {
+        console.warn(`[conduta] check_availability barrado (conv ${conversationId}): ${g.motivo}`);
+        return JSON.stringify({ disponivel: false, horarios: [], dias: [], motivo: g.motivo, instrucao: g.instrucao });
+      }
+    }
+    const unstaffed = await noEligibleProfessional(clinic, procedure);
+    if (unstaffed) return unstaffed;
     const professionalIds = await resolveProfessionalIds(clinicId, procedure.id, input.professional_name);
     const day = parseRequestedDate(input.date);
     const period = ["manha", "tarde", "noite"].includes(String(input.period ?? "")) ? (String(input.period) as "manha" | "tarde" | "noite") : null;
@@ -562,6 +607,15 @@ async function runTool(
     const requested = parseRequestedDateTime(input.date, input.time);
     if (!requested) return "Nao entendi a data/hora. Peca ao paciente pra confirmar o dia e o horario.";
 
+    if (gate) {
+      const g = gateDecision(gate, "check_specific_time", String(input.procedure_name ?? ""), procedure.name);
+      if (!g.allow) {
+        console.warn(`[conduta] check_specific_time barrado (conv ${conversationId}): ${g.motivo}`);
+        return JSON.stringify({ disponivel: false, motivo: g.motivo, instrucao: g.instrucao });
+      }
+    }
+    const unstaffed = await noEligibleProfessional(clinic, procedure);
+    if (unstaffed) return unstaffed;
     const professionalIds = await resolveProfessionalIds(clinicId, procedure.id, input.professional_name);
     const check = await checkSpecificTime(clinicId, procedure.id, requested, { professionalIds });
 
@@ -603,6 +657,33 @@ async function runTool(
           agendado: false,
           motivo: `esta pessoa JA tem uma avaliacao marcada (${formatDateTimeInZone(dup.scheduledAt, tz)}): nao agende outra. Diga o horario que ela ja tem e pergunte se precisa remarcar ou de mais alguma coisa.`,
         });
+      }
+    }
+
+    if (gate) {
+      const g = gateDecision(gate, "book_appointment", String(input.procedure_name ?? ""), procedure.name);
+      if (!g.allow) {
+        console.warn(`[conduta] book_appointment barrado (conv ${conversationId}): ${g.motivo}`);
+        return JSON.stringify({ agendado: false, motivo: g.motivo, instrucao: g.instrucao });
+      }
+    }
+    // Mesma pessoa, MESMO procedimento, no mesmo dia: ela mandou o nome, "ok" ou agradeceu e o modelo tentou agendar de novo - nao cria reserva duplicada.
+    {
+      const dayStart = (() => {
+        const requestedDay = parseRequestedDate(input.date) ?? (input.start_iso ? (() => { const d = new Date(String(input.start_iso)); const wc = wallClockInZone(d, tz); return { year: wc.year, month: wc.month, day: wc.day }; })() : null);
+        return requestedDay ? zonedWallClockToUtc(tz, requestedDay.year, requestedDay.month, requestedDay.day, 0, 0) : null;
+      })();
+      if (dayStart && !Number.isNaN(dayStart.getTime())) {
+        const sameDay = await prisma.appointment.findFirst({
+          where: { patientId, procedureId: procedure.id, status: "confirmed", scheduledAt: { gte: dayStart, lt: new Date(dayStart.getTime() + 24 * 3_600_000) } },
+          select: { scheduledAt: true },
+        });
+        if (sameDay) {
+          return JSON.stringify({
+            agendado: false,
+            motivo: `esta pessoa JA tem ${procedure.name} agendado nesse dia (${formatDateTimeInZone(sameDay.scheduledAt, tz)}): nao crie outra reserva. Confirme o horario que ela ja tem e pergunte se precisa remarcar ou de mais alguma coisa.`,
+          });
+        }
       }
     }
 
@@ -655,6 +736,10 @@ async function runTool(
       const wc = wallClockInZone(startUtc, tz);
       const check = await checkSpecificTime(clinicId, procedure.id, { year: wc.year, month: wc.month, day: wc.day, hour: wc.hour, minute: wc.minute }, { professionalIds: candidateProIds });
       if (check.available) professionalId = check.availableProfessionals.find((p) => p.id)?.id ?? null;
+      else {
+        // Nenhuma profissional habilitada esta livre nesse horario: NAO agenda sem profissional (validaria contra a agenda da clinica inteira).
+        return JSON.stringify({ agendado: false, motivo: "esse horario nao esta livre para nenhuma profissional habilitada neste procedimento; ofereca outro horario (check_availability)" });
+      }
     }
 
     // Clinica Experts conectado: so agenda se o procedimento e o profissional existem la (senao a reserva nao seria espelhada e o horario
@@ -686,6 +771,14 @@ async function runTool(
         booking.error === "conflict"
           ? "esse horario acabou de ser ocupado por outro paciente; ofereca outro horario"
           : SLOT_REASON_PT[booking.error] ?? "nao foi possivel agendar";
+      // Habilitacao / CE sem resposta: nao e questao de horario ocupado - a equipe resolve; nunca dizer que agendou.
+      if (["no_professional", "professional_not_eligible", "professional_required", "ce_unavailable"].includes(booking.error)) {
+        return JSON.stringify({
+          agendado: false,
+          motivo,
+          instrucao: "NAO diga que agendou, nem que nao ha horario, nem repita o motivo tecnico. Chame transfer_to_human com o procedimento, o dia e o horario combinados para a equipe confirmar na agenda, e fique em silencio.",
+        });
+      }
       return JSON.stringify({ agendado: false, motivo });
     }
 
@@ -693,7 +786,7 @@ async function runTool(
       const mirror = await syncAppointment(booking.appointmentId, { quiet: true });
       if (!mirror.ok) {
         // Desfaz: sem a reserva no CE o paciente nao pode receber "agendado". A equipe recebe o caso pela transferencia.
-        await prisma.appointment.update({ where: { id: booking.appointmentId }, data: { status: "cancelled" } });
+        await prisma.appointment.update({ where: { id: booking.appointmentId }, data: { status: "cancelled", cancelledAt: new Date(), cancelSource: "sistema_desfeito" } }); // NAO e desistencia da pessoa: o CE recusou
         invalidateCeCache(clinicId);
         console.warn(`[clinicaexperts] agendamento da Alice desfeito (conv ${conversationId}): o CE nao aceitou - ${mirror.error}`);
         await logActivity({
@@ -830,10 +923,10 @@ async function runTool(
       }
 
       for (const appt of targets) {
-        await prisma.appointment.update({ where: { id: appt.id }, data: { status: "cancelled" } });
+        await prisma.appointment.update({ where: { id: appt.id }, data: { status: "cancelled", cancelledAt: new Date(), cancelSource: "paciente_whatsapp" } });
         removeAppointmentInBackground(appt.id); // tira do Google Agenda e do Clinica Experts
         await logActivity({
-          clinicId, type: "appointment_cancelled", area: "agenda",
+          clinicId, type: "appointment_cancelled", area: "agenda", patientId,
           title: "Agendamento cancelado pelo paciente",
           description: `${who} — ${appt.procedure.name} em ${formatDateTimeInZone(appt.scheduledAt, tz)}.`, actorName: null,
         });
@@ -876,12 +969,28 @@ async function runTool(
         });
       }
 
+      // JA esta nesse horario (o modelo repetiu a ferramenta, ou o evento foi reprocessado depois de um reinicio que pegou a remarcacao pela metade): nada a fazer.
+      // Sem isto a repeticao refazia TUDO: apagava o controle dos lembretes (saiam de novo), avisava a equipe outra vez, registrava outra remarcacao e oferecia
+      // "a vaga que liberou" (que e a mesma) para a lista de espera.
+      if (new Date(check.requestedIso).getTime() === appt.scheduledAt.getTime()) {
+        return JSON.stringify({
+          ok: true, remarcado: check.requestedLabel, ja_estava: true,
+          instrucao: "Ela JA tem este horario (nada foi alterado agora). Confirme o horario em UMA frase, sem dizer que remarcou de novo.",
+        });
+      }
       const oldSlot = { procedureId: appt.procedureId, professionalId: appt.professionalId, freedAt: appt.scheduledAt };
-      const before = { scheduledAt: appt.scheduledAt, patientConfirmed: appt.patientConfirmed, confirmedAt: appt.confirmedAt };
-      await prisma.appointment.update({
-        where: { id: appt.id },
-        data: { scheduledAt: new Date(check.requestedIso), patientConfirmed: false, confirmedAt: null },
-      });
+      // A consulta acima pode ter ficado velha: a gravacao revalida TUDO de novo dentro da transacao (jornada, duracao inteira, habilitacao, conflito, CE).
+      const moved = await rescheduleBooking({ clinicId, appointmentId: appt.id, startUtc: new Date(check.requestedIso) });
+      if (!moved.ok) {
+        return JSON.stringify({
+          ok: false,
+          motivo: slotReasonText(moved.error as keyof typeof SLOT_REASON_PT, professionalIds.length > 0),
+          procedimento: appt.procedure.name,
+          instrucao: `NAO remarcou. O horario atual dela (${formatDateTimeInZone(appt.scheduledAt, tz)}) continua valendo. Se o motivo for de profissional/agenda, chame transfer_to_human com o horario atual e o novo horario pedido e fique em silencio; senao ofereca outro horario do mesmo procedimento.`,
+        });
+      }
+      const before = moved.before;
+      // O historico de envios fica no controle de lembretes (ReminderDispatch, por reserva e horario); aqui so libera a reserva atual pro horario novo.
       await prisma.reminderSent.deleteMany({ where: { appointmentId: appt.id } }); // os lembretes saem de novo, pro horario novo
       // Clinica Experts conectado: so vale depois que ELE aceita a troca. Antes a Alice dizia "remarcado" e, se o CE recusasse, a importacao
       // devolvia o horario antigo sem ninguem perceber (e o lembrete saia pro horario velho).
@@ -908,7 +1017,7 @@ async function runTool(
       }
       await notifyStaff(clinicId, "reschedule", `Agendamento remarcado pelo paciente: ${who} - ${appt.procedure.name} agora em ${check.requestedLabel}.${await bookingRiskNote(patientId)}`);
       await logActivity({
-        clinicId, type: "appointment_rescheduled", area: "agenda",
+        clinicId, type: "appointment_rescheduled", area: "agenda", patientId,
         title: "Agendamento remarcado pelo paciente",
         description: `${who} — ${appt.procedure.name} agora em ${check.requestedLabel}.`, actorName: null,
       });
@@ -1001,39 +1110,12 @@ async function runTool(
     if (!Number.isFinite(score) || score < 0 || score > 10) {
       return JSON.stringify({ ok: false, motivo: "nota deve ser de 0 a 10" });
     }
-    const survey = await prisma.satisfactionSurvey.findFirst({
-      where: { clinicId, patientId, answeredAt: null, askedAt: { gte: new Date(Date.now() - 7 * 24 * 3_600_000) } },
-      orderBy: { askedAt: "desc" },
-    });
-    if (!survey) return JSON.stringify({ ok: false, motivo: "nao ha pesquisa pendente pra este paciente" });
-
-    await prisma.satisfactionSurvey.update({
-      where: { id: survey.id },
-      data: {
-        score,
-        comment: input.comment ? String(input.comment).slice(0, 500) : null,
-        answeredAt: new Date(),
-        reviewLinkSent: score >= clinic.npsThreshold && !!clinic.googleReviewUrl,
-      },
-    });
-
-    const patient = await prisma.patient.findUnique({ where: { id: patientId } });
-    const who = patientLabelOf(patient);
-    await logActivity({
-      clinicId, patientId, type: "satisfaction_recorded", area: "atendimento",
-      title: "Pesquisa de satisfação respondida",
-      description: `${who} deu nota ${score}${input.comment ? `: "${String(input.comment).slice(0, 200)}"` : "."}`,
-      actorName: null,
-    });
-
-    if (score <= 6) {
-      await notifyStaff(clinicId, "human_handoff", `Avaliação baixa (${score}/10): ${who}${input.comment ? ` — "${String(input.comment).slice(0, 200)}"` : ""}. Vale um retorno da equipe.`);
-      return JSON.stringify({ ok: true, acao: "Agradeça pela sinceridade, pergunte o que pode melhorar e diga que vai passar pra equipe. Se ele reclamar, use transfer_to_human." });
-    }
-    if (score >= clinic.npsThreshold && clinic.googleReviewUrl?.trim()) {
-      return JSON.stringify({ ok: true, acao: `Agradeça de coração e peça, se puder, uma avaliação neste link: ${clinic.googleReviewUrl.trim()}. Depois, em uma MENSAGEM SEPARADA (nao junto do link), pergunte com carinho se ela teria um amigo(a) ou familiar que gostaria de conhecer o atendimento (indicação).` });
-    }
-    return JSON.stringify({ ok: true, acao: "Agradeça pelo retorno." });
+    // Mesma regra do tratamento direto da nota (reminders/surveyFlow.ts): grava de forma atomica, o link do Google so vai se estiver CONFIRMADO e nota alta
+    // com reclamacao nao ganha link. O convite de indicacao NAO e escrito aqui: e uma mensagem SEPARADA, enviada depois por um job com controle proprio.
+    const comment = input.comment ? String(input.comment).slice(0, 500) : null;
+    const answered = await recordSurveyAnswer({ clinicId, patientId, score, comment, complaint: hasSurveyComplaint(comment) });
+    if (!answered.ok) return JSON.stringify({ ok: false, motivo: answered.motivo === "ja_respondida" ? "a pesquisa ja foi respondida" : "nao ha pesquisa pendente pra este paciente" });
+    return JSON.stringify({ ok: true, acao: `Responda com este agradecimento, sem mudar os fatos e sem acrescentar link, oferta, avaliacao clinica, horario nem pedido de indicacao: "${answered.reply}"` });
   }
 
   return "Ferramenta desconhecida.";
@@ -1186,13 +1268,13 @@ NAO FIQUE SE DESPEDINDO: se voce ja se despediu ou disse "fico a disposicao"/"e 
     : `\nPOSTURA COMERCIAL - MAQUINA DE VENDAS CONSULTIVA. Cada mensagem sua tem UM objetivo: levar a cliente ao proximo passo (avaliacao ou agendamento), com naturalidade e sem enrolar. Como:
 - SO leve ao agendamento quando a pessoa esta em conversa de compra (contou o que quer, perguntou de um procedimento, pediu ou aceitou horario). Resposta curta ("ok", "nao", "vou tentar"), agradecimento, assunto de amiga/familiar, conversa de quem JA foi atendida ou que a equipe estava conduzindo: responda so o que ela disse; NUNCA liste horarios nem ofereca avaliacao se ela nao pediu.
 - LEIA a conversa inteira antes de responder. Nunca pergunte o que ela ja contou; nunca repita pergunta, informacao ou oferta que voce ja fez.
-- Ela ja disse o que quer? Reconheca com as palavras dela (1 frase), conecte a solucao do catalogo (1 frase) e feche com UMA pergunta concreta rumo ao horario ("Quer que eu veja um horario pra sua avaliacao?"). Ela ainda nao disse? Faca UMA pergunta especifica ao assunto dela (gordura: qual regiao; pele: o que quer melhorar; se veio de anuncio, use o procedimento do anuncio).
+- Ela ja disse o que quer TRATAR (a queixa)? Reconheca com as palavras dela (1 frase) e conecte so o que o CADASTRO aprovado indica para essa queixa (1 frase). O proximo passo e o que a JOGADA AGORA mandar: se ela ESCOLHEU um procedimento que agenda direto, siga com ESSE; se so contou a queixa, NAO escolha o procedimento por ela nem liste horarios; avaliacao so quando for mesmo o caminho. Ela ainda nao disse? Faca UMA pergunta curta sobre o que quer tratar (a regiao sozinha nao define o tratamento; se veio de anuncio, use o procedimento do anuncio).
 - Pediu avaliacao, horario ou agendar (mesmo com poucas palavras: "prefiro uma avaliacao", "quero marcar")? Pare de qualificar e AGENDE agora (check_availability / check_specific_time). Isso nunca e "insistir".
 - Recusou os horarios ("nenhum deles", "nao posso")? Nao se despeca: pergunte o dia da semana e o periodo que preferem e ofereca outras datas. So desista se ela disser claramente que nao quer mais.
 - Nao fale de valor se ela nao perguntou. Se perguntou, responda direto, em 1 frase, e volte ao proximo passo.
-- Objecao (preco, medo, tempo, indecisao): acolha, reconecte com o resultado que ela quer, use so as orientacoes cadastradas e proponha o proximo passo menor (a avaliacao). Nunca invente desconto, garantia nem urgencia.
-- Respondeu "nao", "vou pensar" ou "vou me organizar"? NUNCA responda so "ok"/"tudo bem": acolha em meia frase e, se fizer sentido, faca UMA pergunta aberta sobre o motivo (o que ficou pesando?), SEM empurrar avaliacao. Proponha um momento para retomar o contato ("posso te chamar amanha?") e, quando ela disser o dia e o horario, chame schedule_recontact.
-- NAO monte pacote, combo nem junte procedimentos por conta propria, e nao indique tratamento que nao tenha relacao direta com a queixa que ela contou (NUNCA sugira procedimento de OUTRA regiao do corpo ou do rosto: ex.: preenchimento labial para sobrancelha; sem procedimento cadastrado para aquela regiao, diga que a profissional indica na avaliacao). Indique o procedimento do catalogo que resolve a queixa dela; combo/pacote so se ja estiver cadastrado como condicao vigente ou se ela pedir.
+- Objecao (preco, medo, tempo, indecisao): acolha, reconecte com o resultado que ela quer, use so as orientacoes cadastradas e proponha o proximo passo menor que a JOGADA AGORA indicar (sem empurrar avaliacao a quem escolheu um procedimento direto). Nunca invente desconto, garantia nem urgencia.
+- Respondeu "nao", "vou pensar" ou "vou me organizar"? Acolha em UMA frase calorosa, sem pressao: NAO ofereca avaliacao nem horarios e NAO insista (a JOGADA AGORA detalha). So se ELA disser quando quer ser chamada, chame schedule_recontact.
+- NAO monte pacote, combo nem junte procedimentos por conta propria. Indicacao de procedimento se baseia na QUEIXA que ela contou e no que o CADASTRO aprovado diz que cada procedimento atende - a regiao do corpo sozinha NUNCA e criterio, e queixa que ela nao citou nao autoriza sugestao (quem fala de clareamento nao recebe gordura, celulite nem flacidez, a menos que ela mesma fale disso). Sem procedimento aprovado para a queixa, diga com naturalidade que vai confirmar com a equipe e use transfer_to_human, sem adivinhar. Combo/pacote so se ja estiver cadastrado como condicao vigente ou se ela pedir.
 - Mensagens curtas (ate 3 frases), uma pergunta so, tom de WhatsApp, sem formulario, sem repetir a mesma abertura nem a mesma pergunta de fechamento.
 - Nunca diga que "ja tem outro paciente" no horario: diga so que "esse horario nao esta disponivel" e ofereca o mais proximo.
 Tudo isso sem quebrar regra nenhuma: nao invente valor, prazo, garantia nem urgencia que nao seja real.`;
@@ -1235,10 +1317,10 @@ AGENDAMENTO PELA EQUIPE: voce NAO agenda, NAO remarca, NAO cancela e NAO oferece
     });
     evalPitchLine = offers > 0
       ? `\nAVALIACAO: voce JA falou de avaliacao nesta conversa (${offers}x). Se a pessoa ainda nao pediu, nao repita a oferta: aprofunde com informacao util e uma pergunta NOVA. Se ela pedir avaliacao ou agendamento (a qualquer momento, mesmo com poucas palavras), isso e intencao clara: agende na hora, sem mais perguntas de descoberta. Se ela disse que mora longe, que nao pode vir ou que so quer informacao, respeite e deixe a porta aberta em uma frase.`
-      : "\nAVALIACAO: ofereca a avaliacao gratuita quando a conversa ja mostrou interesse, uma vez, e depois de responder o que a pessoa quis saber. Se ela pedir avaliacao ou agendar, agende na hora.";
+      : "\nAVALIACAO: ofereca a avaliacao gratuita quando a conversa ja mostrou interesse, uma vez, e depois de responder o que a pessoa quis saber - exceto se a JOGADA AGORA disser o contrario (ela escolheu um procedimento que agenda direto, vai pensar ou recusou). Se ela pedir avaliacao ou agendar, agende na hora.";
   }
   const evalFirstLine = clinic.evaluationFirst
-    ? `\nAVALIACAO PRIMEIRO: nunca exija que o paciente saiba qual procedimento precisa. Quando a conversa for de agendamento, ofereca os dois caminhos ("voce ja tem algo em mente ou prefere uma avaliacao pra o profissional entender seu caso?"); nunca como resposta a "ok", "nao", agradecimento ou assunto fora de agenda. Se ele nao sabe e quer ser avaliado, isso e intencao valida de agendamento - conduza direto, sem listar procedimentos. MAS se ele ja disse qual procedimento quer (ex.: limpeza de pele, drenagem, peeling), agende ESSE procedimento (nome exato do catalogo), nunca a avaliacao: a avaliacao gratuita e so para quem a pediu ou ainda nao sabe o que precisa. Identifique o procedimento pelo que a pessoa escreveu e pelo anuncio de origem; se houver mais de um parecido, pergunte qual. Quem ja e paciente (ja foi atendido) nao recebe oferta de avaliacao gratuita.`
+    ? `\nAVALIACAO PRIMEIRO: nunca exija que o paciente saiba qual procedimento precisa. Quando a conversa for de agendamento, ofereca os dois caminhos ("voce ja tem algo em mente ou prefere uma avaliacao pra o profissional entender seu caso?"); nunca como resposta a "ok", "nao", agradecimento ou assunto fora de agenda. Se ele nao sabe e quer ser avaliado, isso e intencao valida de agendamento - conduza direto, sem listar procedimentos. MAS se ele ja disse qual procedimento quer (ex.: limpeza de pele, drenagem, peeling), agende ESSE procedimento (nome exato do catalogo), nunca a avaliacao: a avaliacao gratuita e so para quem a pediu ou ainda nao sabe o que precisa. Identifique o procedimento pelo que a pessoa escreveu e pelo anuncio de origem; se houver mais de um parecido, pergunte qual. Quem ja e paciente (ja foi atendido) nao recebe oferta de avaliacao gratuita. Esta regra NUNCA vale quando a JOGADA AGORA disser o contrario (procedimento escolhido que agenda direto, "vou pensar", recusa, ja agendada, so contou a queixa).`
     : "";
 
   const emojiLine = clinic.allowEmojis === false ? `\nNao use emojis em nenhuma mensagem.` : "";
@@ -1385,7 +1467,7 @@ FERIADOS PROXIMOS: ${holidayItems.join("; ")}. Se a pessoa perguntar se funciona
       orderBy: { askedAt: "desc" },
     });
     if (pending) {
-      surveyLine = `\nPESQUISA DE SATISFACAO PENDENTE: voce perguntou a nota de 0 a 10. Quando o paciente responder com um numero, chame record_satisfaction (com o comentario, se houver) e siga a "acao" que a ferramenta devolver. Se ele responder com um feedback em texto, sem nota (ex.: se sentiu bem atendida), agradeca em UMA frase curta e nao puxe outro assunto; se houver reclamacao ou duvida sem resposta, chame transfer_to_human. Se ele falar de outro assunto, atenda normalmente.`;
+      surveyLine = `\nPESQUISA DE SATISFACAO PENDENTE: voce perguntou a nota de 0 a 10. O sistema ja le a nota quando a pessoa a escreve; um numero solto no meio de uma frase (horario, quantidade, idade, data) NAO e nota. So chame record_satisfaction se a pessoa disser claramente a nota ("dou 10", "nota 9") e siga a "acao" que a ferramenta devolver. Se ela responder com feedback em texto, sem nota (ex.: se sentiu bem atendida), agradeca em UMA frase curta; se houver reclamacao ou duvida sem resposta, chame transfer_to_human. NUNCA ofereca avaliacao clinica, horarios, procedimento, link do Google nem pedido de indicacao em resposta a pesquisa (o link e o convite sao etapas do sistema). Se ela falar de OUTRO assunto, atenda normalmente.`;
     }
   }
 
@@ -2097,7 +2179,7 @@ async function generateReplyUnlocked(
   // Nada a responder: a ultima fala da conversa ja e da Alice (ou da equipe). Acontece
   // quando duas chamadas disputam a mesma mensagem - a primeira ja respondeu tudo.
   const lastTurn = await prisma.message.findFirst({
-    where: { conversationId, role: { in: ["user", "assistant", "human"] } },
+    where: { conversationId, role: { in: ["user", "assistant", "human"] }, ...deliveredOnly },
     orderBy: { createdAt: "desc" },
     select: { role: true },
   });
@@ -2110,7 +2192,7 @@ async function generateReplyUnlocked(
   // novo - passa direto pra equipe. Conversas ja em andamento continuam.
   const usageClinic = await prisma.clinic.findUnique({
     where: { id: clinicId },
-    select: { id: true, plan: true, aiModel: true, evalNearestFirst: true, businessType: true, aliceActive: true, silentHandoff: true, handoffOnPrice: true, humanizedTone: true, softSell: true, conversationLimitOverride: true, usageMonth: true, usageCount: true, usageLimitNotified: true },
+    select: { id: true, plan: true, aiModel: true, evalNearestFirst: true, businessType: true, aliceActive: true, silentHandoff: true, handoffOnPrice: true, humanizedTone: true, softSell: true, strictBookingRules: true, notOfferedServices: true, unmappedOffers: true, conversationLimitOverride: true, usageMonth: true, usageCount: true, usageLimitNotified: true },
   });
   // Alice PAUSADA pela clinica (botao "Alice atendendo"): nao responde. A conversa
   // fica como "nao lida" pra equipe, sem virar atendimento humano (quando a Alice
@@ -2151,7 +2233,7 @@ async function generateReplyUnlocked(
   const history = (
     await prisma.message.findMany({
       // Mensagens de sistema (resumo de transferencia, avisos internos) NAO entram: antes eram enviadas ao modelo como se a Alice as tivesse dito.
-      where: { conversationId, role: { in: ["user", "assistant", "human"] } },
+      where: { conversationId, role: { in: ["user", "assistant", "human"] }, ...deliveredOnly }, // fala da Alice que NAO foi entregue nao conta como dita
       orderBy: { createdAt: "desc" },
       take: HISTORY_LIMIT,
       select: { id: true, role: true, content: true, authorName: true, createdAt: true }, // sem o anexo em base64
@@ -2309,6 +2391,17 @@ async function generateReplyUnlocked(
     }
   }
 
+  // RESPOSTA DA PESQUISA DE SATISFACAO: o CODIGO le a nota (numero sozinho depois da pesquisa, "nota 9", "dou 10"; horario/quantidade/idade nao contam), grava de
+  // forma atomica e idempotente e responde com o agradecimento (link do Google so se confirmado; nota alta com reclamacao nao ganha link nem indicacao).
+  if (usageClinic && usageClinic.businessType !== "geral") {
+    try {
+      const reply = await trySurveyReply({ clinicId, conversationId: conversation.id, patientId: patient.id, history: history.map((m) => ({ id: m.id, role: m.role, content: m.content, authorName: m.authorName, createdAt: m.createdAt })) });
+      if (reply !== null) return reply;
+    } catch (err) {
+      console.error("[pesquisa] falha ao tratar a resposta da pesquisa (segue o fluxo normal):", err);
+    }
+  }
+
   // AGENDOU E AGRADECEU ("Obrigadaa", "ok", "👍"): so finaliza o atendimento, sem perguntas (pedido da Lisboa, 14/10). Quem ja tem horario
   // futuro nao volta pra descoberta.
   if (usageClinic && usageClinic.businessType !== "geral") {
@@ -2333,11 +2426,21 @@ async function generateReplyUnlocked(
     const adText = [origin?.adName, origin?.adCampaignName].filter(Boolean).join(" ");
     const userRecent = history.filter((m) => m.role === "user").slice(-12);
     // O curriculo chega como anexo e depois vem "obrigada": a vaga foi citada ANTES. Olha as ultimas mensagens, nao so a ultima.
-    if (isJobSeeker(lastUserText, adText) || userRecent.some((m) => isJobSeeker(m.content, adText)) || /curr[ií]culo/i.test(userRecent.map((m) => m.content).join(" "))) {
+    // MAS: quem ja mandou curriculo e agora pede horario/conta uma queixa (ou ja e paciente) nao fica presa no assunto da vaga - a parte clinica segue o fluxo normal.
+    const lastIsJob = isJobSeeker(lastUserText, adText);
+    const recentJob = userRecent.some((m) => isJobSeeker(m.content, adText)) || /curr[ií]culo/i.test(userRecent.map((m) => m.content).join(" "));
+    const clinicalAsk = wantsSchedule(lastUserText) || readMessageConcerns(lastUserText).wanted.length > 0;
+    if ((lastIsJob || recentJob) && !(clinicalAsk && !lastIsJob)) {
+      // mensagem MISTA (vaga + pedido de paciente) ou paciente ja cadastrada: a equipe precisa saber da parte clinica (nada e descartado)
+      const knownPatient = (await prisma.appointment.count({ where: { patientId: patient.id, status: { in: ["completed", "confirmed"] } } })) > 0;
+      const extra = [
+        clinicalAsk ? "A mensagem TAMBÉM traz um pedido de paciente (horário/queixa): responda essa parte, ela não foi tratada pela Alice." : "",
+        knownPatient ? "Já é paciente cadastrada: confira o histórico antes de responder." : "",
+      ].filter(Boolean).join(" ");
       try {
         await runTool(clinicId, patient.id, conversation.id, "transfer_to_human", {
-          reason: "Candidata a vaga de emprego (currículo)",
-          summary: `A pessoa escreveu sobre vaga/currículo: "${String(lastUserText).slice(0, 300)}". Não é paciente: a Alice não ofereceu avaliação.`,
+          reason: clinicalAsk ? "Vaga de emprego + pedido de paciente na mesma mensagem" : "Candidata a vaga de emprego (currículo)",
+          summary: `A pessoa escreveu sobre vaga/currículo: "${String(lastUserText).slice(0, 300)}". ${knownPatient || clinicalAsk ? "" : "Não é paciente: "}A Alice não ofereceu avaliação. ${extra}`.trim(),
         });
       } catch (err) {
         console.error("[vaga] falha ao encaminhar pra equipe:", err);
@@ -2348,10 +2451,11 @@ async function generateReplyUnlocked(
     const otherKind = nonPatientKind(lastUserText);
     if (otherKind) {
       const label = { fornecedor: "Fornecedor ou representante", parceria: "Proposta de parceria", cobranca: "Cobrança/financeiro de empresa" }[otherKind];
+      const clinicalAsk = wantsSchedule(lastUserText) || readMessageConcerns(lastUserText).wanted.length > 0;
       try {
         await runTool(clinicId, patient.id, conversation.id, "transfer_to_human", {
           reason: `${label} (não é paciente)`,
-          summary: `Mensagem que não parece de paciente (${label.toLowerCase()}): "${String(lastUserText).slice(0, 300)}". A Alice não ofereceu avaliação nem horário.`,
+          summary: `Mensagem que não parece de paciente (${label.toLowerCase()}): "${String(lastUserText).slice(0, 300)}". A Alice não ofereceu avaliação nem horário.${clinicalAsk ? " A mensagem TAMBÉM traz um pedido de paciente (horário/queixa): responda essa parte." : ""}`,
         });
       } catch (err) {
         console.error("[nao-paciente] falha ao encaminhar pra equipe:", err);
@@ -2398,7 +2502,7 @@ async function generateReplyUnlocked(
 
   // QUAL PROCEDIMENTO ela quer (o catalogo inteiro, sem as descricoes) e QUAL HORARIO ela ja escolheu: a Alice agenda o procedimento pedido; a
   // avaliacao e pra quem nao sabe o que quer (15/10/2026).
-  const bookingCatalog = await prisma.procedure.findMany({ where: { clinicId, internalOnly: false }, select: { name: true, aliases: true } });
+  const bookingCatalog = await prisma.procedure.findMany({ where: { clinicId, internalOnly: false }, select: { name: true, aliases: true, goals: true, benefits: true, description: true, bookingMode: true } });
   const adForWanted = (await prisma.patient.findUnique({ where: { id: patient.id }, select: { adName: true } }))?.adName ?? "";
   const wanted = identifyWanted(bookingCatalog, [adForWanted, ...history.filter((m) => m.role === "user").map((m) => m.content), ...trailingNow].filter(Boolean));
   const flowTz = (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { timezone: true } }))?.timezone || "America/Sao_Paulo";
@@ -2406,6 +2510,26 @@ async function generateReplyUnlocked(
   const lastNameAsk = [...history].reverse().find((m) => m.role !== "user")?.content ?? "";
   const nameReply = trailingNow.at(-1)?.trim() ?? "";
   const givenFullName = /nome completo|sobrenome/i.test(lastNameAsk) && /^[\p{L}' .-]{5,80}$/u.test(nameReply) && nameReply.split(/\s+/).length >= 2 ? nameReply : (patient.name && patient.name.trim().split(/\s+/).length >= 2 ? patient.name.trim() : null);
+  // CONDUCAO (ai/conduct.ts): o que ela quer TRATAR (queixa, nao so regiao), se escolheu procedimento (e se ele agenda direto ou exige avaliacao), se recusou ou
+  // vai pensar, e o que o cadastro aprovado da clinica permite indicar. Modo loja (Laleblu) fica fora: nao tem queixa, avaliacao nem agenda.
+  const notOffered = parseNotOffered(usageClinic?.notOfferedServices);
+  const understanding: Understanding | null =
+    usageClinic && usageClinic.businessType !== "geral"
+      ? understandConversation({
+          history: history.map((m) => ({ role: m.role, content: m.content, createdAt: m.createdAt })),
+          now: new Date(),
+          wanted,
+          catalog: bookingCatalog,
+          strictBooking: !!usageClinic.strictBookingRules,
+          notOffered,
+          unmappedOffers: parseNotOffered(usageClinic.unmappedOffers),
+          adText: adForWanted,
+        })
+      : null;
+  // Acabou de mandar o NOME que a Alice pediu para concluir um agendamento que ja estava em andamento: e continuacao, nao recomeco da venda.
+  const nameLooksLike = /^[\p{L}' .-]{2,80}$/u.test(nameReply) && nameReply.split(/\s+/).length <= 6 && !/\?/.test(nameReply);
+  const recentScheduling = history.slice(-10).some((m) => (m.role !== "user" && (offersSlots(m.content) || /agend|horario/i.test(normalizeReply(m.content)))) || (m.role === "user" && wantsSchedule(m.content)));
+  const awaitingName = askedForName(lastNameAsk) && nameLooksLike && (recentScheduling || !!chosen);
   const flow = analyzeFlow({
     history,
     trailing: trailingNow,
@@ -2416,6 +2540,8 @@ async function generateReplyUnlocked(
     chosen,
     chosenFullName: givenFullName,
     evaluationName: bookingCatalog.find((p) => /avalia/i.test(p.name))?.name ?? null,
+    awaitingName,
+    needOptions: understanding && understanding.objective.concerns.length ? understanding.families : undefined,
   });
   // SITUACAO + FICHA (hierarquia de regras, ver ai/situation.ts): o codigo olha os fatos (agenda dela, ultima mensagem automatica, equipe que estava
   // negociando, o que ela pediu de dia/hora) e escolhe UMA situacao pela ordem de prioridade; cada uma traz a ordem exata pro modelo.
@@ -2449,12 +2575,22 @@ async function generateReplyUnlocked(
     resumedAfterStaffDelay: opts.resumedAfterStaffDelay,
   });
   const memo = await prisma.patient.findUnique({ where: { id: patient.id }, select: { briefingNotes: true } });
-  if (memo?.briefingNotes?.trim()) situation.briefing.push(`MEMORIA DO LEAD (notas atualizadas; vale tanto quanto a agenda):\n${memo.briefingNotes.trim()}`);
+  if (memo?.briefingNotes?.trim()) situation.briefing.push(`MEMORIA DO LEAD (notas escritas pela IA em conversas anteriores; podem estar velhas. Se divergirem da AGENDA DELA, do resultado de uma ferramenta ou do que a pessoa disse AGORA, VALE a agenda/a ferramenta/a fala atual - use as notas so para preferencias e contexto):\n${memo.briefingNotes.trim()}`);
+  // PLANO DE CONDUCAO: o que pode acontecer NESTE turno (agenda, avaliacao, indicacao). Vale para o texto que o modelo le, para as ferramentas e para a saida.
+  let plan: ConductPlan | null = null;
+  if (understanding) {
+    plan = planConduct(understanding, { flow, situation, evaluationName: bookingCatalog.find((p) => /avalia/i.test(p.name))?.name ?? null, hasBooking, clinicIsStore: false, trailing: trailingNow });
+    situation.forbidEvaluationOffer = situation.forbidEvaluationOffer || plan.forbidEvaluationOffer;
+    situation.forbidSlotOffer = situation.forbidSlotOffer || plan.forbidSlotOffer;
+    console.log(`[conduta] clinica=${clinicId} conversa=${conversation.id} ${Object.entries(plan.trace).map(([k, v]) => `${k}=${v}`).join(" ")} revisao=${REVISION.split(":")[0]}`);
+    if (flow.intent === "hesitate" || flow.intent === "refuse") void recordLeadDecision(clinicId, patient.id, flow.intent);
+  }
+  const forcedTransfer = situation.forceTransfer ?? (plan?.handoffForced ? plan.handoff : null);
   if (usageClinic?.businessType !== "geral") {
-    if (situation.forceTransfer) {
-      console.warn(`[situacao] ${situation.kind}: passando pra equipe sem responder (conv ${conversation.id}): ${situation.forceTransfer.reason}`);
+    if (forcedTransfer) {
+      console.warn(`[situacao] ${situation.kind}: passando pra equipe sem responder (conv ${conversation.id}): ${forcedTransfer.reason}`);
       try {
-        await runTool(clinicId, patient.id, conversation.id, "transfer_to_human", situation.forceTransfer);
+        await runTool(clinicId, patient.id, conversation.id, "transfer_to_human", forcedTransfer);
       } catch (err) {
         console.error("[situacao] falha ao encaminhar pra equipe:", err);
       }
@@ -2481,6 +2617,11 @@ async function generateReplyUnlocked(
     flow.intent = situation.kind === "staff_followup" ? "staff" : "manage";
   } else if (!isEmptyRequest(situation.request) && (flow.intent === "schedule" || flow.intent === "decline")) {
     flow.nextMove += ` O PEDIDO DELA (obrigatorio respeitar; vale mais que 'horarios mais proximos'): ${describeSlotRequest(situation.request)}. Chame check_availability COM date do dia que ela pediu (um dia por vez; from_time/until_time se ela deu limite de horario) - nao use os horarios mais proximos nem ofereca 'hoje'/'amanha' se ela pediu outro dia. Se o que ela pediu nao existir, diga isso em uma frase e ofereca os mais proximos DO PEDIDO.`;
+  }
+  if (plan) {
+    // A conducao vem ANTES da jogada generica; quando as duas conflitam (so queixa, so regiao, recusa, procedimento bloqueado) a jogada generica sai.
+    const conduct = [plan.safety, situation.directive ? "" : plan.directive].filter(Boolean).join("\n");
+    if (conduct) flow.nextMove = !situation.directive && plan.replacesFlowMove ? conduct : `${conduct}\n${flow.nextMove}`;
   }
   const focusTexts = [
     ...history.filter((m) => m.role !== "user").slice(-3).map((m) => m.content),
@@ -2646,7 +2787,7 @@ async function generateReplyUnlocked(
       try {
         const input = JSON.parse(toolCall.function.arguments || "{}");
         for (const k of ["date", "new_date"]) if (typeof input[k] === "string") toolDatesQueried.add(input[k]);
-        result = await runTool(clinicId, patient.id, conversation.id, toolCall.function.name, input);
+        result = await runTool(clinicId, patient.id, conversation.id, toolCall.function.name, input, plan?.gate);
       } catch (err) {
         console.error(`Falha na ferramenta ${toolCall.function.name}:`, err);
         result = "Ocorreu um erro ao executar essa acao. Nao invente o resultado; peca desculpas e diga que vai confirmar com a equipe.";
@@ -2705,21 +2846,39 @@ async function generateReplyUnlocked(
     }
   }
 
-  // TRAVA DE RELEVANCIA: a resposta recomenda um procedimento de OUTRA regiao que a da queixa (ex.: "Preenchimento Labial" para sobrancelha).
-  // Troca por uma resposta segura que nao cita procedimento nenhum.
+  // SERVICO QUE A CLINICA NAO OFERECE (ex.: luz pulsada na Lisboa): a resposta nunca o oferece nem o descreve como se existisse. Tira so as frases que o citam.
+  if (understanding && notOffered.length && !didTransfer && !fixedReply && finalText.trim()) {
+    const stripped = stripNotOffered(finalText, notOffered, splitSentences, removeSentences);
+    if (stripped !== null) {
+      console.warn(`[nao-oferecido] resposta citou servico que a clinica nao tem - removido (conv ${conversation.id}): ${finalText.slice(0, 100)}`);
+      finalText = stripped.length >= 12 ? stripped : NOT_OFFERED_REPLY;
+    }
+  }
+
+  // TRAVA DE RELEVANCIA: a resposta recomenda um procedimento que o CADASTRO aprovado nao indica para a QUEIXA dela (ex.: gordura/celulite/flacidez para quem
+  // quer clarear) ou, sem queixa identificada, de OUTRA regiao (ex.: "Preenchimento Labial" para sobrancelha). Troca por uma resposta que continua util.
   if (!didTransfer && !fixedReply && finalText.trim() && usageClinic?.businessType !== "geral") {
     const userMsgs = history.filter((m) => m.role === "user").map((m) => m.content);
     let complaintTexts = trailingUser.length ? trailingUser : userMsgs.slice(-1);
     if (areasIn(complaintTexts.join(" ")).size === 0) complaintTexts = userMsgs.slice(-3);
-    const catalog = await prisma.procedure.findMany({ where: { clinicId, internalOnly: false }, select: { name: true, aliases: true } });
-    const mismatch = findRelevanceMismatch({ complaintTexts, reply: finalText, procedures: catalog });
+    const catalog = bookingCatalog;
+    const objective = understanding?.objective;
+    const allowed = [...(understanding?.chosen ? [understanding.chosen.name] : []), ...(understanding?.options ?? []), ...apptRows.map((a) => a.procedure.name)];
+    const mismatch = findRelevanceMismatch({ complaintTexts, reply: finalText, procedures: catalog, objective, allowed });
     if (mismatch) {
       console.warn(`[relevancia] indicou "${mismatch.procedure}" para queixa de ${mismatch.complaintLabel} - reescrevendo (conv ${conversation.id}): ${finalText.slice(0, 120)}`);
       const clinicName = (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { name: true } }))?.name ?? "a clinica";
-      const fits = fittingProcedures(complaintTexts, catalog);
-      const rewritten = await rewriteForRelevance(finalText, userMsgs.slice(-3), mismatch.complaintLabel, mismatch.procedure, fits, clinicName);
-      const stillBad = rewritten ? findRelevanceMismatch({ complaintTexts, reply: rewritten, procedures: catalog }) : null;
-      finalText = rewritten && !stillBad ? rewritten : safeReplyForMismatch(mismatch, flow.evalOffered);
+      const fits = objective && objective.concerns.length ? fittingForObjective(objective, catalog) : fittingProcedures(complaintTexts, catalog);
+      // 1) tira so a(s) frase(s) que citam o procedimento errado: o resto da resposta continua util e nao gasta outra chamada
+      const naming = splitSentences(finalText).filter((s) => normalizeReply(s).includes(normalizeReply(mismatch.procedure)));
+      const trimmed = naming.length ? removeSentences(finalText, naming).trim() : "";
+      if (trimmed.length >= 12 && !findRelevanceMismatch({ complaintTexts, reply: trimmed, procedures: catalog, objective, allowed })) {
+        finalText = trimmed;
+      } else {
+        const rewritten = await rewriteForRelevance(finalText, userMsgs.slice(-3), mismatch.complaintLabel, mismatch.procedure, fits, clinicName);
+        const stillBad = rewritten ? findRelevanceMismatch({ complaintTexts, reply: rewritten, procedures: catalog, objective, allowed }) : null;
+        finalText = rewritten && !stillBad ? rewritten : safeReplyForMismatch(mismatch, flow.evalOffered);
+      }
     }
   }
 
@@ -2799,7 +2958,8 @@ async function generateReplyUnlocked(
   // Redundante: a propria Alice acabou de mandar (quase) isso. Nao reenvia.
   if (!didTransfer && finalText.trim()) {
     const recent = await prisma.message.findMany({
-      where: { conversationId: conversation.id, role: "assistant", authorName: null, createdAt: { gte: new Date(Date.now() - RECENT_DUPLICATE_WINDOW_MS) } },
+      // So conta o que de fato foi dito: resposta bloqueada/barrada/expirada nunca chegou na pessoa e nao pode suprimir a nova (ficaria sem resposta).
+      where: { conversationId: conversation.id, role: "assistant", authorName: null, createdAt: { gte: new Date(Date.now() - RECENT_DUPLICATE_WINDOW_MS) }, ...deliveredOnly },
       select: { content: true },
     });
     if (isRecentDuplicate(finalText, recent.map((m) => m.content))) {
@@ -2890,8 +3050,41 @@ async function generateReplyUnlocked(
     finalText = fixRelativeDayLabels(finalText, new Date(), clinicTz); // "quinta (amanha)" numa quinta vira "quinta (hoje)"
     finalText = fixRelativeDateLabels(finalText, new Date(), clinicTz); // "Amanha, dia 20/10" numa quarta 14/10 vira "Terça-feira, dia 20/10"
     if (usageClinic?.evalNearestFirst) finalText = capSlotLines(finalText, 3); // combinado: no maximo 3 horarios por vez
+    // CONTEXTO DA GERACAO (o que as ferramentas fizeram e devolveram nesta rodada): a entrega valida com ele o texto que vai sair, inclusive se a revisao por IA o reescrever.
+    let persistedContext: string | null = null;
+    {
+      const evidenceSince = new Date(Date.now() - 6 * 3_600_000);
+      const [cancelledEv, rescheduledEv] = await Promise.all([
+        prisma.activityLog.count({ where: { patientId: patient.id, type: "appointment_cancelled", createdAt: { gte: evidenceSince } } }),
+        prisma.activityLog.count({ where: { patientId: patient.id, type: "appointment_rescheduled", createdAt: { gte: evidenceSince } } }),
+      ]);
+      const allUserMsgs = history.filter((m) => m.role === "user").map((m) => m.content);
+      let complaint = trailingUser.length ? trailingUser : allUserMsgs.slice(-1);
+      if (areasIn(complaint.join(" ")).size === 0) complaint = allUserMsgs.slice(-3);
+      const replyCtx: ReplyContext = {
+          conversationId: conversation.id, tz: guardTz, now: new Date(), todayIso: isoDateInZone(new Date(), guardTz),
+          situationKind: situation.kind,
+          forbidEvaluationOffer: situation.forbidEvaluationOffer || flow.intent === "booked",
+          forbidSlotOffer: situation.forbidSlotOffer,
+          request: situation.request,
+          trusted: fixedReply,
+          agenda: usageClinic?.businessType !== "geral",
+          actions: { booked: bookedOk, cancelled: cancelOk, rescheduled: rescheduleOk, transferred: didTransfer },
+          evidence: { cancelledRecently: cancelledEv > 0, rescheduledRecently: rescheduledEv > 0 },
+          slots: { state: slotState, toolUsed: slotToolUsed, strict: knownStrict, loose: knownLoose, toolDates: [...toolDatesQueried] },
+          upcoming: apptRows.map((a) => ({ dateIso: isoDateInZone(a.scheduledAt, guardTz), time: hhmmOf(a.scheduledAt), ddmm: `${isoDateInZone(a.scheduledAt, guardTz).slice(8, 10)}/${isoDateInZone(a.scheduledAt, guardTz).slice(5, 7)}` })),
+          complaintTexts: complaint,
+          silentHandoff: !!usageClinic?.silentHandoff,
+          objective: understanding ? { concerns: understanding.objective.concerns, regions: understanding.objective.regions } : undefined,
+          allowedProcedures: [...(understanding?.chosen ? [understanding.chosen.name] : []), ...(understanding?.options ?? []), ...apptRows.map((a) => a.procedure.name)],
+          notOffered,
+      };
+      rememberReplyContext(replyCtx, finalText);
+      // o mesmo contexto, resumido, acompanha a mensagem ate ela ser entregue: sobrevive a reinicio e a retomada tardia (apagado no estado final)
+      persistedContext = serializeReplyContext(replyCtx, complaint.length);
+    }
     await prisma.message.create({
-      data: { conversationId: conversation.id, role: "assistant", content: finalText, deliveryStatus: "pending" }, // vira "sent"/"failed" depois do envio (uazapi/client.ts)
+      data: { conversationId: conversation.id, role: "assistant", content: finalText, deliveryStatus: "pending", replyContext: persistedContext }, // vira "sent"/"failed" depois do envio (uazapi/client.ts)
     });
   }
   await prisma.conversation.update({
@@ -2900,6 +3093,34 @@ async function generateReplyUnlocked(
   });
 
   return finalText;
+}
+
+// Registra (uma vez por dia por pessoa) que ela recusou a oferta ou disse que vai pensar: aparece no diario e a indecisao entra no perfil comercial. Sem isso
+// a decisao so existia no texto da conversa. A Alice respeita a decisao nos turnos seguintes lendo a propria conversa (ver conduct.declineStateOf).
+async function recordLeadDecision(clinicId: string, patientId: string, kind: "hesitate" | "refuse"): Promise<void> {
+  try {
+    const since = new Date(Date.now() - 12 * 3_600_000);
+    const already = await prisma.activityLog.count({ where: { patientId, type: "lead_decision", createdAt: { gte: since } } });
+    if (already > 0) return;
+    if (kind === "hesitate") {
+      const p = await prisma.patient.findUnique({ where: { id: patientId }, select: { objections: true } });
+      const cur = (p?.objections ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+      if (!cur.includes("indecisao")) await prisma.patient.update({ where: { id: patientId }, data: { objections: [...cur, "indecisao"].join(",") } });
+    }
+    await logActivity({
+      clinicId, patientId, type: "lead_decision", area: "atendimento",
+      title: kind === "hesitate" ? "Cliente disse que vai pensar" : "Cliente recusou a oferta",
+      description: "A Alice parou de oferecer avaliação/horários e respeita a decisão até a cliente voltar a falar de agenda.", actorName: null,
+    });
+  } catch (err) {
+    console.error("[decisao] falha ao registrar:", err);
+  }
+}
+
+// Encaminha a conversa pra equipe pelo MESMO mecanismo da ferramenta transfer_to_human (nota no chat, aviso, diario). Usado pela entrega quando a
+// resposta final diz que encaminhou e nenhuma transferencia foi registrada: primeiro encaminha, depois (se a clinica nao for silenciosa) o texto sai.
+export async function executeHandoff(clinicId: string, patientId: string, conversationId: string, reason: string, summary: string): Promise<void> {
+  await runTool(clinicId, patientId, conversationId, "transfer_to_human", { reason, summary });
 }
 
 // Compat: grava a mensagem e responde na hora (usado onde nao ha debounce).

@@ -22,15 +22,16 @@ const clip = (s: string, n = 120) => (s.length > n ? s.slice(0, n - 1).trimEnd()
 
 // A ORDEM em que as regras valem (a de cima vence a de baixo). Vai resumida no prompt e completa em docs/hierarquia-de-regras.md.
 export const RULE_HIERARCHY =
-  "ORDEM DE PRIORIDADE DAS REGRAS (se duas conflitarem, vale a de cima): " +
+  "ORDEM DE PRIORIDADE DAS REGRAS (se duas conflitarem, vale a de cima). FATOS AO VIVO (a AGENDA dela, o resultado de uma ferramenta, o que ela disse AGORA) valem mais que NOTAS antigas da memoria do lead e que qualquer regra de texto: " +
   "1) seguranca clinica (urgencia, reacao, duvida clinica -> equipe); " +
   "2) nao e paciente (vaga, fornecedor, parceria, cobranca -> equipe em silencio); " +
   "3) a pessoa so respondeu a uma mensagem AUTOMATICA (lembrete, pos, pesquisa) -> agradece e pronto, sem oferta; " +
   "4) ela JA TEM horario e quer remarcar/cancelar/tirar duvida dele -> use a agenda DELA (mesmo procedimento e profissional), nunca avaliacao nem horario novo; " +
   "5) a EQUIPE estava negociando o horario -> continue de onde a equipe parou; " +
   "6) o PEDIDO explicito dela (dia, hora, limite, turno, profissional) vale mais que 'horarios mais proximos'; " +
-  "7) regras da clinica (valores, tom, postura); " +
-  "8) padroes do sistema (avaliacao para quem nao sabe, descoberta).";
+  "7) conduta comercial: recusa e 'vou pensar' sao respeitados (sem insistir); queixa NAO e procedimento escolhido; so se indica o que o cadastro aprovado diz atender a queixa; servico que a clinica nao oferece nunca e citado; " +
+  "8) regras da clinica (valores, tom, postura); " +
+  "9) padroes do sistema (avaliacao para quem nao sabe, descoberta).";
 
 export type SituationKind = "automation_ack" | "courtesy_ack" | "booking_claim" | "cancel" | "reschedule" | "staff_followup" | "plain_reply" | "default";
 

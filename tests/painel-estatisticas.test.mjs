@@ -25,10 +25,13 @@ const clinic = await prisma.clinic.create({ data: { name: "Clinica Teste Painel"
 const proc = await prisma.procedure.create({ data: { clinicId: clinic.id, name: "Avaliacao", durationMin: 30 } });
 const patient = await prisma.patient.create({ data: { clinicId: clinic.id, name: "Paciente Teste", phone: "5511999991111" } });
 const now = new Date();
+// Os horarios da agenda de "hoje" ficam ANCORADOS no dia da clinica (12h e 13h em Sao Paulo), nao em "agora + 2h/3h": depois das 21h em SP o "agora + 3h" ja e o dia seguinte.
+const hojeSp = new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+const meioDia = new Date(`${hojeSp}T15:00:00.000Z`); // 12:00 em Sao Paulo (sem horario de verao desde 2019)
 // Alice marcou 1 agendamento agora e 1 ha 10 dias; a recepcao lancou 1 (presencial) para daqui a pouco.
-await prisma.appointment.create({ data: { clinicId: clinic.id, patientId: patient.id, procedureId: proc.id, scheduledAt: new Date(now.getTime() + 2 * 3_600_000), source: "whatsapp", createdAt: now } });
+await prisma.appointment.create({ data: { clinicId: clinic.id, patientId: patient.id, procedureId: proc.id, scheduledAt: meioDia, source: "whatsapp", createdAt: now } });
 await prisma.appointment.create({ data: { clinicId: clinic.id, patientId: patient.id, procedureId: proc.id, scheduledAt: new Date(now.getTime() - 9 * DAY), source: "whatsapp", createdAt: new Date(now.getTime() - 10 * DAY) } });
-await prisma.appointment.create({ data: { clinicId: clinic.id, patientId: patient.id, procedureId: proc.id, scheduledAt: new Date(now.getTime() + 3 * 3_600_000), source: "presencial", createdAt: now } });
+await prisma.appointment.create({ data: { clinicId: clinic.id, patientId: patient.id, procedureId: proc.id, scheduledAt: new Date(meioDia.getTime() + 3_600_000), source: "presencial", createdAt: now } });
 
 const app = express();
 app.use(express.json());

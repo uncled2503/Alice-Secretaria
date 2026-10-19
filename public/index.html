@@ -1586,6 +1586,8 @@
             <button type="button" id="btn-lisboa-vincular-proc" class="btn-brand btn-brand--secondary">Vincular procedimentos ao Clínica Experts</button>
             <button type="button" id="btn-lisboa-diag-ce" class="btn-brand btn-brand--secondary">Diagnosticar reservas sem procedimento (CE)</button>
             <button type="button" id="btn-lisboa-restaurar-lembretes" class="btn-brand btn-brand--secondary">Restaurar horário dos lembretes (Antes da visita)</button>
+            <button type="button" id="btn-lisboa-jornadas" class="btn-brand btn-brand--secondary" title="Suelen 12h–21h, Adriana 12h–21h, Talita 8h–17h. Mostra a prévia antes de gravar.">Ajustar jornadas (Suelen, Adriana, Talita)</button>
+            <button type="button" id="btn-lisboa-conduta" class="btn-brand btn-brand--secondary" title="Serviços que a Lisboa não oferece (luz pulsada), apelidos a limpar, como cada procedimento agenda e regras antigas que empurram avaliação. Mostra a prévia antes de gravar.">Ajustar conduta comercial (luz pulsada / agenda direta)</button>
             <button type="button" id="btn-lisboa-regras-ativas" class="btn-brand btn-brand--secondary">Exportar regras ativas (conferência)</button>
             <input type="text" id="lisboa-ai-model" placeholder="modelo da Lisboa (vazio = padrão)" style="max-width:15rem">
             <button type="button" id="btn-lisboa-modelo" class="btn-brand btn-brand--secondary">Definir modelo da Lisboa</button>
@@ -1851,6 +1853,13 @@
           </div>
 
           <label class="checkbox-row"><input type="checkbox" id="pr2-allow-concurrent" /> Atendimento por ordem de chegada (vários pacientes podem ficar no mesmo horário)</label>
+          <label>Como este serviço agenda
+            <select id="pr2-booking-mode">
+              <option value="">Ainda não definido</option>
+              <option value="direct">Agenda direto (sem avaliação prévia)</option>
+              <option value="evaluation">Exige avaliação prévia</option>
+            </select>
+          </label>
           <p class="hint">Use isso pra procedimentos rápidos tipo aplicação/injetável, onde a clínica marca vários pacientes no mesmo horário e atende por ordem de chegada, mantendo um agendamento por paciente só pra controle.</p>
 
           <div class="modal-section">

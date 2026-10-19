@@ -479,14 +479,17 @@ test("economia: a memoria so manda as mensagens NOVAS (as notas anteriores carre
   const cq = await prisma.conversation.create({ data: { patientId: q.id } });
   for (let i = 0; i < 4; i++) await prisma.message.create({ data: { conversationId: cq.id, role: i % 2 ? "assistant" : "user", content: "papo mais longo da conversa numero " + i, createdAt: new Date(Date.now() - (20 - i) * 60_000) } });
   corpos = [];
+  // So conta as chamadas DESTA pessoa: o mock da memoria e compartilhado e, com a suite rodando varios arquivos em paralelo (maquina lenta), o
+  // agendamento de 60-90 s de OUTRO teste deste arquivo pode disparar no meio e cair aqui.
+  const dela = () => corpos.filter((c) => /papo mais longo da conversa/.test(c)).length;
   scheduleBriefingRefresh(q.id, { delayMs: 20 });
   await new Promise((r) => setTimeout(r, 400));
-  const primeira = corpos.length;
+  const primeira = dela();
   await prisma.message.create({ data: { conversationId: cq.id, role: "user", content: "mais uma mensagem", createdAt: new Date() } });
   scheduleBriefingRefresh(q.id, { delayMs: 20 });
   await new Promise((r) => setTimeout(r, 400));
   assert.equal(primeira, 1);
-  assert.equal(corpos.length, 1, "a segunda dentro de 15 min nao chama a IA (o job de 20 min pega depois)");
+  assert.equal(dela(), 1, "a segunda dentro de 15 min nao chama a IA (o job de 20 min pega depois)");
 });
 
 test("economia: o painel mostra onde vao os tokens, por finalidade", async () => {

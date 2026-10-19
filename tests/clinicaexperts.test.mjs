@@ -24,10 +24,17 @@ test("portao exige TODAS as celulas de 15 min do procedimento livres", () => {
   assert.equal(gate(at(9, 45), 15), false); // fora do livre
 });
 
-test("dia nao carregado (CE fora do ar) nao bloqueia", () => {
+test("dia nao carregado (CE fora do ar): NAO oferece (disponibilidade nao confirmada); o escape CE_GATE_FAIL_OPEN volta ao comportamento antigo", () => {
   const gate = buildGate(new Set(), new Set(["2026-10-08"]), TZ);
-  assert.equal(gate(Date.UTC(2026, 9, 9, 13, 0), 60), true);
+  const outroDia = Date.UTC(2026, 9, 9, 13, 0);
+  assert.equal(gate(outroDia, 60), false); // CE nao respondeu esse dia: nao ha como afirmar que esta livre
+  assert.equal(gate.unverified(outroDia), true);
+  assert.equal(gate.covers(outroDia), false);
   assert.equal(gate(at(10, 0), 60), false); // dia carregado e sem celula livre
+  assert.equal(gate.unverified(at(10, 0)), false);
+  const aberto = buildGate(new Set(), new Set(["2026-10-08"]), TZ, { failOpen: true });
+  assert.equal(aberto(outroDia, 60), true);
+  assert.equal(aberto.unverified, undefined);
 });
 
 test("isoWithOffset: offset certo mesmo com segundos/milissegundos", () => {

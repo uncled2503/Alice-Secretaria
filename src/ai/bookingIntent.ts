@@ -44,7 +44,7 @@ const isEvaluation = (n: string) => /avalia/i.test(n);
 // ela contou uma necessidade: nao escolheu o procedimento. Caso Jandira, 16/10: "queria um tratamento pra tirar gordura localizada" e a Alice
 // ja listou horarios de Enzimas, sem ela ter escolhido nada.
 const NEED_WORDS = new Set(
-  "gordura localizada flacidez flacida celulite estria estrias papada olheira olheiras mancha manchas ruga rugas acne barriga abdomen abdominal culote coxa coxas braco bracos gluteo gluteos bumbum cicatriz cicatrizes poros melasma vasinho vasinhos cabelo queda emagrecer emagrecimento peso pele rosto facial corporal rejuvenescimento envelhecimento medidas contorno firmeza".split(" ").map((w) => stem(w)),
+  "gordura localizada flacidez flacida celulite estria estrias papada olheira olheiras mancha manchas ruga rugas acne barriga abdomen abdominal culote coxa coxas braco bracos gluteo gluteos bumbum cicatriz cicatrizes poros melasma vasinho vasinhos cabelo queda emagrecer emagrecimento peso pele rosto facial corporal rejuvenescimento envelhecimento medidas contorno firmeza virilha virilhas axila axilas sovaco intimo intima intimas pescoco colo mao maos pe pes perna pernas joelho joelhos cotovelo cotovelos costas seio seios labio labios sobrancelha sobrancelhas olho olhos nariz testa bochecha bochechas queixo orelha".split(" ").map((w) => stem(w)),
 );
 const allNeedWords = (words: string[]) => words.length > 0 && words.every((w) => NEED_WORDS.has(w));
 
@@ -52,6 +52,17 @@ const allNeedWords = (words: string[]) => words.length > 0 && words.every((w) =>
 export function identifyWanted(catalog: CatalogProc[], texts: string[]): Wanted {
   const recent = texts.map((t) => t.trim()).filter(Boolean).slice(-8);
   if (!recent.length) return { kind: "none" };
+  // O MAIS RECENTE vale: a mensagem mais nova que NOMEIA um procedimento (ou uma familia) decide, sem misturar palavras de mensagens diferentes
+  // ("Clareamento Corporal" numa mensagem + "Limpeza de Pele" noutra batiam, juntas, no apelido "Clareamento de pele corporal"). Sem nenhuma
+  // mensagem que nomeie sozinha, vale a leitura do conjunto (comportamento anterior).
+  for (let i = recent.length - 1; i >= 0; i--) {
+    const w = identifyFrom(catalog, [recent[i]]);
+    if (w.kind === "specific" || w.kind === "options") return w;
+  }
+  return identifyFrom(catalog, recent);
+}
+
+function identifyFrom(catalog: CatalogProc[], recent: string[]): Wanted {
   const said = new Set(recent.flatMap(wordsOf));
   if (!said.size) return { kind: "none" };
 
@@ -183,7 +194,8 @@ export function findChosenSlot(
 export function wantedDirective(w: Wanted, evaluationName: string | null): string {
   const evalPart = evaluationName ? `a avaliacao gratuita ("${evaluationName}")` : "a avaliacao gratuita";
   if (w.kind === "need") {
-    return `PROCEDIMENTO: ela contou so uma NECESSIDADE/QUEIXA (o catalogo tem opcoes como ${w.options.map((o) => `"${o}"`).join(", ")}), mas NAO escolheu procedimento. NAO escolha um por ela e NAO liste horarios de procedimento. Se ela quer agendar mesmo assim, ofereca ${evalPart} (a profissional indica o caminho certo); so agende um procedimento especifico depois que ELA o escolher pelo nome. `;
+    if (!w.options.length) return `PROCEDIMENTO: ela contou so uma NECESSIDADE/QUEIXA e o cadastro NAO traz procedimento com indicacao aprovada para isso. NAO sugira nem escolha procedimento e NAO liste horarios de procedimento: explique que vai confirmar com a equipe e chame transfer_to_human. `;
+    return `PROCEDIMENTO: ela contou so uma NECESSIDADE/QUEIXA (o cadastro aprovado tem opcoes como ${w.options.map((o) => `"${o}"`).join(", ")}), mas NAO escolheu procedimento. NAO escolha um por ela e NAO liste horarios de procedimento. Se ela quer agendar mesmo assim, ofereca ${evalPart} (a profissional indica o caminho certo); so agende um procedimento especifico depois que ELA o escolher pelo nome. `;
   }
   if (w.kind === "specific") {
     return `PROCEDIMENTO IDENTIFICADO: a pessoa quer "${w.procedure}". Agende ESSE procedimento (procedure_name exatamente "${w.procedure}"; check_availability / check_specific_time / book_appointment com esse nome). NAO ofereca nem mencione avaliacao: ela ja sabe o que quer. So ofereca ${evalPart} se ela disser que nao tem certeza. `;

@@ -7,6 +7,7 @@ import { automationKindOf } from "./situation.js";
 import { aiExtraEnabled } from "./aiSwitch.js";
 import { displayProcedureName } from "../clinicaexperts/placeholderProcedure.js";
 import { recordUsage } from "./usageStats.js";
+import { deliveredOnly } from "./delivery.js";
 
 // ---------------------------------------------------------------------------
 // BRIEFING DO LEAD, SEMPRE ATUAL (pedido do dono, 16/10/2026: "a Alice sempre recebe um briefing de cada cliente... quero que seja atualizado sempre
@@ -43,6 +44,10 @@ export interface PatientFacts {
   noInterest: boolean;
   lastHumanMinutesAgo: number | null; // ha quanto tempo uma PESSOA da equipe falou nesta conversa
   upcomingCount: number;
+  fingerprint: string; // impressao digital ESTAVEL do contexto (mensagens, agenda, equipe, alertas, memoria): muda quando algo relevante muda, nao com o passar dos minutos
+  // So o que pode embasar um fato (dia/hora/numero) numa resposta reescrita: horarios ATIVOS da agenda e o que a PESSOA escreveu. Nao entra horario
+  // cancelado, atendimento antigo nem fala da Alice: "estava na ficha" nao e disponibilidade.
+  grounding: string;
 }
 
 // FATOS AO VIVO de uma pessoa. `clinicId + phone` (envio) ou `patientId` (Alice/job).
@@ -84,7 +89,7 @@ export async function patientFacts(ref: { clinicId: string; phone: string } | { 
   ]);
   const messages = conversation
     ? (await prisma.message.findMany({
-        where: { conversationId: conversation.id, role: { in: ["user", "assistant", "human"] } },
+        where: { conversationId: conversation.id, role: { in: ["user", "assistant", "human"] }, ...deliveredOnly },
         orderBy: { createdAt: "desc" }, take: Math.max(maxMessages, 4),
         select: { role: true, content: true, authorName: true, createdAt: true, deliveryStatus: true },
       })).reverse()
@@ -130,6 +135,11 @@ export async function patientFacts(ref: { clinicId: string; phone: string } | { 
   }
   if (opts.notes !== false && patient.briefingNotes?.trim()) lines.push(`MEMORIA DO LEAD (notas atualizadas ${patient.briefingNotesAt ? ago(patient.briefingNotesAt, now) : ""}):\n${patient.briefingNotes.trim()}`);
 
+  const grounding = [
+    ...upcoming.map((a) => `AGENDA ATIVA: ${formatDateTimeInZone(a.scheduledAt, tz)}`),
+    ...messages.filter((m) => m.role === "user").map((m) => m.content),
+  ].join("\n");
+
   return {
     patientId: patient.id,
     text: lines.join("\n"),
@@ -137,6 +147,21 @@ export async function patientFacts(ref: { clinicId: string; phone: string } | { 
     noInterest: patient.noInterest,
     lastHumanMinutesAgo,
     upcomingCount: upcoming.length,
+    fingerprint: [
+      messages.at(-1)?.createdAt.getTime() ?? 0,
+      messages.length,
+      upcoming.map((a) => a.scheduledAt.getTime()).join(","),
+      past.map((a) => `${a.scheduledAt.getTime()}${a.status}`).join(","),
+      cancelled.length,
+      patient.optedOut ? 1 : 0,
+      patient.noInterest ? 1 : 0,
+      patient.callbackAt?.getTime() ?? 0,
+      conversation?.humanTakeover ? 1 : 0,
+      lastHuman?.createdAt.getTime() ?? 0,
+      patient.briefingNotesAt?.getTime() ?? 0,
+      patient.funnelStage,
+    ].join("|"),
+    grounding,
   };
 }
 
@@ -190,7 +215,7 @@ export async function refreshBriefingNotes(patientId: string, opts: { force?: bo
     const conversation = await prisma.conversation.findFirst({ where: { patientId }, orderBy: { lastMessageAt: "desc" }, select: { id: true } });
     if (!conversation) return null;
     const all = (await prisma.message.findMany({
-      where: { conversationId: conversation.id, role: { in: ["user", "assistant", "human"] } },
+      where: { conversationId: conversation.id, role: { in: ["user", "assistant", "human"] }, ...deliveredOnly },
       orderBy: { createdAt: "desc" }, take: 24,
       select: { role: true, content: true, authorName: true, createdAt: true },
     })).reverse();

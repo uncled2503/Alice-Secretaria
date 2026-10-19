@@ -9,7 +9,8 @@ function fold(s: string): string {
 const JOB_TEXT_RE =
   /curricul|processo seletivo|\bvaga (de|para|pra) (esteticista|recepcionista|biomedic|auxiliar|atendente|secretaria|massagista|depiladora|enfermeir|tecnic|estagi|comercial|vendedora|gerente)|oportunidade de (emprego|trabalho)|trabalhar (com voces|ai|na lisboa|na clinica|ai na)|(quero|gostaria de|tenho interesse em) (me )?candidatar|enviar (meu )?curricul/;
 
-const JOB_AD_RE = /\bvaga\b|contrata|recrutamento|selecao|curricul|emprego/;
+// "vaga" sozinha NAO basta: anuncio de promocao ("Ultima vaga da semana", "vagas limitadas") fala de agenda, nao de emprego.
+const JOB_AD_RE = /\bvagas? (de|para|pra) (emprego|trabalho|esteticista|recepcionista|biomedic|auxiliar|atendente|secretaria|massagista|depiladora|enfermeir|tecnic|estagi|vendedora|gerente)|\bvagas? aberta|contrata|recrutamento|processo seletivo|curricul|emprego/;
 
 // PURO: `text` = ultima mensagem; `adText` = nome do anuncio/campanha de origem (se houver).
 export function isJobSeeker(text: string, adText = ""): boolean {

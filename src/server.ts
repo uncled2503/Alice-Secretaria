@@ -19,6 +19,8 @@ import { startProfessionalBackfillJob } from "./scheduling/professionalBackfillJ
 import { startMetaEventWorker } from "./meta/worker.js";
 import { startLearningJob } from "./ai/learning.js";
 import { startFollowUpJob } from "./crm/followup.js";
+import { startResumeFlowsJob } from "./crm/resumeFlows.js";
+import { startReferralJob } from "./reminders/surveyFlow.js";
 import { startBriefingJob } from "./ai/leadBriefing.js";
 import { startLeadSummaryJob } from "./crm/leadSummary.js";
 import { startCeBookingPullJob } from "./clinicaexperts/pull.js";
@@ -38,6 +40,7 @@ import { externalApiRouter } from "./api/external/router.js";
 import { readStaffSession, clearSessionCookie } from "./api/staffSession.js";
 import { isFreePlan, freePlanBlocksPath } from "./crm/plan.js";
 import { prisma, enableWalMode } from "./db/client.js";
+import { releaseMyLocks } from "./jobs/lock.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -354,9 +357,11 @@ const httpServer = app.listen(port, () => {
   startRenewalJob();
   startBirthdayJob();
   startFollowUpJob();
+  startResumeFlowsJob(); // retomada de avaliacao cancelada / sem fechamento: nascem DESLIGADAS (ResumeFlowConfig)
   startBriefingJob(); // memoria do lead: atualiza quem teve conversa nova
   startBroadcastJob();
   startNpsJob();
+  startReferralJob(); // convite de indicacao (mensagem separada, depois da nota alta): so envia se a clinica configurou texto e intervalo
   startPlanExpiryJob();
   startProfessionalBackfillJob();
   startMetaEventWorker();
@@ -387,6 +392,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
   } catch (err) {
     console.error("[shutdown] falha ao finalizar a fila:", err);
   }
+  await releaseMyLocks().then((n) => n && console.log(`[shutdown] ${n} concessao(oes) de tarefa devolvida(s) para a copia nova assumir sem esperar`)).catch(() => undefined);
   await prisma.$disconnect().catch(() => undefined);
   process.exit(0);
 }

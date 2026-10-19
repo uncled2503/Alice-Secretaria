@@ -6,6 +6,9 @@ import { wallClockInZone, zonedWallClockToUtc } from "../scheduling/time.js";
 import { ALICE_BOOKING_SOURCES } from "./realStats.js";
 import { aliceReport, marketingReport } from "./insights.js";
 import { firstOfDayIds } from "../reminders/firstOfDay.js";
+import { dayStats } from "./followupLedger.js";
+import { TRACKED_JOBS } from "./automationRuns.js";
+import { describeRule } from "./followupSchedule.js";
 
 // ---------------------------------------------------------------------------
 // RELATORIO DIARIO + AUDITORIA DAS AUTOMACOES (20h, no WhatsApp interno da clinica, evento "daily_report").
@@ -63,14 +66,9 @@ export async function confirmationAudit(clinicId: string, from: Date, to: Date):
 // PURO: uma linha por regra de recontato ativa, dizendo QUANDO ela dispara (horario fixo do dia seguinte x silencio corrido). Foi
 // assim que o "recontato das 8h" que nao saiu ficou invisivel: ninguem via qual regra estava de fato com horario fixo.
 export function followUpRuleLines(
-  rules: { order: number; name: string; afterMinutes: number; afterDays: number; nextDayHour: number | null }[],
+  rules: { order: number; name: string; afterMinutes: number; afterDays: number; nextDayHour: number | null; sendWindowStart?: number | null; sendWindowEnd?: number | null }[],
 ): string[] {
-  return rules.map((r) => {
-    const when = r.nextDayHour != null
-      ? `dia seguinte às ${r.nextDayHour}h`
-      : `${r.afterMinutes > 0 ? (r.afterMinutes % 1440 === 0 ? `${r.afterMinutes / 1440} dia(s)` : r.afterMinutes % 60 === 0 ? `${r.afterMinutes / 60}h` : `${r.afterMinutes} min`) : `${r.afterDays} dia(s)`} de silêncio`;
-    return `   - ${r.name} (${when})`;
-  });
+  return rules.map((r) => `   - ${r.name} (${describeRule({ ...r, sendWindowStart: r.sendWindowStart ?? null, sendWindowEnd: r.sendWindowEnd ?? null })})`);
 }
 
 export async function buildDailyReport(clinicId: string, tz: string): Promise<string | null> {
@@ -97,7 +95,7 @@ export async function buildDailyReport(clinicId: string, tz: string): Promise<st
       orderBy: { scheduledAt: "asc" },
     }),
     prisma.message.count({
-      where: { role: "assistant", deliveryStatus: { in: ["failed", "failed_permanent"] }, createdAt: { gte: today.from, lt: today.to }, conversation: { patient: { clinicId } } },
+      where: { role: "assistant", deliveryStatus: { in: ["failed", "failed_permanent", "blocked", "vetoed"] }, createdAt: { gte: today.from, lt: today.to }, conversation: { patient: { clinicId } } },
     }),
   ]);
 
@@ -128,9 +126,10 @@ export async function buildDailyReport(clinicId: string, tz: string): Promise<st
     if (unconfirmed.length > 6) lines.push(`   …e mais ${unconfirmed.length - 6}.`);
   }
   // Recontatos: o que esta ligado, quando dispara e quantos sairam hoje (pedido da Lisboa 15/10: o recontato das 8h precisa aparecer na auditoria).
-  const [followRules, followSent] = await Promise.all([
-    prisma.followUpRule.findMany({ where: { clinicId, active: true }, orderBy: { order: "asc" }, select: { order: true, name: true, afterMinutes: true, afterDays: true, nextDayHour: true } }),
-    prisma.message.findMany({ where: { role: "assistant", authorName: "Recontato automático", createdAt: { gte: today.from, lt: today.to }, conversation: { patient: { clinicId } } }, select: { id: true } }),
+  const [followRules, followStats, runsToday] = await Promise.all([
+    prisma.followUpRule.findMany({ where: { clinicId, active: true }, orderBy: { order: "asc" }, select: { order: true, name: true, afterMinutes: true, afterDays: true, nextDayHour: true, sendWindowStart: true, sendWindowEnd: true } }),
+    dayStats(clinicId, today.from, today.to), // resultado PERSISTIDO de cada etapa (nao so "tentei"): enviado, nao confirmado, barrado, adiado, falha, janela perdida
+    prisma.automationRun.groupBy({ by: ["job"], where: { clinicId, startedAt: { gte: today.from, lt: today.to } }, _count: { _all: true }, _max: { startedAt: true } }),
   ]);
   // Conversas paradas com a equipe: a Alice NAO recontata conversa em atendimento humano (transferida em silencio e ninguem respondeu). Era
   // um jeito de "o recontato nao saiu" sem ninguem ver: agora aparece aqui, com nome.
@@ -158,7 +157,31 @@ export async function buildDailyReport(clinicId: string, tz: string): Promise<st
     for (const b of blocked.slice(0, 4)) lines.push(`   - ${(b.description ?? "").slice(0, 110)}`);
     if (blocked.length > 4) lines.push(`   …e mais ${blocked.length - 4} (veja o Diário de atividades).`);
   }
-  if (followRules.length) lines.push("", `🔁 *Recontatos*: ${followSent.length} enviado(s) hoje`, ...followUpRuleLines(followRules));
+  const stat = (flow: string) => followStats.find((s) => s.flow === flow);
+  const sentOf = (flow: string) => stat(flow)?.enviados ?? 0;
+  if (followRules.length) {
+    const s = stat("recontato");
+    const run = runsToday.find((r) => r.job === "recontato");
+    lines.push("", `🔁 *Recontatos*: ${sentOf("recontato")} enviado(s) hoje`);
+    if (s && (s.naoConfirmados || s.barradosTemporarios || s.barradosDefinitivos || s.adiados || s.falhas || s.janelaPerdida)) {
+      const bits = [
+        s.naoConfirmados ? `${s.naoConfirmados} sem confirmação do provedor (não reenviado)` : "",
+        s.barradosTemporarios + s.barradosDefinitivos ? `${s.barradosTemporarios + s.barradosDefinitivos} barrado(s) pela IA (${s.barradosTemporarios} podem ser reavaliados)` : "",
+        s.adiados ? `${s.adiados} adiado(s)` : "",
+        s.falhas ? `${s.falhas} com falha de envio` : "",
+        s.janelaPerdida ? `${s.janelaPerdida} perderam a janela de envio` : "",
+      ].filter(Boolean);
+      lines.push(`   • ${bits.join(" · ")}`);
+    }
+    // se o job nem rodou hoje, isso aparece (era o que tornava "o recontato nao saiu" impossivel de explicar)
+    lines.push(run ? `   • O job rodou ${run._count._all} vez(es) hoje (última às ${new Date(run._max.startedAt ?? Date.now()).toLocaleTimeString("pt-BR", { timeZone: tz, hour: "2-digit", minute: "2-digit" })}).` : "   • ⚠️ O job de recontato NÃO rodou hoje (servidor parado ou sem a concessão da tarefa). Avise o suporte.");
+    lines.push(...followUpRuleLines(followRules));
+  }
+  const resumeSent = sentOf("avaliacao_cancelada") + sentOf("avaliacao_sem_fechamento");
+  if (resumeSent || stat("avaliacao_cancelada")?.pulados || stat("avaliacao_cancelada")?.barradosTemporarios) {
+    const c = stat("avaliacao_cancelada");
+    lines.push("", `↩️ *Retomadas de avaliação*: ${resumeSent} enviada(s) hoje${c?.pulados ? ` · ${c.pulados} não incluída(s) por falta de prova do cancelamento ou por já terem remarcado` : ""}`);
+  }
   if (failures) lines.push("", `⚠️ ${failures} resposta(s) da Alice não foram entregues hoje (o sistema tenta de novo).`);
 
   // Segunda-feira: qualidade da semana + campanhas com baixa conversao

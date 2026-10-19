@@ -1369,10 +1369,16 @@ async function loadMessages(conversationId, { forceScroll = false } = {}) {
     if (bodyText) bubble.insertBefore(el("span", { class: "msg-text" }, [bodyText]), bubble.querySelector(".msg-time"));
     if (m.authorName) bubble.prepend(el("div", { class: "msg-author" }, [m.authorName]));
     // Resposta da Alice que o WhatsApp nao entregou (o sistema tenta de novo por alguns minutos).
-    if (m.deliveryStatus === "failed" || m.deliveryStatus === "failed_permanent") {
-      bubble.appendChild(el("div", { class: "msg-failed", style: "color:#dc2626;font-size:0.72rem;margin-top:0.2rem" }, [
-        m.deliveryStatus === "failed" ? "⚠ Não foi enviada — tentando de novo" : "⚠ Não foi enviada (número sem WhatsApp?)",
-      ]));
+    const DELIVERY_PROBLEM = {
+      failed: "⚠ Não foi enviada — tentando de novo",
+      failed_permanent: "⚠ Não foi enviada (número sem WhatsApp?)",
+      blocked: "⚠ Não foi enviada (envio automático bloqueado pelo plano)",
+      vetoed: "⚠ Não foi enviada (barrada pela revisão)",
+      expired: "⚠ Não foi enviada (expirou) — a equipe foi sinalizada",
+      unconfirmed: "⚠ Envio sem confirmação — pode ter chegado (não será reenviada)",
+    };
+    if (m.deliveryStatus && DELIVERY_PROBLEM[m.deliveryStatus]) {
+      bubble.appendChild(el("div", { class: "msg-failed", style: "color:#dc2626;font-size:0.72rem;margin-top:0.2rem" }, [DELIVERY_PROBLEM[m.deliveryStatus]]));
     }
     box.appendChild(bubble);
   }
@@ -4183,6 +4189,7 @@ async function refreshAll(force = false) {
     activeTab === "chat" || force || Date.now() - (state._convAt || 0) > 10_000 ? loadConversations() : Promise.resolve(),
     state.chatFilter === "archived" && activeTab === "chat" ? loadArchivedConversations() : Promise.resolve(),
     activeTab === "chat" && state.activeConversationId ? loadMessages(state.activeConversationId) : Promise.resolve(),
+    force || Date.now() - (state._healthAt || 0) > 60_000 ? loadAttendanceHealth() : Promise.resolve(),
   ]);
 }
 
@@ -4999,7 +5006,31 @@ function renderAlicePower() {
   const on = !c || c.aliceActive !== false;
   btn.classList.toggle("is-off", !on);
   btn.setAttribute("aria-pressed", String(on));
-  document.getElementById("alice-power-label").textContent = on ? "Alice atendendo" : "Alice pausada";
+  // "Atendendo" so e verdade se as mensagens estao sendo respondidas: o indicador olha as conversas (ver /clinic/attendance-health), nao so a conexao.
+  const h = on && state.attendanceHealth && state.attendanceHealth.clinicId === state.clinicId ? state.attendanceHealth : null;
+  const bad = h && h.status === "problema";
+  const warn = h && h.status === "atencao";
+  btn.classList.toggle("is-bad", !!bad);
+  btn.classList.toggle("is-warn", !!warn);
+  let label = on ? "Alice atendendo" : "Alice pausada";
+  if (bad) label = `Alice com problema · ${h.falhas.total + h.eventos.falhos + h.eventos.parados + h.respostasParadas} sem resposta`;
+  else if (warn && h.aguardando.total > 0) label = `Alice atendendo · ${h.aguardando.total} aguardando`;
+  document.getElementById("alice-power-label").textContent = label;
+  btn.title = h && h.motivos.length ? h.motivos.join(" | ") : "Liga ou desliga o atendimento da Alice nesta clínica";
+}
+
+async function loadAttendanceHealth() {
+  const clinicId = state.clinicId;
+  if (!clinicId) return;
+  try {
+    const h = await api("/clinic/attendance-health");
+    if (clinicId !== state.clinicId) return; // trocou de clinica durante a consulta
+    state.attendanceHealth = { ...h, clinicId };
+    state._healthAt = Date.now();
+    renderAlicePower();
+  } catch {
+    // indicador e so informativo: se a consulta falhar, mantem o ultimo estado
+  }
 }
 
 document.getElementById("alice-power")?.addEventListener("click", async (e) => {
@@ -5051,6 +5082,7 @@ async function loadClinics() {
       // ignora se nao puder salvar
     }
     state.activeConversationId = null;
+    state.attendanceHealth = null;
     resetChatPane();
     updateBrandName();
     renderAlicePower();
@@ -5159,6 +5191,7 @@ function openProcedureModal(proc) {
   document.getElementById("pr2-duration").value = proc?.durationMin || 60;
   document.getElementById("pr2-price").value = proc?.price != null ? proc.price.toFixed(2).replace(".", ",") : "";
   document.getElementById("pr2-allow-concurrent").checked = !!proc?.allowConcurrentBooking;
+  document.getElementById("pr2-booking-mode").value = proc?.bookingMode || "";
   document.getElementById("pr2-price-variable").checked = !!proc?.priceVariable;
   document.getElementById("pr2-installments").checked = !!proc?.offerInstallments;
   document.getElementById("pr2-installments-count").value = proc?.maxInstallments || 10;
@@ -5281,6 +5314,7 @@ document.getElementById("procedure-edit-form").addEventListener("submit", async 
     name: document.getElementById("pr2-name").value.trim(),
     durationMin: Number(document.getElementById("pr2-duration").value),
     allowConcurrentBooking: document.getElementById("pr2-allow-concurrent").checked,
+    bookingMode: document.getElementById("pr2-booking-mode").value || null,
     price: parseBRLInput(document.getElementById("pr2-price").value),
     priceVariable: document.getElementById("pr2-price-variable").checked,
     offerInstallments,
@@ -6373,6 +6407,61 @@ document.getElementById("btn-lisboa-restaurar-lembretes").addEventListener("clic
     out.textContent = `Lembretes restaurados: ${r.applied}; duplicados pausados: ${r.paused}.`;
     out.hidden = false;
     await loadReminderRules().catch(() => {});
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// Jornadas da Lisboa (Suelen 12h-21h, Adriana 12h-21h, Talita 8h-17h): mostra a PREVIA (o que muda, pendencias de identidade, conflitos) e so grava depois do ok.
+document.getElementById("btn-lisboa-jornadas").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const out = document.getElementById("seed-lisboa-result");
+  const post = (dryRun) => api("/clinics/lisboa-jornadas", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dryRun }) });
+  btn.disabled = true;
+  try {
+    const p = await post(true);
+    if (p.error) { showError(p.error); return; }
+    const linhas = p.itens.map((i) => {
+      const cab = i.status === "pendente" ? `• ${i.alvo}: PENDENTE — ${i.pendencia}` : i.status === "sem_mudanca" ? `• ${i.alvo} (${i.profissional}): já está ${i.jornadaNova}` : `• ${i.alvo} (${i.profissional}): ${i.antes} → ${i.jornadaNova}`;
+      const conf = (i.conflitos || []).map((c) => `     ⚠ ${c}`).join("\n");
+      return conf ? `${cab}\n${conf}` : cab;
+    });
+    const msg = `Ajustar as jornadas da Lisboa?\n\n${linhas.join("\n")}\n\nSó muda início e fim da jornada. Dias, intervalos e agendamentos não são alterados.`;
+    if (!p.itens.some((i) => i.status === "atualizar")) { showError(msg); return; }
+    if (!(await showConfirm(msg))) return;
+    const r = await post(false);
+    out.textContent = `Jornadas atualizadas: ${r.atualizadas}; pendências: ${r.pendentes}.`;
+    out.hidden = false;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// Conduta comercial da Lisboa: servicos que nao oferece, apelidos, como cada procedimento agenda e regras antigas em conflito. Previa primeiro; so grava depois do ok.
+document.getElementById("btn-lisboa-conduta").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  const out = document.getElementById("seed-lisboa-result");
+  const post = (dryRun) => api("/clinics/lisboa-conduta", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dryRun }) });
+  btn.disabled = true;
+  try {
+    const p = await post(true);
+    if (p.error) { showError(p.error); return; }
+    const m = p.modoAgendamento;
+    const linhas = [
+      `Serviços que a clínica NÃO oferece: ${p.naoOferecidos.proposto.join(", ") || "—"}${p.naoOferecidos.muda ? " (será gravado)" : " (já gravado)"}`,
+      `Ofertas anunciadas SEM cadastro (vão para a equipe, nunca viram avaliação): ${p.ofertasSemCadastro.proposto.join(", ") || "—"}${p.ofertasSemCadastro.muda ? " (será gravado)" : " (já gravado)"}${p.ofertasSemCadastro.jaCadastradas.length ? ` — JÁ TÊM cadastro: ${p.ofertasSemCadastro.jaCadastradas.join(", ")}` : ""}`,
+      `Menções encontradas: ${p.ocorrencias.length} (${p.ocorrencias.filter((o) => o.acao === "apelido_removido").length} apelido(s) serão limpos; o resto precisa de revisão manual)`,
+      ...p.ocorrencias.slice(0, 8).map((o) => `   • ${o.onde}: ${o.trecho}${o.acao === "apelido_removido" ? " → apelido removido" : " → revisar"}`),
+      `Como os procedimentos agendam: ${m.explicitoDireto} direto, ${m.explicitoAvaliacao} com avaliação (cadastrados), ${m.inferidoAvaliacao.length} que o texto aprovado diz exigir avaliação, ${m.semRegra} SEM regra definida`,
+      `Regras antigas que empurram avaliação/horário (revisar): ${p.regrasEmConflito.length}`,
+      `Sem queixa/objetivo declarado no cadastro (a Alice não os indica): ${p.semQueixaDeclarada.length}`,
+      "PENDENTE DA CLÍNICA: quais procedimentos agendam direto x exigem avaliação, e se procedimento sem regra deve ir para a equipe (modo estrito). Nada disso é ligado por este botão.",
+    ];
+    if (!p.naoOferecidos.muda && !p.ofertasSemCadastro.muda && !p.ocorrencias.some((o) => o.acao === "apelido_removido")) { showError(linhas.join("\n")); return; }
+    if (!(await showConfirm(`Ajustar a conduta comercial da Lisboa?\n\n${linhas.join("\n")}`))) return;
+    const r = await post(false);
+    out.textContent = `Conduta ajustada: serviços não oferecidos ${r.aplicado.naoOferecidos ? "gravados" : "inalterados"}; ofertas sem cadastro ${r.aplicado.ofertasSemCadastro ? "gravadas" : "inalteradas"}; apelidos limpos: ${r.aplicado.apelidosLimpos}.`;
+    out.hidden = false;
   } finally {
     btn.disabled = false;
   }

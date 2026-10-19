@@ -4,10 +4,16 @@ import net from "net";
 import OpenAI from "openai";
 import { toFile } from "openai";
 import { prisma } from "../db/client.js";
-import { recordIncomingMessage, generateReply, recordOutgoingFromDevice } from "../ai/alice.js";
+import { recordIncomingMessage, generateReply, recordOutgoingFromDevice, executeHandoff } from "../ai/alice.js";
 import { isFreePlan } from "../crm/plan.js";
 import { isOptOutRequest, applyOptOut, OPTOUT_CONFIRMATION } from "../crm/optout.js";
 import { reviewOutbound, type OutboundKind } from "../ai/sendGate.js";
+import { chooseFinalReply, forgetReplyContext, recallReplyContext, safeReplyFor, type ReplyContext } from "../ai/replyGuard.js";
+import { loadPersistedReplyContext, pruneReplyContexts } from "../ai/replyContextStore.js";
+import { checkResumeSend, type GuardedFlow } from "../crm/resumeGuard.js";
+import { recordSurveyNoteHumanOwned } from "../reminders/surveyHandler.js";
+import { type DeliveryStatus, STALE_PENDING_MS, REPLY_RESUME_WINDOW_MS } from "../ai/delivery.js";
+import { recordReplyFailure } from "../ai/replyFailure.js";
 import { scheduleBriefingRefresh } from "../ai/leadBriefing.js";
 
 type JsonRecord = Record<string, unknown>;
@@ -460,8 +466,18 @@ const placeholderAlerted = new Map<string, number>();
 // "vetoed" = a revisao por IA barrou (nao faz sentido enviar agora): nada saiu, o motivo fica no Diario de atividades.
 export type SendOutcome = "sent" | "blocked" | "duplicate" | "vetoed";
 
-export async function sendText(clinicId: string, phone: string, text: string, opts: { manual?: boolean; alice?: boolean; kind?: OutboundKind } = {}): Promise<SendOutcome> {
+export async function sendText(clinicId: string, phone: string, text: string, opts: { manual?: boolean; alice?: boolean; kind?: OutboundKind; flow?: GuardedFlow } = {}): Promise<SendOutcome> {
   if (await automatedSendBlocked(clinicId, opts.manual === true)) return "blocked";
+  // MODO RESTRITO das retomadas / convite de indicacao: vale AQUI, no caminho de envio, para a rodada, para nova tentativa e para qualquer chamada direta (nao depende da tela
+  // nem do job). Se o fluxo (ou, sem `flow`, qualquer fluxo possivel desse tipo) estiver restrito e a pessoa nao for um contato de teste autorizado, nada sai.
+  if (opts.manual !== true && (opts.kind === "retomada" || opts.kind === "indicacao")) {
+    const flows: GuardedFlow[] = opts.flow ? [opts.flow] : opts.kind === "indicacao" ? ["indicacao"] : ["avaliacao_cancelada", "avaliacao_sem_fechamento"];
+    const permit = await checkResumeSend(clinicId, flows, { phone }, { countReserved: false });
+    if (!permit.allowed) {
+      console.warn(`[uazapi] envio de ${opts.kind} NAO feito (modo ${permit.mode}: ${permit.code}) para ...${phone.slice(-4)}`);
+      return "blocked";
+    }
+  }
   let reservedDuplicateKey = false;
   if (opts.manual !== true) {
     const missing = hasUnresolvedPlaceholder(text);
@@ -556,49 +572,173 @@ export function isAmbiguousSendError(err: unknown): boolean {
 }
 
 export const BURST_DUPLICATE_MS = 3 * 60_000;
+const deliveriesInFlight = new Set<string>(); // respostas que ESTE processo esta entregando agora: a retomada nao mexe nelas
+const resendAttempts = new Map<string, number>(); // reenvios de cada resposta "failed"; passou do teto, expira e a equipe e sinalizada
+const MAX_RESEND_ATTEMPTS = 5;
 
+// Entrega a resposta da Alice (gravada por generateReply como "pending") e registra o que de fato aconteceu. Ver ai/delivery.ts para o significado de cada estado.
 export async function deliverAliceReply(clinicId: string, phone: string, conversationId: string, replyIn: string): Promise<void> {
-  let reply = replyIn;
   const pending = await prisma.message.findFirst({
-    where: { conversationId, role: "assistant", authorName: null, content: reply, deliveryStatus: { in: ["pending", "failed"] } },
+    where: { conversationId, role: "assistant", authorName: null, content: replyIn, deliveryStatus: { in: ["pending", "failed"] } },
     orderBy: { createdAt: "desc" },
     select: { id: true },
   });
-  // Esta mesma resposta JA foi entregue ha pouco (outra linha, mesmo texto): nao manda de novo.
-  const alreadySent = await prisma.message.findFirst({
+  if (pending) {
+    // Outra rodada DESTE processo ja esta entregando esta mesma linha (evento reprocessado + rotina de reenvio, por ex.): nao entrega duas vezes.
+    if (deliveriesInFlight.has(pending.id)) {
+      console.warn(`[uazapi] resposta ja esta sendo entregue por outra rodada (mensagem ${pending.id}, conv ${conversationId})`);
+      return;
+    }
+    deliveriesInFlight.add(pending.id);
+  }
+  try {
+    await runDelivery(clinicId, phone, conversationId, replyIn, pending);
+  } finally {
+    if (pending) deliveriesInFlight.delete(pending.id);
+  }
+}
+
+async function runDelivery(clinicId: string, phone: string, conversationId: string, replyIn: string, pending: { id: string } | null): Promise<void> {
+  const mark = async (status: DeliveryStatus, extra: { content?: string } = {}) => {
+    if (!pending) return;
+    // estado final: o resumo da geracao nao e mais necessario (so fica enquanto a resposta ainda pode ser entregue)
+    const final = status !== "pending" && status !== "failed" && status !== "sending";
+    await prisma.message.update({ where: { id: pending.id }, data: { deliveryStatus: status, ...extra, ...(final ? { replyContext: null } : {}) } }).catch((err) => {
+      console.error(`[uazapi] nao consegui gravar o estado "${status}" da resposta (mensagem ${pending.id}, conversa ${conversationId}):`, err instanceof Error ? err.message : err);
+    });
+  };
+  // Esta mesma resposta JA foi entregue, saiu sem confirmacao ou esta sendo enviada agora por outra rodada: nao manda de novo.
+  const same = await prisma.message.findFirst({
     where: {
-      conversationId, role: "assistant", authorName: null, content: reply, deliveryStatus: "sent",
+      conversationId, role: "assistant", authorName: null, content: replyIn, deliveryStatus: { in: ["sent", "unconfirmed", "sending"] },
       createdAt: { gte: new Date(Date.now() - BURST_DUPLICATE_MS) },
       ...(pending ? { id: { not: pending.id } } : {}),
     },
-    select: { id: true },
+    orderBy: { createdAt: "desc" },
+    select: { deliveryStatus: true },
   });
-  if (alreadySent) {
-    console.warn(`[uazapi] resposta repetida da Alice descartada (conv ${conversationId}): "${reply.trim().replace(/\s+/g, " ").slice(0, 60)}"`);
-    if (pending) await prisma.message.update({ where: { id: pending.id }, data: { deliveryStatus: null } }).catch(() => undefined);
-    return;
-  }
-  // REVISAO POR IA da resposta (ficha da pessoa + a mensagem): barra o que nao faz sentido agora ou reescreve um trecho errado, sem inventar fato novo.
-  // NUNCA fica sem resposta: se a revisao achou problema, ela escreve uma resposta MELHOR e essa e a que sai; sem alternativa valida, sai a original.
-  const verdict = await reviewOutbound({ clinicId, phone, text: reply, kind: "resposta_alice" });
-  if (verdict.rewritten) {
-    if (pending) await prisma.message.update({ where: { id: pending.id }, data: { content: verdict.rewritten } }).catch(() => undefined);
-    reply = verdict.rewritten;
-  }
-  try {
-    await sendText(clinicId, phone, reply, { alice: true });
-    if (pending) await prisma.message.update({ where: { id: pending.id }, data: { deliveryStatus: "sent" } });
-    void prisma.conversation.findUnique({ where: { id: conversationId }, select: { patientId: true } }).then((c) => { if (c) scheduleBriefingRefresh(c.patientId, { delayMs: 60_000 }); }).catch(() => undefined);
-  } catch (err) {
-    if (isAmbiguousSendError(err)) {
-      // Pode ter chegado: marca como enviada e NAO deixa o reenvio automatico repetir.
-      console.warn(`[uazapi] envio sem confirmacao (conv ${conversationId}), nao vai reenviar: ${err instanceof Error ? err.message : err}`);
-      if (pending) await prisma.message.update({ where: { id: pending.id }, data: { deliveryStatus: "sent" } }).catch(() => undefined);
+  if (same) {
+    if (same.deliveryStatus === "sending") {
+      // Outra rodada esta enviando ESTE texto agora. Esta linha NAO e descartada: fica "pending" e, se a outra rodada nao concluir, a retomada decide
+      // (entregue/sem confirmacao = superada; nada saiu = envia). Descartar aqui perderia a resposta se o envio da outra falhasse.
+      console.warn(`[uazapi] resposta igual ja esta sendo enviada por outra rodada (conv ${conversationId}); aguardando o desfecho dela`);
       return;
     }
-    if (pending) await prisma.message.update({ where: { id: pending.id }, data: { deliveryStatus: "failed" } }).catch(() => undefined);
+    console.warn(`[uazapi] resposta repetida da Alice descartada (conv ${conversationId}): "${replyIn.trim().replace(/\s+/g, " ").slice(0, 60)}"`);
+    await mark(null);
+    return;
+  }
+
+  let text = replyIn;
+  let ctxUsed: ReplyContext | null = null;
+  try {
+    // 1) REVISAO POR IA: pode propor um texto melhor. Nunca barra a resposta da Alice; falha da revisao = segue sem ela (reviewOutbound ja trata).
+    const verdict = await reviewOutbound({ clinicId, phone, text: replyIn, kind: "resposta_alice" });
+
+    // 2) TEXTO FINAL: o proposto pela revisao so vale se passar nas travas deterministicas (acao que de fato aconteceu, oferta indevida, dia/hora que a agenda
+    // devolveu, pedido da pessoa) com o contexto da geracao; senao a original, SE continuar valida; senao a original limpa; senao uma resposta curta e segura.
+    // Estas travas rodam mesmo com o disjuntor da revisao aberto. Nenhuma ferramenta e executada de novo e nenhuma chamada de IA e feita aqui.
+    // contexto da geracao: memoria deste processo; se o servidor reiniciou (ou a retomada veio depois de 15 min), o resumo gravado junto da mensagem
+    const ctx = recallReplyContext(conversationId, replyIn) ?? (pending ? await loadPersistedReplyContext(pending.id).catch(() => null) : null);
+    ctxUsed = ctx;
+    const catalog = ctx && ctx.agenda && !ctx.trusted ? await prisma.procedure.findMany({ where: { clinicId, internalOnly: false }, select: { name: true, aliases: true, goals: true, benefits: true, description: true } }) : undefined;
+    const choice = chooseFinalReply({ ctx, original: replyIn, rewritten: verdict.rewritten, catalog });
+    for (const r of choice.rejected) {
+      console.warn(`[resposta-final] ${r.source} recusada (conv ${conversationId}): ${r.problems.map((p) => `${p.code} (${p.detail})`).join("; ")}`);
+    }
+    text = choice.text;
+    if (choice.source !== "original") console.warn(`[resposta-final] saiu o texto "${choice.source}" (conv ${conversationId}): ${text.replace(/\s+/g, " ").slice(0, 80)}`);
+
+    // O texto diz que encaminhou pra equipe: executa o encaminhamento (mecanismo existente) ANTES. Clinica silenciosa: so encaminha, sem escrever nada.
+    if (choice.needsHandoff) {
+      const conv = await prisma.conversation.findUnique({ where: { id: conversationId }, select: { patientId: true, patient: { select: { clinic: { select: { silentHandoff: true } } } } } });
+      try {
+        if (!conv) throw new Error("conversa nao encontrada");
+        await executeHandoff(clinicId, conv.patientId, conversationId, "Alice disse que ia encaminhar para a equipe", `A resposta da Alice dizia que a equipe continuaria o atendimento. Ultima resposta: "${text.slice(0, 300)}".`);
+        if (conv.patient.clinic.silentHandoff) {
+          await mark(null); // transferencia silenciosa: a equipe ve a conversa nao lida; nada e escrito pra pessoa
+          return;
+        }
+      } catch (err) {
+        console.error("[resposta-final] falha ao encaminhar; saindo com resposta segura:", err instanceof Error ? err.message : err);
+        text = safeReplyFor(ctxUsed, [{ code: "claims_handoff", detail: "encaminhamento nao executado" }]);
+      }
+    }
+  } catch (err) {
+    // Falha inesperada ANTES do envio (banco, validador): nada saiu e o texto nao foi validado, entao NAO envia. Fica "failed": a retomada tenta de novo
+    // (com teto) e, se nao der, a resposta expira e a conversa vai para a equipe. Nunca sai conteudo sem passar pelas travas.
+    console.error(`[resposta-final] falha inesperada antes do envio (clinica=${clinicId} conversa=${conversationId} mensagem=${pending?.id ?? "?"}):`, err instanceof Error ? err.message : err);
+    await mark("failed");
     throw err;
   }
+
+  // 3) ENVIO: o estado reflete o que de fato aconteceu. Grava a intencao ANTES ("sending", ja com o texto final): se o processo cair daqui pra frente o
+  // desfecho e desconhecido e a retomada nunca reenvia as cegas. Se nem isto der pra gravar, nao envia (continua "pending", recuperavel).
+  if (pending) {
+    // Reserva ATOMICA no banco (vale entre processos/copias do servidor): so quem muda pending/failed -> sending envia.
+    const claimed = await prisma.message.updateMany({
+      where: { id: pending.id, deliveryStatus: { in: ["pending", "failed"] } },
+      data: { deliveryStatus: "sending", ...(text !== replyIn ? { content: text } : {}) },
+    });
+    if (claimed.count !== 1) {
+      console.warn(`[uazapi] resposta nao enviada: outra rodada ja assumiu o envio (mensagem ${pending.id}, conv ${conversationId})`);
+      return;
+    }
+  }
+  let outcome: SendOutcome;
+  try {
+    outcome = await sendText(clinicId, phone, text, { alice: true });
+  } catch (err) {
+    if (isAmbiguousSendError(err)) {
+      // Pode ter chegado (o timeout foi DEPOIS de submeter): NAO e entrega confirmada, e NAO reenvia sozinha.
+      console.warn(`[uazapi] envio sem confirmacao (conv ${conversationId}), nao vai reenviar: ${err instanceof Error ? err.message : err}`);
+      await mark("unconfirmed");
+      return;
+    }
+    if (isPermanentSendError(err)) {
+      // Numero sem WhatsApp: insistir nao adianta. Fica registrado como falha definitiva e a equipe e sinalizada (sem lancar: o evento nao pode regenerar a resposta em loop).
+      await mark("failed_permanent");
+      await recordReplyFailure({ clinicId, conversationId, messageId: pending?.id, stage: "envio", error: err, note: "numero sem WhatsApp" });
+      return;
+    }
+    await mark("failed");
+    throw err;
+  }
+  switch (outcome) {
+    case "sent":
+      await mark("sent"); // "sent" = a UAZAPI aceitou o envio; nao ha recibo de entrega no aparelho
+      if (pending) resendAttempts.delete(pending.id);
+      forgetReplyContext(conversationId, replyIn);
+      // A memoria do lead so conta o que chegou de fato.
+      void prisma.conversation.findUnique({ where: { id: conversationId }, select: { patientId: true } }).then((c) => { if (c) scheduleBriefingRefresh(c.patientId, { delayMs: 60_000 }); }).catch(() => undefined);
+      return;
+    case "blocked":
+    case "vetoed": {
+      const motivo = outcome === "blocked" ? "envio automatico bloqueado pelo plano" : "barrada pela revisao";
+      console.warn(`[uazapi] resposta da Alice NAO enviada: ${motivo} (conv ${conversationId})`);
+      await mark(outcome);
+      await recordReplyFailure({ clinicId, conversationId, messageId: pending?.id, stage: "envio", note: motivo });
+      return;
+    }
+    case "duplicate": {
+      // O envio foi SUPRIMIDO: isso so prova entrega anterior se houver outra fala igual ja enviada/sem confirmacao; senao pode ser envio em andamento
+      // de outra rodada (nao da pra afirmar nem que chegou, nem que nao chegou): fica "unconfirmed" e nao reenvia.
+      const earlier = await prisma.message.findFirst({
+        where: { conversationId, role: "assistant", authorName: null, content: text, deliveryStatus: { in: ["sent", "unconfirmed"] }, ...(pending ? { id: { not: pending.id } } : {}), createdAt: { gte: new Date(Date.now() - 10 * 60_000) } },
+        select: { id: true },
+      });
+      console.warn(`[uazapi] envio suprimido como duplicado (conv ${conversationId}); ${earlier ? "ha fala igual ja entregue" : "sem evidencia de entrega anterior"}`);
+      await mark(earlier ? null : "unconfirmed");
+      return;
+    }
+  }
+}
+
+// Marca como expirada uma resposta que nao saiu e nao vai mais sair sozinha, e deixa a conversa sinalizada pra equipe.
+async function expireReply(m: { id: string; conversationId: string; clinicId: string }, why: string): Promise<void> {
+  await prisma.message.update({ where: { id: m.id }, data: { deliveryStatus: "expired" } }).catch(() => undefined);
+  resendAttempts.delete(m.id);
+  await recordReplyFailure({ clinicId: m.clinicId, conversationId: m.conversationId, messageId: m.id, stage: "retomada", note: why });
 }
 
 // Reenvia a ultima resposta da Alice que nao chegou (deliveryStatus "failed"), se ainda for a ultima fala da conversa.
@@ -609,6 +749,7 @@ async function resendFailedAliceReply(clinicId: string, phone: string, conversat
     orderBy: { createdAt: "desc" },
   });
   if (!failed) return false;
+  if (deliveriesInFlight.has(failed.id)) return true; // esta rodada mesma ja esta entregando
   const later = await prisma.message.findFirst({
     where: { conversationId, createdAt: { gt: failed.createdAt }, role: { in: ["assistant", "human"] } },
     select: { id: true },
@@ -617,8 +758,73 @@ async function resendFailedAliceReply(clinicId: string, phone: string, conversat
     await prisma.message.update({ where: { id: failed.id }, data: { deliveryStatus: null } }); // superada por outra fala: nao reenvia
     return false;
   }
+  const attempts = (resendAttempts.get(failed.id) ?? 0) + 1;
+  resendAttempts.set(failed.id, attempts);
+  if (attempts > MAX_RESEND_ATTEMPTS) {
+    await expireReply({ id: failed.id, conversationId, clinicId }, `o envio falhou ${MAX_RESEND_ATTEMPTS} vezes seguidas`);
+    return true;
+  }
   await deliverAliceReply(clinicId, phone, conversationId, failed.content);
   return true;
+}
+
+// RETOMADA (roda a cada minuto): nada pode ficar "pending"/"sending" para sempre. Sem desfecho conhecido a Alice nunca reenvia as cegas:
+//  - "sending" parado: o processo caiu depois de iniciar o envio -> "unconfirmed" (pode ter chegado; nao reenvia);
+//  - "pending" parado e ainda a ultima fala: nunca chegou a enviar -> volta a "failed" (a rotina de reenvio manda, so se for recente);
+//  - superada por fala mais nova, equipe assumiu, ou ja existe a mesma fala entregue -> descartada sem falha;
+//  - velha demais (> 30 min) ou falhando sem parar -> "expired" + conversa sinalizada pra equipe. Nada antigo e reenviado em massa.
+export async function recoverStuckReplies(now = new Date()): Promise<{ unconfirmed: number; resumed: number; superseded: number; expired: number }> {
+  const out = { unconfirmed: 0, resumed: 0, superseded: 0, expired: 0 };
+  const staleBefore = new Date(now.getTime() - STALE_PENDING_MS);
+  const windowStart = new Date(now.getTime() - REPLY_RESUME_WINDOW_MS);
+  const select = {
+    id: true, content: true, createdAt: true, conversationId: true, deliveryStatus: true,
+    conversation: { select: { humanTakeover: true, patient: { select: { clinicId: true } } } },
+  } as const;
+
+  await pruneReplyContexts().catch(() => undefined); // o resumo da geracao so existe enquanto a resposta ainda pode ser entregue
+  const sending = await prisma.message.findMany({ where: { role: "assistant", authorName: null, deliveryStatus: "sending", createdAt: { lt: staleBefore } }, select, take: 50 });
+  for (const m of sending) {
+    if (deliveriesInFlight.has(m.id)) continue;
+    await prisma.message.updateMany({ where: { id: m.id, deliveryStatus: "sending" }, data: { deliveryStatus: "unconfirmed" } });
+    console.warn(`[retomada] envio sem desfecho (mensagem ${m.id}, conv ${m.conversationId}): marcado sem confirmacao, nao sera reenviado`);
+    out.unconfirmed++;
+  }
+
+  const stuck = await prisma.message.findMany({
+    where: { role: "assistant", authorName: null, createdAt: { lt: staleBefore }, OR: [{ deliveryStatus: "pending" }, { deliveryStatus: "failed", createdAt: { lt: windowStart } }] },
+    select,
+    orderBy: { createdAt: "asc" },
+    take: 50,
+  });
+  for (const m of stuck) {
+    if (deliveriesInFlight.has(m.id)) continue;
+    const ref = { id: m.id, conversationId: m.conversationId, clinicId: m.conversation.patient.clinicId };
+    const later = await prisma.message.findFirst({ where: { conversationId: m.conversationId, createdAt: { gt: m.createdAt }, role: { in: ["user", "assistant", "human"] } }, select: { id: true } });
+    if (later || m.conversation.humanTakeover) {
+      await prisma.message.updateMany({ where: { id: m.id, deliveryStatus: m.deliveryStatus }, data: { deliveryStatus: null } });
+      out.superseded++;
+      continue;
+    }
+    if (m.createdAt < windowStart) {
+      await expireReply(ref, "a resposta ficou parada por mais de 30 minutos");
+      out.expired++;
+      continue;
+    }
+    const delivered = await prisma.message.findFirst({
+      where: { conversationId: m.conversationId, role: "assistant", authorName: null, content: m.content, id: { not: m.id }, deliveryStatus: { in: ["sent", "unconfirmed", "sending"] }, createdAt: { gte: new Date(now.getTime() - 10 * 60_000) } },
+      select: { id: true },
+    });
+    if (delivered) {
+      await prisma.message.updateMany({ where: { id: m.id, deliveryStatus: "pending" }, data: { deliveryStatus: null } });
+      out.superseded++;
+      continue;
+    }
+    await prisma.message.updateMany({ where: { id: m.id, deliveryStatus: "pending" }, data: { deliveryStatus: "failed" } });
+    console.warn(`[retomada] resposta que nunca chegou a ser enviada (mensagem ${m.id}, conv ${m.conversationId}): volta pra fila de reenvio`);
+    out.resumed++;
+  }
+  return out;
 }
 
 export type OutgoingMediaKind = "image" | "video" | "document" | "audio" | "ptt";
@@ -1087,7 +1293,11 @@ function scheduleGroupedReply(clinicId: string, phone: string, conversationId: s
         if (pendingReplies.has(key)) return;
         if (reply) return deliverAliceReply(clinicId, phone, conversationId, reply);
       })
-      .catch((err) => console.error("[reply-group] falha ao gerar/enviar:", err));
+      .catch((err) => {
+        console.error("[reply-group] falha ao gerar/enviar:", err);
+        // Sem isto a falha ficava so no log: a mensagem ja estava gravada e ninguem mais ia responder. Agora a conversa fica sinalizada pra equipe.
+        void recordReplyFailure({ clinicId, conversationId, phone, stage: "geracao", error: err });
+      });
   }, wait);
 
   pendingReplies.set(key, { timer, conversationId, phone, imageDataUrl: img, firstAt });
@@ -1108,8 +1318,21 @@ const STALE_REPLY_MS = 30 * 60_000;
 async function findRecordedMessage(clinicId: string, externalId: string) {
   return prisma.message.findFirst({
     where: { externalId, conversation: { patient: { clinicId } } },
-    select: { conversationId: true, conversation: { select: { humanTakeover: true } } },
+    select: { conversationId: true, conversation: { select: { humanTakeover: true, patientId: true } } },
   });
+}
+
+// Conversa com a EQUIPE (atendimento humano): a Alice nao responde, mas uma resposta valida a uma pesquisa de satisfacao pendente continua sendo da pessoa e precisa ser
+// REGISTRADA (idempotente pelo id da mensagem). Nada e escrito para a pessoa: sem agradecimento, sem link do Google, sem convite de indicacao. Falha aqui nunca derruba o evento.
+async function noteSurveyWhileHumanOwned(clinicId: string, conversationId: string, patientId: string): Promise<void> {
+  try {
+    const clinic = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { businessType: true } });
+    if (!clinic || clinic.businessType === "geral") return;
+    const msgs = await prisma.message.findMany({ where: { conversationId }, orderBy: { createdAt: "desc" }, take: 30, select: { id: true, role: true, content: true, authorName: true, createdAt: true } });
+    await recordSurveyNoteHumanOwned({ clinicId, conversationId, patientId, history: msgs.reverse() });
+  } catch (err) {
+    console.error("[pesquisa] nao consegui registrar a nota com a conversa na equipe:", err instanceof Error ? err.message : err);
+  }
 }
 
 async function handleQueuedPayload(clinicId: string, body: unknown, ageMs = 0): Promise<void> {
@@ -1129,6 +1352,7 @@ async function handleQueuedPayload(clinicId: string, body: unknown, ageMs = 0): 
     // de novo nem baixa/transcreve midia outra vez: so garante que o paciente receba a resposta.
     const already = await findRecordedMessage(clinicId, incoming.externalId);
     if (already) {
+      if (already.conversation.humanTakeover && !incoming.fromMe && !freePlan) await noteSurveyWhileHumanOwned(clinicId, already.conversationId, already.conversation.patientId); // (reprocessamento: idempotente)
       if (incoming.fromMe || freePlan || already.conversation.humanTakeover || stale) continue;
       // 1) existe resposta gravada que nao chegou ao paciente: reenvia ESSA (nao gera outra)
       if (await resendFailedAliceReply(clinicId, incoming.phone, already.conversationId)) continue;
@@ -1219,7 +1443,10 @@ async function handleQueuedPayload(clinicId: string, body: unknown, ageMs = 0): 
       continue;
     }
 
-    if (recorded.humanTakeover) continue;
+    if (recorded.humanTakeover) {
+      if (!recorded.probableEcho) await noteSurveyWhileHumanOwned(clinicId, recorded.conversationId, recorded.patientId);
+      continue;
+    }
     if (recorded.probableEcho) continue;
 
     if (stale) {
@@ -1330,12 +1557,25 @@ const MAX_PARALLEL = 4;
 const EVENT_TIMEOUT_MS = 150_000;
 const STALE_PROCESSING_MS = 180_000; // maior que EVENT_TIMEOUT_MS: um evento vivo nunca e confundido com um abandonado
 const MAX_ATTEMPTS = 3;
+// Evento que falhou so e tentado de novo depois deste intervalo: antes as 3 tentativas saiam uma atras da outra em segundos, e uma queda curta da
+// OpenAI/banco esgotava todas e a pessoa ficava sem resposta.
+const EVENT_RETRY_GAP_MS = 30_000;
 const activeClinics = new Set<string>();
 const activeEventIds = new Set<string>();
 let webhookRerun = false;
 let shuttingDown = false;
 
-async function processWebhookEvent(event: { id: string; clinicId: string; payload: string; createdAt: Date }): Promise<void> {
+// O evento esgotou as tentativas: a(s) pessoa(s) que escreveram nele podem ter ficado sem resposta. Deixa a pendencia explicita (conversa nao lida + diario).
+async function flagFailedEvent(event: { id: string; clinicId: string; payload: string }, error: unknown): Promise<void> {
+  try {
+    const phones = new Set(parseWebhookPayload(JSON.parse(event.payload)).filter((m) => !m.fromMe && (m.text || m.media || m.mediaMessageId)).map((m) => m.phone));
+    for (const phone of phones) await recordReplyFailure({ clinicId: event.clinicId, phone, eventId: event.id, stage: "recebimento", error });
+  } catch (err) {
+    console.error("[UAZAPI] nao consegui sinalizar o evento que falhou:", err instanceof Error ? err.message : err);
+  }
+}
+
+async function processWebhookEvent(event: { id: string; clinicId: string; payload: string; createdAt: Date; attempts: number }): Promise<void> {
   activeEventIds.add(event.id);
   try {
     let timer: NodeJS.Timeout | undefined;
@@ -1353,7 +1593,8 @@ async function processWebhookEvent(event: { id: string; clinicId: string; payloa
     await prisma.uazapiWebhookEvent
       .update({ where: { id: event.id }, data: { status: "failed", error: message.slice(0, 1000) } })
       .catch(() => undefined);
-    console.error(`[UAZAPI] Evento ${event.id} falhou:`, error);
+    console.error(`[UAZAPI] Evento ${event.id} falhou (clinica ${event.clinicId}, tentativa ${event.attempts + 1} de ${MAX_ATTEMPTS}):`, error);
+    if (event.attempts + 1 >= MAX_ATTEMPTS) await flagFailedEvent(event, error); // a copia lida nao tem o incremento da reserva
   } finally {
     activeEventIds.delete(event.id);
   }
@@ -1375,7 +1616,7 @@ export async function processUazapiWebhookQueue(): Promise<void> {
           const busy = [...activeClinics];
           const events = await prisma.uazapiWebhookEvent.findMany({
             where: {
-              status: { in: ["pending", "failed"] },
+              OR: [{ status: "pending" }, { status: "failed", updatedAt: { lt: new Date(Date.now() - EVENT_RETRY_GAP_MS) } }],
               attempts: { lt: MAX_ATTEMPTS },
               ...(busy.length ? { clinicId: { notIn: busy } } : {}),
             },
@@ -1446,6 +1687,7 @@ export async function maintainUazapiQueue(): Promise<void> {
     where: { status: "processing", updatedAt: { lt: new Date(Date.now() - STALE_PROCESSING_MS) }, id: { notIn: [...activeEventIds] } },
     data: { status: "pending" },
   });
+  await recoverStuckReplies().catch((err) => console.error("[retomada] falhou:", err instanceof Error ? err.message : err));
   await processUazapiWebhookQueue();
   await retryFailedAliceReplies();
 
@@ -1455,6 +1697,7 @@ export async function maintainUazapiQueue(): Promise<void> {
     await prisma.uazapiWebhookEvent.deleteMany({ where: { status: "done", createdAt: { lt: new Date(Date.now() - 7 * day) } } });
     await prisma.uazapiWebhookEvent.deleteMany({ where: { status: "failed", attempts: { gte: MAX_ATTEMPTS }, createdAt: { lt: new Date(Date.now() - 30 * day) } } });
     await prisma.apiIdempotencyKey.deleteMany({ where: { createdAt: { lt: new Date(Date.now() - 7 * day) } } });
+    await prisma.reminderDispatch.deleteMany({ where: { createdAt: { lt: new Date(Date.now() - 90 * day) } } }); // trilha dos lembretes: 90 dias
   }
 }
 

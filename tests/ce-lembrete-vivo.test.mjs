@@ -58,7 +58,7 @@ test("reserva CANCELADA no CE: o lembrete nao sai e o agendamento e cancelado aq
   handler = ({ path }) => (path.endsWith("/bookings/cancelada-no-ce") ? json(200, { data: { uuid: "cancelada-no-ce", status: "canceled", starts_at: appt.scheduledAt.toISOString() } }) : json(404, {}));
   const verdict = await verifyBookingLive(appt, TZ);
   assert.equal(verdict.kind, "gone");
-  assert.equal(await applyLiveVerdict(appt, verdict, "Bruna"), true); // true = pular o lembrete
+  assert.equal(await applyLiveVerdict(appt, verdict, "Bruna"), "skip"); // "skip" = pular o lembrete
   assert.equal((await prisma.appointment.findUnique({ where: { id: appt.id } })).status, "cancelled");
   const log = await prisma.activityLog.findFirst({ where: { clinicId: clinic.id, patientId: p.id, type: "appointment_cancelled" } });
   assert.ok(log, "fica registrado no diario");
@@ -68,7 +68,7 @@ test("reserva APAGADA no CE (404): idem", async () => {
   const p = await paciente("Vania");
   const appt = await agendamento(p, { when: inHours(20), uuid: "apagada" });
   handler = () => json(404, { error: { user_message: "Not found" } });
-  assert.equal(await applyLiveVerdict(appt, await verifyBookingLive(appt, TZ), "Vania"), true);
+  assert.equal(await applyLiveVerdict(appt, await verifyBookingLive(appt, TZ), "Vania"), "skip");
   assert.equal((await prisma.appointment.findUnique({ where: { id: appt.id } })).status, "cancelled");
 });
 
@@ -81,7 +81,7 @@ test("horario TROCADO no CE: corrige aqui, zera a confirmacao antiga e libera os
   handler = () => json(200, { data: { uuid: "trocada", status: "scheduled", starts_at: novo.toISOString() } });
   const verdict = await verifyBookingLive(appt, TZ);
   assert.equal(verdict.kind, "moved");
-  assert.equal(await applyLiveVerdict(appt, verdict, "Maria"), true); // nao manda o do horario antigo
+  assert.equal(await applyLiveVerdict(appt, verdict, "Maria"), "skip"); // nao manda o do horario antigo
   const after = await prisma.appointment.findUnique({ where: { id: appt.id } });
   assert.equal(after.scheduledAt.getTime(), novo.getTime());
   assert.equal(after.patientConfirmed, false);
@@ -95,22 +95,31 @@ test("reserva igual ao que a Alice tem: segue e o lembrete sai normalmente", asy
   handler = () => json(200, { data: { uuid: "igual", status: "scheduled", starts_at: appt.scheduledAt.toISOString() } });
   const verdict = await verifyBookingLive(appt, TZ);
   assert.equal(verdict.kind, "ok");
-  assert.equal(await applyLiveVerdict(appt, verdict, "Ana"), false);
+  assert.equal(await applyLiveVerdict(appt, verdict, "Ana"), "send");
   assert.equal((await prisma.appointment.findUnique({ where: { id: appt.id } })).status, "confirmed");
 });
 
-test("CE fora do ar / resposta estranha: nao conclui nada (o lembrete segue) e nunca lanca", async () => {
+test("CE fora do ar / resposta estranha: INCONCLUSIVO -> adia (nao envia), nao altera a reserva e nunca lanca", async () => {
   const p = await paciente("Rede");
   const appt = await agendamento(p, { when: inHours(20), uuid: "rede-caiu" });
   handler = () => { throw new Error("socket hang up"); };
-  assert.equal((await verifyBookingLive(appt, TZ)).kind, "unknown");
+  const caiu = await verifyBookingLive(appt, TZ);
+  assert.equal(caiu.kind, "unknown");
+  assert.equal(caiu.systemic, true);
+  assert.equal(await applyLiveVerdict(appt, caiu, "Rede"), "defer");
   handler = () => json(500, {});
   assert.equal((await verifyBookingLive(appt, TZ)).kind, "unknown");
-  handler = () => json(200, { data: { status: { name: "canceled" }, starts_at: "2026-10-20T13:30:00" } }); // formato inesperado
-  assert.equal((await verifyBookingLive(appt, TZ)).kind, "ok");
-  assert.equal((await prisma.appointment.findUnique({ where: { id: appt.id } })).status, "confirmed");
+  handler = () => json(401, {});
+  assert.equal((await verifyBookingLive(appt, TZ)).kind, "unknown");
+  handler = () => json(200, { data: { status: { name: "canceled" }, starts_at: "2026-10-20T13:30:00" } }); // formato inesperado: status nao e texto
+  const estranho = await verifyBookingLive(appt, TZ);
+  assert.equal(estranho.kind, "unknown", "dado ausente/estranho NUNCA vira confirmacao positiva");
+  assert.equal(estranho.systemic, false);
+  assert.equal((await prisma.appointment.findUnique({ where: { id: appt.id } })).status, "confirmed", "nada foi cancelado nem alterado");
   const semUuid = await agendamento(p, { when: inHours(22), uuid: null });
-  assert.equal((await verifyBookingLive(semUuid, TZ)).kind, "ok"); // nao veio do CE: nada a conferir
+  const sem = await verifyBookingLive(semUuid, TZ);
+  assert.equal(sem.kind, "unlinked"); // nao veio do CE: nada a conferir, segue como sempre
+  assert.equal(await applyLiveVerdict(semUuid, sem, "Rede"), "send");
 });
 
 test("a importacao: reserva SEM procedimento entra com procedimento interno (e e a unica sem telefone que fica de fora)", async () => {

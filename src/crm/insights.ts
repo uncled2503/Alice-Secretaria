@@ -88,7 +88,7 @@ export async function aliceReport(clinicId: string, start: Date, end: Date): Pro
       take: 5000,
     }),
     prisma.message.count({
-      where: { role: "assistant", deliveryStatus: { in: ["failed", "failed_permanent"] }, createdAt: { gte: start, lte: end }, conversation: { patient: { clinicId } } },
+      where: { role: "assistant", deliveryStatus: { in: ["failed", "failed_permanent", "blocked", "vetoed"] }, createdAt: { gte: start, lte: end }, conversation: { patient: { clinicId } } },
     }),
   ]);
   const wonStages = new Set(stages.filter((s) => s.kind === "ganho").map((s) => s.stageId));

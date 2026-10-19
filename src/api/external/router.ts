@@ -507,6 +507,10 @@ externalApiRouter.post(
         past: "O horário já passou.",
         procedure_not_found: "Procedimento não encontrado.",
         invalid_datetime: "Data/hora inválida.",
+        no_professional: "Nenhuma profissional habilitada para esse procedimento tem agenda disponível.",
+        professional_not_eligible: "Essa profissional não realiza esse procedimento (ou o cadastro dela está incompleto).",
+        professional_required: "Informe uma profissional habilitada para esse procedimento (professional_id).",
+        ce_unavailable: "Não foi possível confirmar a disponibilidade na agenda do Clínica Experts agora. Tente novamente.",
       };
       fail(booking.error === "conflict" ? 409 : 422, booking.error, map[booking.error] ?? "Não foi possível agendar.");
     }
@@ -576,6 +580,7 @@ externalApiRouter.patch(
       where: { id: existing.id },
       data: {
         ...(b.status ? { status: b.status } : {}),
+        ...(b.status === "cancelled" && existing.status !== "cancelled" ? { cancelledAt: new Date(), cancelSource: "api_externa" } : {}),
         ...(start ? { scheduledAt: start, patientConfirmed: false, confirmedAt: null } : {}),
         ...(b.professional_id !== undefined ? { professionalId: b.professional_id || null } : {}),
       },

@@ -91,9 +91,9 @@ export function renderCallbackMessage(name: string | null): string {
   return first ? CALLBACK_MESSAGE.replace("{primeiro_nome}", first) : CALLBACK_MESSAGE.replace(", {primeiro_nome}!", "!");
 }
 
-export async function runCallbackCheck(now = new Date()): Promise<number> {
+export async function runCallbackCheck(now = new Date(), only: { clinicId?: string } = {}): Promise<number> {
   const clinics = await prisma.clinic.findMany({
-    where: { ...PAID_CLINIC_WHERE, active: true, aliceActive: true },
+    where: { ...PAID_CLINIC_WHERE, active: true, aliceActive: true, ...(only.clinicId ? { id: only.clinicId } : {}) },
     select: { id: true, timezone: true, workDays: true, workStartHour: true, workEndHour: true, hoursByDay: true },
   });
   let handled = 0;
@@ -121,6 +121,11 @@ export async function runCallbackCheck(now = new Date()): Promise<number> {
           const text = renderCallbackMessage(p.name);
           const outcome = await sendText(clinic.id, p.phone, text, { kind: "recontato" });
           if (outcome === "sent") await recordAutomatedMessage(p.id, text, "Retorno combinado");
+          else {
+            // O retorno combinado e a promessa feita a pessoa: se nada saiu (revisao por IA, plano, duplicada), a equipe e avisada - nunca some em silencio.
+            const why = outcome === "vetoed" ? "a revisão por IA barrou a mensagem (veja o Diário de atividades)" : outcome === "blocked" ? "envio automático bloqueado (plano)" : "mensagem idêntica já enviada";
+            await notifyStaff(clinic.id, "automation_failed", `⚠️ O retorno combinado com ${p.name ?? p.phone} (${p.phone}) NÃO foi enviado: ${why}. Chame manualmente.`);
+          }
         }
         handled++;
       } catch (err) {

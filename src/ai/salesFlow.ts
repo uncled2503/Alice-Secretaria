@@ -12,7 +12,7 @@ function fold(s: string): string {
   return s.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
 }
 
-export type Intent = "schedule" | "decline" | "hesitate" | "price" | "info" | "booked" | "returning" | "manage" | "staff";
+export type Intent = "schedule" | "decline" | "hesitate" | "refuse" | "price" | "info" | "booked" | "returning" | "manage" | "staff";
 
 export interface FlowMessage {
   role: string;
@@ -42,6 +42,18 @@ const HARD_NO_RE =
   /\b(nao tenho (mais )?interesse|sem interesse|nao quero( mais)?( fazer| esse| isso)?|desisti|nao vou (fazer|querer)|nao (era|e) isso|nao me interessa)\b/;
 const SOFT_STALL_RE =
   /\b(vou pensar|vou me organizar|vou ver (e|com)|te aviso|depois (eu )?(vejo|falo|aviso|te falo|entro em contato)|mais pra frente|talvez depois|agora nao|no momento nao|deixa eu ver)\b/;
+
+// "Nao." / "Agora nao." respondendo a uma OFERTA: recusa da oferta (nao dos horarios, que e outro caso: "nao consigo nesse horario, so sabado").
+const REFUSE_ONLY_RE = /^(nao|nao obrigad[oa]|agora nao|nao quero|nao preciso|prefiro nao|por enquanto nao|nao por enquanto|nao no momento|no momento nao|nao tenho interesse|sem interesse)[ .!,]*$/;
+export function isBareRefusal(text: string): boolean {
+  return REFUSE_ONLY_RE.test(fold(text).replace(/\s+/g, " ").trim());
+}
+
+// A Alice acabou de pedir o NOME para concluir o agendamento?
+const ASKED_NAME_RE = /nome completo|sobrenome|qual (e )?(o )?seu nome|seu nome (completo|e sobrenome)|como (voce )?(se )?chama|me (passa|diz|informa|manda) (o )?seu nome|preciso do seu nome/;
+export function askedForName(lastAssistant: string): boolean {
+  return ASKED_NAME_RE.test(fold(lastAssistant));
+}
 
 const GOAL_RE =
   /gordura|barriga|abdom|flacidez|flacida|braco|ruga|mancha|celulite|estria|papada|coxa|culote|olheira|acne|labio|rosto|\bpele\b|cabelo|emagrec|peso|sobrancelha|tatuagem|depila|cicatriz|poros|bumbum|gluteo|perna|seio|colo\b|melasma|vasinho/;
@@ -86,6 +98,8 @@ export function analyzeFlow(input: {
   chosen?: ChosenSlot | null; // horario que ela ja escolheu numa lista oferecida
   chosenFullName?: string | null; // nome completo que ela ja deu (pra book_appointment)
   evaluationName?: string | null; // nome da avaliacao no catalogo
+  awaitingName?: boolean; // ela acabou de responder o NOME que a Alice pediu para concluir um agendamento em andamento
+  needOptions?: string[]; // procedimentos APROVADOS no cadastro para a queixa dela (vem da conducao); [] = nenhum com indicacao aprovada
 }): SalesFlow {
   const { history, trailing, priceAsked, hasBooking } = input;
   const pastVisits = input.pastVisits === true;
@@ -107,6 +121,8 @@ export function analyzeFlow(input: {
   const hardNo = HARD_NO_RE.test(trailFold);
   const softStall = SOFT_STALL_RE.test(trailFold) && !slotsOffered;
   const hesitates = !proposesTime && (hardNo || softStall);
+  const lastOfferedEarly = OFFER_RE.test(fold(lastAssistant)) && /\?/.test(lastAssistant);
+  const refusesOffer = !hesitates && !proposesTime && lastOfferedEarly && isBareRefusal(trailText);
 
   // "Sim" a uma oferta de horario/avaliacao, ou "amanha estarei de folga" depois de uma oferta: quer agendar (antes a Alice explicava o
   // procedimento de novo e perguntava "voce ja fez antes?").
@@ -116,7 +132,8 @@ export function analyzeFlow(input: {
   const chosen = hasBooking ? null : input.chosen ?? null; // ja agendada: nada a escolher
   // "Quero uma limpeza de pele": pediu um procedimento do catalogo pelo nome = quer agendar ESSE (nao e so curiosidade). Pergunta de valor/informacao nao conta.
   const namesProcedure = input.wanted !== undefined && (input.wanted.kind === "specific" || input.wanted.kind === "options") && /\b(quero|queria|gostaria|tenho interesse|interesse em|fazer|marcar)\b/.test(fold(trailText)) && !priceAsked && !/\b(saber|informac\w*|duvida|como funciona|explic\w*|o que e)\b/.test(fold(trailText));
-  const wantsToBook = wantsSchedule(trailText) || accepted || gaveAvailability || !!chosen || namesProcedure;
+  const awaitingName = input.awaitingName === true && !hasBooking;
+  const wantsToBook = wantsSchedule(trailText) || accepted || gaveAvailability || !!chosen || namesProcedure || awaitingName;
 
   // Pedido ANTIGO de horario (scheduleAsked) so conta se a conversa ainda esta no meio do agendamento (a ultima fala ofereceu horario ou perguntou
   // de agendar). Antes valia pra sempre: depois de a pessoa pedir horario uma vez, TODA mensagem ("Ok.", "Nao.", "Pra minha amiga.") virava "va
@@ -124,10 +141,12 @@ export function analyzeFlow(input: {
   // "Recente" = pediu horario numa das ULTIMAS 4 falas dela (a conversa ainda e de agendamento: ela responde as perguntas de qualificacao da Alice).
   const scheduleRecent = !hasBooking && userAll.slice(-4).some((m) => wantsSchedule(m));
   const midScheduling = slotsOffered || lastOffered;
-  const schedulingSignal = wantsToBook || (declined && midScheduling) || scheduleRecent;
+  // Recusou a oferta ou disse que vai pensar: nao ha pedido de agenda neste turno (mesmo que ela tenha pedido horario antes na conversa).
+  const schedulingSignal = (wantsToBook || (declined && midScheduling) || scheduleRecent) && !refusesOffer && !hesitates;
   let intent: Intent = "info";
   if (hasBooking && !wantsToBook) intent = "booked"; // ja agendou: so responde o que perguntou e para
   else if (hesitates) intent = "hesitate";
+  else if (refusesOffer) intent = "refuse";
   else if (declined) intent = "decline";
   else if (wantsToBook || scheduleRecent) intent = "schedule";
   else if (pastVisits) intent = "returning"; // ja e paciente: nao e lead, nao recebe oferta de avaliacao
@@ -136,14 +155,19 @@ export function analyzeFlow(input: {
   const noPrice = priceAsked ? "" : " Ela NAO perguntou valor: nao fale de valor, investimento nem parcelas.";
   const wanted: Wanted = input.wanted ?? { kind: "none" };
   const evalName = input.evaluationName ?? null;
+  // Queixa sem escolha: as opcoes sao as APROVADAS no cadastro para a queixa (vem da conducao), nunca as que bateram so por apelido.
+  const needWanted: Wanted | null = wanted.kind === "need" && input.needOptions ? { kind: "need", options: input.needOptions } : null;
   let nextMove: string;
   switch (intent) {
     case "schedule":
       nextMove =
         "A cliente quer AGENDAR. Va DIRETO ao agendamento, sem perguntas de descoberta e sem repetir o que ja foi dito (se ela so disse 'sim'/'pode' a uma oferta sua, ACEITOU: ofereca os horarios agora, nao explique o procedimento de novo). " +
         (chosen ? chosenSlotDirective(chosen, input.chosenFullName ?? null) : "") +
+        (awaitingName
+          ? "ELA ACABOU DE INFORMAR O NOME QUE VOCE PEDIU para CONCLUIR um agendamento que ja estava em andamento: isso e a CONTINUACAO, nao um recomeço. NAO reinicie a venda, NAO ofereca avaliacao, NAO explique o procedimento de novo e NAO liste outros horarios. Use o procedimento e o horario combinados nas mensagens acima e chame book_appointment (patient_full_name com o nome dela). So se nao estiver claro QUAL horario ela escolheu, pergunte apenas isso. "
+          : "") +
         (input.wanted
-          ? wantedDirective(wanted, evalName)
+          ? wantedDirective(needWanted ?? wanted, evalName)
           : "QUAL PROCEDIMENTO: se ela quer um procedimento especifico do catalogo (ex.: limpeza de pele, drenagem), agende ESSE procedimento (nome exato do catalogo), nao a avaliacao. A avaliacao gratuita e para quem pediu avaliacao ou ainda nao sabe o que quer. ") +
         "Se ela pediu a avaliacao gratuita de forma explicita, agende a avaliacao. Se o procedimento citado ou a oferta do anuncio NAO estiver no catalogo, NAO diga que nao encontrou nem pergunte de novo: se ja combinaram dia e hora, agende a AVALIACAO gratuita NESSE MESMO dia e hora (a equipe apresenta a oferta, sem prometer valor ou condicao); senao ofereca os horarios da avaliacao. " +
         "HORARIOS: chame check_availability (ja devolve os mais proximos) e ofereca NO MAXIMO 3 horarios reais, hoje e amanha primeiro; nunca liste mais de 3. Se ela disse o turno (manha, tarde ou noite), passe period e ofereca so desse turno; se ainda nao disse, pode perguntar UMA vez qual turno prefere. Se ela ja citou dia/hora, chame check_specific_time. " +
@@ -158,7 +182,12 @@ export function analyzeFlow(input: {
       break;
     case "hesitate":
       nextMove =
-        "A cliente disse NAO, que vai pensar ou que vai se organizar - sem marcar nada. NUNCA responda so 'ok', 'tudo bem' ou 'quando estiver pronta me avise': isso entrega a venda. Respeite (sem pressao, sem insistir, sem inventar desconto/urgencia). Em 1 frase acolha e, se fizer sentido, faca UMA pergunta aberta que descubra o motivo (ex.: 'o que te deixou ainda pensando?'). NAO proponha avaliacao nem peca dia e turno de agendamento agora. Proponha um momento para retomar o contato (ex.: 'posso te chamar amanha?' ou 'qual dia e horario ficam bons pra eu te chamar?'); quando ela disser o dia e o horario, chame schedule_recontact (date AAAA-MM-DD, time HH:MM) e confirme em uma frase. Se ela ja disse quando quer ser chamada, registre direto. Nao repita uma pergunta que ja fez." +
+        "A cliente disse que vai PENSAR / se organizar (ou que nao quer agora) - sem marcar nada. Respeite: acolha em UMA frase calorosa, sem pressao, sem insistir e sem inventar desconto ou urgencia. NAO ofereca avaliacao, NAO liste horarios e NAO peca dia e turno agora; a insistencia imediata acabou. Pode deixar a porta aberta em meia frase ('qualquer coisa e so me chamar'). So se ELA disser quando quer ser chamada (ex.: 'me chama dia 20'), chame schedule_recontact (date AAAA-MM-DD, time HH:MM) e confirme em uma frase. Nao repita uma pergunta que ja fez. Nao e desinteresse definitivo: se ela voltar a falar de agenda, atenda normalmente." +
+        noPrice;
+      break;
+    case "refuse":
+      nextMove =
+        "A cliente RECUSOU a oferta que voce fez ('nao'). Respeite em UMA frase curta e acolhedora ('Tudo bem! Qualquer coisa e so me chamar 💗'). NAO insista, NAO ofereca avaliacao nem horarios de novo, NAO pergunte o motivo e NAO faca outra pergunta de venda. Recusar essa oferta nao e recusar o atendimento: se ela fizer outra pergunta ou voltar a falar de agenda, atenda normalmente." +
         noPrice;
       break;
     case "booked":
