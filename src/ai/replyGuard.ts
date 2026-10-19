@@ -38,6 +38,7 @@ export interface ReplyContext {
   upcoming: { dateIso: string; time: string; ddmm: string }[]; // horarios ATIVOS dela (cancelado nao entra)
   complaintTexts: string[];
   silentHandoff: boolean;
+  confirmationGuard?: boolean; // a mensagem da pessoa parece confirmacao de presenca e ela tem reserva proxima: a resposta final NUNCA oferece horarios nem avaliacao
   // CONDUCAO (ai/conduct.ts): o objetivo que a pessoa tem agora (queixa, nao so regiao), os procedimentos que ELA escolheu/ja tem agendados (citar o nome deles
   // e atender o pedido) e os servicos que a clinica NAO oferece. Opcionais: contextos antigos/fixos continuam validos.
   objective?: { concerns: ConcernId[]; regions: string[] };
@@ -96,7 +97,8 @@ export function checkFinalReply(text: string, ctx: ReplyContext, opts: { strict:
   // oferta indevida
   const norm = fold(text).replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
   if (ctx.forbidEvaluationOffer && EVAL_OFFER_RE.test(norm)) add("eval_offer", "oferece avaliacao a quem nao deve receber");
-  if (ctx.forbidSlotOffer && offersSlots(text)) add("slot_offer_forbidden", "lista horarios sem a pessoa ter pedido");
+  if ((ctx.forbidSlotOffer || ctx.confirmationGuard) && offersSlots(text)) add("slot_offer_forbidden", ctx.confirmationGuard ? "oferece horarios a quem so confirmou a presenca" : "lista horarios sem a pessoa ter pedido");
+  if (ctx.confirmationGuard && /(que horas|qual (dia|turno|horario)|prefere (manha|tarde|noite)|manha, tarde ou noite)/.test(fold(text))) add("slot_request", "pergunta dia/turno a quem so confirmou a presenca");
 
   // dia/hora: so o que uma ferramenta de agenda devolveu nesta rodada, o horario ATIVO dela, ou o que ela mesma escreveu
   if (ctx.agenda) {
@@ -158,6 +160,8 @@ export const NEUTRAL_REPLY = "Combinado! Qualquer coisa é só me chamar. 💗";
 // Resposta curta e adequada quando NENHUM texto e seguro: sem fato inventado e SEM prometer acao pendente (a Alice nao "volta depois").
 export function safeReplyFor(ctx: ReplyContext | null, problems: ReplyProblem[]): string {
   const codes = new Set(problems.map((p) => p.code));
+  // quem so confirmou a presenca nunca recebe pergunta de horario/turno como resposta segura: agradece
+  if (ctx?.confirmationGuard && problems.every((p) => ["slot_unproven", "slot_request", "slot_offer_forbidden", "eval_offer", "claims_booking", "relevance"].includes(p.code))) return "Obrigada pela confirmação! 💗";
   const hasBooking = !!ctx && ctx.upcoming.length > 0;
   if (codes.has("claims_cancel") || codes.has("claims_reschedule") || (codes.has("claims_booking") && ctx && (ctx.situationKind === "cancel" || ctx.situationKind === "reschedule"))) {
     return hasBooking
@@ -209,11 +213,11 @@ export function serializeReplyContext(ctx: ReplyContext, complaintCount: number)
     forbidEvaluationOffer: ctx.forbidEvaluationOffer, forbidSlotOffer: ctx.forbidSlotOffer, request: ctx.request, trusted: ctx.trusted, agenda: ctx.agenda,
     actions: ctx.actions, evidence: ctx.evidence,
     slots: {
-      state: { times: arr(st.times), dates: arr(st.dates), instants: st.instants.slice(0, CAP), offer: st.offer.slice(0, 50), booked: st.booked },
+      state: { times: arr(st.times), dates: arr(st.dates), instants: st.instants.slice(0, CAP), offer: st.offer.slice(0, 50), offerProcedure: st.offerProcedure, booked: st.booked },
       toolUsed: ctx.slots.toolUsed, strict: { times: arr(ctx.slots.strict.times), dates: arr(ctx.slots.strict.dates) }, loose: { times: arr(ctx.slots.loose.times), dates: arr(ctx.slots.loose.dates) },
       toolDates: ctx.slots.toolDates.slice(0, CAP),
     },
-    upcoming: ctx.upcoming.slice(0, 50), complaintCount: Math.max(0, Math.min(complaintCount, 10)), silentHandoff: ctx.silentHandoff,
+    upcoming: ctx.upcoming.slice(0, 50), complaintCount: Math.max(0, Math.min(complaintCount, 10)), silentHandoff: ctx.silentHandoff, confirmationGuard: !!ctx.confirmationGuard,
     objective: ctx.objective, allowedProcedures: ctx.allowedProcedures?.slice(0, 50), notOffered: ctx.notOffered?.slice(0, 50),
   });
 }
@@ -230,10 +234,10 @@ export function deserializeReplyContext(json: string | null | undefined, convers
       forbidEvaluationOffer: !!p.forbidEvaluationOffer, forbidSlotOffer: !!p.forbidSlotOffer, request: p.request, trusted: !!p.trusted, agenda: !!p.agenda,
       actions: p.actions, evidence: p.evidence,
       slots: {
-        state: { times: new Set(p.slots.state.times ?? []), dates: new Set(p.slots.state.dates ?? []), instants: p.slots.state.instants ?? [], offer: p.slots.state.offer ?? [], booked: p.slots.state.booked ?? null },
+        state: { times: new Set(p.slots.state.times ?? []), dates: new Set(p.slots.state.dates ?? []), instants: p.slots.state.instants ?? [], offer: p.slots.state.offer ?? [], offerProcedure: p.slots.state.offerProcedure ?? null, booked: p.slots.state.booked ?? null },
         toolUsed: !!p.slots.toolUsed, strict: known(p.slots.strict), loose: known(p.slots.loose), toolDates: p.slots.toolDates ?? [],
       },
-      upcoming: p.upcoming ?? [], complaintTexts, silentHandoff: !!p.silentHandoff,
+      upcoming: p.upcoming ?? [], complaintTexts, silentHandoff: !!p.silentHandoff, confirmationGuard: !!p.confirmationGuard,
       ...(p.objective ? { objective: p.objective } : {}), ...(p.allowedProcedures ? { allowedProcedures: p.allowedProcedures } : {}), ...(p.notOffered ? { notOffered: p.notOffered } : {}),
     };
   } catch {

@@ -27,6 +27,7 @@ const { parseWebhookPayload } = await import("../dist/uazapi/client.js");
 const { getFunnelStages } = await import("../dist/crm/stages.js");
 
 test.after(async () => {
+  await (await import("../dist/jobs/background.js")).drainBackground(); // tarefas em segundo plano terminam ANTES de o banco temporario ser apagado
   await prisma.$disconnect();
   for (const ext of ["", "-wal", "-shm", "-journal"]) { try { fs.rmSync(dbFile + ext, { force: true }); } catch { /* temporario */ } }
 });

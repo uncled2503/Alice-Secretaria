@@ -98,6 +98,9 @@ model Clinic {
   googleReviewConfirmedAt DateTime? // quando alguem confirmou que o link leva ao estabelecimento certo; sem isso o link NAO e enviado
   googleReviewConfirmedBy String?   // quem confirmou (conta do painel / admin)
   googleReviewPlace       String?   // nome do estabelecimento de destino conferido
+  uazapiDownSince     DateTime? // WhatsApp comprovadamente DESCONECTADO desde quando (o provedor disse); null = sem problema conhecido
+  uazapiDownReason    String?   // resposta do provedor (curta, sem segredos)
+  uazapiDownCheckedAt DateTime? // ultima vez que a conexao foi conferida enquanto marcada como desconectada (sonda a cada poucos minutos, nao a cada envio)
   followupRecoveryHours Int? // recontato: ate quantas horas DEPOIS que a janela abriu ainda pode sair um recontato que nao saiu na hora. null = padrao antigo (tolerancia de 3 dias, o de producao hoje); 0 = nao recupera; 1-72 = N horas. Decisao da clinica
   googleReviewLegacyAllowed Boolean @default(false) // link ja cadastrado ANTES da exigencia de confirmacao: segue enviando por COMPATIBILIDADE, sem dizer que o destino foi conferido
 
@@ -650,6 +653,9 @@ model Conversation {
   archived          Boolean   @default(false) // conversa arquivada (sai da lista principal), estilo WhatsApp
   aliceMonth        String    @default("")    // "YYYY-MM" da ultima vez que a Alice atendeu (conta 1 atendimento/mes)
   lastFollowUpOrder Int       @default(0) // ultima etapa de recontato ja enviada (0 = nenhuma)
+  replyDueAt        DateTime? // agrupamento (replyDelaySeconds > 0): quando a resposta agrupada vence. Persistido para sobreviver a reinicio; null = nada aguardando
+  replyFirstAt      DateTime? // quando a primeira mensagem do grupo chegou (limite de espera total)
+  replyClaimedAt    DateTime? // quem esta gerando a resposta agrupada agora (reivindicacao atomica; velha = o processo caiu)
   lastMessageAt     DateTime  @default(now())
   recontactVerdict  String?   // veredito da IA sobre recontatar esta conversa: yes | no
   recontactReason   String?   // motivo curto dado pela IA
@@ -664,6 +670,7 @@ model Conversation {
 
   @@index([archived, lastMessageAt])
   @@index([patientId])
+  @@index([replyDueAt])
 }
 
 // Cascata de recontato: dispara mensagens automaticas quando o paciente fica
@@ -1053,9 +1060,21 @@ model PreProcedureSent {
   appointment   Appointment      @relation(fields: [appointmentId], references: [id])
   ruleId        String
   rule          PreProcedureRule @relation(fields: [ruleId], references: [id])
-  sentAt        DateTime         @default(now())
+  sentAt        DateTime         @default(now()) // (historico: momento da RESERVA; so vale como envio quando state = sent)
+  // Estado real da etapa: reserved (reservada, provedor NAO chamado) | queued (virou resposta na conversa; a entrega da mensagem diz o resto) | sending (tentativa iniciada,
+  // provedor pode ter sido chamado) | sent | unconfirmed (resultado incerto: nunca reenvia as cegas) | failed (tenta de novo) | failed_permanent | blocked | vetoed | superseded | expired
+  state         String           @default("sent")
+  channel       String?          // resposta | antecipado | recuperacao
+  messageId     String?          // mensagem da conversa que carrega o preparo (canal resposta)
+  reservedAt    DateTime?
+  attemptedAt   DateTime?
+  finalAt       DateTime?
+  attempts      Int              @default(0)
+  reevaluateAt  DateTime?
+  note          String?
 
   @@unique([appointmentId, ruleId])
+  @@index([state, reservedAt])
 }
 
 // Renovacao: retoma o contato meses/anos depois do fim do atendimento pra

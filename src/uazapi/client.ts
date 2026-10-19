@@ -7,13 +7,15 @@ import { prisma } from "../db/client.js";
 import { recordIncomingMessage, generateReply, recordOutgoingFromDevice, executeHandoff } from "../ai/alice.js";
 import { isFreePlan } from "../crm/plan.js";
 import { isOptOutRequest, applyOptOut, OPTOUT_CONFIRMATION } from "../crm/optout.js";
-import { reviewOutbound, type OutboundKind } from "../ai/sendGate.js";
+import { reviewOutbound, ReviewUnavailableError, isReviewUnavailable, holdInfo, type OutboundKind } from "../ai/sendGate.js";
 import { chooseFinalReply, forgetReplyContext, recallReplyContext, safeReplyFor, type ReplyContext } from "../ai/replyGuard.js";
 import { loadPersistedReplyContext, pruneReplyContexts } from "../ai/replyContextStore.js";
 import { checkResumeSend, type GuardedFlow } from "../crm/resumeGuard.js";
 import { recordSurveyNoteHumanOwned } from "../reminders/surveyHandler.js";
 import { type DeliveryStatus, STALE_PENDING_MS, REPLY_RESUME_WINDOW_MS } from "../ai/delivery.js";
 import { recordReplyFailure } from "../ai/replyFailure.js";
+import { logActivity } from "../crm/activity.js";
+import { REVISION } from "../version.js";
 import { scheduleBriefingRefresh } from "../ai/leadBriefing.js";
 
 type JsonRecord = Record<string, unknown>;
@@ -154,6 +156,14 @@ function explainCredentialError(error: unknown, baseUrl: string): Error {
   return error instanceof Error ? error : new Error(message);
 }
 
+// Erro do provedor COM o status e o codigo: quem decide o que fazer (repetir, esperar, avisar a equipe) precisa mais que o texto.
+export class UazapiHttpError extends Error {
+  constructor(message: string, readonly status: number, readonly providerCode: string | null, readonly providerMessage: string | null) {
+    super(message);
+    this.name = "UazapiHttpError";
+  }
+}
+
 function uazapiError(status: number, body: unknown): Error {
   const data = record(body);
   const message = textValue(
@@ -163,7 +173,104 @@ function uazapiError(status: number, body: unknown): Error {
     data?.message,
     data?.provider_message
   );
-  return new Error(`Servidor de conexao HTTP ${status}${message ? `: ${message}` : ""}`);
+  return new UazapiHttpError(`Servidor de conexao HTTP ${status}${message ? `: ${message}` : ""}`, status, textValue(data?.code, data?.error_code) || null, message || null);
+}
+
+// A clinica esta com o WhatsApp comprovadamente fora: nenhuma tentativa foi feita ao provedor (nao ha perspectiva de sucesso ate reconectar).
+export class ConnectionDownError extends Error {
+  readonly code = "connection_down";
+  constructor(readonly clinicId: string, readonly since: Date | null, readonly reason: string | null) {
+    super(`WhatsApp desconectado nesta clinica${since ? ` desde ${since.toISOString()}` : ""}: nenhuma tentativa de envio foi feita`);
+    this.name = "ConnectionDownError";
+  }
+}
+export const isConnectionDownError = (err: unknown): err is ConnectionDownError => err instanceof ConnectionDownError;
+// Nada saiu e NAO foi decisao de negocio (WhatsApp desconectado nesta clinica, ou a revisao por IA fora do ar e a automacao foi retida): quem automatiza ADIA a tentativa,
+// sem gastar tentativa, sem marcar como falha definitiva e sem avisar a equipe a cada rodada (o aviso e unico: Diario + Canais).
+export const isSendDeferred = (err: unknown): boolean => isConnectionDownError(err) || isReviewUnavailable(err);
+// Camada/motivo/etiqueta do adiamento para o controle persistente e o resumo da rodada: desconexao, revisao fora do ar ou pausa humana (cada uma diz o que e).
+export function deferralInfo(err: unknown): { layer: string; reason: string; tag: string } {
+  if (isConnectionDownError(err)) return { layer: "conexao", reason: "WhatsApp desconectado nesta clinica: nenhuma tentativa foi feita", tag: "whatsapp_desconectado" };
+  if (isReviewUnavailable(err)) return holdInfo(err);
+  return { layer: "adiado", reason: "adiado", tag: "adiado" };
+}
+
+export type SendFailureKind = "number_not_on_whatsapp" | "connection_down" | "provider_unavailable" | "uncertain" | "other";
+
+const DISCONNECTED_RE = /disconnect|desconect|not reconnectable|nao reconectavel|not connected|nao conectad|logged out|logout|session (closed|expired|invalid)|sessao (encerrada|expirada|invalida)|instance (is )?(not|un)\w* (connected|ready)|qr ?code/i;
+
+// Diferencia: numero sem WhatsApp (permanente para ESSA pessoa), sessao DESCONECTADA (permanente ate reconectar a clinica), indisponibilidade TEMPORARIA do provedor
+// (502/503/504/429/500 sem marca de desconexao: vale tentar de novo depois), timeout/queda no meio (RESULTADO INCERTO: pode ter saido) e o resto.
+export function classifySendFailure(err: unknown): SendFailureKind {
+  if (isPermanentSendError(err)) return "number_not_on_whatsapp";
+  if (isConnectionDownError(err)) return "connection_down";
+  if (err instanceof UazapiHttpError) {
+    const text = `${err.providerMessage ?? ""} ${err.providerCode ?? ""} ${err.message}`;
+    if ((err.status === 503 || err.status === 401 || err.status === 403 || err.status === 409 || err.status === 400) && DISCONNECTED_RE.test(text) && !/not on whatsapp/i.test(text)) return "connection_down";
+    if ([429, 500, 502, 503, 504].includes(err.status)) return "provider_unavailable";
+    return "other";
+  }
+  if (isAmbiguousSendError(err)) return "uncertain";
+  return "other";
+}
+
+// ---------------------------------------------------------------------------
+// ESTADO DA CONEXAO POR CLINICA (Clinic.uazapiDownSince/Reason/CheckedAt). Quando o provedor diz que a sessao esta desconectada, a clinica e MARCADA: os envios
+// automaticos dela deixam de bater no provedor (sem perspectiva de sucesso, so geravam erro e alertas a cada rodada) ate que um envio ou a consulta de status voltem a
+// funcionar. A marca e DA CLINICA: outra clinica nunca e afetada. Envio manual da equipe continua tentando (a pessoa precisa ver o erro).
+// ---------------------------------------------------------------------------
+const CONNECTION_PROBE_MS = 10 * 60_000;
+
+export async function markConnectionDown(clinicId: string, reason: string, now = new Date()): Promise<void> {
+  const clinic = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { uazapiDownSince: true } });
+  if (!clinic) return;
+  const first = !clinic.uazapiDownSince;
+  await prisma.clinic.update({ where: { id: clinicId }, data: { uazapiDownSince: clinic.uazapiDownSince ?? now, uazapiDownReason: reason.slice(0, 200), uazapiDownCheckedAt: now } });
+  if (first) {
+    console.error(`[whatsapp] clinica=${clinicId} conexao=DESCONECTADA revisao=${REVISION.split(":")[0]} motivo="${reason.slice(0, 120)}": os envios automaticos desta clinica param ate reconectar`);
+    void logActivity({
+      clinicId, type: "whatsapp_disconnected", area: "atendimento", title: "WhatsApp desconectado",
+      description: `O provedor informou que a sessão está desconectada (${reason.slice(0, 120)}). Os envios automáticos desta clínica estão pausados e as mensagens novas ficam para a equipe. Reconecte em Canais (ler o QR Code de novo).`, actorName: null,
+    }).catch(() => undefined);
+  }
+}
+
+export async function clearConnectionDown(clinicId: string, via: string): Promise<void> {
+  const r = await prisma.clinic.updateMany({ where: { id: clinicId, uazapiDownSince: { not: null } }, data: { uazapiDownSince: null, uazapiDownReason: null, uazapiDownCheckedAt: null } });
+  if (r.count === 1) {
+    console.warn(`[whatsapp] clinica=${clinicId} conexao=RESTABELECIDA via=${via} revisao=${REVISION.split(":")[0]}`);
+    void logActivity({ clinicId, type: "whatsapp_reconnected", area: "atendimento", title: "WhatsApp reconectado", description: "Os envios automáticos voltaram. Mensagens antigas que ficaram sem resposta NÃO são reenviadas sozinhas: a equipe confere a lista de conversas não lidas.", actorName: null }).catch(() => undefined);
+  }
+}
+
+// Posso tentar o provedor para esta clinica agora? Marcada como desconectada: a cada CONNECTION_PROBE_MS confere o status (sem enviar nada) antes de liberar.
+export async function connectionUsable(clinicId: string, now = new Date()): Promise<{ usable: boolean; since: Date | null; reason: string | null }> {
+  const c = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { uazapiDownSince: true, uazapiDownReason: true, uazapiDownCheckedAt: true } });
+  if (!c?.uazapiDownSince) return { usable: true, since: null, reason: null };
+  if (!c.uazapiDownCheckedAt || now.getTime() - c.uazapiDownCheckedAt.getTime() >= CONNECTION_PROBE_MS) {
+    await prisma.clinic.update({ where: { id: clinicId }, data: { uazapiDownCheckedAt: now } }).catch(() => undefined);
+    statusCache.delete(clinicId);
+    const st = await getStatus(clinicId).catch(() => null);
+    if (st?.connected) {
+      await clearConnectionDown(clinicId, "consulta de status");
+      return { usable: true, since: null, reason: null };
+    }
+  }
+  return { usable: false, since: c.uazapiDownSince, reason: c.uazapiDownReason };
+}
+
+// O que o painel mostra em Canais. Vem SO do banco (Clinic.uazapiDown*): nao chama o provedor nem o WhatsApp, entao o aviso aparece justamente quando o WhatsApp esta fora.
+export interface ConnectionNotice { paused: boolean; since: string | null; reason: string | null; checkedAt: string | null; nextCheckAt: string | null }
+export async function connectionNotice(clinicId: string): Promise<ConnectionNotice> {
+  const c = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { uazapiDownSince: true, uazapiDownReason: true, uazapiDownCheckedAt: true } });
+  if (!c?.uazapiDownSince) return { paused: false, since: null, reason: null, checkedAt: null, nextCheckAt: null };
+  return {
+    paused: true,
+    since: c.uazapiDownSince.toISOString(),
+    reason: c.uazapiDownReason,
+    checkedAt: c.uazapiDownCheckedAt?.toISOString() ?? null,
+    nextCheckAt: new Date((c.uazapiDownCheckedAt ?? c.uazapiDownSince).getTime() + CONNECTION_PROBE_MS).toISOString(),
+  };
 }
 
 async function request<T>(credentials: UazapiCredentials, path: string, init: RequestInit = {}): Promise<T> {
@@ -466,8 +573,13 @@ const placeholderAlerted = new Map<string, number>();
 // "vetoed" = a revisao por IA barrou (nao faz sentido enviar agora): nada saiu, o motivo fica no Diario de atividades.
 export type SendOutcome = "sent" | "blocked" | "duplicate" | "vetoed";
 
-export async function sendText(clinicId: string, phone: string, text: string, opts: { manual?: boolean; alice?: boolean; kind?: OutboundKind; flow?: GuardedFlow } = {}): Promise<SendOutcome> {
+export async function sendText(clinicId: string, phone: string, text: string, opts: { manual?: boolean; alice?: boolean; kind?: OutboundKind; flow?: GuardedFlow; beforeProvider?: () => Promise<void> } = {}): Promise<SendOutcome> {
   if (await automatedSendBlocked(clinicId, opts.manual === true)) return "blocked";
+  // WhatsApp comprovadamente fora: nao ha o que tentar. Lanca (os chamadores ja tratam erro de envio) SEM bater no provedor e SEM gastar tentativa do chamador que souber distinguir.
+  if (opts.manual !== true) {
+    const conn = await connectionUsable(clinicId);
+    if (!conn.usable) throw new ConnectionDownError(clinicId, conn.since, conn.reason);
+  }
   // MODO RESTRITO das retomadas / convite de indicacao: vale AQUI, no caminho de envio, para a rodada, para nova tentativa e para qualquer chamada direta (nao depende da tela
   // nem do job). Se o fluxo (ou, sem `flow`, qualquer fluxo possivel desse tipo) estiver restrito e a pessoa nao for um contato de teste autorizado, nada sai.
   if (opts.manual !== true && (opts.kind === "retomada" || opts.kind === "indicacao")) {
@@ -520,6 +632,8 @@ export async function sendText(clinicId: string, phone: string, text: string, op
     const verdict = await reviewOutbound({ clinicId, phone, text, kind: opts.kind ?? "outra" });
     if (!verdict.send) {
       if (reservedDuplicateKey) forgetSend(clinicId, phone, text);
+      // RETIDA (revisor indisponivel) NAO e veto: lanca para o chamador adiar sem consumir a etapa nem virar "barrada"
+      if (verdict.held) throw new ReviewUnavailableError(opts.kind ?? "outra", verdict.reason, verdict.heldWhy ?? "revisao");
       return "vetoed";
     }
   }
@@ -536,6 +650,8 @@ export async function sendText(clinicId: string, phone: string, text: string, op
       ? splitMessage(text, Math.max(config.splitMaxMessages, 1))
       : [text];
 
+    // IMEDIATAMENTE antes de o provedor ser chamado (depois do plano, do duplicado e da revisao por IA): quem chamou grava "tentativa iniciada". Se isto falhar, nada e enviado.
+    if (opts.beforeProvider) await opts.beforeProvider();
     let target = phone.replace(/\D/g, "");
     for (let index = 0; index < parts.length; index++) {
       const delay = Math.min(3500, 500 + parts[index].length * 25);
@@ -555,8 +671,16 @@ export async function sendText(clinicId: string, phone: string, text: string, op
 
   } catch (err) {
     if (reservedDuplicateKey) forgetSend(clinicId, phone, text); // nao saiu: a proxima tentativa nao e duplicata
+    // O provedor disse que a sessao esta desconectada: marca a CLINICA (nao repete as proximas tentativas as cegas). Outros erros (timeout, 5xx sem marca) nao marcam.
+    if (!isConnectionDownError(err) && classifySendFailure(err) === "connection_down") {
+      const reason = err instanceof Error ? err.message : String(err);
+      await markConnectionDown(clinicId, reason).catch(() => undefined);
+      // Envio AUTOMATICO: quem chamou recebe o mesmo erro tipado das proximas tentativas (adia, nao gasta tentativa, nao vira falha da pessoa). Envio MANUAL da equipe recebe o erro cru do provedor.
+      if (opts.manual !== true) throw new ConnectionDownError(clinicId, new Date(), reason);
+    }
     throw err;
   }
+  void clearConnectionDown(clinicId, "envio").catch(() => undefined); // um envio que o provedor aceitou prova que a conexao voltou
   return "sent";
 }
 
@@ -1261,8 +1385,11 @@ async function downloadImageDataUrl(clinicId: string, messageId: string): Promis
 // --- Agrupamento de mensagens quebradas ------------------------------------
 // O cliente costuma mandar varias mensagens curtas seguidas. Quando a clinica
 // configura replyDelaySeconds > 0, a Alice espera esse tempo sem mensagem nova
-// antes de responder - e responde a todas de uma vez. Estado em memoria (um
-// restart perde os timers pendentes; as mensagens ja estao gravadas).
+// antes de responder - e responde a todas de uma vez.
+// PERSISTENTE (20/10/2026): o prazo fica na conversa (Conversation.replyDueAt/replyFirstAt), nao so num timer em memoria. Um reinicio entre o recebimento (que ja
+// foi aceito e confirmado ao provedor) e o timer deixava a mensagem sem resposta. O timer em memoria continua sendo o caminho normal; a RECUPERACAO
+// (recoverGroupedReplies, no boot e a cada minuto) assume o que ficou para tras. A reivindicacao e atomica (replyDueAt -> replyClaimedAt), entao timer e recuperacao,
+// ou duas instancias, nunca respondem o mesmo grupo duas vezes.
 const MAX_TOTAL_WAIT_MS = 45_000;
 
 interface PendingReply {
@@ -1274,32 +1401,67 @@ interface PendingReply {
 }
 const pendingReplies = new Map<string, PendingReply>(); // key = `${clinicId}:${phone}`
 
-function scheduleGroupedReply(clinicId: string, phone: string, conversationId: string, delayMs: number, imageDataUrl?: string): void {
+// Grava (ou estende) o prazo do grupo na conversa e devolve quanto falta. A primeira mensagem do grupo fixa o limite total de espera.
+async function armGroupedReply(conversationId: string, delayMs: number, now = new Date()): Promise<number> {
+  const conv = await prisma.conversation.findUnique({ where: { id: conversationId }, select: { replyDueAt: true, replyFirstAt: true } });
+  const firstAt = conv?.replyDueAt && conv.replyFirstAt ? conv.replyFirstAt : now;
+  const remaining = MAX_TOTAL_WAIT_MS - (now.getTime() - firstAt.getTime());
+  const wait = Math.max(0, Math.min(delayMs, remaining));
+  await prisma.conversation.update({ where: { id: conversationId }, data: { replyDueAt: new Date(now.getTime() + wait), replyFirstAt: firstAt } });
+  return wait;
+}
+
+// Reivindica o grupo: so quem troca replyDueAt (do valor que leu) por replyClaimedAt vence. Falso = outro processo/timer ja cuidou, ou o prazo foi estendido.
+async function claimGroupedReply(conversationId: string, now: Date, dueLeewayMs = 1000): Promise<boolean> {
+  const conv = await prisma.conversation.findUnique({ where: { id: conversationId }, select: { replyDueAt: true } });
+  if (!conv?.replyDueAt || conv.replyDueAt.getTime() > now.getTime() + dueLeewayMs) return false;
+  const r = await prisma.conversation.updateMany({ where: { id: conversationId, replyDueAt: conv.replyDueAt }, data: { replyDueAt: null, replyFirstAt: null, replyClaimedAt: now } });
+  return r.count === 1;
+}
+
+// Gera e entrega a resposta de um grupo JA reivindicado. Reavalia antes: se a pessoa ja foi respondida, a equipe assumiu ou o plano nao atende, nao responde.
+async function respondGroup(clinicId: string, phone: string, conversationId: string, imageDataUrl: string | undefined): Promise<void> {
+  const key = `${clinicId}:${phone}`;
+  try {
+    const conv = await prisma.conversation.findUnique({ where: { id: conversationId }, select: { humanTakeover: true, patient: { select: { clinic: { select: { plan: true } } } } } });
+    if (!conv || conv.humanTakeover || isFreePlan(conv.patient.clinic.plan)) return; // a equipe assumiu / plano gratis: a Alice nao responde
+    const last = await prisma.message.findFirst({ where: { conversationId, role: { in: ["user", "assistant", "human"] } }, orderBy: { createdAt: "desc" }, select: { role: true } });
+    if (last && last.role !== "user") return; // ja foi respondida (por ela, por uma recuperacao anterior ou pela equipe)
+    const startedAt = new Date();
+    const reply = await generateReply(conversationId, { imageDataUrl, guardAgainstNewerThan: startedAt });
+    // Um novo agrupamento comecou enquanto gerava (memoria OU banco) -> nao envia esta.
+    if (pendingReplies.has(key)) return;
+    const rearmed = await prisma.conversation.findUnique({ where: { id: conversationId }, select: { replyDueAt: true } });
+    if (rearmed?.replyDueAt) return;
+    if (reply) await deliverAliceReply(clinicId, phone, conversationId, reply);
+  } catch (err) {
+    console.error("[reply-group] falha ao gerar/enviar:", err);
+    // Sem isto a falha ficava so no log: a mensagem ja estava gravada e ninguem mais ia responder. Agora a conversa fica sinalizada pra equipe.
+    void recordReplyFailure({ clinicId, conversationId, phone, stage: "geracao", error: err });
+  } finally {
+    await prisma.conversation.update({ where: { id: conversationId }, data: { replyClaimedAt: null } }).catch(() => undefined);
+  }
+}
+
+async function scheduleGroupedReply(clinicId: string, phone: string, conversationId: string, delayMs: number, imageDataUrl?: string): Promise<void> {
   const key = `${clinicId}:${phone}`;
   const existing = pendingReplies.get(key);
   if (existing) clearTimeout(existing.timer);
-
-  const firstAt = existing?.firstAt ?? Date.now();
   const img = imageDataUrl ?? existing?.imageDataUrl;
-  const remaining = MAX_TOTAL_WAIT_MS - (Date.now() - firstAt);
-  const wait = Math.max(0, Math.min(delayMs, remaining));
+  // O prazo vai para o BANCO antes de o evento ser dado como concluido: se o processo cair daqui para frente, a recuperacao encontra o grupo.
+  const wait = await armGroupedReply(conversationId, delayMs);
+  armTimer(clinicId, phone, conversationId, wait, img, existing?.firstAt ?? Date.now());
+}
 
+function armTimer(clinicId: string, phone: string, conversationId: string, wait: number, img: string | undefined, firstAt: number): void {
+  const key = `${clinicId}:${phone}`;
   const timer = setTimeout(() => {
     pendingReplies.delete(key);
-    const startedAt = new Date();
-    generateReply(conversationId, { imageDataUrl: img, guardAgainstNewerThan: startedAt })
-      .then((reply) => {
-        // Um novo agrupamento comecou enquanto gerava -> nao envia esta.
-        if (pendingReplies.has(key)) return;
-        if (reply) return deliverAliceReply(clinicId, phone, conversationId, reply);
-      })
-      .catch((err) => {
-        console.error("[reply-group] falha ao gerar/enviar:", err);
-        // Sem isto a falha ficava so no log: a mensagem ja estava gravada e ninguem mais ia responder. Agora a conversa fica sinalizada pra equipe.
-        void recordReplyFailure({ clinicId, conversationId, phone, stage: "geracao", error: err });
-      });
+    void (async () => {
+      if (!(await claimGroupedReply(conversationId, new Date()))) return; // outro processo (recuperacao/outra instancia) ja pegou, ou o prazo foi estendido
+      await respondGroup(clinicId, phone, conversationId, img);
+    })().catch((err) => console.error("[reply-group] falha no agrupamento:", err));
   }, wait);
-
   pendingReplies.set(key, { timer, conversationId, phone, imageDataUrl: img, firstAt });
 }
 
@@ -1308,7 +1470,57 @@ export function bumpTypingWait(clinicId: string, phone: string, extraMs: number)
   const key = `${clinicId}:${phone}`;
   const e = pendingReplies.get(key);
   if (!e) return;
-  scheduleGroupedReply(clinicId, phone, e.conversationId, extraMs, e.imageDataUrl);
+  void scheduleGroupedReply(clinicId, phone, e.conversationId, extraMs, e.imageDataUrl).catch((err) => console.error("[reply-group] nao consegui estender o prazo:", err));
+}
+
+// RECUPERACAO do agrupamento (boot e a cada minuto). Reavalia cada grupo ANTES de responder; nao inventa prazo novo: usa o que a clinica configurou (o prazo gravado)
+// e o mesmo limite de "mensagem velha demais" dos eventos reprocessados (STALE_REPLY_MS).
+//  - prazo no FUTURO e sem timer neste processo: rearma o timer (o servidor reiniciou durante a espera);
+//  - prazo VENCIDO: reivindica (atomico) e responde, a menos que ja tenha sido respondida / equipe assumiu / plano gratis / passou de STALE_REPLY_MS (nesse caso a conversa
+//    fica sinalizada para a equipe, como num evento atrasado);
+//  - reivindicado ha muito tempo e sem desfecho (processo caiu gerando): se a pessoa continua sem resposta, refaz; senao so libera.
+export async function recoverGroupedReplies(now = new Date()): Promise<{ rearmed: number; answered: number; cleared: number; flagged: number }> {
+  const out = { rearmed: 0, answered: 0, cleared: 0, flagged: 0 };
+  const select = { id: true, replyDueAt: true, replyClaimedAt: true, humanTakeover: true, patient: { select: { phone: true, clinicId: true, clinic: { select: { plan: true } } } } } as const;
+  const due = await prisma.conversation.findMany({ where: { replyDueAt: { not: null } }, orderBy: { replyDueAt: "asc" }, take: 40, select });
+  const abandoned = await prisma.conversation.findMany({ where: { replyDueAt: null, replyClaimedAt: { not: null, lt: new Date(now.getTime() - STALE_PENDING_MS) } }, take: 40, select });
+  const clear = (id: string) => prisma.conversation.update({ where: { id }, data: { replyDueAt: null, replyFirstAt: null, replyClaimedAt: null } }).catch(() => undefined);
+
+  for (const c of [...due, ...abandoned]) {
+    const clinicId = c.patient.clinicId;
+    const key = `${clinicId}:${c.patient.phone}`;
+    const lastUser = await prisma.message.findFirst({ where: { conversationId: c.id, role: "user" }, orderBy: { createdAt: "desc" }, select: { createdAt: true, mediaType: true, mediaUrl: true } });
+    const last = await prisma.message.findFirst({ where: { conversationId: c.id, role: { in: ["user", "assistant", "human"] } }, orderBy: { createdAt: "desc" }, select: { role: true, createdAt: true } });
+    const dueAt = c.replyDueAt;
+    if (dueAt && dueAt.getTime() > now.getTime()) {
+      // prazo futuro: so rearma se este processo ainda nao tem o timer (reinicio)
+      if (!pendingReplies.has(key)) {
+        const img = lastUser?.mediaType === "image" && lastUser.mediaUrl ? lastUser.mediaUrl : undefined;
+        armTimer(clinicId, c.patient.phone, c.id, dueAt.getTime() - now.getTime(), img, now.getTime());
+        out.rearmed++;
+      }
+      continue;
+    }
+    if (pendingReplies.has(key)) continue; // este processo tem timer vivo: ele vai reivindicar
+    // reavaliacao: ja respondida, equipe assumiu, plano gratis, ou sem mensagem da pessoa
+    if (!lastUser || !last || last.role !== "user" || c.humanTakeover || isFreePlan(c.patient.clinic.plan)) { await clear(c.id); out.cleared++; continue; }
+    const ageMs = now.getTime() - (dueAt ?? c.replyClaimedAt ?? now).getTime();
+    if (ageMs > STALE_REPLY_MS) {
+      // velha demais: uma resposta de agora seria de uma conversa antiga. Mesmo tratamento do evento atrasado: sinaliza para a equipe.
+      await prisma.conversation.update({ where: { id: c.id }, data: { replyDueAt: null, replyFirstAt: null, replyClaimedAt: null, handoffPending: true, handoffReason: "mensagem recebida com atraso (falha no processamento)" } }).catch(() => undefined);
+      out.flagged++;
+      continue;
+    }
+    // reivindica (atomico): vence um so processo
+    let won = false;
+    if (dueAt) won = await claimGroupedReply(c.id, now, 0);
+    else if (c.replyClaimedAt) won = (await prisma.conversation.updateMany({ where: { id: c.id, replyDueAt: null, replyClaimedAt: c.replyClaimedAt }, data: { replyClaimedAt: now } })).count === 1;
+    if (!won) continue;
+    const img = lastUser.mediaType === "image" && lastUser.mediaUrl ? lastUser.mediaUrl : undefined;
+    await respondGroup(clinicId, c.patient.phone, c.id, img);
+    out.answered++;
+  }
+  return out;
 }
 
 // Evento reprocessado depois de mais que isso: a mensagem entra no chat, mas a Alice NAO responde sozinha (a resposta
@@ -1458,7 +1670,7 @@ async function handleQueuedPayload(clinicId: string, body: unknown, ageMs = 0): 
     }
 
     if (recorded.replyDelayMs > 0) {
-      scheduleGroupedReply(clinicId, incoming.phone, recorded.conversationId, recorded.replyDelayMs, imageDataUrl);
+      await scheduleGroupedReply(clinicId, incoming.phone, recorded.conversationId, recorded.replyDelayMs, imageDataUrl);
       continue;
     }
 
@@ -1688,6 +1900,7 @@ export async function maintainUazapiQueue(): Promise<void> {
     data: { status: "pending" },
   });
   await recoverStuckReplies().catch((err) => console.error("[retomada] falhou:", err instanceof Error ? err.message : err));
+  await recoverGroupedReplies().catch((err) => console.error("[agrupamento] recuperacao falhou:", err instanceof Error ? err.message : err));
   await processUazapiWebhookQueue();
   await retryFailedAliceReplies();
 
@@ -1710,6 +1923,7 @@ export async function startUazapiWebhookWorker(): Promise<void> {
     data: { status: "pending" },
   });
   await processUazapiWebhookQueue();
+  await recoverGroupedReplies().catch((err) => console.error("[agrupamento] recuperacao no boot falhou:", err instanceof Error ? err.message : err)); // grupos que ficaram esperando o timer que se perdeu
   setInterval(() => {
     maintainUazapiQueue().catch((err) => console.error("[UAZAPI] manutencao da fila falhou:", err));
   }, 60_000).unref();

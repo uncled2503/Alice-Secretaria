@@ -19,6 +19,7 @@ const { clinicTimeStatements, findTimeConflicts, statementsNote } = await import
 const { checkClinicTimeConflicts } = await import("../dist/ai/timeConflict.js");
 
 test.after(async () => {
+  await (await import("../dist/jobs/background.js")).drainBackground(); // tarefas em segundo plano terminam ANTES de o banco temporario ser apagado
   await prisma.$disconnect();
   for (const ext of ["", "-wal", "-shm", "-journal"]) { try { fs.rmSync(dbFile + ext, { force: true }); } catch { /* Windows pode segurar o arquivo por um instante: e temporario */ } }
 });
@@ -116,10 +117,12 @@ test("a Alice confere antes de responder e passa pra equipe se nao resolver", ()
 });
 
 test("Helia: 'Confirmado' a uma confirmacao pedida pela EQUIPE so agradece (nao oferece horarios)", async () => {
-  const src = fs.readFileSync(new URL("../src/ai/alice.ts", import.meta.url), "utf8");
-  assert.match(src, /const humanAskedConfirm = lastNonUser\?\.role === "human"/);
-  assert.match(src, /lastNonUser\?\.authorName === "Lembrete de consulta" \|\| humanAskedConfirm/);
-  assert.match(src, /\.\.\.\(humanAskedConfirm \? \{\} : \{ reminders:/);
+  // a decisao de "confirmou presenca" saiu de alice.ts para ai/presenceConfirmation.ts (decisao deterministica sobre o que esta gravado); a Alice so a consulta
+  const presence = fs.readFileSync(new URL("../src/ai/presenceConfirmation.ts", import.meta.url), "utf8");
+  assert.ok(presence.includes('const humanAsked = lastNonUser?.role === "human"'));
+  assert.ok(presence.includes("const evidence = chatReminder || humanAsked ||"));
+  const alice = fs.readFileSync(new URL("../src/ai/alice.ts", import.meta.url), "utf8");
+  assert.ok(alice.includes("await resolvePresence({ clinicId, patient: { id: patient.id, phone: patient.phone }, history"));
   const { isConfirmationReply } = await import("../dist/ai/confirmation.js");
   assert.equal(isConfirmationReply("Confirmado 😉"), true);
   assert.equal(isConfirmationReply("Confirmado, mas queria remarcar"), false);

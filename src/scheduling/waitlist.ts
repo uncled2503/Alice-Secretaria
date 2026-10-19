@@ -1,6 +1,7 @@
 import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 import { getClinicTemplateInfo } from "../crm/template.js";
+import { usableFirstName } from "../crm/greeting.js";
 import { logActivity } from "../crm/activity.js";
 import { formatInZone } from "./time.js";
 
@@ -35,7 +36,7 @@ export async function offerFreedSlotToWaitlist(params: {
     const info = await getClinicTemplateInfo(clinicId);
     const tz = clinic.timezone || "America/Sao_Paulo";
     const procedureName = entry.procedure?.name ?? "atendimento";
-    const firstName = entry.patient.name?.trim().split(" ")[0] || "";
+    const firstName = usableFirstName(entry.patient.name);
 
     const text =
       `Oi ${firstName}! Abriu uma vaga para ${procedureName} em ${formatInZone(freedAt, tz)} aqui na ${info.name}. ` +

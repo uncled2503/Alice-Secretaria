@@ -142,7 +142,7 @@ A UAZAPI continua sendo uma integração não oficial do WhatsApp. Use preferenc
    ```
 2. **Criar o App no EasyPanel**: Novo serviço → App → Source = GitHub (aponte pro repo/branch) → Builder = Railpack (detecta Node.js sozinho, não precisa de Dockerfile).
 3. **Banco persistente (importante!)**: na aba **Storage/Mounts**, adicione um **Volume** montado em `/app/data`. Sem isso, o SQLite é apagado a cada deploy. Aponte `DATABASE_URL` pra dentro dele: `file:/app/data/prod.db`.
-4. **Backup persistente**: adicione outro volume em `/app/backups` e configure `BACKUP_DIR=/app/backups`.
+4. **Backup persistente**: adicione outro volume em `/app/backups` e configure `BACKUP_DIR=/app/backups`. Não presuma que funcionou: o boot registra `[backup] diretorio de backup=... armazenamento=volume` (ou avisa `raiz_do_container`), cada backup é restaurado num temporário e verificado (`integrity_check`), e vale fazer o teste de persistência descrito em [docs/backup.md](docs/backup.md) (criar um arquivo, implantar de novo, conferir).
 5. **Variáveis de ambiente**: inclua `DATABASE_URL`, `BACKUP_DIR`, `PUBLIC_BASE_URL`, `UAZAPI_WEBHOOK_SECRET`, `SESSION_SECRET` e `NODE_ENV=production`. `ADMIN_BOOTSTRAP_TOKEN` só é necessário até criar o primeiro admin.
 6. **Domínio**: adicione o domínio/subdomínio, ative HTTPS e use exatamente essa origem em `PUBLIC_BASE_URL`.
 7. **Réplicas**: deixe em **1** — SQLite e o worker da fila de webhook pressupõem um único processo.

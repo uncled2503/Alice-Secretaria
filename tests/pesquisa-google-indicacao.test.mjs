@@ -65,6 +65,7 @@ const { prepararGoogleLisboa } = await import("../dist/maintenance/lisboaGoogle.
 const { diagnoseJobs } = await import("../dist/crm/automationRuns.js");
 
 test.after(async () => {
+  await (await import("../dist/jobs/background.js")).drainBackground(); // tarefas em segundo plano terminam ANTES de o banco temporario ser apagado
   await prisma.$disconnect();
   for (const ext of ["", "-wal", "-shm", "-journal"]) { try { fs.rmSync(dbFile + ext, { force: true }); } catch { /* arquivo temporario */ } }
 });

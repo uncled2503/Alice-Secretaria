@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { safeFetch } from "../ai/wellFormed.js";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
@@ -23,7 +24,7 @@ import { formatDayInZone, isoDateInZone, zonedWallClockToUtc } from "../scheduli
 // conversa gera ~1 chamada, em vez de uma por mensagem.
 // ---------------------------------------------------------------------------
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 60_000, maxRetries: 1 });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: safeFetch, timeout: 60_000, maxRetries: 1 });
 const MODEL = process.env.OPENAI_CRM_MODEL ?? process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
 const QUIET_MINUTES = 10; // conversa precisa estar parada ha esse tanto

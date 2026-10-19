@@ -1,6 +1,6 @@
 import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
-import { sendText, isPermanentSendError, isAmbiguousSendError, type SendOutcome } from "../uazapi/client.js";
+import { deferralInfo, sendText, isPermanentSendError, isAmbiguousSendError, isConnectionDownError, type SendOutcome } from "../uazapi/client.js";
 import { logActivity } from "../crm/activity.js";
 import { notifyStaff } from "../crm/notify.js";
 import { recordAutomatedMessage } from "../crm/conversationLog.js";
@@ -10,6 +10,8 @@ import { openAt, type SendCalendar } from "../crm/followupSchedule.js";
 import { acquireFlow, finishFlow as finishFlowAt, MAX_VETOES, VETO_RETRY_MS, DEFER_RETRY_MS, FAIL_GAP_MS, type DecisionMeta, type FlowKey, type FlowState } from "../crm/followupLedger.js";
 import { RunRecorder } from "../crm/automationRuns.js";
 import { REVISION } from "../version.js";
+import { usableFirstName } from "../crm/greeting.js";
+import { isReviewUnavailable } from "../ai/sendGate.js";
 import { reviewLinkState, validateReferralText, type ReviewLinkState } from "./reviewLink.js";
 import { checkResumeSend, modeOf, readRestriction, testSendsSoFar } from "../crm/resumeGuard.js";
 import { scoreBand, type ScoreBand } from "./surveyReply.js";
@@ -66,7 +68,7 @@ export async function lastSurveyAskedAt(clinicId: string, patientIds: string[]):
 // ---------------------------------------------------------------------------
 // GRAVAR A NOTA (atomico, idempotente) E MONTAR O AGRADECIMENTO
 // ---------------------------------------------------------------------------
-const firstName = (n: string | null | undefined) => (n ?? "").trim().split(/\s+/)[0] ?? "";
+const firstName = (n: string | null | undefined) => usableFirstName(n);
 
 export interface AnswerResult {
   ok: true;
@@ -317,7 +319,8 @@ async function runReferralForClinic(clinicId: string, now: Date, sleep: (ms: num
         outcome = await sendText(clinicId, patient.phone, text, { kind: "indicacao", flow: "indicacao" });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        if (isPermanentSendError(err)) { await finish(got.id, "failed_permanent", { layer: "envio", reason: `numero recusado: ${msg.slice(0, 100)}` }); rec.add("falha", "numero_sem_whatsapp"); }
+        if (isConnectionDownError(err) || isReviewUnavailable(err)) { const d = deferralInfo(err); await finish(got.id, "deferred", { layer: d.layer, reason: d.reason, temporary: true, reevaluateAt: new Date(now.getTime() + DEFER_RETRY_MS), fingerprint }); rec.add("adiado", d.tag); }
+        else if (isPermanentSendError(err)) { await finish(got.id, "failed_permanent", { layer: "envio", reason: `numero recusado: ${msg.slice(0, 100)}` }); rec.add("falha", "numero_sem_whatsapp"); }
         else if (isAmbiguousSendError(err)) { await finish(got.id, "unconfirmed", { layer: "envio", reason: "tempo esgotado no provedor: pode ter sido entregue, nao reenviado" }); rec.add("incerto", "envio_nao_confirmado"); }
         else { await finish(got.id, "failed", { layer: "envio", reason: `falha no envio: ${msg.slice(0, 100)}`, temporary: true, reevaluateAt: new Date(now.getTime() + FAIL_GAP_MS) }); rec.add("falha", "envio_falhou_tentara_de_novo"); }
         continue;

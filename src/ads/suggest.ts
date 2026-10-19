@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { safeFetch } from "../ai/wellFormed.js";
 import { prisma } from "../db/client.js";
 import { scheduleLocked } from "../jobs/lock.js";
 import { classifyLead, REASON_CODES, type LeadStatus } from "./classification.js";
@@ -69,7 +70,7 @@ export type SuggestCall = (system: string, user: string) => Promise<string | nul
 
 let openai: OpenAI | null = null;
 async function defaultCall(model: string, system: string, user: string): Promise<string | null> {
-  openai ??= new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 30_000, maxRetries: 1 });
+  openai ??= new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: safeFetch, timeout: 30_000, maxRetries: 1 });
   const r = await openai.chat.completions.create({ model, temperature: 0, max_tokens: 120, response_format: { type: "json_object" }, messages: [{ role: "system", content: system }, { role: "user", content: user }] });
   return r.choices[0]?.message?.content ?? null;
 }

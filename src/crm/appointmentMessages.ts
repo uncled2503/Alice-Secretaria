@@ -2,6 +2,7 @@ import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 import { formatInZone } from "../scheduling/time.js";
 import { notifyStaff } from "./notify.js";
+import { usableFirstName } from "./greeting.js";
 import { recordAutomatedMessage } from "./conversationLog.js";
 
 // Quando a Alice agenda dentro de uma conversa, a propria resposta dela JA e
@@ -26,7 +27,7 @@ export async function sendAppointmentConfirmationToPatient(appointmentId: string
   });
   if (!appt) return;
 
-  const firstName = appt.patient.name?.trim().split(" ")[0] || "";
+  const firstName = usableFirstName(appt.patient.name);
   const tz = appt.clinic.timezone || "America/Sao_Paulo";
   const when = formatInZone(appt.scheduledAt, tz);
   // Alguns procedimentos ja tem o nome do profissional no proprio nome (ex.:

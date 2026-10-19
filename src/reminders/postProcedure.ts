@@ -1,6 +1,7 @@
 import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
-import { sendText, isPermanentSendError } from "../uazapi/client.js";
+import { sendText, isPermanentSendError, isAmbiguousSendError, isSendDeferred, deferralInfo } from "../uazapi/client.js";
+import { RunRecorder } from "../crm/automationRuns.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js";
 import { PAID_CLINIC_WHERE } from "../crm/plan.js";
 import { notifyStaff } from "../crm/notify.js";
@@ -36,20 +37,29 @@ export function skipsPostForEvaluation(appt: { procedureId: string; procedure: {
 // Roda a cada 15min. So dispara uma vez por agendamento por regra (marca em
 // PostProcedureSent), respeitando "so apos concluido" e o filtro de
 // procedimentos (procedureIds vazio = vale pra todos).
-export function startPostProcedureJob(): void {
-  scheduleLocked("pos-procedimento", "*/15 * * * *", async () => {
+// Cada rodada deixa um resumo por clinica (AutomationRun "pos-procedimento") para provar se o job rodou, quantos atendimentos entraram, o que saiu e por que
+// o restante nao saiu. O "pos" aqui e o ACOMPANHAMENTO PÓS-PROCEDIMENTO (regra PostProcedureRule, depois de um atendimento CONCLUIDO); nao e o preparo pre-procedimento
+// (PreProcedureRule) nem a pesquisa de satisfacao (NPS), que sao fluxos separados.
+export async function runPostProcedureCycle(clock: () => Date = () => new Date()): Promise<void> {
+  {
+    const recorders = new Map<string, RunRecorder>();
+    const rec = (clinicId: string) => { let r = recorders.get(clinicId); if (!r) recorders.set(clinicId, (r = new RunRecorder("pos-procedimento", clinicId, clock()))); return r; };
+    let failure: unknown = null;
+    try {
     const rules = await prisma.postProcedureRule.findMany({
       where: { active: true, clinic: PAID_CLINIC_WHERE },
       include: { clinic: { select: { timezone: true } } },
     });
     const clinicInfoCache = new Map<string, Awaited<ReturnType<typeof getClinicTemplateInfo>>>();
 
+    for (const rule of rules) rec(rule.clinicId); // uma linha por clinica com regra ativa, mesmo sem candidatos: prova que o job rodou
     for (const rule of rules) {
-      const now = new Date();
+      const now = clock();
+      const r = rec(rule.clinicId);
       // Cuidados pos-procedimento nao saem de noite/madrugada: espera ate as 7h (o que ficou pendente sai no 1o ciclo da manha;
       // a folga de 3 dias da regra cobre a espera).
       const localHour = wallClockInZone(now, rule.clinic.timezone || "America/Sao_Paulo").hour;
-      if (localHour >= 21 || localHour < 7) continue;
+      if (localHour >= 21 || localHour < 7) { r.add("ignorado", "fora_do_horario_de_envio_7h_21h"); continue; }
       const cutoff = new Date(now.getTime() - intervalMs(rule.intervalValue, rule.intervalUnit));
       const floor = new Date(cutoff.getTime() - MAX_OVERDUE_MS);
       const procedureFilter = rule.procedureIds.split(",").filter(Boolean);
@@ -84,6 +94,8 @@ export function startPostProcedureJob(): void {
       }
 
       if (due.length === 0) continue;
+      r.candidates += due.length;
+      r.eligible += due.length;
 
       if (!clinicInfoCache.has(rule.clinicId)) {
         clinicInfoCache.set(rule.clinicId, await getClinicTemplateInfo(rule.clinicId));
@@ -109,15 +121,25 @@ export function startPostProcedureJob(): void {
         }
         try {
           const outcome = await sendText(appt.clinicId, appt.patient.phone, text, { kind: "pos" });
-          if (outcome === "sent") await recordAutomatedMessage(appt.patientId, text, rule.name || "Pós-procedimento automático");
+          if (outcome === "sent") { await recordAutomatedMessage(appt.patientId, text, rule.name || "Pós-procedimento automático"); r.add("enviado", "pos"); }
+          // barrado pela revisao / plano / identica: a reserva FICA (e a decisao e definitiva para este atendimento) e o resumo da rodada registra, nao como envio
+          else r.add(outcome === "vetoed" ? "vetado" : "ignorado", outcome === "vetoed" ? "revisao_de_envio_barrou" : outcome === "blocked" ? "envio_bloqueado_pelo_plano" : "mensagem_identica_ja_enviada");
         } catch (err) {
+          if (isAmbiguousSendError(err)) {
+            // timeout depois de enviar: PODE ter chegado. Mantem a reserva e NUNCA reenvia as cegas (antes devolvia a reserva e podia mandar em dobro).
+            r.add("incerto", "envio_nao_confirmado");
+            continue;
+          }
           if (isPermanentSendError(err)) {
+            r.add("falha", "numero_sem_whatsapp");
             // Numero sem WhatsApp: mantem a reserva (nao tenta de novo a cada 15 min) e avisa a equipe uma vez.
             console.error(`Pos-procedimento nao enviado: ${appt.patient.phone} nao tem WhatsApp.`);
             await notifyStaff(appt.clinicId, "automation_failed", `⚠️ O número de ${appt.patient.name ?? appt.patient.phone} (${appt.patient.phone}) não tem WhatsApp, então a mensagem de acompanhamento ("${rule.name}") não foi enviada. Confira o telefone no cadastro.`);
             continue;
           }
           await prisma.postProcedureSent.deleteMany({ where: { appointmentId: appt.id, ruleId: rule.id } }); // devolve a reserva
+          if (isSendDeferred(err)) { r.add("adiado", deferralInfo(err).tag); console.warn(`[pos] adiado para ...${appt.patient.phone.slice(-4)} (${err instanceof Error ? err.message : "indisponivel"})`); continue; } // sem aviso a cada rodada: o aviso e unico (Diario + Canais)
+          r.add("falha", "envio_falhou_tentara_de_novo");
           console.error(`Falha ao enviar pos-procedimento (regra ${rule.id}) para ${appt.patient.phone}:`, err);
           // Sem isso a falha so aparecia no log do servidor - a clinica nunca
           // ficava sabendo que a mensagem automatica nao saiu. O robo tenta de
@@ -130,5 +152,15 @@ export function startPostProcedureJob(): void {
         }
       }
     }
-  });
+    } catch (err) {
+      failure = err;
+      console.error("[pos-procedimento] a rodada falhou:", err instanceof Error ? err.message : err);
+    } finally {
+      for (const r of recorders.values()) await r.save(failure ? "erro" : "ok", failure ?? undefined);
+    }
+  }
+}
+
+export function startPostProcedureJob(): void {
+  scheduleLocked("pos-procedimento", "*/15 * * * *", async () => { await runPostProcedureCycle(); });
 }

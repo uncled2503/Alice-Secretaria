@@ -97,6 +97,9 @@ export interface JobSpec {
 // Os jobs que o diagnostico acompanha (nome interno = o do scheduleLocked / do RunRecorder).
 export const TRACKED_JOBS: JobSpec[] = [
   { job: "recontato", label: "Recontatos (cascata por silêncio)", cron: "*/15 * * * *" },
+  { job: "lembretes", label: "Confirmações e lembretes de agendamento", cron: "*/15 * * * *" },
+  { job: "pos-procedimento", label: "Acompanhamento pós-procedimento (depois de atendimento concluído)", cron: "*/15 * * * *" },
+  { job: "aniversario", label: "Aniversariantes do dia", cron: "5 * * * *" },
   { job: "retomada-avaliacao-cancelada", label: "Retomada de avaliações canceladas", cron: "*/15 * * * *" },
   { job: "retomada-avaliacao-sem-fechamento", label: "Retomada de avaliações sem fechamento (pessoas marcadas pela equipe)", cron: "*/15 * * * *" },
   { job: "pesquisa-satisfacao", label: "Pesquisa de satisfação (no máximo 1 a cada 15 dias por pessoa)", cron: "*/15 * * * *" },

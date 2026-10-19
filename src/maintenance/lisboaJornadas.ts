@@ -1,6 +1,7 @@
 import { prisma } from "../db/client.js";
 import { logActivity } from "../crm/activity.js";
 import { wallClockInZone } from "../scheduling/time.js";
+import { journeySource } from "../scheduling/eligibility.js";
 
 // ---------------------------------------------------------------------------
 // JORNADAS DAS PROFISSIONAIS DA LISBOA (informadas pela clinica em 16/10/2026): Suelen 12h-21h, Adriana 12h-21h, Talita 8h-17h.
@@ -43,6 +44,8 @@ export interface JornadaItem {
   profissionalId?: string;
   profissional?: string;
   antes?: string;
+  origemAntes?: string; // DE ONDE vem o valor antigo: cadastro da profissional ou herdado do expediente da clinica
+  situacao?: "cadastro_aplicado" | "cadastro_preparado_nao_aplicado"; // 'ajustado' so quando o cadastro JA esta igual ao pretendido
   candidatas: JornadaCandidata[];
   conflitos: string[]; // o que ficou incompativel com a nova jornada (nao e corrigido aqui)
   aplicada?: boolean;
@@ -104,6 +107,8 @@ export async function ajustarJornadasLisboa(clinicId: string, opts: JornadasOpti
     item.profissionalId = chosen.id;
     item.profissional = chosen.name;
     item.antes = jornadaTexto(chosen);
+    const origem = journeySource(chosen);
+    item.origemAntes = origem === "cadastro" ? "cadastro da própria profissional" : origem === "heranca_da_clinica" ? "herdado do expediente da clínica (a profissional NÃO tem jornada própria cadastrada)" : "cadastro incompleto (só início ou só fim)";
     item.pendencia = undefined;
 
     // 2) o que fica incompativel com a nova jornada (so sinaliza)
@@ -131,6 +136,7 @@ export async function ajustarJornadasLisboa(clinicId: string, opts: JornadasOpti
     // 3) idempotente: ja esta igual?
     const igual = chosen.workStartHour === alvo.inicio[0] && chosen.workStartMinute === alvo.inicio[1] && chosen.workEndHour === alvo.fim[0] && chosen.workEndMinute === alvo.fim[1];
     item.status = igual ? "sem_mudanca" : "atualizar";
+    item.situacao = igual ? "cadastro_aplicado" : "cadastro_preparado_nao_aplicado";
     itens.push(item);
   }
 

@@ -1,6 +1,10 @@
 import OpenAI from "openai";
+import { safeFetch } from "../ai/wellFormed.js";
 import { prisma } from "../db/client.js";
 import { recordUsage } from "../ai/usageStats.js";
+import { safeSlice } from "../ai/wellFormed.js";
+import { parseCategory, vetoStands, type VetoCategory } from "./vetoReasons.js";
+import { REVISION } from "../version.js";
 
 // ---------------------------------------------------------------------------
 // "Juiz" do recontato: antes de mandar o recontato automatico, uma IA le o
@@ -13,7 +17,7 @@ import { recordUsage } from "../ai/usageStats.js";
 // do que mandar mensagem sem sentido e queimar o numero).
 // ---------------------------------------------------------------------------
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 60_000, maxRetries: 1 });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: safeFetch, timeout: 60_000, maxRetries: 1 });
 const MODEL = process.env.OPENAI_RECONTACT_MODEL ?? process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
 export interface JudgeInput {
@@ -26,7 +30,14 @@ export interface JudgeInput {
 export interface JudgeVerdict {
   recontact: boolean;
   reason: string;
+  category?: VetoCategory; // por que NAO recontatar (estruturado)
+  ignoredVeto?: boolean; // o juiz disse "nao" so descrevendo o publico da automacao: o "nao" nao vale
 }
+
+// Falha TECNICA do juiz (nao e decisao de negocio). `permanent`: a requisicao foi RECUSADA (HTTP 400, ex.: invalid_json) - repetir a mesma requisicao nao adianta, entao a
+// etapa espera bem mais antes de tentar de novo (e nunca vira veto nem etapa consumida).
+export interface JudgeFailure { why: string; permanent: boolean; status?: number; code?: string }
+export const JUDGE_REJECTED_RETRY_MS = 6 * 3_600_000;
 
 const SYSTEM = `Voce decide se a clinica deve mandar um RECONTATO automatico a um paciente que ficou em silencio.
 
@@ -45,7 +56,9 @@ Responda recontact=false quando:
 - nao ha informacao suficiente para saber que ele queria algo.
 Na duvida, recontact=false.
 
-Responda APENAS um JSON: {"recontact": true|false, "reason": "motivo em ate 15 palavras"}.`;
+O PUBLICO do recontato e exatamente quem NAO tem horario marcado, NAO respondeu a mensagem anterior, e um lead novo ou parou de responder depois de pedir agendamento. Esses fatos NAO sao motivo para recontact=false: sao o motivo do recontato. Use recontact=false so pelos motivos acima (consulta ja marcada, recusa, equipe conversando, retorno combinado, reclamacao/assunto sensivel, contato nao comercial, repeticao).
+
+Responda APENAS um JSON: {"recontact": true|false, "categoria": "opt_out|sem_interesse|atendimento_humano|retorno_combinado|reclamacao|assunto_sensivel|nao_comercial|ja_tem_horario|ja_atendida|repeticao|momento_inadequado|outro", "reason": "motivo em ate 15 palavras"}.`;
 
 function formatConversation(input: JudgeInput): string {
   const now = input.now ?? new Date();
@@ -53,7 +66,7 @@ function formatConversation(input: JudgeInput): string {
     const who = m.role === "user" ? "PACIENTE" : m.role === "human" ? "EQUIPE" : m.authorName ? `AUTOMACAO (${m.authorName})` : "ALICE";
     const mins = Math.max(0, Math.round((now.getTime() - m.createdAt.getTime()) / 60_000));
     const ago = mins < 90 ? `${mins} min atras` : mins < 60 * 36 ? `${Math.round(mins / 60)} h atras` : `${Math.round(mins / 1440)} dias atras`;
-    return `[${ago}] ${who}: ${m.content.replace(/\s+/g, " ").slice(0, 300)}`;
+    return `[${ago}] ${who}: ${safeSlice(m.content.replace(/\s+/g, " "), 300)}`; // (sem partir um emoji no meio: substituto solto faz a OpenAI recusar o corpo)
   });
   const appts = input.appointments.length
     ? input.appointments
@@ -63,28 +76,58 @@ function formatConversation(input: JudgeInput): string {
   return `Clinica: ${input.clinicName}\nAgendamentos do paciente:\n${appts}\n\nConversa (mais recente por ultimo):\n${lines.join("\n")}`;
 }
 
-export async function judgeRecontact(input: JudgeInput): Promise<JudgeVerdict | null> {
-  if (process.env.RECONTACT_AI_GATE === "off") return { recontact: true, reason: "juiz desligado (RECONTACT_AI_GATE=off)" };
-  if (!process.env.OPENAI_API_KEY) return null;
+// Interpreta a resposta do modelo. Veto cujo UNICO motivo e descrever o publico da automacao (sem horario / sem resposta / lead novo / pediu agendamento) nao vale.
+export function toVerdict(parsed: { recontact?: unknown; reason?: unknown; categoria?: unknown }): JudgeVerdict | null {
+  if (typeof parsed.recontact !== "boolean") return null;
+  const reason = typeof parsed.reason === "string" ? safeSlice(parsed.reason, 200) : "";
+  const category = parseCategory(parsed.categoria) ?? undefined;
+  if (!parsed.recontact) {
+    const v = vetoStands(category ?? null, reason);
+    if (!v.stands) return { recontact: true, reason: `veto ignorado (${v.why}): ${reason}`, ignoredVeto: true, category };
+  }
+  return { recontact: parsed.recontact, reason, category };
+}
+
+// Uma consulta ao juiz. Separa: veredito (ok) x falha tecnica (temporaria: IA fora do ar/tempo esgotado/resposta ilegivel; permanente: requisicao recusada, HTTP 400).
+// NUNCA registra o corpo da requisicao (tem conversa de paciente): so status, codigo, id da requisicao da OpenAI e tamanho.
+async function askJudge(system: string, user: string, tag: { clinicId?: string; conversationId?: string; job: string }): Promise<{ ok: true; verdict: JudgeVerdict } | { ok: false; failure: JudgeFailure }> {
   try {
     const res = await openai.chat.completions.create({
       model: MODEL,
       temperature: 0,
       response_format: { type: "json_object" },
       messages: [
-        { role: "system", content: SYSTEM },
-        { role: "user", content: formatConversation(input) },
+        { role: "system", content: system },
+        { role: "user", content: user },
       ],
     });
     recordUsage("juiz_recontato", res.usage);
-    const raw = res.choices[0]?.message?.content ?? "";
-    const parsed = JSON.parse(raw) as { recontact?: unknown; reason?: unknown };
-    if (typeof parsed.recontact !== "boolean") return null;
-    return { recontact: parsed.recontact, reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 200) : "" };
+    let parsed: { recontact?: unknown; reason?: unknown; categoria?: unknown };
+    try {
+      parsed = JSON.parse(res.choices[0]?.message?.content ?? "");
+    } catch {
+      return { ok: false, failure: { why: "resposta da IA ilegivel", permanent: false } };
+    }
+    const verdict = toVerdict(parsed);
+    return verdict ? { ok: true, verdict } : { ok: false, failure: { why: "resposta da IA sem o campo recontact", permanent: false } };
   } catch (err) {
-    console.error("[recontato] juiz de IA falhou:", err);
-    return null;
+    const e = err as { status?: number; code?: string | null; requestID?: string | null; message?: string } | null;
+    const status = typeof e?.status === "number" ? e.status : undefined;
+    const permanent = status === 400; // requisicao recusada: repetir o mesmo corpo nao adianta
+    console.error(`[${tag.job}] juiz de IA ${permanent ? "RECUSOU a requisicao" : "falhou"} clinica=${tag.clinicId ?? "-"} conversa=${tag.conversationId ?? "-"} status=${status ?? "-"} code=${e?.code ?? "-"} request_id=${e?.requestID ?? "-"} bytes=${user.length + system.length} revisao=${REVISION.split(":")[0]} (o conteudo da conversa nao e registrado)`);
+    return { ok: false, failure: { why: permanent ? `requisicao recusada pela IA (HTTP 400${e?.code ? ` ${e.code}` : ""})` : "a IA nao respondeu", permanent, status, code: e?.code ?? undefined } };
   }
+}
+
+export async function judgeRecontact(input: JudgeInput, tag: { clinicId?: string; conversationId?: string } = {}): Promise<JudgeVerdict | null> {
+  const r = await judgeRecontactDetailed(input, tag);
+  return r.ok ? r.verdict : null;
+}
+
+export async function judgeRecontactDetailed(input: JudgeInput, tag: { clinicId?: string; conversationId?: string } = {}): Promise<{ ok: true; verdict: JudgeVerdict } | { ok: false; failure: JudgeFailure }> {
+  if (process.env.RECONTACT_AI_GATE === "off") return { ok: true, verdict: { recontact: true, reason: "juiz desligado (RECONTACT_AI_GATE=off)" } };
+  if (!process.env.OPENAI_API_KEY) return { ok: false, failure: { why: "sem chave da OpenAI", permanent: false } };
+  return askJudge(SYSTEM, formatConversation(input), { ...tag, job: "recontato" });
 }
 
 // O veredito em cache so vale enquanto o CONTEXTO nao muda (mensagem nova, agendamento, atendimento da equipe, retorno combinado, etapa da cascata) E por
@@ -94,14 +137,14 @@ export const JUDGE_TTL_MS = 4 * 3_600_000;
 
 export type JudgeResult =
   | { kind: "verdict"; verdict: JudgeVerdict; source: "cache" | "ia" }
-  | { kind: "unavailable"; why: string }; // falha TECNICA (IA fora do ar, sem chave, resposta ilegivel): nao e decisao de negocio
+  | { kind: "unavailable"; why: string; permanent?: boolean; retryAfterMs?: number }; // falha TECNICA (IA fora do ar, sem chave, resposta ilegivel): nao e decisao de negocio
 
 // Junta o contexto no banco e julga. Reaproveita o veredito so se o contexto (impressao digital + etapa) e o prazo ainda valem.
 export async function judgeConversation(
   conversationId: string,
   patientId: string,
   clinicName: string,
-  opts: { fingerprint: string; ruleOrder: number; now?: Date },
+  opts: { fingerprint: string; ruleOrder: number; now?: Date; clinicId?: string },
 ): Promise<JudgeResult> {
   const now = opts.now ?? new Date();
   const stamp = `${opts.fingerprint}#${opts.ruleOrder}`;
@@ -133,13 +176,15 @@ export async function judgeConversation(
     }),
   ]);
   const lastAt = messages[0]?.createdAt ?? now; // (a lista vem da mais nova para a mais antiga)
-  const verdict = await judgeRecontact({
+  const asked = await judgeRecontactDetailed({
     clinicName,
     messages: messages.reverse(),
     appointments: appointments.map((a) => ({ status: a.status, scheduledAt: a.scheduledAt, procedure: a.procedure.name })),
     now,
-  });
-  if (!verdict) return { kind: "unavailable", why: process.env.OPENAI_API_KEY ? "a IA nao respondeu ou devolveu algo ilegivel" : "sem chave da OpenAI" }; // falha: nao grava, tenta de novo (e nao envia)
+  }, { clinicId: opts.clinicId, conversationId });
+  // falha TECNICA: nao grava veredito, nao vira veto e nao envia; requisicao recusada espera bem mais (repetir o mesmo corpo nao adianta)
+  if (!asked.ok) return { kind: "unavailable", why: asked.failure.why, permanent: asked.failure.permanent, ...(asked.failure.permanent ? { retryAfterMs: JUDGE_REJECTED_RETRY_MS } : {}) };
+  const verdict = asked.verdict;
 
   await prisma.conversation.update({
     where: { id: conversationId },
@@ -167,9 +212,11 @@ Responda recontact=false quando:
 - nao ha informacao suficiente para saber o que aconteceu.
 Na duvida, recontact=false.
 
-Responda APENAS um JSON: {"recontact": true|false, "reason": "motivo em ate 15 palavras"}.`;
+Nao ter horario marcado, nao ter respondido a ultima mensagem ou ter sumido depois de pedir agendamento e o PUBLICO desta retomada: nao e motivo para recontact=false.
 
-export async function judgeResumeContact(flow: string, input: { patientId: string; clinicName: string; now?: Date }): Promise<JudgeResult> {
+Responda APENAS um JSON: {"recontact": true|false, "categoria": "opt_out|sem_interesse|atendimento_humano|retorno_combinado|reclamacao|assunto_sensivel|nao_comercial|ja_tem_horario|ja_atendida|repeticao|momento_inadequado|outro", "reason": "motivo em ate 15 palavras"}.`;
+
+export async function judgeResumeContact(flow: string, input: { patientId: string; clinicName: string; now?: Date; clinicId?: string }): Promise<JudgeResult> {
   const now = input.now ?? new Date();
   if (process.env.RECONTACT_AI_GATE === "off") return { kind: "verdict", verdict: { recontact: true, reason: "juiz desligado (RECONTACT_AI_GATE=off)" }, source: "ia" };
   if (!process.env.OPENAI_API_KEY) return { kind: "unavailable", why: "sem chave da OpenAI" };
@@ -182,22 +229,11 @@ export async function judgeResumeContact(flow: string, input: { patientId: strin
     }),
     prisma.appointment.findMany({ where: { patientId: input.patientId }, orderBy: { scheduledAt: "desc" }, take: 6, select: { status: true, scheduledAt: true, procedure: { select: { name: true } } } }),
   ]);
-  try {
-    const res = await openai.chat.completions.create({
-      model: MODEL,
-      temperature: 0,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: RESUME_SYSTEM },
-        { role: "user", content: `Fluxo: ${flow === "avaliacao_cancelada" ? "avaliacao cancelada" : "avaliacao realizada sem fechamento"}\n${formatConversation({ clinicName: input.clinicName, messages: messages.reverse(), appointments: appointments.map((a) => ({ status: a.status, scheduledAt: a.scheduledAt, procedure: a.procedure.name })), now })}` },
-      ],
-    });
-    recordUsage("juiz_recontato", res.usage);
-    const parsed = JSON.parse(res.choices[0]?.message?.content ?? "") as { recontact?: unknown; reason?: unknown };
-    if (typeof parsed.recontact !== "boolean") return { kind: "unavailable", why: "resposta da IA ilegivel" };
-    return { kind: "verdict", verdict: { recontact: parsed.recontact, reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 200) : "" }, source: "ia" };
-  } catch (err) {
-    console.error("[retomada] juiz de IA falhou:", err instanceof Error ? err.message : err);
-    return { kind: "unavailable", why: "a IA nao respondeu" };
-  }
+  const asked = await askJudge(
+    RESUME_SYSTEM,
+    `Fluxo: ${flow === "avaliacao_cancelada" ? "avaliacao cancelada" : "avaliacao realizada sem fechamento"}\n${formatConversation({ clinicName: input.clinicName, messages: messages.reverse(), appointments: appointments.map((a) => ({ status: a.status, scheduledAt: a.scheduledAt, procedure: a.procedure.name })), now })}`,
+    { clinicId: input.clinicId, conversationId: undefined, job: "retomada" },
+  );
+  if (!asked.ok) return { kind: "unavailable", why: asked.failure.why, permanent: asked.failure.permanent, ...(asked.failure.permanent ? { retryAfterMs: JUDGE_REJECTED_RETRY_MS } : {}) };
+  return { kind: "verdict", verdict: asked.verdict, source: "ia" };
 }

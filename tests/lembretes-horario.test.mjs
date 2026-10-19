@@ -29,6 +29,7 @@ const put = (id, body) => fetch(`http://127.0.0.1:${port}/api/reminder-rules/${i
 
 test.after(async () => {
   server.close();
+  await (await import("../dist/jobs/background.js")).drainBackground(); // tarefas em segundo plano terminam ANTES de o banco temporario ser apagado
   await prisma.$disconnect();
   for (const ext of ["", "-wal", "-shm", "-journal"]) { try { fs.rmSync(dbFile + ext, { force: true }); } catch { /* Windows pode segurar o arquivo por um instante: e temporario */ } }
 });

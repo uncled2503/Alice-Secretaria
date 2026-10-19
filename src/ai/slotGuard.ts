@@ -19,11 +19,12 @@ export interface SlotState {
   dates: Set<string>; // "DD/MM"
   instants: number[]; // instantes devolvidos (para conferir hoje/amanha)
   offer: { iso: string; professional: string | null }[]; // ultima lista oferecida (ate montar a resposta)
+  offerProcedure: string | null; // procedimento a que essa lista se refere (campo "procedimento" do resultado da ferramenta), para nao reaproveitar a de outro
   booked: { label: string; professional: string | null } | null; // book_appointment deu certo
 }
 
 export function newSlotState(): SlotState {
-  return { times: new Set(), dates: new Set(), instants: [], offer: [], booked: null };
+  return { times: new Set(), dates: new Set(), instants: [], offer: [], offerProcedure: null, booked: null };
 }
 
 const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
@@ -68,6 +69,7 @@ export function absorbToolResult(state: SlotState, toolName: string, resultJson:
       .map((x) => x as Record<string, unknown>)
       .filter((x) => typeof x.iso === "string")
       .map((x) => ({ iso: x.iso as string, professional: typeof x.profissional === "string" ? x.profissional : null }));
+    state.offerProcedure = typeof r.procedimento === "string" ? r.procedimento : null;
   }
   if (toolName === "book_appointment" && r.agendado === true && typeof r.quando === "string") {
     state.booked = { label: r.quando, professional: typeof r.profissional === "string" ? r.profissional : null };

@@ -834,6 +834,8 @@
                   <label class="biz-clinica-only"><input type="checkbox" value="cancel" />Cancelamento</label>
                   <label class="biz-clinica-only"><input type="checkbox" value="confirmed" />Presença confirmada pelo paciente</label>
                   <label><input type="checkbox" value="human_handoff" />Transferência para humano</label>
+                  <label><input type="checkbox" value="daily_report" />Resumo do dia (20h)</label>
+                  <label><input type="checkbox" value="daily_report_phones" />Telefones dos leads no resumo do dia</label>
                 </div>
               </label>
             </div>
@@ -944,6 +946,10 @@
           </div>
           <div class="card channel-card">
             <div id="channel-status-badge" class="badge badge-neutral">Verificando…</div>
+            <div id="channel-paused-notice" role="alert" style="display:none;margin:0.75rem 0 0;padding:0.75rem 0.9rem;border:1px solid #b91c1c;border-radius:8px;background:rgba(185,28,28,0.08)">
+              <strong>WhatsApp desconectado: os envios automáticos estão pausados.</strong>
+              <p id="channel-paused-text" class="hint" style="margin:0.35rem 0 0"></p>
+            </div>
             <p id="channel-last-error" class="hint" style="color:#b91c1c;margin:0.5rem 0 0"></p>
             <div id="channel-qr-loading" style="display:none;align-items:center;gap:0.5rem;margin-top:0.8rem">
               <span class="spinner"></span>

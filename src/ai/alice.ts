@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { safeFetch } from "./wellFormed.js";
 import type { ChatCompletion, ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
 import { prisma } from "../db/client.js";
 import { ceMirrorEnabled, enrichPatientFromCe, syncAppointment } from "../clinicaexperts/sync.js";
@@ -61,19 +62,23 @@ import { trySurveyReply } from "../reminders/surveyHandler.js";
 import { recordSurveyAnswer } from "../reminders/surveyFlow.js";
 import { hasComplaint as hasSurveyComplaint } from "../reminders/surveyReply.js";
 import { selectFocusProcedures } from "./procedureFocus.js";
+import { safeSlice } from "./wellFormed.js";
 import { analyzeConversation, renderAnalysis } from "./conversationAnalysis.js";
 import { areasIn, findRelevanceMismatch, fittingForObjective, fittingProcedures, safeReplyForMismatch } from "./relevance.js";
-import { buildPreProcedureText } from "../reminders/preProcedure.js";
+import { buildPreProcedureText, linkPreProcedureToMessage, type PreReservation } from "../reminders/preProcedure.js";
+import { resolvePresence, disambiguationText } from "./presenceConfirmation.js";
 
 // Orientacao de PRE-procedimento que sai como resposta da Alice logo apos a cliente confirmar o horario (por conversa).
 // A ferramenta de confirmar preenche; generateReplyUnlocked usa o texto exato (nao deixa o modelo reescrever).
-const pendingPreProcedure = new Map<string, string>();
+// Texto de preparo entre a ferramenta de confirmacao e a resposta. As etapas ja estao RESERVADAS no banco (estado "reserved"): se o processo cair antes de a resposta existir,
+// a reconciliacao do preparo (reminders/preProcedure.ts) as recupera depois de revalidar; nada depende deste Map para nao se perder.
+const pendingPreProcedure = new Map<string, { text: string; reservations: PreReservation[] }>();
 import { reportsProcedureReaction, REACTION_HANDOFF_REASON, REACTION_TEXT, REACTION_WINDOW_DAYS } from "./safety.js";
 import { bookingRiskNote } from "../crm/patientRisk.js";
 import { isFreePlan } from "../crm/plan.js";
 import type { Procedure } from "@prisma/client";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 60_000, maxRetries: 1 });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: safeFetch, timeout: 60_000, maxRetries: 1 });
 // gpt-4o-mini por padrao: conversa de qualificacao/agendamento nao precisa do
 // modelo mais caro. Troque via OPENAI_MODEL se a qualidade exigir.
 const MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
@@ -2332,49 +2337,55 @@ async function generateReplyUnlocked(
     }
   }
 
-  // RESPOSTA A CONFIRMACAO DE PRESENCA ("pode sim" ao lembrete de 24h): so agradece (ou manda o preparo, se houver), sem passar pelo modelo.
+  // CONFIRMACAO DE PRESENCA ("Confirmado" / "pode sim" ao lembrete): so agradece (ou manda o preparo, se houver), sem passar pelo modelo e SEM consultar agenda nem oferecer horarios.
+  // A decisao e de presenceConfirmation.ts e se apoia no lembrete e na reserva GRAVADOS (nao so na ultima fala do chat): sobrevive a reinicio e vale para a mesma pessoa com o
+  // telefone com/sem o 9o digito. Reserva cancelada/remarcada nao e confirmada por lembrete antigo; mais de uma reserva possivel pergunta qual.
+  let presenceGuard = false; // a mensagem parece uma confirmacao e ela tem reserva proxima: a resposta final (qualquer que seja o caminho) nunca oferece horarios
   if (usageClinic && usageClinic.businessType !== "geral") {
-    const lastUserText = history.filter((m) => m.role === "user").at(-1)?.content ?? "";
-    // so vale se a ULTIMA fala foi o proprio lembrete (senao o "sim" pode ser resposta a outra pergunta da conversa)
-    const lastNonUser = history.filter((m) => m.role !== "user").at(-1);
-    // Confirmacao pedida por uma PESSOA da equipe (celular/painel, "Passando para confirmar o seu agendamento...") vale igual ao lembrete
-    // automatico: a resposta "Confirmado" e confirmacao, nao pedido de horario (Helia, 15/10: a Alice respondeu com horarios de peeling).
-    const humanAskedConfirm = lastNonUser?.role === "human" && /\bconfirm\w*\b/i.test(lastNonUser.content) && /\b(agendamento|hor[aá]rio|atendimento)\b/i.test(lastNonUser.content);
-    if (isConfirmationReply(lastUserText) && (lastNonUser?.authorName === "Lembrete de consulta" || humanAskedConfirm)) {
-      const now = new Date();
-      const awaiting = await prisma.appointment.findFirst({
-        where: {
-          clinicId,
-          patientId: patient.id,
-          status: "confirmed",
-          patientConfirmed: false,
-          scheduledAt: { gte: now, lte: new Date(now.getTime() + 72 * 3_600_000) },
-          ...(humanAskedConfirm ? {} : { reminders: { some: { sentAt: { gte: new Date(now.getTime() - 36 * 3_600_000) }, rule: { hoursBefore: { gte: 12 } } } } }),
-        },
-        select: { id: true },
-      });
-      if (!awaiting && humanAskedConfirm) {
-        // Confirmacao pedida pela equipe e a pessoa nao tem horario pendente aqui (agendado so no Clinica Experts): so agradece, sem oferecer nada.
-        const text = confirmationThanks(patient.name);
+    try {
+      const presTz = (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { timezone: true } }))?.timezone || "America/Sao_Paulo";
+      const presence = await resolvePresence({ clinicId, patient: { id: patient.id, phone: patient.phone }, history, now: new Date(), tz: presTz });
+      if (presence.confirmationLike) {
+        // trilha de decisao (sem dados pessoais): por que foi, ou nao foi, tratada como confirmacao
+        void logActivity({
+          clinicId, patientId: patient.id, type: "presence_confirmation_decision", area: "agenda", title: "Resposta de confirmação de presença avaliada",
+          description: presence.kind === "none" ? `Não tratada como confirmação: ${presence.why}.` : presence.kind === "confirm" ? `Confirmação aplicada (${presence.via}${presence.already ? ", já estava confirmada" : ""}).` : presence.kind === "ambiguous" ? `Mais de uma reserva possível (${presence.options.length}): perguntei qual.` : `Reserva do lembrete não está mais válida: ${presence.why}.`,
+          actorName: null,
+        }).catch(() => undefined);
+      }
+      const reply = async (text: string) => {
         await prisma.message.create({ data: { conversationId: conversation.id, role: "assistant", content: text, deliveryStatus: "pending" } });
         await prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: new Date() } });
         return text;
-      }
-      if (awaiting) {
-        try {
-          const raw = await runTool(clinicId, patient.id, conversation.id, "manage_my_appointment", { action: "confirm" });
-          if ((JSON.parse(raw) as { ok?: boolean }).ok) {
-            const pre = pendingPreProcedure.get(conversation.id);
-            pendingPreProcedure.delete(conversation.id);
-            const text = pre || confirmationThanks(patient.name);
-            await prisma.message.create({ data: { conversationId: conversation.id, role: "assistant", content: text, deliveryStatus: "pending" } });
-            await prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: new Date() } });
-            return text;
-          }
-        } catch (err) {
-          console.error("[confirmacao] falha ao confirmar direto; segue pelo modelo:", err);
+      };
+      if (presence.kind === "none") presenceGuard = presence.confirmationLike && presence.hasUpcoming;
+      else if (presence.kind === "confirm") {
+        if (presence.already) return await reply(confirmationThanks(patient.name)); // ja estava confirmada: so agradece (idempotente)
+        const raw = await runTool(clinicId, presence.option.ownerPatientId, conversation.id, "manage_my_appointment", { action: "confirm", appointment_date: presence.option.day, appointment_time: presence.option.time });
+        if ((JSON.parse(raw) as { ok?: boolean }).ok) {
+          const pre = pendingPreProcedure.get(conversation.id);
+          pendingPreProcedure.delete(conversation.id);
+          const text = pre?.text || confirmationThanks(patient.name);
+          const created = await prisma.message.create({ data: { conversationId: conversation.id, role: "assistant", content: text, deliveryStatus: "pending" } });
+          if (pre) await linkPreProcedureToMessage(pre.reservations, created.id); // a etapa passa de "reservada" a "na fila da conversa"
+          await prisma.conversation.update({ where: { id: conversation.id }, data: { lastMessageAt: new Date() } });
+          return text;
         }
+        presenceGuard = true; // a confirmacao nao pode ser registrada agora: segue, mas SEM oferecer horarios
+        console.error("[confirmacao] a ferramenta nao confirmou; segue sem oferecer horarios:", raw.slice(0, 200));
+      } else if (presence.kind === "ambiguous") {
+        return await reply(disambiguationText(presence.options)); // sem perguntar disponibilidade nem oferecer horarios novos
+      } else if (presence.kind === "stale") {
+        await runTool(clinicId, patient.id, conversation.id, "transfer_to_human", {
+          reason: "Confirmação de presença para reserva alterada ou cancelada",
+          summary: "A pessoa respondeu que confirma, mas a reserva do lembrete foi cancelada, remarcada ou já passou. Conferir qual horário vale hoje antes de confirmar.",
+        });
+        if (usageClinic.silentHandoff) return "";
+        return await reply("Obrigada pelo retorno! 💗 Vi que esse horário foi alterado, então vou pedir para a nossa equipe te confirmar o horário certinho.");
       }
+    } catch (err) {
+      console.error("[confirmacao] falha ao tratar a confirmacao de presenca; segue pelo modelo sem oferecer horarios:", err);
+      presenceGuard = true;
     }
   }
 
@@ -2768,7 +2779,7 @@ async function generateReplyUnlocked(
         const verdict = slotCheck(finalText);
         if (!verdict.ok) {
           slotNudged = true;
-          console.warn(`[dia-hora] resposta cita dia/horario que a agenda nao devolveu - refazendo (conv ${conversation.id}): ${verdict.problems.join("; ")} | ${finalText.slice(0, 120)}`);
+          console.warn(`[dia-hora] clinica=${clinicId} conversa=${conversation.id} revisao=${REVISION.split(":")[0]} TEXTO DO MODELO RECUSADO (nao e o que sai): ${verdict.problems.join("; ")} | recusado="${safeSlice(finalText, 100)}" - pedindo ao modelo que refaca com os horarios devolvidos pela agenda`);
           messages.push(choice);
           messages.push({ role: "system", content: SLOT_NUDGE });
           continue;
@@ -2810,8 +2821,9 @@ async function generateReplyUnlocked(
   }
 
   // Orientacao de preparo (pre-procedimento): o texto da clinica, exato, no lugar da resposta do modelo (que so confirmou).
-  const preText = pendingPreProcedure.get(conversation.id);
+  const preEntry = pendingPreProcedure.get(conversation.id);
   pendingPreProcedure.delete(conversation.id);
+  const preText = preEntry?.text;
   const fixedReply = !!preText && !didTransfer;
   if (fixedReply) finalText = preText as string;
 
@@ -2841,8 +2853,14 @@ async function generateReplyUnlocked(
   if (guardOn && !situation.forbidSlotOffer && !didTransfer && !fixedReply && finalText.trim()) {
     const verdict = slotCheck(finalText);
     if (!verdict.ok) {
-      console.warn(`[dia-hora] resposta montada direto da agenda (conv ${conversation.id}): ${verdict.problems.join("; ")} | ${finalText.slice(0, 120)}`);
-      finalText = slotState.booked ? renderBooked(slotState.booked) : slotState.offer.length ? renderOffer(slotState.offer, guardTz) : SLOT_FALLBACK_ASK;
+      const rejected = finalText;
+      // So reaproveita horarios devolvidos por uma ferramenta DESTA rodada e do procedimento pertinente: oferta de outro procedimento nao e reutilizada.
+      const fold = (t: string) => t.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "").trim();
+      const offerFits = slotState.offer.length > 0 && (!understanding?.chosen || !slotState.offerProcedure || fold(slotState.offerProcedure) === fold(understanding.chosen.name) || fold(slotState.offerProcedure).includes(fold(understanding.chosen.name)) || fold(understanding.chosen.name).includes(fold(slotState.offerProcedure)));
+      const how = slotState.booked ? "reserva_confirmada" : offerFits ? `oferta_da_agenda(${Math.min(slotState.offer.length, 3)} horarios de ${slotState.offerProcedure ?? "consulta desta rodada"})` : "pergunta_de_turno(sem_oferta_valida)";
+      finalText = slotState.booked ? renderBooked(slotState.booked) : offerFits ? renderOffer(slotState.offer, guardTz) : SLOT_FALLBACK_ASK;
+      // O log mostra O QUE SAIU DE FATO (antes mostrava so o texto recusado, parecendo que os mesmos horarios haviam sido enviados): recusado x substituto
+      console.warn(`[dia-hora] clinica=${clinicId} conversa=${conversation.id} revisao=${REVISION.split(":")[0]} RESPOSTA SUBSTITUIDA pela montada da agenda via ${how}. motivos: ${verdict.problems.join("; ")} | recusado="${safeSlice(rejected, 80)}" | final="${safeSlice(finalText.replace(/\s+/g, " "), 100)}"`);
     }
   }
 
@@ -3075,6 +3093,7 @@ async function generateReplyUnlocked(
           upcoming: apptRows.map((a) => ({ dateIso: isoDateInZone(a.scheduledAt, guardTz), time: hhmmOf(a.scheduledAt), ddmm: `${isoDateInZone(a.scheduledAt, guardTz).slice(8, 10)}/${isoDateInZone(a.scheduledAt, guardTz).slice(5, 7)}` })),
           complaintTexts: complaint,
           silentHandoff: !!usageClinic?.silentHandoff,
+          confirmationGuard: presenceGuard,
           objective: understanding ? { concerns: understanding.objective.concerns, regions: understanding.objective.regions } : undefined,
           allowedProcedures: [...(understanding?.chosen ? [understanding.chosen.name] : []), ...(understanding?.options ?? []), ...apptRows.map((a) => a.procedure.name)],
           notOffered,
@@ -3083,9 +3102,10 @@ async function generateReplyUnlocked(
       // o mesmo contexto, resumido, acompanha a mensagem ate ela ser entregue: sobrevive a reinicio e a retomada tardia (apagado no estado final)
       persistedContext = serializeReplyContext(replyCtx, complaint.length);
     }
-    await prisma.message.create({
+    const createdReply = await prisma.message.create({
       data: { conversationId: conversation.id, role: "assistant", content: finalText, deliveryStatus: "pending", replyContext: persistedContext }, // vira "sent"/"failed" depois do envio (uazapi/client.ts)
     });
+    if (fixedReply && preEntry) await linkPreProcedureToMessage(preEntry.reservations, createdReply.id); // o preparo agora tem uma mensagem real: a entrega dela diz o desfecho
   }
   await prisma.conversation.update({
     where: { id: conversation.id },

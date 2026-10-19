@@ -1,4 +1,5 @@
 import { prisma } from "../db/client.js";
+import { usableFirstName, usableFullName, tidyGreetingText } from "./greeting.js";
 
 // Variaveis compartilhadas por mensagens programadas, lembrete de consulta e
 // pos-procedimento - {nome} continua funcionando (compatibilidade com
@@ -18,8 +19,8 @@ export interface TemplateContext {
 }
 
 export function renderMessageTemplate(template: string, ctx: TemplateContext): string {
-  const fullName = ctx.patientName?.trim() ?? "";
-  const firstName = fullName.split(" ")[0] ?? "";
+  const fullName = usableFullName(ctx.patientName);
+  const firstName = usableFirstName(ctx.patientName); // sem nome utilizavel (vazio, so emoji/simbolos): saudacao neutra, nunca "Oi, !"
   const when = ctx.when ?? new Date();
   const tz = ctx.timeZone || "America/Sao_Paulo";
 
@@ -28,7 +29,7 @@ export function renderMessageTemplate(template: string, ctx: TemplateContext): s
     /\[(nome|primeiro_nome|nome_completo|telefone|endere[cç]o|unidade|procedimento|profissional|data|data_hora|hora|aniversario)\]/gi,
     (_m, k: string) => `{${k.toLowerCase().replace("ç", "c")}}`,
   );
-  return normalized
+  return tidyGreetingText(normalized
     .replace(/\{nome\}/gi, firstName)
     .replace(/\{primeiro_nome\}/gi, firstName)
     .replace(/\{nome_completo\}/gi, fullName)
@@ -40,7 +41,7 @@ export function renderMessageTemplate(template: string, ctx: TemplateContext): s
     .replace(/\{data\}/gi, when.toLocaleDateString("pt-BR", { timeZone: tz, day: "2-digit", month: "2-digit", year: "numeric" }))
     .replace(/\{data_hora\}/gi, when.toLocaleString("pt-BR", { timeZone: tz }))
     .replace(/\{hora\}/gi, when.toLocaleTimeString("pt-BR", { timeZone: tz, hour: "2-digit", minute: "2-digit" }))
-    .replace(/\{aniversario\}/gi, ctx.birthDate ? `${String(ctx.birthDate.getUTCDate()).padStart(2, "0")}/${String(ctx.birthDate.getUTCMonth() + 1).padStart(2, "0")}` : "")
+    .replace(/\{aniversario\}/gi, ctx.birthDate ? `${String(ctx.birthDate.getUTCDate()).padStart(2, "0")}/${String(ctx.birthDate.getUTCMonth() + 1).padStart(2, "0")}` : ""))
     .trim();
 }
 

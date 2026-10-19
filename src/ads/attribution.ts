@@ -1,4 +1,5 @@
 import { prisma } from "../db/client.js";
+import { trackBackground } from "../jobs/background.js";
 import { decryptSecret } from "../meta/secretBox.js";
 import { graphVersionOf } from "../meta/capi.js";
 
@@ -103,7 +104,7 @@ export async function captureAdReferral(p: {
     }
     if (sourceId) {
       await prisma.adCatalog.upsert({ where: { clinicId_sourceId: { clinicId: p.clinicId, sourceId } }, update: {}, create: { clinicId: p.clinicId, sourceId } });
-      void resolveAdName(p.clinicId, sourceId).catch(() => {}); // nome do anuncio na Marketing API: melhor esforco, nunca bloqueia a mensagem
+      void trackBackground(resolveAdName(p.clinicId, sourceId)).catch(() => {}); // nome do anuncio na Marketing API: melhor esforco, nunca bloqueia a mensagem
     }
     return { id: row.id, entryKind, created: true };
   } catch (err) {

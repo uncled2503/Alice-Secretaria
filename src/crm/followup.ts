@@ -1,6 +1,7 @@
 import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
-import { sendText, isPermanentSendError, isAmbiguousSendError, type SendOutcome } from "../uazapi/client.js";
+import { deferralInfo, sendText, isPermanentSendError, isAmbiguousSendError, isConnectionDownError, type SendOutcome } from "../uazapi/client.js";
+import { isReviewUnavailable } from "../ai/sendGate.js";
 import { getFunnelStages } from "./stages.js";
 import { movePatientToKind, movePatientToStage } from "./stageAutomation.js";
 import { renderMessageTemplate, getClinicTemplateInfo, type ClinicTemplateInfo } from "./template.js";
@@ -10,7 +11,8 @@ import { judgeConversation, JUDGE_TTL_MS, type JudgeResult } from "./recontactJu
 import { decideTiming, MIN_GAP_BETWEEN_AUTOMATED_MS, ruleThresholdMin, validRecoveryHours, type RecoveryPolicy, type SendCalendar } from "./followupSchedule.js";
 import { acquireFlow, competingContact, conversationFingerprint, finishFlow as finishFlowAt, MAX_VETOES, recordFlowDecision as recordFlowDecisionAt, VETO_RETRY_MS, DEFER_RETRY_MS, FAIL_GAP_MS, type DecisionMeta, type FlowKey, type FlowState } from "./followupLedger.js";
 import { pruneAutomationRuns, RunRecorder } from "./automationRuns.js";
-import { isNonCommercialHandoff } from "./nonCommercial.js";
+import { isNonCommercialHandoff, nonCommercialByContext } from "./nonCommercial.js";
+import { REVISION } from "../version.js";
 
 export { nextDayAt } from "./followupSchedule.js";
 
@@ -164,6 +166,12 @@ async function runFollowUpCheckInner(deps: FollowUpDeps): Promise<void> {
     // Encerrou o assunto ("ok", "estarei ai", "obrigada"): nao ha o que retomar.
     if (isClosingMessage(lastPatientMessage.content)) return void r.add("ignorado", "encerrou_o_assunto");
 
+    // CONTEXTO nao comercial (candidatura, fornecedor, parceria, cobranca, interesse gravado que e uma vaga de emprego): fora do recontato ANTES de gerar e de enviar
+    // (nao depende do revisor nem de a transferencia ter sido gravada).
+    const recentUser = await prisma.message.findMany({ where: { conversationId: conversation.id, role: "user" }, orderBy: { createdAt: "desc" }, take: 5, select: { content: true } });
+    const nonCommercial = nonCommercialByContext({ interestNote: conversation.patient.interestNote, patientTexts: recentUser.map((m) => m.content), adText: conversation.patient.adName });
+    if (nonCommercial) return void r.add("ignorado", `contato_nao_comercial:${nonCommercial}`);
+
     const clinic = await cachedClinic(clinicId);
     let last = conversation.lastFollowUpOrder;
     for (const rule of pending) {
@@ -248,14 +256,14 @@ async function runFollowUpCheckInner(deps: FollowUpDeps): Promise<void> {
       return void r.add("adiado", "limite_de_consultas_a_IA_por_rodada");
     }
     judgedByClinic.set(clinicId, (judgedByClinic.get(clinicId) ?? 0) + 1);
-    const judged: JudgeResult = await judgeConversation(conversation.id, conversation.patientId, clinic.info.name, { fingerprint, ruleOrder: rule.order, now });
+    const judged: JudgeResult = await judgeConversation(conversation.id, conversation.patientId, clinic.info.name, { fingerprint, ruleOrder: rule.order, now, clinicId });
     if (judged.kind === "unavailable") {
-      await finishFlow(got.id, "deferred", { layer: "juiz_ia", reason: `falha tecnica do juiz de IA (${judged.why}) - nao e decisao de negocio`, temporary: true, reevaluateAt: new Date(now.getTime() + DEFER_RETRY_MS), fingerprint });
-      return void r.add("incerto", "juiz_de_IA_indisponivel");
+      await finishFlow(got.id, "deferred", { layer: "juiz_ia", reason: `falha tecnica do juiz de IA (${judged.why}) - nao e decisao de negocio`, temporary: true, reevaluateAt: new Date(now.getTime() + (judged.retryAfterMs ?? DEFER_RETRY_MS)), fingerprint });
+      return void r.add("incerto", judged.permanent ? "juiz_de_IA_requisicao_recusada" : "juiz_de_IA_indisponivel");
     }
     if (!judged.verdict.recontact) {
       const final = got.vetoes + 1 >= MAX_VETOES;
-      await finishFlow(got.id, "vetoed", { layer: "juiz_ia", reason: `juiz de IA: ${judged.verdict.reason || "sem motivo"}${judged.source === "cache" ? " (veredito em cache, mesmo contexto)" : ""}`, temporary: !final, reevaluateAt: final ? null : new Date(now.getTime() + VETO_RETRY_MS), fingerprint });
+      await finishFlow(got.id, "vetoed", { layer: "juiz_ia", reason: `juiz de IA${judged.verdict.category ? ` [${judged.verdict.category}]` : ""}: ${judged.verdict.reason || "sem motivo"}${judged.source === "cache" ? " (veredito em cache, mesmo contexto)" : ""}`, temporary: !final, reevaluateAt: final ? null : new Date(now.getTime() + VETO_RETRY_MS), fingerprint });
       if (final) await movePointer(conversation.id, last, rule.order);
       return void r.add("vetado", final ? "juiz_de_IA_definitivo" : "juiz_de_IA_temporario");
     }
@@ -296,7 +304,14 @@ async function runFollowUpCheckInner(deps: FollowUpDeps): Promise<void> {
       outcome = await sendText(clinicId, conversation.patient.phone, text, { kind: "recontato" });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`Falha ao enviar recontato para ${conversation.patient.phone}:`, msg);
+      if (isConnectionDownError(err) || isReviewUnavailable(err)) {
+        // WhatsApp desconectado / revisor indisponivel: nada saiu e NAO e decisao de negocio. Adia sem gastar tentativa nem virar veto; a etapa volta quando o servico voltar.
+        const d = deferralInfo(err);
+        await finishFlow(got.id, "deferred", { layer: d.layer, reason: d.reason, temporary: true, reevaluateAt: new Date(now.getTime() + DEFER_RETRY_MS), fingerprint });
+        await release();
+        return void r.add("adiado", d.tag);
+      }
+      console.error(`[recontato] falha ao enviar clinica=${clinicId} conversa=${conversation.id} etapa=${rule.order} revisao=${REVISION.split(":")[0]}:`, msg);
       if (isPermanentSendError(err)) {
         // Numero sem WhatsApp: nao adianta insistir - esta etapa fica consumida.
         await finishFlow(got.id, "failed_permanent", { layer: "envio", reason: `numero recusado pelo provedor: ${msg.slice(0, 100)}` });

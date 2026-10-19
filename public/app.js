@@ -5802,6 +5802,7 @@ async function loadClinicsList() {
           el("span", { class: `badge ${c.connected ? "badge-green" : "badge-neutral"}` }, [
             c.connected ? "Conectado" : c.connecting ? "Conectando…" : "Desconectado",
           ]),
+          ...(c.uazapiDownSince ? [el("span", { class: "badge badge-red", title: `Envios automáticos pausados desde ${new Date(c.uazapiDownSince).toLocaleString("pt-BR")}` }, ["Envios pausados"])] : []),
         ]),
         el("td", {}, [bizSelect]),
         el("td", {}, [
@@ -6635,9 +6636,13 @@ function loadClinicDataForm() {
 
   document.getElementById("cd-notify-phone").value = clinic.notifyPhone ?? "";
   const notifyEvents = (clinic.notifyEvents ?? "").split(",");
+  const knownNotify = new Set();
   document.querySelectorAll("#cd-notify-events input[type=checkbox]").forEach((box) => {
+    knownNotify.add(box.value);
     box.checked = notifyEvents.includes(box.value);
   });
+  // avisos que ja estavam ligados mas nao tem caixa na tela (ex.: lead quente) NAO podem ser apagados ao salvar
+  state.notifyExtra = notifyEvents.map((v) => v.trim()).filter((v) => v && !knownNotify.has(v));
 
   document.getElementById("cd-persona").value = clinic.assistantPersona ?? "team";
   document.getElementById("cd-persona-name").value = clinic.assistantPersonaName ?? "";
@@ -6697,8 +6702,8 @@ document.getElementById("clinic-data-form").addEventListener("submit", async (e)
     .map((box) => box.value)
     .join(",");
   const notifyPhone = document.getElementById("cd-notify-phone").value.trim().replace(/\D/g, "");
-  const notifyEvents = Array.from(document.querySelectorAll("#cd-notify-events input[type=checkbox]:checked"))
-    .map((box) => box.value)
+  const notifyEvents = [...Array.from(document.querySelectorAll("#cd-notify-events input[type=checkbox]:checked")).map((box) => box.value), ...(state.notifyExtra ?? [])]
+    .filter((v, i, all) => all.indexOf(v) === i)
     .join(",");
   const assistantPersona = document.getElementById("cd-persona").value;
   const assistantPersonaName = document.getElementById("cd-persona-name").value.trim();
@@ -6908,6 +6913,24 @@ async function loadChannelStatus() {
   document.getElementById("btn-channel-media-debug").style.display = showAdminChannelBtns;
 
   state.channelConnected = !!status.connected;
+
+  // Aviso de envios pausados: vem do banco (nao depende do WhatsApp estar de pe). Some sozinho quando a conexao volta.
+  const pausedBox = document.getElementById("channel-paused-notice");
+  if (pausedBox) {
+    const paused = status.sendsPaused;
+    pausedBox.style.display = paused ? "block" : "none";
+    if (paused) {
+      const since = paused.since ? new Date(paused.since).toLocaleString("pt-BR") : "";
+      const next = paused.nextCheckAt ? new Date(paused.nextCheckAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "";
+      const parts = [
+        since ? `Desde ${since}.` : "",
+        "As mensagens novas ficam para a equipe responder pelo celular; lembretes, recontatos e envios em lote esperam a conexão voltar e não são enviados em lote depois.",
+        status.connected ? "O provedor informa conectado, mas o último envio falhou: o sistema confere de novo sozinho" + (next ? ` por volta de ${next}` : "") + "." : "Leia o QR Code novamente para reconectar.",
+        paused.reason ? `Detalhe técnico: ${paused.reason}` : "",
+      ].filter(Boolean);
+      document.getElementById("channel-paused-text").textContent = parts.join(" ");
+    }
+  }
 
   if (!status.configured) {
     badge.textContent = "API não configurada";

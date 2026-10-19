@@ -9,6 +9,7 @@ import { firstOfDayIds } from "../reminders/firstOfDay.js";
 import { dayStats } from "./followupLedger.js";
 import { TRACKED_JOBS } from "./automationRuns.js";
 import { describeRule } from "./followupSchedule.js";
+import { collectDayLeads, buildLeadPhoneMessages, leadPhoneReportEnabled } from "./leadPhones.js";
 
 // ---------------------------------------------------------------------------
 // RELATORIO DIARIO + AUDITORIA DAS AUTOMACOES (20h, no WhatsApp interno da clinica, evento "daily_report").
@@ -213,6 +214,16 @@ export async function runDailyReport(): Promise<number> {
       if (text) {
         await notifyStaff(c.id, "daily_report", text);
         sent++;
+        // Telefones dos leads do dia (so clinicas com "daily_report_phones" marcado, para o MESMO destino interno do relatorio; lista completa, em partes se for longa)
+        if (leadPhoneReportEnabled(c.notifyEvents)) {
+          const tz = c.timezone || "America/Sao_Paulo";
+          const today = dayBounds(tz, 0);
+          const wc = wallClockInZone(new Date(), tz);
+          const leads = await collectDayLeads(c.id, today.from, today.to);
+          const parts = buildLeadPhoneMessages(leads, { dateLabel: `${String(wc.day).padStart(2, "0")}/${String(wc.month).padStart(2, "0")}`, timeZone: tz });
+          for (const part of parts) await notifyStaff(c.id, "daily_report_phones", part);
+          console.log(`[relatorio diario] clinica=${c.id} leads=${leads.length} partes=${parts.length}`); // so contagens: o texto leva telefones e nao vai para o log
+        }
       }
     } catch (err) {
       console.error(`[relatorio diario] clinica ${c.id} falhou:`, err);

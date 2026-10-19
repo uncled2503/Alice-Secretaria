@@ -10,6 +10,8 @@ import {
   connectClinic,
   disconnectClinic,
   getStatus,
+  connectionNotice,
+  connectionUsable,
   getProfilePicUrlCached,
   triggerHistoryImport,
   getUazapiConfig,
@@ -393,6 +395,7 @@ apiRouter.get(
         conversationLimitOverride: true,
         usageMonth: true,
         usageCount: true,
+        uazapiDownSince: true,
       },
     });
     // So o admin ve o login de acesso do cliente (a primeira conta "client" da clinica).
@@ -1843,7 +1846,13 @@ apiRouter.get(
   "/whatsapp/status",
   asyncRoute(async (req, res) => {
     const clinic = await getClinic(req);
-    res.json(await getStatus(clinic.id));
+    const status = await getStatus(clinic.id);
+    // Marcada como desconectada: a cada poucos minutos confere o status e libera sozinha quando voltou (ex.: a equipe leu o QR Code de novo). Nunca derruba a resposta.
+    await connectionUsable(clinic.id).catch(() => undefined);
+    const notice = await connectionNotice(clinic.id).catch(() => null);
+    // Conta de clinica nao ve a resposta crua do provedor; o admin ve para diagnostico.
+    const isAdmin = req.staff?.role === "admin";
+    res.json({ ...status, sendsPaused: notice?.paused ? { since: notice.since, nextCheckAt: notice.nextCheckAt, reason: isAdmin ? notice.reason : null } : null });
   })
 );
 

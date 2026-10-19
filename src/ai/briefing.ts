@@ -1,11 +1,12 @@
 import OpenAI from "openai";
+import { safeFetch } from "./wellFormed.js";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { z } from "zod";
 import { prisma } from "../db/client.js";
 import { reseedRulesForProfile } from "./rules.js";
 import { logActivity } from "../crm/activity.js";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 180_000, maxRetries: 1 });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: safeFetch, timeout: 180_000, maxRetries: 1 });
 // Briefing e uma chamada rara (uma por cliente novo) e vale um modelo melhor:
 // nao cai no OPENAI_MODEL (que costuma ser o mini) - usa gpt-4o por padrao.
 const MODEL = process.env.OPENAI_BRIEFING_MODEL ?? "gpt-4o";

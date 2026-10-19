@@ -1,13 +1,15 @@
 import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
-import { sendText, isPermanentSendError, isAmbiguousSendError, type SendOutcome } from "../uazapi/client.js";
+import { deferralInfo, sendText, isPermanentSendError, isAmbiguousSendError, isConnectionDownError, type SendOutcome } from "../uazapi/client.js";
+import { isReviewUnavailable } from "../ai/sendGate.js";
 import { getClinicTemplateInfo } from "../crm/template.js";
 import { FREE_PLAN } from "../crm/plan.js";
 import { isWithinClinicHours } from "../crm/openHours.js";
-import { acquireFlow, competingContact, conversationFingerprint, finishFlow as finishFlowAt, recordFlowDecision as recordFlowDecisionAt, MAX_VETOES, VETO_RETRY_MS, FAIL_GAP_MS, type DecisionMeta, type FlowKey, type FlowState } from "../crm/followupLedger.js";
+import { acquireFlow, competingContact, conversationFingerprint, finishFlow as finishFlowAt, recordFlowDecision as recordFlowDecisionAt, MAX_VETOES, VETO_RETRY_MS, DEFER_RETRY_MS, FAIL_GAP_MS, type DecisionMeta, type FlowKey, type FlowState } from "../crm/followupLedger.js";
 import { RunRecorder } from "../crm/automationRuns.js";
 import { MIN_GAP_BETWEEN_AUTOMATED_MS } from "../crm/followupSchedule.js";
 import { frequencyVerdict, identityPatientIds, lastSurveyAskedAt, SURVEY_AUTHOR, SURVEY_MIN_DAYS } from "./surveyFlow.js";
+import { usableFirstName } from "../crm/greeting.js";
 
 const MAX_PER_TICK = 10; // por clinica a cada rodada (15 min)
 export const NPS_AFTER_POST_MS = 4 * 3_600_000; // a pesquisa espera pelo menos 4h depois de uma mensagem de pos-procedimento
@@ -140,7 +142,7 @@ async function runForClinic(
       const got = await acquireFlow({ ...key, conversationId: conv?.id ?? null }, fingerprint, nowDate);
       if (!got.ok) { rec.add(got.why === "already_handled" || got.why === "exhausted" ? "ignorado" : "adiado", `${got.why}:${got.state ?? "-"}`); continue; }
 
-      const firstName = appt.patient.name?.trim().split(" ")[0] || "";
+      const firstName = usableFirstName(appt.patient.name);
       const isEvaluation = /avalia/i.test(appt.procedure.name);
       const text = ((isEvaluation && clinic.npsEvaluationMessage?.trim()) || clinic.npsMessage?.trim() || DEFAULT_MESSAGE)
         .replace(/\{primeiro_nome\}/gi, firstName)
@@ -156,6 +158,7 @@ async function runForClinic(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`NPS: falha ao enviar para ${appt.patient.phone}:`, msg);
+        if (isConnectionDownError(err) || isReviewUnavailable(err)) { const d = deferralInfo(err); await finishFlow(got.id, "deferred", { layer: d.layer, reason: d.reason, temporary: true, reevaluateAt: new Date(now + DEFER_RETRY_MS) }); rec.add("adiado", d.tag); continue; }
         if (isPermanentSendError(err)) { await finishFlow(got.id, "failed_permanent", { layer: "envio", reason: `numero recusado pelo provedor: ${msg.slice(0, 100)}` }); rec.add("falha", "numero_sem_whatsapp"); continue; }
         if (!isAmbiguousSendError(err)) { await finishFlow(got.id, "failed", { layer: "envio", reason: `falha no envio: ${msg.slice(0, 100)}`, temporary: true, reevaluateAt: new Date(now + FAIL_GAP_MS) }); rec.add("falha", "envio_falhou_tentara_de_novo"); continue; }
         // timeout depois de submetido: PODE ter chegado. Conta como enviada para a frequencia e nunca reenvia as cegas (antes: sem registro, reenviava na proxima rodada).

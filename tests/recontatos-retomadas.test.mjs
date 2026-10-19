@@ -26,6 +26,7 @@ const posts = []; // mensagens que a UAZAPI aceitou
 let uazapiMode = "ok"; // ok | http500 | timeout
 let judgeAnswer = { recontact: true, reason: "pediu informacao e sumiu" }; // resposta do juiz; null = IA fora do ar
 let reviewDecision = { decisao: "enviar", confianca: "alta", motivo: "ok" };
+let reviewDown = false; // a revisao por IA (o SERVICO) esta fora do ar: erro 500 da OpenAI
 let judgeHook = null; // chamado quando o juiz de IA e consultado (permite mudar o banco ENTRE a selecao e o envio)
 const judgeCalls = [];
 const reviewCalls = [];
@@ -36,7 +37,7 @@ globalThis.fetch = async (url, init = {}) => {
   if (u.hostname.includes("openai.com")) {
     const body = JSON.parse(init.body);
     const system = String(body.messages?.[0]?.content ?? "");
-    if (/REVISOR DE ENVIO/.test(system)) { reviewCalls.push(body); return jsonRes(200, completion(reviewDecision)); }
+    if (/REVISOR DE ENVIO/.test(system)) { reviewCalls.push(body); if (reviewDown) return jsonRes(500, { error: { message: "revisao fora do ar" } }); return jsonRes(200, completion(reviewDecision)); }
     if (/RECONTATO automatico|RETOMADA a uma pessoa/.test(system)) {
       judgeCalls.push(body);
       if (judgeHook) await judgeHook();
@@ -68,6 +69,7 @@ const { isNonCommercialHandoff } = await import("../dist/crm/nonCommercial.js");
 const { resetBreakerForTests } = await import("../dist/ai/sendGate.js");
 
 test.after(async () => {
+  await (await import("../dist/jobs/background.js")).drainBackground(); // tarefas em segundo plano terminam ANTES de o banco temporario ser apagado
   await prisma.$disconnect();
   for (const ext of ["", "-wal", "-shm", "-journal"]) { try { fs.rmSync(dbFile + ext, { force: true }); } catch { /* arquivo temporario */ } }
 });
@@ -201,7 +203,7 @@ async function lead(clinic, { name = "Maria Teste", userAt, aliceAt, userText = 
   if (aliceText) await prisma.message.create({ data: { conversationId: c.id, role: "assistant", content: aliceText, createdAt: aliceAt ?? new Date(userAt.getTime() + 60_000), deliveryStatus: "sent" } });
   return { p, c };
 }
-const reset = () => { judgeHook = null; posts.length = 0; judgeCalls.length = 0; reviewCalls.length = 0; uazapiMode = "ok"; judgeAnswer = { recontact: true, reason: "pediu informacao e sumiu" }; reviewDecision = { decisao: "enviar", confianca: "alta", motivo: "ok" }; process.env.AI_SEND_REVIEW = "off"; resetBreakerForTests(); };
+const reset = () => { reviewDown = false; judgeHook = null; posts.length = 0; judgeCalls.length = 0; reviewCalls.length = 0; uazapiMode = "ok"; judgeAnswer = { recontact: true, reason: "pediu informacao e sumiu" }; reviewDecision = { decisao: "enviar", confianca: "alta", motivo: "ok" }; process.env.AI_SEND_REVIEW = "off"; resetBreakerForTests(); };
 let current = null; // clinica do teste em andamento: a rodada e dirigida a ela (testes nao se atrapalham)
 const use = (c) => (current = c);
 const runAt = (iso) => runFollowUpCheck({ now: sp(iso), sleep: noSleep, clinicId: current.id });
@@ -217,6 +219,127 @@ async function freshLisboa(name = "Lisboa Recontato Teste") {
   await mkRule(c.id, 3, { name: "3 dias", afterMinutes: 4320, afterDays: 3, message: "Oi, {primeiro_nome}! Ficou alguma duvida?" });
   return use(c);
 }
+
+test("REVISAO FORA DO AR: o recontato fica RETIDO (nao e veto, nao gasta tentativa, a cascata nao anda); quando volta, reavalia e envia UMA vez; quem respondeu no meio tempo nao recebe nada", async () => {
+  reset();
+  process.env.AI_SEND_REVIEW = "on";
+  reviewDown = true;
+  const cl = use(await mkClinic("Clinica Recontato Retido"));
+  await mkRule(cl.id, 1, RULE_4H);
+  await mkRule(cl.id, 2, { afterMinutes: 480, afterDays: 1, nextDayHour: null, sendWindowStart: null, sendWindowEnd: null, message: "Oi, {primeiro_nome}! Recontato 2." });
+  const retida = await lead(cl, { userAt: sp("2026-10-15T09:00"), name: "Retida" });
+  const respondeu = await lead(cl, { userAt: sp("2026-10-15T09:00"), name: "Respondeu" });
+
+  await runAt("2026-10-15T14:30");
+  assert.equal(posts.length, 0, "revisor fora do ar: automacao de relacionamento nao sai");
+  let rows = await ledgerOf(retida.p.id);
+  assert.deepEqual(rows.map((r) => [r.state, r.layer, r.temporary]), [["deferred", "revisao_indisponivel", true]], "retida, nao vetada");
+  assert.equal(rows[0].vetoes, 0);
+  assert.equal(rows[0].failures, 0);
+  assert.equal(await pointer(retida.c), 0, "a cascata nao andou");
+  assert.equal(JSON.parse((await runRows(cl.id)).at(-1).reasons)["adiado:revisao_indisponivel"] >= 1, true, "a rodada registra o motivo");
+
+  // durante a retencao varias rodadas passam: nada acumula, nada e consumido
+  for (const hora of ["14:50", "15:10", "15:30"]) await runAt(`2026-10-15T${hora}`);
+  assert.equal(posts.length, 0);
+  rows = await ledgerOf(retida.p.id);
+  assert.equal(rows.length, 1, "uma linha de controle so");
+  assert.equal(rows[0].vetoes, 0);
+  assert.equal(rows[0].failures, 0);
+  assert.equal(await pointer(retida.c), 0);
+
+  // a pessoa responde ENQUANTO a mensagem estava retida: depois da recuperacao a mensagem velha nao faz mais sentido
+  await prisma.message.create({ data: { conversationId: respondeu.c.id, role: "user", content: "Oi, ainda quero sim!", createdAt: sp("2026-10-15T15:35") } });
+
+  // o servico volta (o disjuntor fecha sozinho em 30 min; aqui zerado para nao depender do relogio real)
+  reviewDown = false;
+  resetBreakerForTests();
+  await runAt("2026-10-15T16:00");
+  assert.equal(posts.length, 1, "exatamente UMA mensagem, so para quem ainda faz sentido");
+  assert.equal(posts[0].number, retida.p.phone);
+  assert.equal(posts[0].text, "Oi, Retida! Recontato 1.", "a etapa 1 (nao as duas acumuladas)");
+  assert.deepEqual((await ledgerOf(retida.p.id)).map((r) => r.state), ["sent"]);
+  assert.equal(await pointer(retida.c), 1);
+  assert.equal(posts.filter((x) => x.number === respondeu.p.phone).length, 0, "quem respondeu nao recebe recontato velho");
+
+  // outra rodada logo depois: nada em dobro
+  await runAt("2026-10-15T16:20");
+  assert.equal(posts.length, 1);
+  process.env.AI_SEND_REVIEW = "off";
+});
+
+// Cascata com o formato da Lisboa e a etapa de 4 HORAS LIGADA (etapa 1 = silencio corrido de 4 h; etapa 2 = dia seguinte as 8h, janela 8h-12h; etapa 3 = 3 dias).
+async function lisboa4h(nome) {
+  const c = use(await mkClinic(nome));
+  await mkRule(c.id, 1, { name: "Recontato Lisboa - 4 horas", ...RULE_4H, message: "Oi, {primeiro_nome}! Passando para saber se ficou alguma duvida." });
+  await mkRule(c.id, 2, { name: "Recontato Lisboa - 1 dia", ...RULE_NEXTDAY, message: "Oi, {primeiro_nome}! Conseguiu pensar com calma?" });
+  await mkRule(c.id, 3, { name: "Recontato Lisboa - 3 dias", afterMinutes: 4320, afterDays: 3, message: "Oi, {primeiro_nome}! Ficou alguma duvida?" });
+  return c;
+}
+
+test("LISBOA 4 HORAS (relogio controlado): o gatilho e a ULTIMA mensagem da pessoa; antes das 4 h nada; depois, UMA mensagem, com tudo persistido; rodada repetida nao duplica", async () => {
+  reset();
+  const cl = await lisboa4h("Lisboa 4h Teste");
+  const { p, c } = await lead(cl, { userAt: sp("2026-10-14T09:00"), name: "Maria Souza" }); // quarta-feira
+  await runAt("2026-10-14T12:50"); // 3h50 de silencio
+  assert.equal(posts.length, 0, "antes de 4 h nao sai");
+  assert.equal((await ledgerOf(p.id)).length, 0);
+  assert.match(JSON.stringify(JSON.parse((await runRows(cl.id)).at(-1).reasons)), /aguardando/);
+
+  await runAt("2026-10-14T13:05"); // 4h05
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].text, "Oi, Maria! Passando para saber se ficou alguma duvida.");
+  const rows = await ledgerOf(p.id);
+  assert.deepEqual(rows.map((r) => [r.step, r.state, r.layer]), [[1, "sent", "envio"]], "etapa 1 persistida como enviada");
+  assert.equal(rows[0].cycleKey, String(sp("2026-10-14T09:00").getTime()), "o ciclo e identificado pela ULTIMA MENSAGEM DA PESSOA");
+  assert.equal(rows[0].dueAt.getTime(), sp("2026-10-14T13:00").getTime(), "venceu exatamente 4 h depois, no fuso da clinica");
+  assert.equal(await pointer(c), 1);
+  assert.equal((await prisma.message.findFirst({ where: { conversationId: c.id, authorName: "Recontato automático" } })).content, "Oi, Maria! Passando para saber se ficou alguma duvida.");
+  assert.equal((await runRows(cl.id)).at(-1).sent, 1);
+  assert.equal(JSON.parse((await runRows(cl.id)).at(-1).reasons)["enviado:etapa_1"], 1);
+
+  await runAt("2026-10-14T13:20");
+  await runAt("2026-10-14T13:35");
+  assert.equal(posts.length, 1, "rodadas repetidas nao duplicam");
+  assert.equal((await ledgerOf(p.id)).length, 1);
+});
+
+test("LISBOA 4 HORAS: se a pessoa ESCREVE de novo antes das 4 h a contagem recomeca a partir da nova mensagem; se a pessoa foi a ultima a falar, nao sai", async () => {
+  reset();
+  const cl = await lisboa4h("Lisboa 4h Reinicio");
+  const { p, c } = await lead(cl, { userAt: sp("2026-10-14T09:00"), name: "Joana Reinicio" });
+  // 12h: ela escreve de novo (a Alice ainda nao respondeu): a bola esta com a clinica, nao e silencio dela
+  await prisma.message.create({ data: { conversationId: c.id, role: "user", content: "Tenho mais uma duvida sobre o valor", createdAt: sp("2026-10-14T12:00") } });
+  await runAt("2026-10-14T13:30"); // 4h30 depois da PRIMEIRA mensagem, mas 1h30 da ultima
+  assert.equal(posts.length, 0, "a contagem de 4 h parte da ULTIMA mensagem dela");
+  // a Alice responde as 12:05; 4 h depois da ultima fala da pessoa = 16:00
+  await prisma.message.create({ data: { conversationId: c.id, role: "assistant", content: "O valor depende da avaliacao. Quer ver um horario?", createdAt: sp("2026-10-14T12:05"), deliveryStatus: "sent" } });
+  await prisma.conversation.update({ where: { id: c.id }, data: { lastMessageAt: sp("2026-10-14T12:05") } });
+  await runAt("2026-10-14T15:50");
+  assert.equal(posts.length, 0, "ainda nao fez 4 h da ultima mensagem");
+  await runAt("2026-10-14T16:05");
+  assert.equal(posts.length, 1, "4 h depois da ULTIMA mensagem");
+  const rows = await ledgerOf(p.id);
+  assert.equal(rows[0].cycleKey, String(sp("2026-10-14T12:00").getTime()));
+  assert.equal(rows[0].dueAt.getTime(), sp("2026-10-14T16:00").getTime());
+});
+
+test("LISBOA 4 HORAS: o vencimento que cai FORA do expediente espera a janela comercial da clinica (nunca sai de madrugada/noite); a nova resposta da pessoa antes disso cancela a espera", async () => {
+  reset();
+  const cl = await lisboa4h("Lisboa 4h Janela");
+  const noite = await lead(cl, { userAt: sp("2026-10-14T18:30"), name: "Noite Silva" }); // vence 22:30, depois do fechamento (21h)
+  const respondeu = await lead(cl, { userAt: sp("2026-10-14T18:30"), name: "Respondeu Antes" });
+  await runAt("2026-10-14T22:35");
+  assert.equal(posts.length, 0, "fora do expediente nao sai");
+  // a segunda pessoa escreve de madrugada: o ciclo antigo morre, a espera recomeca da nova mensagem
+  await prisma.message.create({ data: { conversationId: respondeu.c.id, role: "user", content: "Ainda quero sim!", createdAt: sp("2026-10-15T07:30") } });
+  await runAt("2026-10-15T08:10");
+  const paraNoite = posts.filter((x) => x.text.includes("Noite"));
+  assert.equal(paraNoite.length, 1, "no proximo expediente a pessoa que ficou em silencio recebe");
+  assert.equal(posts.filter((x) => x.text.includes("Respondeu")).length, 0, "quem respondeu nao recebe o recontato antigo");
+  assert.equal((await ledgerOf(noite.p.id)).map((r) => r.state).join(), "sent");
+  assert.equal((await ledgerOf(noite.p.id))[0].decidedAt.getTime(), sp("2026-10-15T08:10").getTime(), "enviado na rodada de 08:10 (dentro do expediente)");
+});
 
 test("INTEGRADO: do 'dia seguinte as 8h' (servidor em UTC, etapa 1 desligada) ate o envio, o registro no chat, o ponteiro da cascata, o controle persistente e o resumo da rodada", async () => {
   reset();
@@ -890,6 +1013,9 @@ test("RESTRITO: o limite do teste vale entre rodadas (mesmo com mais contatos au
   const a = await cancelada(R, { name: "Teste Um" });
   const b = await cancelada(R, { name: "Teste Dois" });
   await restringe(R, [a, b], 1);
+  // o inicio do teste e gravado com o relogio REAL; as rodadas aqui rodam em tempo simulado. Sem isto o resultado dependia da hora do dia em que o teste roda
+  // (decisoes simuladas as 10h ficavam "antes do inicio" quando o teste rodava a tarde e deixavam de ser contadas).
+  await prisma.resumeFlowConfig.update({ where: { clinicId_flow: { clinicId: R.retClinic.id, flow: "avaliacao_cancelada" } }, data: { testStartedAt: sp("2026-10-19T00:00") } });
   await runResume(MONDAY);
   assert.equal(posts.length, 1, "o limite do teste e 1, embora 2 contatos estejam autorizados e o teto do dia seja 20");
   await runResume("2026-10-19T10:30");

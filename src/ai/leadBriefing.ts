@@ -1,5 +1,7 @@
 import OpenAI from "openai";
+import { safeFetch } from "./wellFormed.js";
 import { prisma } from "../db/client.js";
+import { trackBackground } from "../jobs/background.js";
 import { scheduleLocked } from "../jobs/lock.js";
 import { PAID_CLINIC_WHERE } from "../crm/plan.js";
 import { formatDateTimeInZone } from "../scheduling/time.js";
@@ -24,7 +26,7 @@ import { deliveredOnly } from "./delivery.js";
 
 const MODEL = process.env.OPENAI_CRM_MODEL ?? process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 let client: OpenAI | null = null;
-const openai = () => (client ??= new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 30_000, maxRetries: 1 }));
+const openai = () => (client ??= new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: safeFetch, timeout: 30_000, maxRetries: 1 }));
 
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s);
 const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
@@ -262,7 +264,7 @@ export function scheduleBriefingRefresh(patientId: string, opts: { delayMs?: num
     if (Date.now() - (lastRun.get(patientId) ?? 0) < (force ? 3 : 15) * 60_000) return;
     lastRun.set(patientId, Date.now());
     if (lastRun.size > 5000) for (const [k, v] of lastRun) if (Date.now() - v > 3_600_000) lastRun.delete(k);
-    void refreshBriefingNotes(patientId, { force });
+    void trackBackground(refreshBriefingNotes(patientId, { force })).catch(() => undefined);
   }, opts.delayMs ?? 90_000);
   t.unref?.();
   timers.set(patientId, t);
@@ -271,10 +273,11 @@ export function scheduleBriefingRefresh(patientId: string, opts: { delayMs?: num
 // Quando o evento e do agendamento (criar/cancelar/remarcar/importar), a pessoa e achada pelo agendamento.
 export function scheduleBriefingRefreshForAppointment(appointmentId: string): void {
   if (!aiExtraEnabled("AI_BRIEFING")) return;
-  void prisma.appointment
-    .findUnique({ where: { id: appointmentId }, select: { patientId: true } })
-    .then((a) => { if (a) scheduleBriefingRefresh(a.patientId, { force: true, delayMs: 20_000 }); })
-    .catch(() => undefined);
+  void trackBackground(
+    prisma.appointment
+      .findUnique({ where: { id: appointmentId }, select: { patientId: true } })
+      .then((a) => { if (a) scheduleBriefingRefresh(a.patientId, { force: true, delayMs: 20_000 }); }),
+  ).catch(() => undefined);
 }
 
 // Seguranca: de tempos em tempos atualiza quem teve conversa nova e ainda nao tem memoria em dia (restart do servidor perde os agendamentos em memoria).

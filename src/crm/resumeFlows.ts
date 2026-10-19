@@ -1,6 +1,7 @@
 import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
-import { sendText, isPermanentSendError, isAmbiguousSendError, type SendOutcome } from "../uazapi/client.js";
+import { deferralInfo, sendText, isPermanentSendError, isAmbiguousSendError, isConnectionDownError, type SendOutcome } from "../uazapi/client.js";
+import { isReviewUnavailable } from "../ai/sendGate.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "./template.js";
 import { PAID_CLINIC_WHERE } from "./plan.js";
 import { getFunnelStages } from "./stages.js";
@@ -225,9 +226,9 @@ async function runOneFlow(clinicId: string, flow: typeof RESUME_CANCELLED | type
       if (!got.ok) { rec.add(got.why === "already_handled" || got.why === "exhausted" ? "ignorado" : "adiado", `${got.why}:${got.state ?? "-"}`); continue; }
 
       // Ultima palavra: o juiz le o contexto (reclamacao, recusa, saude, retorno combinado...). Falha tecnica da IA nao e decisao de negocio: adia.
-      const judged = await judgeResumeContact(flow, { patientId: cand.patient.id, clinicName: info.name, now });
+      const judged = await judgeResumeContact(flow, { patientId: cand.patient.id, clinicName: info.name, now, clinicId });
       if (judged.kind === "unavailable") {
-        await finishFlow(got.id, "deferred", { layer: "juiz_ia", reason: `falha tecnica do juiz de IA (${judged.why}) - nao e decisao de negocio`, temporary: true, reevaluateAt: new Date(now.getTime() + DEFER_RETRY_MS), fingerprint });
+        await finishFlow(got.id, "deferred", { layer: "juiz_ia", reason: `falha tecnica do juiz de IA (${judged.why}) - nao e decisao de negocio`, temporary: true, reevaluateAt: new Date(now.getTime() + (judged.retryAfterMs ?? DEFER_RETRY_MS)), fingerprint });
         rec.add("incerto", "juiz_de_IA_indisponivel");
         continue;
       }
@@ -251,7 +252,8 @@ async function runOneFlow(clinicId: string, flow: typeof RESUME_CANCELLED | type
         outcome = await sendText(clinicId, cand.patient.phone, text, { kind: "retomada", flow });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        if (isPermanentSendError(err)) { await finishFlow(got.id, "failed_permanent", { layer: "envio", reason: `numero recusado pelo provedor: ${msg.slice(0, 100)}` }); rec.add("falha", "numero_sem_whatsapp"); }
+        if (isConnectionDownError(err) || isReviewUnavailable(err)) { const d = deferralInfo(err); await finishFlow(got.id, "deferred", { layer: d.layer, reason: d.reason, temporary: true, reevaluateAt: new Date(now.getTime() + DEFER_RETRY_MS), fingerprint }); rec.add("adiado", d.tag); }
+        else if (isPermanentSendError(err)) { await finishFlow(got.id, "failed_permanent", { layer: "envio", reason: `numero recusado pelo provedor: ${msg.slice(0, 100)}` }); rec.add("falha", "numero_sem_whatsapp"); }
         else if (isAmbiguousSendError(err)) { await finishFlow(got.id, "unconfirmed", { layer: "envio", reason: "tempo esgotado no provedor: pode ter sido entregue, nao reenviado" }); rec.add("incerto", "envio_nao_confirmado"); }
         else { await finishFlow(got.id, "failed", { layer: "envio", reason: `falha no envio: ${msg.slice(0, 100)}`, temporary: true, reevaluateAt: new Date(now.getTime() + FAIL_GAP_MS) }); rec.add("falha", "envio_falhou_tentara_de_novo"); }
         continue;

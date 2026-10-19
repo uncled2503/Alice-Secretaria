@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { prisma } from "../db/client.js";
+import { trackBackground } from "../jobs/background.js";
 import { encryptSecret, decryptSecret, encryptionAvailable } from "../meta/secretBox.js";
 import { formatDateTimeInZone } from "../scheduling/time.js";
 
@@ -395,11 +396,11 @@ export async function removeAppointment(appointmentId: string): Promise<void> {
 // Dispara a sincronizacao sem prender quem chamou (agendar tem que responder
 // rapido pro paciente; o Google pode demorar).
 export function pushAppointmentInBackground(appointmentId: string): void {
-  void pushAppointment(appointmentId).catch((err) => console.error("[google] pushAppointment:", err));
+  void trackBackground(pushAppointment(appointmentId)).catch((err) => console.error("[google] pushAppointment:", err));
 }
 
 export function removeAppointmentInBackground(appointmentId: string): void {
-  void removeAppointment(appointmentId).catch((err) => console.error("[google] removeAppointment:", err));
+  void trackBackground(removeAppointment(appointmentId)).catch((err) => console.error("[google] removeAppointment:", err));
 }
 
 // --- estado pro painel ---

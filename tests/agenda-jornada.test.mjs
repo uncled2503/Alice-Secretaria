@@ -50,6 +50,7 @@ const { ajustarJornadasLisboa } = await import("../dist/maintenance/lisboaJornad
 const { syncCatalog } = await import("../dist/clinicaexperts/sync.js");
 
 test.after(async () => {
+  await (await import("../dist/jobs/background.js")).drainBackground(); // tarefas em segundo plano terminam ANTES de o banco temporario ser apagado
   await prisma.$disconnect();
   for (const ext of ["", "-wal", "-shm", "-journal"]) { try { fs.rmSync(dbFile + ext, { force: true }); } catch { /* arquivo temporario */ } }
 });

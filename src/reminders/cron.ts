@@ -1,6 +1,6 @@
 import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
-import { sendText, isPermanentSendError, isAmbiguousSendError, type SendOutcome } from "../uazapi/client.js";
+import { sendText, isPermanentSendError, isAmbiguousSendError, isSendDeferred, connectionUsable, type SendOutcome } from "../uazapi/client.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js";
 import { PAID_CLINIC_WHERE } from "../crm/plan.js";
 import type { ReminderRule } from "@prisma/client";
@@ -11,6 +11,7 @@ import { classifyReminder } from "../maintenance/restoreReminders.js";
 import { verifyBookingLive, applyLiveVerdict, type LiveAction } from "../clinicaexperts/liveCheck.js";
 import { acquireDispatch, finishDispatch, recordDeferral, precheckDispatch, bookingKeyOf, dispatchKind, sendDayOf, type DispatchKey } from "./ledger.js";
 import { notifyStaff } from "../crm/notify.js";
+import { RunRecorder } from "../crm/automationRuns.js";
 import { logActivity } from "../crm/activity.js";
 import { REVISION } from "../version.js";
 import { stripProcedureLines, isPlaceholderProcedure } from "../clinicaexperts/placeholderProcedure.js";
@@ -232,7 +233,29 @@ const deferAlertedAt = new Map<string, number>(); // clinica -> quando a equipe 
 const CE_DOWN_AFTER = 3;
 const MAX_CHECKS_PER_RUN = 40; // quantas reservas uma regra examina por rodada (o teto de ENVIOS e MAX_SENDS_PER_RUN)
 
+// Resumo da rodada por clinica (AutomationRun "lembretes"): prova que o job rodou e o que decidiu, sem dado pessoal. Preenchido pelo proprio registro das decisoes.
+let cycleRecorders: Map<string, RunRecorder> | null = null;
+function recordCycle(decision: string, f: Record<string, string | number | boolean | null | undefined>): void {
+  if (!cycleRecorders || typeof f.clinica !== "string") return;
+  let r = cycleRecorders.get(f.clinica);
+  if (!r) cycleRecorders.set(f.clinica, (r = new RunRecorder("lembretes", f.clinica)));
+  r.candidates++;
+  const motivo = String(f.motivo ?? f.resultado ?? "-").slice(0, 60);
+  if (decision === "enviar") {
+    const res = String(f.resultado ?? "");
+    if (res === "sent") { r.eligible++; r.add("enviado", "lembrete"); }
+    else if (res === "vetoed") r.add("vetado", "revisao_de_envio_barrou");
+    else if (res === "falhou" || res === "falha_definitiva") r.add("falha", res);
+    else if (res === "sem_confirmacao") r.add("incerto", "envio_nao_confirmado");
+    else if (res === "adiado") r.add("adiado", "whatsapp_desconectado_ou_revisao");
+    else r.add("ignorado", res || "outro");
+  } else if (decision === "adiar") r.add("adiado", motivo.split(":")[0]);
+  else if (decision === "desistir") r.add("falha", "tentativas_esgotadas");
+  else r.add("ignorado", motivo);
+}
+
 function logDecision(decision: string, f: Record<string, string | number | boolean | null | undefined>): void {
+  recordCycle(decision, f);
   const parts = Object.entries(f).filter(([, v]) => v !== undefined && v !== null && v !== "").map(([k, v]) => `${k}=${String(v)}`);
   console.log(`[lembrete] decisao=${decision} ${parts.join(" ")} revisao=${REVISION.split(":")[0]}`);
 }
@@ -263,6 +286,7 @@ export async function runReminderCycle(opts: { now?: Date } = {}): Promise<void>
     const ceDown = new Map<string, string>(); // clinica -> motivo
     const ceFailures = new Map<string, number>(); // clinica -> falhas de sistema seguidas
     const clock = () => opts.now ?? new Date();
+    cycleRecorders = new Map();
     try {
     const loaded = await prisma.reminderRule.findMany({ where: { active: true, clinic: PAID_CLINIC_WHERE } });
     const rules: typeof loaded = [];
@@ -299,6 +323,13 @@ export async function runReminderCycle(opts: { now?: Date } = {}): Promise<void>
       const due = await selectDueAppointments(rule, now, tz);
 
       if (due.length === 0) continue;
+      // WhatsApp desta clinica comprovadamente fora: nao reserva, nao confere no CE e NAO gasta tentativa (o teto de tentativas desistiria do lembrete em 45 min por um problema da
+      // clinica inteira). A janela de envio de cada lembrete segue valendo: quando a conexao volta, so sai o que ainda esta dentro da janela, uma vez, sem lote atrasado.
+      const conn = await connectionUsable(rule.clinicId).catch(() => ({ usable: true as const, since: null, reason: null }));
+      if (!conn.usable) {
+        logDecision("adiar", { clinica: rule.clinicId, regra: rule.id, motivo: "whatsapp_desconectado: nenhum lembrete desta clinica e tentado ate reconectar", pendentes: due.length });
+        continue;
+      }
       due.sort((a, b) => a.scheduledAt.getTime() - b.scheduledAt.getTime()); // quem atende primeiro recebe primeiro
 
       if (!clinicInfoCache.has(rule.clinicId)) {
@@ -435,7 +466,12 @@ export async function runReminderCycle(opts: { now?: Date } = {}): Promise<void>
             outcome = await sendText(appt.clinicId, appt.patient.phone, text, { kind: "lembrete" });
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
-            if (isPermanentSendError(err)) {
+            if (isSendDeferred(err)) {
+              // a conexao caiu entre a conferencia e o envio: nada saiu e nao e falha desta pessoa. Libera a reserva e adia.
+              await finishDispatch(acq.id, "deferred", msg);
+              await prisma.reminderSent.deleteMany({ where: { appointmentId: appt.id, ruleId: rule.id } });
+              logDecision("enviar", { ...base, tipo: key.kind, tentativa: acq.attempt, ce: ceResult, resultado: "adiado" });
+            } else if (isPermanentSendError(err)) {
               await finishDispatch(acq.id, "failed_permanent", msg); // numero sem WhatsApp: mantem a reserva, nao insiste
               logDecision("enviar", { ...base, tipo: key.kind, tentativa: acq.attempt, ce: ceResult, resultado: "falha_definitiva" });
             } else if (isAmbiguousSendError(err)) {
@@ -469,6 +505,9 @@ export async function runReminderCycle(opts: { now?: Date } = {}): Promise<void>
     }
     await alertDeferrals(stats);
     } finally {
+      const recs = cycleRecorders;
+      cycleRecorders = null;
+      if (recs) for (const r of recs.values()) await r.save("ok", undefined, clock());
       reminderRunning = false;
     }
 }

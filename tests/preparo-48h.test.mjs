@@ -40,6 +40,6 @@ test("migracao liga as 48h so na Lisboa e o job esta registrado", () => {
 
 test("quem ja recebeu o preparo antecipado nao recebe de novo ao confirmar (mesma reserva PreProcedureSent)", () => {
   const src = fs.readFileSync(new URL("../src/reminders/preProcedure.ts", import.meta.url), "utf8");
-  assert.match(src, /prisma\.preProcedureSent\.create\(\{ data: \{ appointmentId: appt\.id, ruleId: rule\.id \} \}\); \/\/ reserva atomica/);
+  assert.ok(src.includes('prisma.preProcedureSent.create({ data: { appointmentId: appt.id, ruleId: rule.id, state: "reserved", channel: "resposta", reservedAt: new Date() } }); // reserva atomica'), "a reserva atomica continua sendo a criacao unica (appointmentId+ruleId), agora com estado 'reserved'");
   assert.match(src, /alreadyRule\.has\(rule\.id\) \|\| sentKeys\.has/, "a confirmacao na conversa ja pula o que foi enviado");
 });

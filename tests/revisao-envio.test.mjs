@@ -50,7 +50,7 @@ globalThis.fetch = async (url, init = {}) => {
 
 const { prisma } = await import("../dist/db/client.js");
 const { sendText, deliverAliceReply } = await import("../dist/uazapi/client.js");
-const { decide, acceptsRewrite, reviewOutbound } = await import("../dist/ai/sendGate.js");
+const { decide, acceptsRewrite, reviewOutbound, breakerOpen, isReviewUnavailable } = await import("../dist/ai/sendGate.js");
 const { patientFacts, parseNotes, refreshBriefingNotes, runBriefingJob } = await import("../dist/ai/leadBriefing.js");
 const { aiExtraEnabled } = await import("../dist/ai/aiSwitch.js");
 const { usageSnapshot, resetUsageForTests } = await import("../dist/ai/usageStats.js");
@@ -63,6 +63,7 @@ const { scheduleBriefingRefresh } = await import("../dist/ai/leadBriefing.js");
 const { ensurePlaceholderProcedure } = await import("../dist/clinicaexperts/placeholderProcedure.js");
 
 test.after(async () => {
+  await (await import("../dist/jobs/background.js")).drainBackground(); // tarefas em segundo plano terminam ANTES de o banco temporario ser apagado
   await prisma.$disconnect();
   for (const ext of ["", "-wal", "-shm", "-journal"]) { try { fs.rmSync(dbFile + ext, { force: true }); } catch { /* arquivo temporario */ } }
 });
@@ -298,22 +299,41 @@ test("a revisao fora do ar ou lenta: a resposta da Alice sai igual (nunca trava)
   assert.equal(posts[0].text, reply);
 });
 
-test("DISJUNTOR: se a revisao barrar quase tudo (erro dela), desliga sozinha por 30 min e as mensagens saem sem revisar", async () => {
+test("QUALIDADE: se a revisao barrar quase tudo, NAO se desliga (vetos podem estar certos): continua barrando e avisa a equipe no Diario", async () => {
   posts.length = 0; reviews.length = 0;
-  reviewAnswer = () => ({ decisao: "nao_enviar", confianca: "alta", motivo: "barrar tudo (revisao com defeito)" });
+  reviewAnswer = () => ({ decisao: "nao_enviar", confianca: "alta", motivo: "pessoa pediu para nao receber mensagens", categoria: "opt_out" });
   const resultados = [];
   for (let i = 0; i < 8; i++) {
-    const p = await pessoa("Disjuntor " + i);
+    const p = await pessoa("Qualidade " + i);
     resultados.push(await sendText(clinic.id, p.phone, unico("Confirmando seu horário " + i), { kind: "lembrete" }));
   }
-  // as primeiras sao barradas; quando 6 de 6 foram barradas o disjuntor abre e o resto SAI sem consultar a IA
-  assert.deepEqual(resultados.slice(0, 6), ["vetoed", "vetoed", "vetoed", "vetoed", "vetoed", "vetoed"]);
-  assert.deepEqual(resultados.slice(6), ["sent", "sent"]);
-  assert.equal(reviews.length, 6, "depois de aberto, nem chama a IA");
+  assert.deepEqual(resultados, Array(8).fill("vetoed"), "veto nao desliga a revisao");
+  assert.equal(reviews.length, 8, "a IA segue sendo consultada em todas");
+  assert.equal(breakerOpen(clinic.id), false);
   let aviso = null; // o aviso e gravado em segundo plano: espera ate 3s
-  for (let i = 0; i < 30 && !aviso; i++) { aviso = await prisma.activityLog.findFirst({ where: { clinicId: clinic.id, title: "Revisão da IA desligada por 30 min" } }); if (!aviso) await new Promise((r) => setTimeout(r, 100)); }
-  assert.ok(aviso);
+  for (let i = 0; i < 30 && !aviso; i++) { aviso = await prisma.activityLog.findFirst({ where: { clinicId: clinic.id, type: "review_quality_alert" } }); if (!aviso) await new Promise((r) => setTimeout(r, 100)); }
+  assert.ok(aviso, "alerta de qualidade no Diario");
   reviewAnswer = () => ({ decisao: "enviar", confianca: "alta", motivo: "ok" });
+});
+
+test("DISJUNTOR (saude do servico): 3 falhas tecnicas seguidas abrem; lembrete sai sem revisar e a automacao de relacionamento fica RETIDA", async () => {
+  posts.length = 0; reviews.length = 0;
+  openaiDown = true;
+  try {
+    const resultados = [];
+    for (let i = 0; i < 4; i++) {
+      const p = await pessoa("Servico fora " + i);
+      resultados.push(await sendText(clinic.id, p.phone, unico("Confirmando seu horário " + i), { kind: "lembrete" }));
+    }
+    assert.deepEqual(resultados, ["sent", "sent", "sent", "sent"], "agendamento nunca fica parado por causa da revisao");
+    assert.equal(breakerOpen(clinic.id), true);
+    const q = await pessoa("Retida");
+    await assert.rejects(() => sendText(clinic.id, q.phone, unico("Oi, sumiu! Vamos agendar?"), { kind: "recontato" }), (e) => isReviewUnavailable(e));
+    assert.equal(posts.filter((x) => x.number === q.phone).length, 0, "recontato retido nao sai");
+  } finally { openaiDown = false; }
+  let aviso = null;
+  for (let i = 0; i < 30 && !aviso; i++) { aviso = await prisma.activityLog.findFirst({ where: { clinicId: clinic.id, title: "Revisão da IA suspensa por 30 min (serviço com falha)" } }); if (!aviso) await new Promise((r) => setTimeout(r, 100)); }
+  assert.ok(aviso);
 });
 
 test("resposta da Alice reescrita: sai a versao corrigida e o chat guarda a que foi enviada", async () => {
@@ -370,7 +390,7 @@ test("job de seguranca: atualiza a memoria de quem teve conversa nova e ainda na
   assert.equal((await prisma.patient.findUnique({ where: { id: p.id } })).briefingNotes, "- Quer saber de botox");
 });
 
-test("reviewOutbound com a IA injetada: recebe o tipo, a hora e a ficha; falha vira envio", async () => {
+test("reviewOutbound com a IA injetada: recebe o tipo, a hora e a ficha; falha tecnica nao e veto", async () => {
   const p = await pessoa("Injetada");
   let visto = "";
   const v = await reviewOutbound(
@@ -382,8 +402,13 @@ test("reviewOutbound com a IA injetada: recebe o tipo, a hora e a ficha; falha v
   assert.match(visto, /FICHA DA PESSOA/);
   assert.match(visto, /AGORA:/);
   const falha = await reviewOutbound({ clinicId: clinic.id, phone: p.phone, text: unico("Outra"), kind: "recontato" }, { call: async () => { throw new Error("boom"); } });
-  assert.equal(falha.send, true);
+  // revisor com falha tecnica: recontato (relacionamento) fica retido, sem virar veto; lembrete (agendamento) sai sem revisar
+  assert.equal(falha.send, false);
+  assert.equal(falha.held, true);
   assert.equal(falha.reviewed, false);
+  const falhaLembrete = await reviewOutbound({ clinicId: clinic.id, phone: p.phone, text: unico("Outro"), kind: "lembrete" }, { call: async () => { throw new Error("boom"); } });
+  assert.equal(falhaLembrete.send, true);
+  assert.equal(falhaLembrete.reviewed, false);
 });
 
 test("rodada de lembretes COM a revisao: o barrado nao sai, os outros saem (kind lembrete chega ate a IA)", async () => {
@@ -503,7 +528,7 @@ test("economia: o painel mostra onde vao os tokens, por finalidade", async () =>
   assert.equal(usageSnapshot().purposes.length, 0);
 });
 
-test("DISJUNTOR tambem vale se a revisao REESCREVE quase todas as respostas da Alice (e as respostas seguem saindo)", async () => {
+test("reescritas em excesso NAO desligam a revisao (so alertam) e toda pessoa segue recebendo resposta", async () => {
   posts.length = 0; reviews.length = 0;
   reviewAnswer = () => ({ decisao: "reescrever", confianca: "alta", motivo: "sempre acha ruim", texto: "Certo! Já te respondo por aqui. 💗" });
   const enviados = [];
@@ -516,7 +541,8 @@ test("DISJUNTOR tambem vale se a revisao REESCREVE quase todas as respostas da A
     enviados.push(posts.at(-1).text === reply ? "original" : "reescrita");
   }
   assert.equal(posts.length, 9, "toda pessoa recebeu resposta");
-  assert.equal(reviews.length, 6, "depois de 6 reescritas seguidas o disjuntor abre e para de chamar a IA");
-  assert.deepEqual(enviados.slice(6), ["original", "original", "original"]);
+  assert.equal(reviews.length, 9, "reescrever muito nao abre o disjuntor: a IA segue sendo consultada");
+  assert.equal(breakerOpen(clinic.id), false);
+  assert.ok(enviados.every((e) => e === "reescrita"), enviados.join(","));
   reviewAnswer = () => ({ decisao: "enviar", confianca: "alta", motivo: "ok" });
 });

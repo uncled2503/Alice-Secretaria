@@ -3,7 +3,7 @@ import { prisma } from "../db/client.js";
 import { PAID_CLINIC_WHERE } from "./plan.js";
 import { isWithinClinicHours } from "./openHours.js";
 import { notifyStaff } from "./notify.js";
-import { sendText } from "../uazapi/client.js";
+import { sendText, isSendDeferred } from "../uazapi/client.js";
 import { recordAutomatedMessage } from "./conversationLog.js";
 import { describeSignals } from "./intent.js";
 
@@ -107,7 +107,7 @@ export async function runCallbackCheck(now = new Date(), only: { clinicId?: stri
         noInterest: false,
         appointments: { none: { status: "confirmed", scheduledAt: { gte: now } } },
       },
-      select: { id: true, name: true, phone: true, callbackNote: true, conversations: { select: { humanTakeover: true }, orderBy: { lastMessageAt: "desc" }, take: 1 } },
+      select: { id: true, name: true, phone: true, callbackAt: true, callbackNote: true, conversations: { select: { humanTakeover: true }, orderBy: { lastMessageAt: "desc" }, take: 1 } },
       take: 10,
     });
     for (const p of due) {
@@ -129,6 +129,12 @@ export async function runCallbackCheck(now = new Date(), only: { clinicId?: stri
         }
         handled++;
       } catch (err) {
+        if (isSendDeferred(err)) {
+          // nada saiu e nao e falha desta pessoa (WhatsApp desconectado / revisao fora do ar): devolve o retorno combinado, a proxima rodada tenta de novo. Sem aviso repetido.
+          await prisma.patient.update({ where: { id: p.id }, data: { callbackAt: p.callbackAt, callbackNote: p.callbackNote } });
+          console.warn(`[retorno combinado] adiado para ...${p.phone.slice(-4)} (${err instanceof Error ? err.message : "indisponivel"})`);
+          continue;
+        }
         console.error(`[retorno combinado] falha com ${p.phone}:`, err instanceof Error ? err.message : err);
         await notifyStaff(clinic.id, "automation_failed", `⚠️ Não consegui retomar a conversa combinada com ${p.name ?? p.phone} (${p.phone}). Chame manualmente.`);
       }

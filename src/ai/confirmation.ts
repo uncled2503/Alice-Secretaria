@@ -4,6 +4,8 @@
 // nova e perguntava "voce ja fez o peeling antes?". Aqui a decisao e deterministica, sem depender do modelo.
 // ---------------------------------------------------------------------------
 
+import { usableFirstName } from "../crm/greeting.js";
+
 function fold(s: string): string {
   return s.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "").replace(/[^\p{L}\p{N}\s?]/gu, " ").replace(/\s+/g, " ").trim();
 }
@@ -31,6 +33,6 @@ export function isConfirmationReply(text: string): boolean {
 
 // PURO: resposta fixa. So agradece (o nome entra se houver).
 export function confirmationThanks(name: string | null): string {
-  const first = (name ?? "").trim().split(/\s+/)[0] ?? "";
+  const first = usableFirstName(name);
   return first ? `Obrigada pela confirmação, ${first}! 💗` : "Obrigada pela confirmação! 💗";
 }

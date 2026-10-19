@@ -1,6 +1,6 @@
 import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
-import { sendText } from "../uazapi/client.js";
+import { sendText, isSendDeferred } from "../uazapi/client.js";
 import { renderMessageTemplate, getClinicTemplateInfo } from "../crm/template.js";
 import { PAID_CLINIC_WHERE } from "../crm/plan.js";
 import { notifyStaff } from "../crm/notify.js";
@@ -49,6 +49,7 @@ export function startPrescriptionReminderJob(): void {
           await prisma.prescriptionReminder.update({ where: { id: reminder.id }, data: { sentAt: new Date() } });
           if (outcome === "sent") await recordAutomatedMessage(reminder.patientId, text, "Renovação de receita");
         } catch (err) {
+          if (isSendDeferred(err)) { console.warn(`[receita] adiado para ...${reminder.patient.phone.slice(-4)} (${err instanceof Error ? err.message : "indisponivel"})`); continue; } // sentAt nao e gravado: tenta na proxima rodada, sem aviso repetido
           console.error(`Falha ao enviar lembrete de receita (${reminder.id}) para ${reminder.patient.phone}:`, err);
           await notifyStaff(
             clinic.id,

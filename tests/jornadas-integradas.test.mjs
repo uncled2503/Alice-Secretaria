@@ -97,6 +97,7 @@ const { preflightLisboa } = await import("../dist/maintenance/lisboaPreflight.js
 const { ajustarCondutaLisboa } = await import("../dist/maintenance/lisboaConduta.js");
 
 test.after(async () => {
+  await (await import("../dist/jobs/background.js")).drainBackground(); // tarefas em segundo plano terminam ANTES de o banco temporario ser apagado
   await prisma.$disconnect();
   for (const ext of ["", "-wal", "-shm", "-journal"]) { try { fs.rmSync(dbFile + ext, { force: true }); } catch { /* arquivo temporario */ } }
 });
@@ -395,7 +396,10 @@ test("E) revisao falha ou reescreve de forma invalida: sai a original ou uma sai
   assert.match(app, /DELIVERY_PROBLEM\[m\.deliveryStatus\]/);
 
   // disjuntor por clinica: a Lisboa E-A abre o dela; a E-B continua sendo revisada
+  // muitos vetos NAO abrem o disjuntor (vetos podem estar certos); so a falha TECNICA do servico de revisao (3 seguidas) abre
   for (let i = 0; i < 7; i++) noteVerdict(A.clinic.id, { send: false, reason: "teste", confidence: "alta", reviewed: true });
+  assert.equal(breakerOpen(A.clinic.id), false, "vetos em excesso so alertam");
+  for (let i = 0; i < 3; i++) noteVerdict(A.clinic.id, { send: true, reason: "teste", confidence: "baixa", reviewed: false, technical: "timeout" });
   assert.equal(breakerOpen(A.clinic.id), true);
   assert.equal(breakerOpen(B.clinic.id), false);
   reviewCalls.length = 0;
@@ -759,4 +763,280 @@ test("regras recomendadas que contradiziam a conducao (toda resposta termina com
   const r2 = await ajustarCondutaLisboa(L.clinic.id, { dryRun: false });
   assert.equal(r2.aplicado.regrasPadraoTrocadas, 0, "idempotente");
   assert.equal(await prisma.customRule.count({ where: { clinicId: L.clinic.id } }), antes);
+});
+
+// ================================================================ CONFIRMACAO DE PRESENCA ("Confirmado" ao lembrete) — erro de producao da Lisboa, 19/10/2026
+// Lembrete real (runReminderCycle) -> resposta pelo webhook REAL (fila, gravacao, geracao) -> mensagem destinada ao envio (UAZAPI simulada).
+const { enqueueWebhook, maintainUazapiQueue } = await import("../dist/uazapi/client.js");
+const waitUntil = async (cond, ms = 90_000) => { const end = Date.now() + ms; while (Date.now() < end) { const v = await cond(); if (v) return v; await new Promise((r) => setTimeout(r, 150)); } return null; };
+const webhookPayload = (phone, text, id = `MSG-${Math.random().toString(36).slice(2)}`) => ({ EventType: "messages", message: { messageid: id, sender_pn: `${phone}@s.whatsapp.net`, senderName: "Paciente", fromMe: false, isGroup: false, messageType: "text", text } });
+const eventsOpen = (clinicId) => prisma.uazapiWebhookEvent.count({ where: { clinicId, status: { in: ["pending", "processing"] } } });
+const settledEvents = (clinicId) => waitUntil(async () => (await eventsOpen(clinicId)) === 0);
+const REMINDER_24H = "Olá, {primeiro_nome}! ♥️\n📅 Data: {data} (amanhã)\n⏰ Horário: {hora}\n💆 Procedimento: {procedimento}\nPodemos contar com a sua presença?";
+const SAUDACAO_HORARIOS = /prefere manhã, tarde ou noite|horários certinhos/;
+
+// Uma paciente com UMA reserva amanha 09:00 (Lavieen Full Face PDRN) e o lembrete de 24h realmente enviado pelo ciclo de lembretes.
+async function comLembrete(L, nome, { procedimento = "Lavieen Full Face PDRN", hora = "09:00", ceUuid = `res-${Math.random().toString(36).slice(2, 8)}`, regra = true } = {}) {
+  const proc = (await prisma.procedure.findFirst({ where: { clinicId: L.clinic.id, name: procedimento } })) ?? (await prisma.procedure.create({ data: { clinicId: L.clinic.id, name: procedimento, durationMin: 60, bookingMode: "evaluation", professionals: { connect: [{ id: L.suelen.id }] } } }));
+  const c = await pessoa(L, nome, { ceUuid: null });
+  const [h, m] = hora.split(":").map(Number);
+  const amanha = isoDay(1);
+  const [Y1, M1, D1] = amanha.split("-").map(Number);
+  const when = new Date(Date.UTC(Y1, M1 - 1, D1, h + 3, m));
+  const appt = await prisma.appointment.create({ data: { clinicId: L.clinic.id, patientId: c.patient.id, procedureId: proc.id, professionalId: L.suelen.id, scheduledAt: when, ceBookingUuid: ceUuid, status: "confirmed", source: "presencial" } });
+  if (regra && !(await prisma.reminderRule.findFirst({ where: { clinicId: L.clinic.id, hoursBefore: 24 } }))) {
+    await prisma.reminderRule.create({ data: { clinicId: L.clinic.id, hoursBefore: 24, dayOffset: 1, sendHour: 0, sendMinute: 0, sendEndHour: 23, pauseMinSec: 0, pauseMaxSec: 0, active: true, message: REMINDER_24H } });
+  }
+  ceDetail = (uuid) => ({ status: 200, body: { data: { uuid, status: "scheduled", starts_at: when.toISOString() } } });
+  const antes = posts.length;
+  await runReminderCycle({ now: new Date(when.getTime() - 24 * HOUR + 15 * 60_000) });
+  return { ...c, appt, proc, when, lembrete: posts.slice(antes).find((p) => p.number === c.patient.phone) };
+}
+const respostasA = (c, desde) => posts.slice(desde).filter((p) => p.number === c.patient.phone);
+
+test("CONFIRMACAO: 'Confirmado' ao lembrete de uma reserva valida -> so agradece, registra a confirmacao e NAO oferece horarios, nem consulta disponibilidade, nem mexe na reserva", async () => {
+  reset();
+  const L = await mkLisboa("Lisboa Confirma");
+  const c = await comLembrete(L, "Dayane Confirma");
+  assert.ok(c.lembrete, "o lembrete saiu pelo ciclo real");
+  assert.match(c.lembrete.text, /Podemos contar com a sua presença\?/);
+  assert.match(c.lembrete.text, /Lavieen Full Face PDRN/);
+  const desde = posts.length;
+  script = []; // se o modelo for chamado, o roteiro "acaba" e o teste mostra
+  await enqueueWebhook(L.clinic.id, webhookPayload(c.patient.phone, "Confirmado"));
+  await waitUntil(() => respostasA(c, desde).length >= 1 || modelCalls.length > 0);
+  await settledEvents(L.clinic.id);
+  const out = respostasA(c, desde);
+  assert.equal(modelCalls.length, 0, "a confirmacao de presenca nao passa pelo modelo");
+  assert.equal(out.length, 1, JSON.stringify(out));
+  assert.equal(out[0].text, "Obrigada pela confirmação, Dayane! 💗");
+  assert.doesNotMatch(out[0].text, SAUDACAO_HORARIOS);
+  const a = await prisma.appointment.findUnique({ where: { id: c.appt.id } });
+  assert.equal(a.patientConfirmed, true, "a confirmacao foi registrada na reserva");
+  assert.equal(a.status, "confirmed");
+  assert.equal(a.scheduledAt.getTime(), c.when.getTime(), "horario intacto");
+  assert.equal(await nAppts(c), 1, "nenhuma reserva criada ou duplicada");
+  assert.equal(ceLog.filter((l) => l.path.endsWith("/available-hours")).length, 0, "nenhuma disponibilidade foi consultada");
+  assert.equal(ceBookings().length, 0, "nenhuma reserva nova no CE");
+});
+
+const responde = async (L, c, texto, id) => {
+  const desde = posts.length;
+  const antesModelo = modelCalls.length;
+  await enqueueWebhook(L.clinic.id, webhookPayload(c.patient.phone, texto, id));
+  await settledEvents(L.clinic.id);
+  return { saiu: respostasA(c, desde), modelo: modelCalls.length - antesModelo };
+};
+const isoDayOf = (d) => new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+const apptDe = (c) => prisma.appointment.findUnique({ where: { id: c.appt.id } });
+const semDisponibilidade = () => assert.equal(ceLog.filter((l) => l.path.endsWith("/available-hours")).length, 0, "nenhuma disponibilidade consultada");
+
+test("CONFIRMACAO: variacoes claras ('confirmo', 'sim, estarei aí', 'Pode sim') confirmam; nunca consultam agenda nem oferecem horario", async () => {
+  reset();
+  const L = await mkLisboa("Lisboa Variacoes");
+  for (const [nome, texto] of [["Vera Confirmo", "confirmo"], ["Vilma Estarei", "sim, estarei aí"], ["Valeria Pode", "Pode sim"]]) {
+    const c = await comLembrete(L, nome);
+    const r = await responde(L, c, texto);
+    assert.equal(r.modelo, 0, `${texto}: sem modelo`);
+    assert.equal(r.saiu.length, 1, texto);
+    assert.match(r.saiu[0].text, /^Obrigada pela confirmação/);
+    assert.equal((await apptDe(c)).patientConfirmed, true, texto);
+  }
+  semDisponibilidade();
+  assert.equal(ceBookings().length, 0);
+});
+
+test("CONFIRMACAO: o MESMO webhook entregue de novo nao gera segunda resposta nem confirma duas vezes", async () => {
+  reset();
+  const L = await mkLisboa("Lisboa Repetido");
+  const c = await comLembrete(L, "Rosa Repetida");
+  const id = `MSG-REP-${Math.random().toString(36).slice(2)}`;
+  const r1 = await responde(L, c, "Confirmado", id);
+  assert.equal(r1.saiu.length, 1);
+  const desde = posts.length;
+  assert.equal(await enqueueWebhook(L.clinic.id, webhookPayload(c.patient.phone, "Confirmado", id)), "duplicate");
+  await settledEvents(L.clinic.id);
+  assert.equal(respostasA(c, desde).length, 0);
+  assert.equal(await prisma.activityLog.count({ where: { clinicId: L.clinic.id, type: "appointment_confirmed" } }), 1, "confirmada uma vez so");
+  // e um segundo "Confirmado" (mensagem nova) depois de ja confirmada: so agradece, sem oferecer nada nem mexer na reserva
+  const r2 = await responde(L, c, "Confirmado!");
+  assert.equal(r2.modelo, 0);
+  assert.ok(r2.saiu.every((p) => /^Obrigada pela confirmação/.test(p.text)));
+  assert.equal(await prisma.activityLog.count({ where: { clinicId: L.clinic.id, type: "appointment_confirmed" } }), 1);
+  semDisponibilidade();
+});
+
+test("CONFIRMACAO: reinicio REAL do processo entre o lembrete e a resposta (a decisao vem do que esta gravado)", async () => {
+  reset();
+  const L = await mkLisboa("Lisboa Reinicio Confirma");
+  const c = await comLembrete(L, "Rita Reinicio");
+  assert.ok(c.lembrete);
+  const { spawn } = await import("node:child_process");
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "alice-conf-"));
+  const spec = path.join(work, "spec.json");
+  const log = path.join(work, "events.jsonl");
+  fs.writeFileSync(spec, JSON.stringify({ op: "enqueue", clinicId: L.clinic.id, payload: webhookPayload(c.patient.phone, "Confirmado"), model: [], log }));
+  // (assincrono: o processo de teste continua atendendo o que for dele enquanto o outro processo, com memoria vazia, trata a resposta)
+  const r = await new Promise((resolve) => {
+    const child = spawn(process.execPath, [path.join(root, "tests", "helpers", "restart-worker.mjs"), spec], { env: { ...process.env } });
+    let err = "";
+    child.stderr.on("data", (d) => { err += d; });
+    child.stdout.on("data", (d) => { err += d; });
+    const t = setTimeout(() => child.kill(), 240_000);
+    child.on("close", (status) => { clearTimeout(t); resolve({ status, stderr: err }); });
+  });
+  assert.equal(r.status, 0, `${r.stderr}`.slice(0, 400));
+  const ev = fs.readFileSync(log, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  assert.equal(ev.filter((e) => e.t === "model" && (e.users ?? []).some((u) => u === "Confirmado")).length, 0, "processo novo: o 'Confirmado' desta pessoa nao passa pelo modelo");
+  const envios = ev.filter((e) => e.t === "send" && e.number === c.patient.phone);
+  assert.equal(envios.length, 1);
+  assert.match(envios[0].text, /^Obrigada pela confirmação/);
+  assert.equal((await apptDe(c)).patientConfirmed, true);
+  try { fs.rmSync(work, { recursive: true, force: true }); } catch { /* temporario */ }
+});
+
+test("CONFIRMACAO: atendimento humano ativo -> a Alice nao responde nem confirma sozinha (a conversa e da equipe)", async () => {
+  reset();
+  const L = await mkLisboa("Lisboa Humano Confirma");
+  const c = await comLembrete(L, "Heloisa Humana");
+  await prisma.conversation.update({ where: { id: c.conv.id }, data: { humanTakeover: true, staffTouchedAt: new Date() } });
+  const r = await responde(L, c, "Confirmado");
+  assert.equal(r.saiu.length, 0);
+  assert.equal(r.modelo, 0);
+  assert.equal((await apptDe(c)).patientConfirmed, false, "a equipe ve a mensagem e decide");
+  assert.equal(await prisma.message.count({ where: { conversationId: { in: (await prisma.conversation.findMany({ where: { patientId: c.patient.id }, select: { id: true } })).map((x) => x.id) }, role: "user", content: "Confirmado" } }), 1, "a mensagem foi gravada para a equipe");
+});
+
+test("CONFIRMACAO: reserva CANCELADA ou REMARCADA depois do lembrete nao e confirmada por lembrete antigo (vai para a equipe, sem oferecer horario)", async () => {
+  reset();
+  const L = await mkLisboa("Lisboa Antigo");
+  const canc = await comLembrete(L, "Cida Cancelada");
+  await prisma.appointment.update({ where: { id: canc.appt.id }, data: { status: "cancelled", cancelledAt: new Date(), cancelSource: "equipe_painel" } });
+  const r1 = await responde(L, canc, "Confirmado");
+  assert.equal(r1.modelo, 0);
+  assert.equal(r1.saiu.length, 0, "clinica silenciosa: so encaminha");
+  const conv1 = await prisma.conversation.findFirst({ where: { patientId: canc.patient.id }, orderBy: { createdAt: "desc" } });
+  assert.ok(conv1.humanTakeover || conv1.handoffPending, "a equipe foi acionada");
+  assert.equal((await apptDe(canc)).patientConfirmed, false);
+
+  const rem = await comLembrete(L, "Rosana Remarcada");
+  await prisma.appointment.update({ where: { id: rem.appt.id }, data: { scheduledAt: new Date(rem.when.getTime() + 3 * HOUR) } }); // remarcada para outro horario
+  const r2 = await responde(L, rem, "Confirmado");
+  assert.equal(r2.modelo, 0);
+  assert.equal((await apptDe(rem)).patientConfirmed, false, "o horario mudou: o lembrete antigo nao vale");
+  semDisponibilidade();
+
+  // clinica que NAO e silenciosa: avisa em uma frase e nao oferece horario
+  const L2 = await mkLisboa("Lisboa Antigo Fala", { silentHandoff: false });
+  const c3 = await comLembrete(L2, "Nair Nao Silenciosa");
+  await prisma.appointment.update({ where: { id: c3.appt.id }, data: { status: "cancelled", cancelledAt: new Date(), cancelSource: "equipe_painel" } });
+  const r3 = await responde(L2, c3, "Confirmado");
+  assert.equal(r3.saiu.length, 1);
+  assert.match(r3.saiu[0].text, /equipe te confirmar o horário certinho/);
+  assert.doesNotMatch(r3.saiu[0].text, SAUDACAO_HORARIOS);
+});
+
+test("CONFIRMACAO: mais de uma reserva -> mesmo dia confirma as duas; dias diferentes pergunta QUAL (sem oferecer horario novo) e confirma so a escolhida", async () => {
+  reset();
+  const L = await mkLisboa("Lisboa Duas");
+  const c = await comLembrete(L, "Dora Duas Reservas");
+  // segunda reserva em OUTRO dia (dentro de 72h) tambem lembrada
+  const dia2 = new Date(c.when.getTime() + 29 * HOUR); // depois de amanha 14:00 (SP)
+  const a2 = await prisma.appointment.create({ data: { clinicId: L.clinic.id, patientId: c.patient.id, procedureId: c.proc.id, professionalId: L.suelen.id, scheduledAt: dia2, ceBookingUuid: "res-dia2", status: "confirmed", source: "presencial" } });
+  const rule = await prisma.reminderRule.findFirst({ where: { clinicId: L.clinic.id, hoursBefore: 24 } });
+  await prisma.reminderDispatch.create({ data: { clinicId: L.clinic.id, bookingKey: "ce:res-dia2", appointmentId: a2.id, patientId: c.patient.id, ruleId: rule.id, kind: "dia_seguinte", startsAt: dia2, sendDay: isoDay(0), state: "sent" } });
+  // o lembrete que ela viu cita as DUAS reservas (mensagem unica): o contexto nao identifica qual
+  const [, M2, D2] = [0, ...isoDayOf(dia2).split("-").slice(1).map(Number)];
+  await prisma.message.create({ data: { conversationId: c.conv.id, role: "assistant", authorName: "Lembrete de consulta", content: `Olá! Podemos contar com a sua presença em ${String(isoDayOf(c.when).slice(8, 10))}/${isoDayOf(c.when).slice(5, 7)} às ${hhmm(c.when)} e em ${String(D2).padStart(2, "0")}/${String(M2).padStart(2, "0")} às ${hhmm(dia2)}?`, createdAt: new Date(Date.now() + 1) } });
+  const r1 = await responde(L, c, "Confirmado");
+  assert.equal(r1.modelo, 0);
+  assert.equal(r1.saiu.length, 1);
+  assert.match(r1.saiu[0].text, /^Qual destes horários você está confirmando\?/);
+  assert.doesNotMatch(r1.saiu[0].text, SAUDACAO_HORARIOS);
+  assert.equal((await apptDe(c)).patientConfirmed, false);
+  assert.equal((await prisma.appointment.findUnique({ where: { id: a2.id } })).patientConfirmed, false);
+  const hora2 = hhmm(dia2);
+  const r2 = await responde(L, c, `o das ${hora2}`);
+  assert.equal(r2.modelo, 0);
+  assert.match(r2.saiu[0].text, /^Obrigada pela confirmação/);
+  assert.equal((await prisma.appointment.findUnique({ where: { id: a2.id } })).patientConfirmed, true, "so a escolhida");
+  assert.equal((await apptDe(c)).patientConfirmed, false, "a outra continua pendente");
+  semDisponibilidade();
+  assert.equal(await nAppts(c), 2, "nenhuma reserva criada");
+});
+
+test("CONFIRMACAO com pedido de mudanca ('Confirmado, mas preciso mudar o horário') e recusa ('Não posso ir') NAO confirmam presenca: seguem o fluxo de remarcacao/cancelamento", async () => {
+  reset();
+  const L = await mkLisboa("Lisboa Mudanca");
+  const c = await comLembrete(L, "Mara Muda");
+  script = [{ content: "Claro, Mara! Me conta qual dia e período ficam melhores pra você que eu vejo as opções. 💗" }];
+  const r1 = await responde(L, c, "Confirmado, mas preciso mudar o horário");
+  assert.ok(r1.modelo >= 1, "foi para o fluxo normal (remarcacao)");
+  assert.equal((await apptDe(c)).patientConfirmed, false, "pedir mudanca nao confirma presenca");
+  const c2 = await comLembrete(L, "Nina Nao Vai");
+  script = [{ content: "Entendi, Nina. Quer que eu cancele ou remarque o seu horário? 💗" }];
+  const r2 = await responde(L, c2, "Não posso ir");
+  assert.ok(r2.modelo >= 1);
+  assert.equal((await apptDe(c2)).patientConfirmed, false);
+});
+
+test("CONFIRMACAO: o revisor (IA) NAO consegue reintroduzir oferta de horarios, e a resposta do modelo que oferece horarios a quem so confirmou vira agradecimento", async () => {
+  reset();
+  process.env.AI_SEND_REVIEW = "on";
+  const L = await mkLisboa("Lisboa Revisor");
+  // (1) a resposta direta e FIXA: nem passa pela revisao
+  const c = await comLembrete(L, "Rute Revisada");
+  reviewDecision = { decisao: "reescrever", confianca: "alta", motivo: "tom", texto: "Obrigada! Tenho 14:00 ou 15:00 amanhã, qual prefere?" };
+  reviewCalls.length = 0; // (o lembrete em si ja passou pela revisao)
+  const r1 = await responde(L, c, "Confirmado");
+  assert.equal(reviewCalls.length, 0, "resposta fixa nao e revisada");
+  assert.match(r1.saiu[0].text, /^Obrigada pela confirmação/);
+  // (2) pergunta de desambiguacao (nao e fixa): o revisor tenta reescrever com horarios novos -> a validacao recusa e sai a original
+  const d = await comLembrete(L, "Dani Dupla");
+  const dia2 = new Date(d.when.getTime() + 29 * HOUR);
+  const a2 = await prisma.appointment.create({ data: { clinicId: L.clinic.id, patientId: d.patient.id, procedureId: d.proc.id, professionalId: L.suelen.id, scheduledAt: dia2, ceBookingUuid: "res-rev2", status: "confirmed", source: "presencial" } });
+  const rule = await prisma.reminderRule.findFirst({ where: { clinicId: L.clinic.id, hoursBefore: 24 } });
+  await prisma.reminderDispatch.create({ data: { clinicId: L.clinic.id, bookingKey: "ce:res-rev2", appointmentId: a2.id, patientId: d.patient.id, ruleId: rule.id, kind: "dia_seguinte", startsAt: dia2, sendDay: isoDay(0), state: "sent" } });
+  await prisma.message.create({ data: { conversationId: d.conv.id, role: "assistant", authorName: "Lembrete de consulta", content: `Podemos contar com a sua presença em ${isoDayOf(d.when).slice(8, 10)}/${isoDayOf(d.when).slice(5, 7)} às ${hhmm(d.when)} e em ${isoDayOf(dia2).slice(8, 10)}/${isoDayOf(dia2).slice(5, 7)} às ${hhmm(dia2)}?`, createdAt: new Date(Date.now() + 1) } });
+  reviewDecision = { decisao: "reescrever", confianca: "alta", motivo: "tom", texto: "Claro! Tenho 14:00 ou 15:00 livres amanhã, qual prefere?" };
+  const r2 = await responde(L, d, "Confirmado");
+  assert.match(r2.saiu[0].text, /^Qual destes horários você está confirmando\?/, "a reescrita com horarios novos foi recusada");
+  // (3) o modelo (fluxo normal, ex.: mensagem que nao e so confirmacao mas tem reserva proxima) oferece horario a quem confirmou: a validacao final troca por agradecimento
+  const guard = await import("../dist/ai/replyGuard.js");
+  const ctx = guard.deserializeReplyContext(guard.serializeReplyContext({
+    conversationId: "x", tz: TZ, now: new Date(), todayIso: isoDay(0), situationKind: "normal", forbidEvaluationOffer: false, forbidSlotOffer: false,
+    request: { dates: [], weekdays: [], onlyWeekdays: false, times: [], notBefore: null, notAfter: null, period: null }, trusted: false, agenda: true,
+    actions: { booked: false, cancelled: false, rescheduled: false, transferred: false }, evidence: { cancelledRecently: false, rescheduledRecently: false },
+    slots: { state: { times: new Set(), dates: new Set(), instants: [], offer: [], booked: null }, toolUsed: false, strict: { times: new Set(), dates: new Set() }, loose: { times: new Set(), dates: new Set() }, toolDates: [] },
+    upcoming: [], complaintTexts: [], silentHandoff: false, confirmationGuard: true,
+  }, 0), "x", []);
+  assert.equal(ctx.confirmationGuard, true, "a trava sobrevive a reinicio (vai no resumo persistido)");
+  const choice = guard.chooseFinalReply({ ctx, original: "Confirmado! Tenho 10:00 ou 15:00 amanhã, qual prefere?" });
+  assert.equal(choice.text, "Obrigada pela confirmação! 💗");
+  const choice2 = guard.chooseFinalReply({ ctx, original: "Pra eu te passar os horários certinhos: você prefere manhã, tarde ou noite?" });
+  assert.equal(choice2.text, "Obrigada pela confirmação! 💗", "a pergunta de turno do print nunca sai para quem so confirmou");
+  process.env.AI_SEND_REVIEW = "off";
+});
+
+test("CONFIRMACAO: a mesma pessoa com o telefone SEM o 9o digito no cadastro e COM o 9 no WhatsApp (linhas diferentes) tem a reserva confirmada; outra clinica nao e tocada", async () => {
+  reset();
+  const L = await mkLisboa("Lisboa Nono Digito");
+  const c = await comLembrete(L, "Sol Nono Digito");
+  const sem9 = c.patient.phone.slice(0, 4) + c.patient.phone.slice(5); // 5511 9xxxxxxxx -> 5511 xxxxxxxx
+  await prisma.patient.update({ where: { id: c.patient.id }, data: { phone: sem9 } });
+  // outra clinica com a MESMA pessoa (mesmo numero) e uma reserva pendente: nada dela pode ser confirmado
+  const M = await mkLisboa("Outra Clinica Mesmo Numero");
+  const outro = await comLembrete(M, "Sol Outra Clinica");
+  await prisma.patient.update({ where: { id: outro.patient.id }, data: { phone: sem9 } }).catch(() => undefined); // (unico por clinica: pode)
+  const full = c.patient.phone;
+  const desde = posts.length;
+  await enqueueWebhook(L.clinic.id, webhookPayload(full, "Confirmado"));
+  await settledEvents(L.clinic.id);
+  const out = posts.slice(desde).filter((p) => p.number === full);
+  assert.equal(modelCalls.length, 0);
+  assert.equal(out.length, 1, JSON.stringify(out));
+  assert.match(out[0].text, /^Obrigada pela confirmação/);
+  assert.equal((await apptDe(c)).patientConfirmed, true, "a reserva da linha do cadastro foi confirmada");
+  assert.equal((await prisma.appointment.findUnique({ where: { id: outro.appt.id } })).patientConfirmed, false, "outra clinica intacta");
+  semDisponibilidade();
 });

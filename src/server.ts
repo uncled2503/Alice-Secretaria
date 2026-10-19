@@ -41,6 +41,7 @@ import { readStaffSession, clearSessionCookie } from "./api/staffSession.js";
 import { isFreePlan, freePlanBlocksPath } from "./crm/plan.js";
 import { prisma, enableWalMode } from "./db/client.js";
 import { releaseMyLocks } from "./jobs/lock.js";
+import { drainBackground } from "./jobs/background.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -393,6 +394,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
     console.error("[shutdown] falha ao finalizar a fila:", err);
   }
   await releaseMyLocks().then((n) => n && console.log(`[shutdown] ${n} concessao(oes) de tarefa devolvida(s) para a copia nova assumir sem esperar`)).catch(() => undefined);
+  await drainBackground(10_000).catch(() => undefined); // tarefas disparadas e esquecidas terminam antes de o banco ser solto
   await prisma.$disconnect().catch(() => undefined);
   process.exit(0);
 }

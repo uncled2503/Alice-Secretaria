@@ -5,7 +5,8 @@ import { PAID_CLINIC_WHERE } from "./plan.js";
 import { logActivity } from "./activity.js";
 import { notifyStaff } from "./notify.js";
 import { generateReply } from "../ai/alice.js";
-import { deliverAliceReply } from "../uazapi/client.js";
+import { deliverAliceReply, connectionUsable } from "../uazapi/client.js";
+import { isNonCommercialHandoff } from "./nonCommercial.js";
 import { recordReplyFailure } from "../ai/replyFailure.js";
 
 // ---------------------------------------------------------------------------
@@ -18,7 +19,9 @@ import { recordReplyFailure } from "../ai/replyFailure.js";
 //    transferiu e ninguem tocou continua esperando a equipe (nao volta sozinha);
 //  - nunca devolve quando a transferencia foi por URGENCIA clinica ou REACAO apos procedimento (e ninguem "devolveu" depois);
 //  - o relogio conta da primeira mensagem da pessoa que PEDE resposta: "ok"/"obrigada"/emoji nao contam;
-//  - mensagem parada ha mais de 6h nao e respondida de repente (a equipe vê no chat).
+//  - mensagem parada ha mais de 6h nao e respondida de repente (a equipe vê no chat);
+//  - (21/10/2026) NUNCA devolve: contato NAO comercial (curriculo, fornecedor, parceria, cobranca: o motivo da transferencia diz isso), pessoa com RETORNO COMBINADO futuro
+//    (a equipe/ela combinou uma data) e clinica com o WhatsApp comprovadamente DESCONECTADO (a Alice nao conseguiria responder: a conversa fica com a equipe).
 // ---------------------------------------------------------------------------
 
 export const RESUME_MAX_AGE_MS = 6 * 3_600_000;
@@ -91,6 +94,8 @@ export async function resumeStalledConversations(now = new Date()): Promise<numb
   });
   let resumed = 0;
   for (const clinic of clinics) {
+    const conn = await connectionUsable(clinic.id, now).catch(() => ({ usable: true }));
+    if (!conn.usable) { console.warn(`[equipe-demorou] clinica=${clinic.id}: WhatsApp desconectado, nenhuma conversa foi devolvida para a Alice (ela nao conseguiria responder)`); continue; }
     const conversations = await prisma.conversation.findMany({
       where: {
         humanTakeover: true,
@@ -98,12 +103,15 @@ export async function resumeStalledConversations(now = new Date()): Promise<numb
         lastMessageAt: { gte: new Date(now.getTime() - RESUME_MAX_AGE_MS - 60_000) },
         patient: { clinicId: clinic.id, optedOut: false },
       },
-      select: { id: true, staffTouchedAt: true, patient: { select: { id: true, name: true, phone: true } } },
+      select: { id: true, staffTouchedAt: true, handoffReason: true, patient: { select: { id: true, name: true, phone: true, callbackAt: true } } },
       take: 200,
     });
     for (const c of conversations) {
       try {
         const since = c.staffTouchedAt!;
+        // motivo da transferencia: contato nao comercial nunca volta para a Alice; retorno combinado futuro tambem nao (a data combinada manda)
+        if (isNonCommercialHandoff(c.handoffReason)) continue;
+        if (c.patient.callbackAt && c.patient.callbackAt.getTime() > now.getTime()) continue;
         const after = await prisma.message.findMany({
           where: { conversationId: c.id, createdAt: { gt: since }, role: { in: ["user", "assistant", "human"] } },
           orderBy: { createdAt: "asc" },

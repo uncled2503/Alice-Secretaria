@@ -1,4 +1,5 @@
 import { prisma } from "../db/client.js";
+import { trackBackground } from "../jobs/background.js";
 import { getFunnelStages } from "../crm/stages.js";
 
 // ---------------------------------------------------------------------------
@@ -129,7 +130,7 @@ export async function syncLeadTags(clinicId: string, patientId: string): Promise
 }
 
 export function syncLeadTagsInBackground(clinicId: string, patientId: string): void {
-  void syncLeadTags(clinicId, patientId).catch(() => {});
+  void trackBackground(syncLeadTags(clinicId, patientId)).catch(() => {});
 }
 
 // Aplica as etiquetas a todos os leads da clinica (botao do admin; em lotes, idempotente).

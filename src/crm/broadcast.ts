@@ -1,6 +1,6 @@
 import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
-import { sendText } from "../uazapi/client.js";
+import { sendText, isSendDeferred } from "../uazapi/client.js";
 import { PAID_CLINIC_WHERE } from "./plan.js";
 import { isWithinClinicHours } from "./openHours.js";
 import { wallClockInZone } from "../scheduling/time.js";
@@ -8,6 +8,7 @@ import { nationalHolidayOn, parseHolidayOpen } from "../scheduling/holidays.js";
 import { recordAutomatedMessage } from "./conversationLog.js";
 import { MONTH_LEADS_MODE, monthLeadRecipients, firstInterest } from "./leadReactivation.js";
 import { getFunnelStages } from "./stages.js";
+import { usableFirstName, usableFullName, tidyGreetingText } from "./greeting.js";
 import type { Clinic } from "@prisma/client";
 
 // Envia aos poucos pra nao estourar limite de taxa do WhatsApp e nao
@@ -24,11 +25,11 @@ type BroadcastClinicInfo = {
 // da clinica, ja que o paciente nao esta amarrado a uma unidade especifica.
 // {procedimento} = o primeiro interesse conhecido do paciente (anotado pela Alice no resumo do CRM).
 export function renderTemplate(template: string, patientName: string | null, patientPhone: string, clinic: BroadcastClinicInfo, interestNote: string | null = null): string {
-  const fullName = patientName?.trim() ?? "";
-  const firstName = fullName.split(" ")[0] ?? "";
+  const fullName = usableFullName(patientName);
+  const firstName = usableFirstName(patientName);
   const now = new Date();
 
-  return template
+  return tidyGreetingText(template
     .replace(/\{nome\}/gi, firstName)
     .replace(/\{primeiro_nome\}/gi, firstName)
     .replace(/\{nome_completo\}/gi, fullName)
@@ -37,8 +38,7 @@ export function renderTemplate(template: string, patientName: string | null, pat
     .replace(/\{endereco\}/gi, clinic.primaryLocation?.fullAddress ?? "")
     .replace(/\{unidade\}/gi, clinic.primaryLocation?.name ?? clinic.name)
     .replace(/\{data_hora\}/gi, now.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }))
-    .replace(/\b(Oi|Olá|Ola),\s*!/gi, "$1!") // sem nome: "Oi, !" vira "Oi!"
-    .trim();
+  ).trim(); // sem nome: "Oi, !" vira "Oi!" (tidyGreetingText)
 }
 
 async function getBroadcastClinicInfo(clinicId: string): Promise<BroadcastClinicInfo> {
@@ -226,6 +226,11 @@ async function sendNextBatch(): Promise<void> {
           await recordAutomatedMessage(recipient.patientId, text, "Reativação de base");
         }
       } catch (err) {
+        if (isSendDeferred(err)) {
+          // WhatsApp desconectado ou revisao por IA fora do ar: NADA saiu e nao e falha desta pessoa. Ela continua pendente (a campanha segue quando o servico voltar) e esta clinica para aqui.
+          console.warn(`[campanha] clinica=${clinic.id} campanha=${campaign.id}: envio adiado (${err instanceof Error ? err.message : "indisponivel"}); destinatarios seguem pendentes`);
+          break;
+        }
         console.error(`Falha ao enviar broadcast para ${recipient.patient.phone}:`, err);
         await prisma.broadcastRecipient.update({ where: { id: recipient.id }, data: { status: "failed" } });
       }

@@ -70,6 +70,22 @@ function noteBlocked(clinicId: string, p: BlockedProfessional): void {
   }).catch(() => undefined);
 }
 
+// DE ONDE VEM a jornada de uma profissional: do CADASTRO dela (inicio e fim proprios) ou herdada do expediente da CLINICA (resolveHours). Log de producao de 19/10: Adriana, Suelen
+// e Talita apareciam todas com 08:00-21:00 = expediente da clinica: nenhuma tinha jornada propria cadastrada (a correcao cadastral da Lisboa estava preparada, nao aplicada).
+export function journeySource(p: { workStartHour: number | null; workEndHour: number | null }): "cadastro" | "heranca_da_clinica" | "cadastro_incompleto" {
+  if (p.workStartHour != null && p.workEndHour != null) return "cadastro";
+  return p.workStartHour == null && p.workEndHour == null ? "heranca_da_clinica" : "cadastro_incompleto";
+}
+const hhmmOf = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+function noteJourney(clinicId: string, p: { id: string; name: string }, source: string, hours: { workStartMinutes: number; workEndMinutes: number }): void {
+  if (source === "cadastro") return;
+  const key = `${p.id}|jornada|${source}`;
+  const now = Date.now();
+  if (now - (logged.get(key) ?? 0) < LOG_EVERY_MS) return;
+  logged.set(key, now);
+  console.warn(`[agenda] jornada efetiva clinica=${clinicId} profissional=${p.id} (${p.name}) ${hhmmOf(hours.workStartMinutes)}-${hhmmOf(hours.workEndMinutes)} origem=${source}: ${source === "heranca_da_clinica" ? "a profissional NAO tem jornada propria cadastrada, vale o expediente da clinica" : "jornada propria com so um dos limites: o outro vem do expediente da clinica"} revisao=${REVISION.split(":")[0]}`);
+}
+
 export async function procedureEligibility(clinic: ClinicRow, procedureId: string): Promise<Eligibility> {
   const [pros, ceAgenda] = await Promise.all([
     prisma.professional.findMany({ where: { clinicId: clinic.id, active: true }, include: { procedures: { select: { id: true } } }, orderBy: { createdAt: "asc" } }),
@@ -91,6 +107,7 @@ export async function procedureEligibility(clinic: ClinicRow, procedureId: strin
       noteBlocked(clinic.id, b);
     } else {
       eligible.push({ id: p.id, name: p.name, ceUuid: p.ceUuid, hours });
+      noteJourney(clinic.id, p, journeySource(p), hours);
     }
   }
   return { mode: "professionals", eligible, blocked, ceAgenda, why: eligible.length ? "ok" : "all_blocked" };

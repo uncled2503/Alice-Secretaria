@@ -1,4 +1,5 @@
 import { prisma } from "../db/client.js";
+import { trackBackground } from "../jobs/background.js";
 import { notifyStaff } from "../crm/notify.js";
 import { logActivity } from "../crm/activity.js";
 import { formatDateTimeInZone } from "../scheduling/time.js";
@@ -306,7 +307,7 @@ export async function ceMirrorEnabled(clinicId: string): Promise<boolean> {
 }
 
 export function syncAppointmentInBackground(appointmentId: string): void {
-  void syncAppointment(appointmentId).catch((err) => console.error("[clinicaexperts] syncAppointment:", err));
+  void trackBackground(syncAppointment(appointmentId)).catch((err) => console.error("[clinicaexperts] syncAppointment:", err));
 }
 
 // ---------------------------------------------------------------------------
