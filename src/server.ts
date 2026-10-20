@@ -6,6 +6,7 @@ import express from "express";
 import helmet from "helmet";
 import compression from "compression";
 import { rateLimit } from "express-rate-limit";
+import { siteLeadRouter } from "./site/leads.js";
 import { startReminderJob } from "./reminders/cron.js";
 import { startPostProcedureJob } from "./reminders/postProcedure.js";
 import { startConfirmationRecoveryJob } from "./crm/appointmentMessages.js";
@@ -87,6 +88,8 @@ app.use(helmet({
 app.use((req, res, next) => {
   if (req.method === "POST" && /^\/api\/conversations\/[^/]+\/send-media$/.test(req.path)) {
     express.json({ limit: "15mb" })(req, res, next);
+  } else if (req.method === "POST" && req.path === "/site/lead") {
+    express.json({ limit: "16kb" })(req, res, next); // formulario publico da landing: corpo pequeno
   } else if ((req.method === "POST" || req.method === "PUT") && /^\/api\/procedures(\/[^/]+)?$/.test(req.path)) {
     // O cadastro de procedimento leva as FOTOS de resultado (ate 12, em base64) no mesmo JSON: com 4mb nao cabiam nem 3
     // fotos e o salvar falhava com 413 - por isso as fotos de antes/depois "nao vinculavam".
@@ -220,6 +223,9 @@ app.use(
 // API Externa (integracao server-to-server por API key). Fica fora do gate de
 // sessao do painel - a autenticacao e a propria chave. Ver src/api/external/.
 app.use("/external/v1", externalApiRouter);
+
+// Captacao de leads da landing (publico, sem sessao; ver src/site/leads.ts).
+app.use("/site", siteLeadRouter);
 
 // So /staff/login e /staff/me passam sem sessao (o login em si e o "estou
 // logado?" do frontend); qualquer outra rota de API exige uma conta valida.

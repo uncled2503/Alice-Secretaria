@@ -1515,3 +1515,33 @@ model AiUsageDaily {
 
   @@id([day, clinicId, purpose, model])
 }
+
+// Pedido de demonstracao vindo do formulario da landing (public/site). Um registro por telefone (reenvio so atualiza e conta). O IP nao e guardado: so um HMAC curto (limite de abuso).
+// Nenhuma mensagem e disparada para o visitante; a equipe comercial ve a lista em GET /api/site-leads (admin).
+model SiteLead {
+  id              String   @id @default(cuid())
+  phoneKey        String   @unique // DDD + numero canonico (nunca duas linhas para o mesmo telefone)
+  phone           String   // 55 + DDD + numero
+  name            String
+  company         String
+  segment         String
+  volume          String?
+  utmSource       String?
+  utmMedium       String?
+  utmCampaign     String?
+  utmContent      String?
+  utmTerm         String?
+  gclid           String?
+  fbclid          String?
+  referrer        String?
+  landingPath     String?
+  userAgent       String?
+  ipHash          String?
+  submissions     Int      @default(1)
+  status          String   @default("novo") // novo | contatado | descartado (uso interno)
+  createdAt       DateTime @default(now())
+  lastSubmittedAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([ipHash, createdAt])
+}

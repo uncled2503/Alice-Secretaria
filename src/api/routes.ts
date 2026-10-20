@@ -351,6 +351,17 @@ apiRouter.get(
   })
 );
 
+// Pedidos de demonstracao vindos da landing (so admin: contem nome e telefone dos interessados).
+apiRouter.get(
+  "/site-leads",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const take = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
+    res.set("Cache-Control", "no-store");
+    res.json(await prisma.siteLead.findMany({ orderBy: { createdAt: "desc" }, take, select: { id: true, name: true, phone: true, company: true, segment: true, volume: true, utmSource: true, utmMedium: true, utmCampaign: true, utmContent: true, utmTerm: true, referrer: true, landingPath: true, submissions: true, status: true, createdAt: true, lastSubmittedAt: true } }));
+  })
+);
+
 // Saude da AGENDA / Clinica Experts: ultima sincronizacao boa, escritas incertas, confirmacoes de presenca pendentes, proximos envios. So leitura do banco.
 apiRouter.get(
   "/clinic/agenda-health",
