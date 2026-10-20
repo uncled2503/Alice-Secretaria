@@ -427,6 +427,7 @@ model Procedure {
   benefits           String?   // beneficios que podem ser afirmados, um por linha
   aliases            String?   // outros nomes/formas de pedir, separados por virgula
   resultTimeline     String?   // quando o resultado costuma aparecer
+  includedQuantity   String?   // quantidade INCLUIDA na oferta, dado comercial aprovado (ex.: "50 UI"). NAO e recomendacao individual de aplicacao e nao vale para outras ofertas/marcas
 
   // true = varios pacientes podem ocupar o MESMO horario com o mesmo
   // profissional pra esse procedimento (ex.: aplicacao/injetavel atendido
@@ -468,7 +469,8 @@ model Professional {
   clinicId  String
   clinic    Clinic   @relation(fields: [clinicId], references: [id])
   name      String
-  title     String?  // tratamento usado pela Alice (ex.: "Dra."); vazio = so o nome
+  title     String?  // tratamento usado pela Alice (ex.: "Dra."); vazio = so o nome. NAO indica formacao: "Dra." nao significa medica (ver qualification)
+  qualification String? // FORMACAO profissional informada pela clinica (ex.: "Biomedica", "Medica", "Esteticista"); null = nao informada (a Alice nao deduz formacao pelo titulo)
   instagram String?
   bio       String?
   color     String?  // cor de identificacao (ex: na agenda), hex

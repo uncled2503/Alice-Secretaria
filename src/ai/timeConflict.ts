@@ -22,8 +22,8 @@ export async function checkClinicTimeConflicts(
   patient: { id: string; name: string | null; ceUuid: string | null },
   history: HistoryMessage[],
   tz: string,
+  now: Date = new Date(), // injetavel: o relogio de teste nao pode depender do dia em que a suite roda
 ): Promise<ConflictCheck> {
-  const now = new Date();
   const statements = clinicTimeStatements(history, tz, now);
   const load = () =>
     prisma.appointment.findMany({

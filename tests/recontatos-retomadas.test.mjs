@@ -356,7 +356,7 @@ test("INTEGRADO: do 'dia seguinte as 8h' (servidor em UTC, etapa 1 desligada) at
   assert.equal(msg.content, "Oi, Maria! Conseguiu pensar com calma?");
   const rows = await ledgerOf(p.id);
   assert.deepEqual(rows.map((r) => [r.step, r.state, r.layer]), [[2, "sent", "envio"]]);
-  assert.match(rows[0].version, /^2026-10-1/);
+  assert.match(rows[0].version, /^2026-10-/);
   const runs = await runRows(lisboa.id);
   const last = runs.at(-1);
   assert.equal(last.sent, 1);

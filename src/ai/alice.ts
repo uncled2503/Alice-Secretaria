@@ -33,15 +33,16 @@ import { tagNewLead } from "../crm/leadTag.js";
 import { recordIntentSignals } from "../crm/intent.js";
 import { handoffCard } from "../crm/handoffCard.js";
 import { findRepetitions, removeSentences, askedAgain, conversationMemory, splitSentences } from "./repetition.js";
-import { announcesAction, brokenPromise, PROMISE_NUDGE } from "./promises.js";
-import { decideTurn, turnDecisionLog } from "./turnDecision.js";
+import { announcesAction, brokenPromise, CLAIM_NUDGE, PROMISE_NUDGE } from "./promises.js";
+import { decideTurn, turnDecisionLog, type TurnDecision } from "./turnDecision.js";
+import { claimIsSupported, conclusionClaims, GROUP_BOOKING_DIRECTIVE, mentionsCompanion, priceValues, stripGenericFarewell, stripRedundantGreeting, unitNumbers, weekdayLabel, type ExistingSlot } from "./replyFacts.js";
 import { analyzeFlow, askedForName, complainsAboutBot, turnObligations, wantsSchedule, type SalesFlow } from "./salesFlow.js";
 import { understandConversation, planConduct, gateDecision, parseNotOffered, notOfferedIn, stripNotOffered, NOT_OFFERED_REPLY, type ConductGate, type ConductPlan, type Understanding } from "./conduct.js";
 import { REVISION } from "../version.js";
 import { confirmationThanks, isConfirmationReply } from "./confirmation.js";
 import { closingReply, feedbackThanks, isCourtesyOnly, isPositiveFeedback } from "./courtesy.js";
 import { capSlotLines, stripSlotOffers } from "./slotText.js";
-import { absorbToolResult, checkSlotMentions, knownFrom, newSlotState, renderBooked, renderOffer, SLOT_FALLBACK_ASK, SLOT_NUDGE } from "./slotGuard.js";
+import { absorbToolResult, checkSlotMentions, extractMentions, knownFrom, newSlotState, renderBooked, renderOffer, SLOT_FALLBACK_ASK, SLOT_NUDGE } from "./slotGuard.js";
 import { isJobSeeker, nonPatientKind } from "./jobSeeker.js";
 import { findChosenSlot, identifyWanted, offersSlots, staffConfirmedBooking } from "./bookingIntent.js";
 import { statementsNote } from "./clinicStatements.js";
@@ -336,6 +337,22 @@ async function findProcedure(clinicId: string, name: unknown): Promise<Procedure
 
 // Por que o horario nao serve, dito com honestidade: quando ha profissional definido, "closed_day"/"outside_hours" sao do EXPEDIENTE DELE, nao da
 // clinica (16/10: "a clinica nao atende nesse dia" para uma terca em que a clinica abre - era o dia da profissional do procedimento).
+// Nome REAL (so letras, 2+ palavras) e primeiro nome compativel: o nome de um acompanhante nunca sobrescreve o cadastro da pessoa que conversa.
+export function looksLikeRealName(n: string | null | undefined): boolean {
+  const parts = (n ?? "").trim().split(/\s+/).filter(Boolean);
+  return parts.length >= 2 && parts.every((w) => /^[\p{L}'.-]{2,}$/u.test(w));
+}
+export function sameFirstName(a: string | null | undefined, b: string | null | undefined): boolean {
+  const f = (x: string | null | undefined) => (x ?? "").trim().split(/\s+/)[0]?.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase() ?? "";
+  const x = f(a), y = f(b);
+  return !!x && !!y && (x === y || (Math.min(x.length, y.length) >= 3 && (x.startsWith(y) || y.startsWith(x))));
+}
+
+function isoPlusDays(iso: string, n: number): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+}
+
 function slotReasonText(reason: keyof typeof SLOT_REASON_PT | undefined, withProfessional: boolean): string {
   const r = reason ?? "conflict";
   if (withProfessional && r === "closed_day") return "o profissional deste procedimento nao atende nesse dia da semana (a clinica abre nesse dia; ofereca outro dia ou outro horario do procedimento). NAO diga que a clinica nao atende";
@@ -740,6 +757,14 @@ async function runTool(
     const hasSurname = (n: string | null | undefined) => (n ?? "").trim().split(/\s+/).filter(Boolean).length >= 2;
     if (bookingPatient && !bookingPatient.ceUuid && (await ceConnected(clinicId))) {
       if (hasSurname(fullNameGiven)) {
+        // O nome completo informado precisa ser DA PESSOA desta conversa: o de outra pessoa (marido, filha...) nunca sobrescreve o cadastro dela.
+        if (looksLikeRealName(bookingPatient.name) && !sameFirstName(bookingPatient.name, fullNameGiven)) {
+          return JSON.stringify({
+            agendado: false,
+            motivo: `o nome informado ("${fullNameGiven}") parece ser de OUTRA pessoa: o cadastro desta conversa e de "${bookingPatient.name}" e NAO sera sobrescrito. Esta ferramenta agenda so a pessoa que esta conversando.`,
+            instrucao: "NAO use book_appointment para outra pessoa. Para o acompanhante, colete nome completo e telefone de contato e chame transfer_to_human com 'RESERVA PENDENTE' (nome, procedimento, dia e horario combinados). Nao diga que ele(a) esta agendado(a).",
+          });
+        }
         await prisma.patient.update({ where: { id: patientId }, data: { name: fullNameGiven } });
       } else if (!hasSurname(bookingPatient.name)) {
         return JSON.stringify({
@@ -768,6 +793,17 @@ async function runTool(
         ? zonedWallClockToUtc(tz, requested.year, requested.month, requested.day, requested.hour, requested.minute)
         : new Date(NaN);
 
+    // Tentativa anterior para ESTE horario teve resultado INCERTO no Clinica Experts (pode ter sido criada la): nao tenta de novo (evita reserva em duplicidade); a equipe confere.
+    if (!isNaN(startUtc.getTime())) {
+      const uncertain = await prisma.activityLog.findFirst({ where: { patientId, type: "ce_mirror_uncertain", createdAt: { gte: new Date(Date.now() - 60 * 60_000) }, description: { contains: startUtc.toISOString() } }, select: { id: true } });
+      if (uncertain) {
+        return JSON.stringify({
+          agendado: false,
+          motivo: "a tentativa anterior para este horario teve resultado INCERTO no Clinica Experts (a reserva pode ja existir la): nao crie de novo",
+          instrucao: "NAO diga que agendou nem tente de novo. Chame transfer_to_human para a equipe conferir a agenda antes de recriar, e diga so que a equipe vai confirmar o horario.",
+        });
+      }
+    }
     if (isNaN(startUtc.getTime())) {
       return JSON.stringify({
         agendado: false,
@@ -844,6 +880,16 @@ async function runTool(
           actorName: null,
           patientId,
         });
+        if (!mirror.definitive) {
+          // Nao deu para saber se o CE criou a reserva (rede/tempo esgotado): registra para NAO recriar as cegas e passa para a equipe conferir.
+          await logActivity({ clinicId, type: "ce_mirror_uncertain", area: "agenda", title: "Resultado incerto ao criar a reserva no Clínica Experts", description: `startsAt=${booking.scheduledAt.toISOString()} ${procedure.name}: o CE pode ter criado a reserva; a equipe precisa conferir antes de recriar.`, actorName: null, patientId });
+          return JSON.stringify({
+            agendado: false,
+            incerto: true,
+            motivo: "nao foi possivel confirmar se a agenda (Clinica Experts) criou a reserva",
+            instrucao: "NAO diga que agendou e NAO tente de novo. Chame transfer_to_human com o procedimento, o dia e o horario combinados para a equipe conferir a agenda; diga so que a equipe vai confirmar o horario.",
+          });
+        }
         if (/ocupad|conflit|indispon|overlap|sobrepo|occupied|conflict|unavailable|not available|already booked/i.test(mirror.error)) {
           return JSON.stringify({ agendado: false, motivo: "esse horario acabou de ser ocupado por outro paciente; ofereca outro horario" });
         }
@@ -1090,25 +1136,45 @@ async function runTool(
     const patient = await prisma.patient.findUnique({ where: { id: patientId } });
     if (!patient) return JSON.stringify({ enviado: false, motivo: "paciente nao encontrado" });
 
+    // as MESMAS fotos nao sao reenviadas na mesma conversa
+    const marker = `foto(s) de resultado enviada(s): ${procedure.name}`;
+    const already = await prisma.message.findFirst({ where: { conversationId, role: "assistant", content: { contains: marker } }, select: { id: true } });
+    if (already) {
+      return JSON.stringify({ enviado: false, motivo: "ja_enviadas_nesta_conversa", instrucao: "Estas fotos ja foram enviadas a esta pessoa nesta conversa: NAO reenvie nem diga que vai enviar de novo. Siga a conversa (pergunte se e esse tipo de resultado que ela busca, ou responda o que ela perguntou)." });
+    }
+
     let sentCount = 0;
+    let failure: string | null = null;
     try {
       for (const photo of photos) {
         await sendMedia(clinicId, patient.phone, { dataUrl: photo.dataUrl, kind: "image", caption: photo.caption ?? undefined });
         sentCount++;
         if (sentCount < photos.length) await new Promise((r) => setTimeout(r, 800)); // sem rajada: o WhatsApp entrega em ordem
       }
+    } catch (err) {
+      failure = err instanceof Error ? err.message.slice(0, 120) : "falha ao enviar";
+      console.error(`[fotos] falha ao enviar (conv ${conversationId}) depois de ${sentCount} de ${photos.length}:`, failure);
     } finally {
-      // Registra no chat (so o aviso, sem duplicar as imagens no banco): a equipe ve que as fotos foram enviadas.
+      // Registra no chat (so o aviso, sem duplicar as imagens no banco): a equipe ve o que foi enviado DE FATO. Fotos de outro procedimento nunca entram aqui.
       if (sentCount > 0) {
         await prisma.message.create({
-          data: { conversationId, role: "assistant", content: `📷 ${sentCount} foto(s) de resultado enviada(s): ${procedure.name}`, authorName: null, deliveryStatus: "sent" },
+          data: { conversationId, role: "assistant", content: failure ? `📷 ${sentCount} de ${photos.length} foto(s) enviada(s) (houve falha no restante): ${procedure.name}` : `📷 ${sentCount} ${marker}`, authorName: null, deliveryStatus: "sent" },
         });
       }
+    }
+    if (failure) {
+      return JSON.stringify({
+        enviado: false,
+        parcial: sentCount > 0,
+        quantidade: sentCount,
+        motivo: "falha ao enviar as fotos",
+        instrucao: "NAO diga que enviou as fotos. Diga que nao conseguiu enviar agora e siga ajudando com a informacao cadastrada do procedimento (sem prometer reenviar depois).",
+      });
     }
     return JSON.stringify({
       enviado: true,
       quantidade: photos.length,
-      instrucao: "As fotos ja foram enviadas nesta mesma resposta. Nao descreva as fotos (o paciente ja esta vendo) - so pergunte se e esse tipo de resultado que ele busca.",
+      instrucao: "As fotos ja foram enviadas nesta mesma resposta. Nao descreva as fotos (o paciente ja esta vendo) e nao prometa o mesmo resultado: o resultado varia de pessoa para pessoa. So pergunte se e esse tipo de resultado que ela busca.",
     });
   }
 
@@ -1177,7 +1243,7 @@ const PAYMENT_METHOD_LABELS: Record<string, string> = {
 // So passa pro prompt o que a clinica realmente cadastrou - nunca inventa
 // indicacao, beneficio, prazo ou preco que nao veio do banco.
 function describeProcedureForPrompt(p: Procedure & { _count?: { photos: number } }, quotePrices = true): string {
-  const lines = [`- ${p.name} (${p.durationMin}min)`];
+  const lines = [`- ${p.name} (reserva de ${p.durationMin}min na agenda)`];
   if (p._count?.photos) lines.push("  Fotos de resultado (antes/depois): TEM cadastradas - quando a pessoa demonstrar interesse neste procedimento, ofereca ('Posso te enviar alguns resultados?') e, se ela aceitar ou pedir, use send_procedure_photos");
 
   if (!quotePrices) {
@@ -1201,6 +1267,7 @@ function describeProcedureForPrompt(p: Procedure & { _count?: { photos: number }
   if (methods.length) lines.push(`  Formas de pagamento: ${methods.join(", ")}`);
   if (p.paymentLink) lines.push(`  Link de pagamento: ${p.paymentLink}`);
 
+  if (p.includedQuantity) lines.push(`  Quantidade INCLUIDA na oferta: ${p.includedQuantity} (dado comercial aprovado desta oferta; NAO e recomendacao individual de aplicacao, nao vale para outras ofertas/marcas e nao se converte entre marcas)`);
   if (p.description) lines.push(`  Descricao: ${p.description}`);
   if (p.aliases) lines.push(`  Tambem pode ser chamado de: ${p.aliases}`);
   if (p.goals) lines.push(`  Atende objetivos/queixas: ${p.goals.split("\n").filter(Boolean).join("; ")}`);
@@ -1217,7 +1284,7 @@ function describeProcedureCompact(p: Procedure & { _count?: { photos: number } }
   if (!quotePrices) price = " | valor: equipe";
   else if (p.price != null) price = ` | R$ ${p.price.toFixed(2).replace(".", ",")}${p.offerInstallments && p.maxInstallments ? ` (ate ${p.maxInstallments}x)` : ""}`;
   else if (p.priceVariable) price = " | valor: na avaliacao";
-  return `- ${p.name} (${p.durationMin}min)${price}${p._count?.photos ? " [tem fotos]" : ""}`;
+  return `- ${p.name} (reserva ${p.durationMin}min)${price}${p.includedQuantity ? ` | oferta inclui ${p.includedQuantity}` : ""}${p._count?.photos ? " [tem fotos]" : ""}`;
 }
 
 // Concordancia em portugues: o nome de uma PESSOA leva "de" ("secretaria de
@@ -1265,7 +1332,7 @@ export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: str
   const clinic = await prisma.clinic.findUniqueOrThrow({
     where: { id: clinicId },
     include: {
-      procedures: { where: { internalOnly: false }, include: { professionals: { where: { active: true }, select: { name: true, title: true } }, _count: { select: { photos: true } } } }, // internalOnly (retoque/cortesia importados do CE) a Alice nao oferece
+      procedures: { where: { internalOnly: false }, include: { professionals: { where: { active: true }, select: { name: true, title: true, qualification: true } }, _count: { select: { photos: true } } } }, // internalOnly (retoque/cortesia importados do CE) a Alice nao oferece
       messageTemplates: { where: { active: true } },
       faqs: { where: { active: true } },
       playbooks: { where: { active: true } },
@@ -1594,7 +1661,7 @@ FERIADOS PROXIMOS: ${holidayItems.join("; ")}. Se a pessoa perguntar se funciona
     .join(", ");
   const prosByProcedure = clinic.procedures
     .filter((p) => p.professionals.length > 0 && focusIds.has(p.id))
-    .map((p) => `- ${p.name}: ${p.professionals.map((pr) => `${pr.title ? pr.title + " " : ""}${pr.name}`).join(", ")}`)
+    .map((p) => `- ${p.name}: ${p.professionals.map((pr) => `${pr.title ? pr.title + " " : ""}${pr.name}${pr.qualification ? ` [formacao: ${pr.qualification}]` : ""}`).join(", ")}`)
     .join("\n");
   const professionalsBlock = prosByProcedure
     ? `\n\nProfissionais por procedimento (use o nome EXATAMENTE como escrito aqui; quem esta sem 'Dr./Dra.' e chamado so pelo nome, nunca invente titulo):\n${prosByProcedure}\nSe houver mais de um profissional, pergunte a preferencia do paciente (ou ofereca o primeiro horario livre de qualquer um). Passe professional_name/professional_id nas ferramentas de agenda.`
@@ -1691,6 +1758,7 @@ Seu trabalho:
 3. Checar disponibilidade real (check_specific_time / check_availability) antes de falar de qualquer data.
 4. Confirmar o horario escolhido com o paciente e so entao usar book_appointment.
 5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${locationLine}${explainLine}${teamBooksLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${handoffLine}${silentLine}${humanLine}${noRepeatLine}
+6. FATOS QUE NAO SE DEDUZ: (a) FORMACAO PROFISSIONAL so existe se constar em [formacao: ...] ao lado do nome; o tratamento 'Dr./Dra.' NAO indica que a pessoa e medica (pode ser biomedica, esteticista...). Sem formacao cadastrada nao afirme nem negue e nunca invente outra profissional; se exigirem 'medica' e nao houver informacao confirmada, transfer_to_human. (b) QUANTIDADE (UI, unidades, sessoes) so a cadastrada: 'Quantidade INCLUIDA na oferta' vale para ESSA oferta (nunca invente faixa, nem quantidade por regiao, nem converta entre marcas); duvida de dose individual e da responsavel tecnica na avaliacao. (c) A duracao entre parenteses e o tempo de RESERVA na agenda, nao necessariamente o tempo de aplicacao: so diga quanto o procedimento dura se estiver na descricao. (d) Se a memoria do lead ou uma fala antiga da conversa divergir do cadastro (formacao, quantidade, tecnologia), vale o CADASTRO.
 
 Procedimentos oferecidos pela clinica (lista resumida: nome, duracao e valor; a descricao completa so vem, no fim do contexto, para os procedimentos em foco na conversa):
 ${procedureListCompact || "(nenhum procedimento cadastrado ainda)"}
@@ -2613,7 +2681,7 @@ async function generateReplyUnlocked(
 
   // QUAL PROCEDIMENTO ela quer (o catalogo inteiro, sem as descricoes) e QUAL HORARIO ela ja escolheu: a Alice agenda o procedimento pedido; a
   // avaliacao e pra quem nao sabe o que quer (15/10/2026).
-  const bookingCatalog = await prisma.procedure.findMany({ where: { clinicId, internalOnly: false }, select: { name: true, aliases: true, goals: true, benefits: true, description: true, bookingMode: true } });
+  const bookingCatalog = await prisma.procedure.findMany({ where: { clinicId, internalOnly: false }, select: { name: true, aliases: true, goals: true, benefits: true, description: true, bookingMode: true, includedQuantity: true, price: true, offerInstallments: true, maxInstallments: true } });
   const adForWanted = (await prisma.patient.findUnique({ where: { id: patient.id }, select: { adName: true } }))?.adName ?? "";
   const wanted = identifyWanted(bookingCatalog, [adForWanted, ...history.filter((m) => m.role === "user").map((m) => m.content), ...trailingNow].filter(Boolean), adForWanted ? 1 : 0);
   const flowTz = (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { timezone: true } }))?.timezone || "America/Sao_Paulo";
@@ -2667,11 +2735,18 @@ async function generateReplyUnlocked(
     const wc = wallClockInZone(d, tagTz);
     return `${String(wc.hour).padStart(2, "0")}:${String(wc.minute).padStart(2, "0")}`;
   };
+  // DATA DE REFERENCIA das falas dela: 'amanha' vale a partir do dia em que a mensagem foi ESCRITA no fuso da clinica. Processar depois da meia-noite nao desloca o compromisso.
+  const todayLocalIso = isoDateInZone(new Date(), tagTz);
+  const firstTrailing = trailingNow.length ? history[history.length - trailingNow.length] : undefined;
+  const refCandidate = firstTrailing?.createdAt ? isoDateInZone(firstTrailing.createdAt, tagTz) : todayLocalIso;
+  const refIso = refCandidate < todayLocalIso ? refCandidate : todayLocalIso;
   const situation = resolveSituation({
     history: history.map((m) => ({ role: m.role, content: m.content, authorName: m.authorName, createdAt: m.createdAt })),
     trailing: trailingNow,
     now: new Date(),
-    todayIso: isoDateInZone(new Date(), tagTz),
+    todayIso: todayLocalIso,
+    tz: tagTz,
+    refIso,
     upcoming: apptRows.map((a) => ({
       id: a.id,
       dateIso: isoDateInZone(a.scheduledAt, tagTz),
@@ -2686,16 +2761,19 @@ async function generateReplyUnlocked(
     schedulingSignal: flow.schedulingSignal,
     resumedAfterStaffDelay: opts.resumedAfterStaffDelay,
   });
+  if (refIso !== todayLocalIso) situation.briefing.push(`DATA DAS MENSAGENS DELA: foram escritas em ${refIso} (${weekdayLabel(refIso)}); hoje (agora) e ${todayLocalIso}. 'Hoje/amanha/depois de amanha' na fala dela contam a partir de ${refIso}: ${refIso} = hoje DELA, ${isoPlusDays(refIso, 1)} (${weekdayLabel(isoPlusDays(refIso, 1))}) = amanha DELA. Use sempre a data absoluta (AAAA-MM-DD) nas ferramentas.`);
   const memo = await prisma.patient.findUnique({ where: { id: patient.id }, select: { briefingNotes: true } });
   if (memo?.briefingNotes?.trim()) situation.briefing.push(`MEMORIA DO LEAD (notas escritas pela IA em conversas anteriores; podem estar velhas. Se divergirem da AGENDA DELA, do resultado de uma ferramenta ou do que a pessoa disse AGORA, VALE a agenda/a ferramenta/a fala atual - use as notas so para preferencias e contexto):\n${memo.briefingNotes.trim()}`);
   // PLANO DE CONDUCAO: o que pode acontecer NESTE turno (agenda, avaliacao, indicacao). Vale para o texto que o modelo le, para as ferramentas e para a saida.
   let plan: ConductPlan | null = null;
+  let turnDec: TurnDecision | null = null;
   if (understanding) {
     plan = planConduct(understanding, { flow, situation, evaluationName: bookingCatalog.find((p) => /avalia/i.test(p.name))?.name ?? null, hasBooking, clinicIsStore: false, trailing: trailingNow });
     situation.forbidEvaluationOffer = situation.forbidEvaluationOffer || plan.forbidEvaluationOffer;
     situation.forbidSlotOffer = situation.forbidSlotOffer || plan.forbidSlotOffer;
     console.log(`[conduta] clinica=${clinicId} conversa=${conversation.id} ${Object.entries(plan.trace).map(([k, v]) => `${k}=${v}`).join(" ")} revisao=${REVISION.split(":")[0]}`);
-    console.log(`[decisao] conversa=${conversation.id} ${turnDecisionLog(decideTurn({ flow, situation, understanding, plan, wanted, nextBookingLabel: apptRows[0] ? formatInZone(apptRows[0].scheduledAt, tagTz) : null, chosenSlotLabel: chosen?.label ?? null }))}`);
+    turnDec = decideTurn({ flow, situation, understanding, plan, wanted, nextBookingLabel: apptRows[0] ? formatInZone(apptRows[0].scheduledAt, tagTz) : null, chosenSlotLabel: chosen?.label ?? null });
+    console.log(`[decisao] conversa=${conversation.id} ${turnDecisionLog(turnDec)}`);
     if (flow.intent === "hesitate" || flow.intent === "refuse") void recordLeadDecision(clinicId, patient.id, flow.intent);
   }
   const forcedTransfer = situation.forceTransfer ?? (plan?.handoffForced ? plan.handoff : null);
@@ -2739,6 +2817,24 @@ async function generateReplyUnlocked(
     if (situation.directive || plan.replacesFlowMove) {
       const ob = turnObligations(flow.reading, flow.intent);
       if (ob) flow.nextMove += `\nPRIORIDADE NESTE TURNO: ${ob}`;
+    }
+  }
+  // MAIS DE UMA PESSOA no mesmo pedido (cliente + marido...): cada pessoa e um atendimento e um cadastro separados; so se afirma o que a ferramenta reservou.
+  const companionContext = usageClinic?.businessType !== "geral" && (flow.schedulingSignal || flow.intent === "schedule") && [...history.filter((m) => m.role === "user").slice(-8).map((m) => m.content), ...trailingNow].some((t) => mentionsCompanion(t));
+  if (companionContext) flow.nextMove += `\n${GROUP_BOOKING_DIRECTIVE}`;
+  // FOTOS APROVADAS do procedimento em foco (lead interessado, sem pedido de horario ainda): mostrar resultado pertinente antes de convidar, sem repetir e sem atrasar o agendamento
+  if (usageClinic?.businessType !== "geral" && (flow.intent === "info" || flow.intent === "price") && !situation.closeWith && (flow.statedGoal || understanding?.chosen)) {
+    try {
+      const cand = understanding?.chosen?.name ?? (understanding && understanding.eligible.length === 1 ? understanding.eligible[0] : null);
+      if (cand) {
+        const withPhotos = await prisma.procedure.findFirst({ where: { clinicId, name: cand, internalOnly: false }, select: { name: true, _count: { select: { photos: true } } } });
+        if (withPhotos && withPhotos._count.photos > 0) {
+          const sentBefore = await prisma.message.count({ where: { conversationId: conversation.id, role: "assistant", content: { contains: `foto(s) de resultado enviada(s): ${withPhotos.name}` } } });
+          if (sentBefore === 0) flow.nextMove += `\nFOTOS APROVADAS: "${withPhotos.name}" tem fotos cadastradas e elas ainda NAO foram enviadas a esta pessoa. Depois de responder o que ela perguntou, chame send_procedure_photos com procedure_name="${withPhotos.name}" (so as fotos DESTE procedimento; nunca de outro). So diga que enviou se a ferramenta devolver enviado:true; se falhar ou nao houver, siga sem prometer. Nao prometa o mesmo resultado.`;
+        }
+      }
+    } catch (err) {
+      console.error("[fotos] nao consegui conferir as fotos do procedimento:", err instanceof Error ? err.message : err);
     }
   }
   const focusTexts = [
@@ -2823,6 +2919,12 @@ async function generateReplyUnlocked(
   let bookedOk = false; // book_appointment devolveu agendado:true nesta rodada
   let cancelOk = false; // manage_my_appointment cancelou de verdade nesta rodada
   let rescheduleOk = false; // manage_my_appointment remarcou de verdade nesta rodada
+  let bookedCount = 0; // quantas reservas book_appointment criou nesta rodada
+  const bookedSlots: ExistingSlot[] = []; // quais (dd/mm e hora)
+  let photosOk = false; // send_procedure_photos enviou de verdade nesta rodada
+  let claimNudged = false;
+  const existingSlots: ExistingSlot[] = apptRows.map((a) => { const iso = isoDateInZone(a.scheduledAt, tagTz); return { ddmm: `${iso.slice(8, 10)}/${iso.slice(5, 7)}`, time: hhmmOf(a.scheduledAt) }; });
+  const unsupportedClaim = (t: string): boolean => process.env.ALICE_REPLY_FACTS !== "off" && conclusionClaims(t).some((c) => (c.group && bookedCount < 2) || !claimIsSupported(c, [...existingSlots, ...bookedSlots], bookedOk || rescheduleOk));
   let promiseNudged = false;
   let requestNudged = false;
   let noOfferNudged = false;
@@ -2865,6 +2967,15 @@ async function generateReplyUnlocked(
         messages.push(choice);
         messages.push({ role: "system", content: PROMISE_NUDGE });
         callReason = "correction:promessa";
+        continue;
+      }
+      // Afirmou que esta agendado/confirmado/'te esperamos' SEM reserva criada nem existente (proposta no chat e aceite do cliente nao sao reserva): manda executar ou nao afirmar.
+      if (!claimNudged && canBook && !didTransfer && turn < 5 && finalText.trim() && unsupportedClaim(finalText)) {
+        claimNudged = true;
+        console.warn(`[conclusao-sem-reserva] resposta afirmou reserva sem evidencia - refazendo (conv ${conversation.id}): ${finalText.slice(0, 120)}`);
+        messages.push(choice);
+        messages.push({ role: "system", content: CLAIM_NUDGE });
+        callReason = "correction:conclusao_sem_reserva";
         continue;
       }
       // Ela NAO pediu horario nem agendamento: nada de lista de horarios nem oferta de avaliacao "do nada" (Clarinda: "Ok." virou 3 horarios de avaliacao).
@@ -2921,9 +3032,17 @@ async function generateReplyUnlocked(
         console.error(`Falha na ferramenta ${toolCall.function.name}:`, err);
         result = "Ocorreu um erro ao executar essa acao. Nao invente o resultado; peca desculpas e diga que vai confirmar com a equipe.";
       }
-      if (toolCall.function.name === "book_appointment" && result.includes('"agendado":true')) bookedOk = true;
+      if (toolCall.function.name === "book_appointment" && result.includes('"agendado":true')) {
+        bookedOk = true;
+        bookedCount++;
+        try { const q = (JSON.parse(result) as { quando?: string }).quando ?? ""; const mm = extractMentions(q); if (mm.dates[0] && mm.times[0]) bookedSlots.push({ ddmm: mm.dates[0], time: mm.times[0] }); } catch { /* sem o rotulo, o dia/hora segue provado pelas ferramentas de agenda */ }
+      }
+      if (toolCall.function.name === "send_procedure_photos" && result.includes('"enviado":true')) photosOk = true;
       if (toolCall.function.name === "manage_my_appointment" && result.includes('"cancelado":')) cancelOk = true;
-      if (toolCall.function.name === "manage_my_appointment" && result.includes('"remarcado":')) rescheduleOk = true;
+      if (toolCall.function.name === "manage_my_appointment" && result.includes('"remarcado":')) {
+        rescheduleOk = true;
+        try { const q = String((JSON.parse(result) as { remarcado?: string }).remarcado ?? ""); const mm = extractMentions(q); if (mm.dates[0] && mm.times[0]) bookedSlots.push({ ddmm: mm.dates[0], time: mm.times[0] }); } catch { /* sem o rotulo */ }
+      }
       if (guardOn && ["check_availability", "check_specific_time", "book_appointment"].includes(toolCall.function.name)) {
         absorbToolResult(slotState, toolCall.function.name, result, guardTz);
         slotToolUsed = true;
@@ -3230,6 +3349,29 @@ async function generateReplyUnlocked(
     finalText = URGENT_TEXT;
   }
 
+  if (finalText.trim() && !fixedReply && !didTransfer && usageClinic?.businessType !== "geral" && process.env.ALICE_REPLY_FACTS !== "off") {
+    // ACABAMENTO deterministico (sem IA), ANTES das validacoes finais: o texto validado e o que sai.
+    const lastOut = history.filter((m) => m.role !== "user").at(-1);
+    if (lastOut && Date.now() - lastOut.createdAt.getTime() < 12 * 3_600_000) finalText = stripRedundantGreeting(finalText); // novo "Oi" no meio da conversa
+    const stage = turnDec?.stage;
+    const interested =
+      !!turnDec && (stage === "descoberta" || stage === "solucao") && !situation.closeWith && (flow.intent === "info" || flow.intent === "price") &&
+      (flow.statedGoal || !!understanding?.chosen || !!understanding?.complaintOnly) && !plan?.handoff && !understanding?.declineState;
+    if (interested) {
+      finalText = stripGenericFarewell(finalText); // lead interessado sem proximo passo nao recebe "se precisar, estou a disposicao"
+      const evalName = bookingCatalog.find((pc) => /avalia/i.test(pc.name))?.name ?? null;
+      // UMA unica opcao aprovada e que agenda DIRETO: o convite e para o horario dela (nunca avaliacao no lugar); varias opcoes ou exige avaliacao: a avaliacao decide.
+      const onlyEligible = !understanding?.chosen && understanding?.complaintOnly && understanding.eligible.length === 1 ? bookingCatalog.find((pc) => pc.name === understanding.eligible[0]) : null;
+      const locked = plan?.gate.lockedProcedure ?? (onlyEligible && onlyEligible.bookingMode === "direct" ? onlyEligible.name : null);
+      const prevInvited = !!lastOut && (EVAL_OFFER_RE.test(normalizeReply(lastOut.content)) || offersSlots(lastOut.content) || /quer que eu veja um horario/.test(normalizeReply(lastOut.content)));
+      const endsAsk = /\?[\s\p{Extended_Pictographic}\uFE0F]*$/u.test(finalText.trim());
+      if (!prevInvited && !endsAsk && !EVAL_OFFER_RE.test(normalizeReply(finalText)) && !offersSlots(finalText)) {
+        if (locked) finalText = `${finalText.trim()}\n\nQuer que eu veja um horário para ${displayProcedureName(locked)}?`;
+        else if (evalName && !situation.forbidEvaluationOffer && (plan?.gate.evaluationAllowed ?? true)) finalText = `${finalText.trim()}\n\nQuer que eu veja um horário para sua avaliação?`;
+      }
+    }
+  }
+
   if (finalText.trim()) {
     const clinicTz = (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { timezone: true } }))?.timezone || "America/Sao_Paulo";
     finalText = fixWeekdayDatePairs(finalText, new Date(), clinicTz); // "sexta, 20/10" numa terca vira "terca, 20/10"
@@ -3247,6 +3389,18 @@ async function generateReplyUnlocked(
       const allUserMsgs = history.filter((m) => m.role === "user").map((m) => m.content);
       let complaint = trailingUser.length ? trailingUser : allUserMsgs.slice(-1);
       if (areasIn(complaint.join(" ")).size === 0) complaint = allUserMsgs.slice(-3);
+      const proRows = await prisma.professional.findMany({ where: { clinicId, active: true }, select: { name: true, qualification: true } });
+      const faqRows = await prisma.clinicFaq.findMany({ where: { clinicId }, select: { answer: true } });
+      const approvedPros = proRows.map((pr) => ({ name: pr.name, qualification: pr.qualification }));
+      const approvedUnits = [...new Set(unitNumbers([...bookingCatalog.flatMap((pc) => [pc.includedQuantity, pc.description, pc.benefits]), ...faqRows.map((f) => f.answer)].filter(Boolean).join("\n")))];
+      const ruleRows = await prisma.customRule.findMany({ where: { clinicId }, select: { instruction: true } });
+      const tmplRows = await prisma.messageTemplate.findMany({ where: { clinicId }, select: { body: true } });
+      const quoting = (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { quotePrices: true } }))?.quotePrices !== false;
+      const priceText = [...bookingCatalog.flatMap((pc) => [pc.description, pc.benefits]), ...faqRows.map((f) => f.answer), ...ruleRows.map((r) => r.instruction), ...tmplRows.map((t) => t.body)].filter(Boolean).join("\n");
+      const approvedPrices = [
+        ...(quoting ? bookingCatalog.flatMap((pc) => (pc.price != null ? [pc.price, ...(pc.offerInstallments && pc.maxInstallments ? [Math.round((pc.price / pc.maxInstallments) * 100) / 100, Math.ceil((pc.price / pc.maxInstallments) * 100) / 100, Math.floor((pc.price / pc.maxInstallments) * 100) / 100] : [])] : [])) : []),
+        ...priceValues(priceText),
+      ];
       const replyCtx: ReplyContext = {
           conversationId: conversation.id, tz: guardTz, now: new Date(), todayIso: isoDateInZone(new Date(), guardTz),
           situationKind: situation.kind,
@@ -3255,7 +3409,7 @@ async function generateReplyUnlocked(
           request: situation.request,
           trusted: fixedReply,
           agenda: usageClinic?.businessType !== "geral",
-          actions: { booked: bookedOk, cancelled: cancelOk, rescheduled: rescheduleOk, transferred: didTransfer },
+          actions: { booked: bookedOk, cancelled: cancelOk, rescheduled: rescheduleOk, transferred: didTransfer, bookedCount, bookedSlots, photosSent: photosOk },
           evidence: { cancelledRecently: cancelledEv > 0, rescheduledRecently: rescheduledEv > 0 },
           slots: { state: slotState, toolUsed: slotToolUsed, strict: knownStrict, loose: knownLoose, toolDates: [...toolDatesQueried] },
           upcoming: apptRows.map((a) => ({ dateIso: isoDateInZone(a.scheduledAt, guardTz), time: hhmmOf(a.scheduledAt), ddmm: `${isoDateInZone(a.scheduledAt, guardTz).slice(8, 10)}/${isoDateInZone(a.scheduledAt, guardTz).slice(5, 7)}` })),
@@ -3265,6 +3419,11 @@ async function generateReplyUnlocked(
           objective: understanding ? { concerns: understanding.objective.concerns, regions: understanding.objective.regions } : undefined,
           allowedProcedures: [...(understanding?.chosen ? [understanding.chosen.name] : []), ...(understanding?.options ?? []), ...apptRows.map((a) => a.procedure.name)],
           notOffered,
+          companion: companionContext,
+          professionals: approvedPros,
+          approvedUnits,
+          unitsKnown: approvedUnits.length > 0,
+          approvedPrices,
       };
       rememberReplyContext(replyCtx, finalText);
       // o mesmo contexto, resumido, acompanha a mensagem ate ela ser entregue: sobrevive a reinicio e a retomada tardia (apagado no estado final)

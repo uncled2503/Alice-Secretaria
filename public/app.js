@@ -5202,6 +5202,7 @@ function openProcedureModal(proc) {
   document.getElementById("pr2-benefits").value = proc?.benefits || "";
   document.getElementById("pr2-aliases").value = proc?.aliases || "";
   document.getElementById("pr2-timeline").value = proc?.resultTimeline || "";
+  document.getElementById("pr2-quantity").value = proc?.includedQuantity || "";
   document.getElementById("pr2-payment-link").value = proc?.paymentLink || "";
   document.getElementById("pr2-pix-key").value = proc?.pixKey || "";
 
@@ -5324,6 +5325,7 @@ document.getElementById("procedure-edit-form").addEventListener("submit", async 
     benefits: document.getElementById("pr2-benefits").value.trim(),
     aliases: document.getElementById("pr2-aliases").value.trim(),
     resultTimeline: document.getElementById("pr2-timeline").value.trim(),
+    includedQuantity: document.getElementById("pr2-quantity").value.trim(),
     paymentMethods: Array.from(document.querySelectorAll(".payment-method-btn.active")).map((b) => b.dataset.method),
     paymentLink: document.getElementById("pr2-payment-link").value.trim(),
     pixKey: document.getElementById("pr2-pix-key").value.trim(),
@@ -5535,6 +5537,7 @@ async function openProfessionalModal(prof) {
   document.getElementById("pf-id").value = prof?.id || "";
   document.getElementById("pf-name").value = prof?.name || "";
   document.getElementById("pf-title").value = prof?.title || "";
+  document.getElementById("pf-qualification").value = prof?.qualification || "";
   document.getElementById("pf-instagram").value = prof?.instagram || "";
   document.getElementById("pf-bio").value = prof?.bio || "";
   document.getElementById("pf-active").checked = prof ? !!prof.active : true;
@@ -5618,6 +5621,7 @@ document.getElementById("professional-form").addEventListener("submit", async (e
   const payload = {
     name: document.getElementById("pf-name").value.trim(),
     title: document.getElementById("pf-title").value.trim(),
+    qualification: document.getElementById("pf-qualification").value.trim(),
     instagram: document.getElementById("pf-instagram").value.trim(),
     bio: document.getElementById("pf-bio").value.trim(),
     color: activeColor ? activeColor.dataset.color : "",

@@ -8,6 +8,8 @@ import { removeSentences, splitSentences } from "./repetition.js";
 import { stripSlotOffers } from "./slotText.js";
 import { notOfferedIn, NOT_OFFERED_REPLY } from "./conduct.js";
 import type { ConcernId, ProcedureInfo } from "./concerns.js";
+import { claimIsSupported, claimsPhotosSent, conclusionClaims, GROUP_RE, qualificationProblems, unprovenPriceSentences, unprovenUnitSentences, type ExistingSlot, type ProRef } from "./replyFacts.js";
+import { fixRelativeDateLabels, fixRelativeDayLabels, fixWeekdayDatePairs } from "./relativeDays.js";
 
 // ---------------------------------------------------------------------------
 // VALIDACAO DA RESPOSTA FINAL (16/10/2026). A revisao por IA pode reescrever a resposta da Alice na hora da entrega; o texto novo NAO passou
@@ -32,7 +34,7 @@ export interface ReplyContext {
   request: SlotRequest; // o que ela pediu de dia/hora
   trusted: boolean; // texto exato da clinica (preparo do procedimento): nao se valida
   agenda: boolean; // o negocio tem agenda (clinica); loja (modo geral) nao tem: sem checagem de agendamento nem de dia/hora
-  actions: { booked: boolean; cancelled: boolean; rescheduled: boolean; transferred: boolean }; // o que as ferramentas FIZERAM nesta rodada
+  actions: { booked: boolean; cancelled: boolean; rescheduled: boolean; transferred: boolean; bookedCount?: number; bookedSlots?: ExistingSlot[]; photosSent?: boolean }; // o que as ferramentas FIZERAM nesta rodada (quantas reservas, quais, fotos enviadas)
   evidence: { cancelledRecently: boolean; rescheduledRecently: boolean }; // cancelou/remarcou ha pouco (diario)
   slots: { state: SlotState; toolUsed: boolean; strict: Known; loose: Known; toolDates: string[] }; // o que as ferramentas de agenda DEVOLVERAM
   upcoming: { dateIso: string; time: string; ddmm: string }[]; // horarios ATIVOS dela (cancelado nao entra)
@@ -44,9 +46,15 @@ export interface ReplyContext {
   objective?: { concerns: ConcernId[]; regions: string[] };
   allowedProcedures?: string[];
   notOffered?: string[];
+  // FATOS APROVADOS (cadastro): so o que esta aqui pode ser afirmado sobre formacao e quantidade
+  companion?: boolean; // a conversa e sobre agendar MAIS DE UMA pessoa (ela + acompanhante)
+  professionals?: ProRef[]; // equipe ativa com a formacao cadastrada (null = nao informada)
+  approvedUnits?: number[]; // quantidades (UI/unidades) que o cadastro sustenta
+  unitsKnown?: boolean; // o cadastro tem alguma quantidade para citar (se nao tem, qualquer numero de UI e inventado)
+  approvedPrices?: number[]; // valores (R$) que o cadastro/regras da clinica sustentam; qualquer outro valor citado e inventado
 }
 
-export type ProblemCode = "claims_booking" | "claims_cancel" | "claims_reschedule" | "claims_handoff" | "eval_offer" | "slot_offer_forbidden" | "slot_unproven" | "slot_request" | "relevance" | "not_offered";
+export type ProblemCode = "price_unproven" | "claims_group" | "claims_photos" | "unit_unproven" | "qualification" | "group_offer" | "claims_booking" | "claims_cancel" | "claims_reschedule" | "claims_handoff" | "eval_offer" | "slot_offer_forbidden" | "slot_unproven" | "slot_request" | "relevance" | "not_offered";
 export interface ReplyProblem { code: ProblemCode; detail: string }
 
 function fold(s: string): string {
@@ -93,6 +101,38 @@ export function checkFinalReply(text: string, ctx: ReplyContext, opts: { strict:
   if (ctx.agenda && claimsCancel(text) && !ctx.actions.cancelled && !ctx.evidence.cancelledRecently) add("claims_cancel", "diz que cancelou sem cancelamento executado");
   if (ctx.agenda && claimsReschedule(text) && !ctx.actions.rescheduled && !ctx.evidence.rescheduledRecently) add("claims_reschedule", "diz que remarcou sem remarcacao executada");
   if (claimsHandoff(text) && !ctx.actions.transferred) add("claims_handoff", "diz que encaminhou/vai encaminhar pra equipe sem transferencia registrada");
+
+  // CONCLUSAO de reserva por SIGNIFICADO e ORIGEM (nao so a palavra "agendei"): "confirmado", "seu horario ficou", "te esperamos as 14h", "voces estao marcados"...
+  // So vale se a reserva foi criada nesta rodada pela ferramenta, ou ja existe na agenda (e bate com o dia/hora citados). Proposta no chat e aceite do cliente nao sao reserva.
+  if (ctx.agenda) {
+    const existing: ExistingSlot[] = [...ctx.upcoming.map((a) => ({ ddmm: a.ddmm, time: a.time })), ...(ctx.actions.bookedSlots ?? [])];
+    const booked = ctx.actions.booked || ctx.actions.rescheduled; // reserva criada OU trocada nesta rodada pela ferramenta
+    const bookedCount = ctx.actions.bookedCount ?? (booked ? 1 : 0);
+    for (const c of (process.env.ALICE_REPLY_FACTS === "off" ? [] : conclusionClaims(text))) {
+      if (c.group && bookedCount < 2) { add("claims_group", c.sentence); continue; } // "os dois estao agendados" sem duas reservas confirmadas
+      if (!claimIsSupported(c, existing, booked)) { add("claims_booking", `afirma reserva/horario como feito sem reserva verificada: "${c.sentence.slice(0, 90)}"`); }
+    }
+    // uma unica reserva criada nao cobre duas pessoas
+    if (ctx.companion) {
+      for (const s of splitSentences(text)) {
+        const f = fold(s);
+        if (GROUP_RE.test(f) && extractMentions(s).times.length > 0 && !/\?/.test(s) && bookedCount < 2) add("group_offer", s);
+      }
+    }
+  }
+  // fotos: nao diz que enviou se a ferramenta nao enviou
+  const factsOn = process.env.ALICE_REPLY_FACTS !== "off"; // chave de reversao das travas de FATOS (conclusao por significado, fotos, quantidade, valor, formacao); as travas anteriores seguem
+  if (factsOn && claimsPhotosSent(text) && !ctx.actions.photosSent) add("claims_photos", "diz que enviou fotos sem envio confirmado pela ferramenta");
+  // quantidade (UI): so a que o cadastro sustenta; faixa inventada nunca
+  if (factsOn && (ctx.approvedUnits !== undefined || ctx.unitsKnown !== undefined)) {
+    for (const s of unprovenUnitSentences(text, ctx.approvedUnits ?? [])) add("unit_unproven", s);
+  }
+  // valores em R$: so os do cadastro (preco do procedimento, parcela, ou escritos nas regras/FAQ/mensagens). Valor de print, de conversa antiga ou de memoria nao e cadastro.
+  if (factsOn && ctx.approvedPrices !== undefined) for (const s of unprovenPriceSentences(text, ctx.approvedPrices)) add("price_unproven", s);
+  // formacao profissional: nunca inferida pelo titulo "Dra."
+  if (factsOn && ctx.professionals?.length) {
+    for (const q of qualificationProblems(text, ctx.professionals)) add("qualification", q.sentence);
+  }
 
   // oferta indevida
   const norm = fold(text).replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
@@ -150,9 +190,17 @@ export function sanitizeReply(text: string, problems: ReplyProblem[]): string | 
       if (term) drop.push(...splitSentences(out).filter((s) => notOfferedIn(s, [term]) && !NEGATES_OFFER_RE.test(fold(s))));
     }
   }
+  for (const p of problems) if (p.code === "unit_unproven" || p.code === "price_unproven" || p.code === "qualification" || p.code === "group_offer" || p.code === "claims_group") drop.push(p.detail);
+  if (problems.some((p) => p.code === "claims_booking")) {
+    for (const p of problems) if (p.code === "claims_booking") { const s = /: "(.*)"$/.exec(p.detail)?.[1]; if (s) drop.push(...splitSentences(out).filter((x) => x.startsWith(s.slice(0, 40)))); }
+  }
+  if (problems.some((p) => p.code === "claims_photos")) drop.push(...splitSentences(out).filter((x) => claimsPhotosSent(x)));
   if (drop.length) out = removeSentences(out, [...new Set(drop)]);
   out = out.trim();
-  return out && out !== text.trim() && out.length >= 12 ? out : null;
+  // Tirar uma afirmacao falsa nao pode deixar um 'Perfeito, Maria!' que soa como aceite: o que sobra precisa ter conteudo proprio (senao sai a resposta segura)
+  const factual = problems.some((p) => ["claims_booking", "claims_group", "group_offer", "claims_photos", "unit_unproven", "price_unproven", "qualification"].includes(p.code));
+  const minLen = factual && drop.length ? 45 : 12;
+  return out && out !== text.trim() && out.length >= minLen ? out : null;
 }
 
 export const NEUTRAL_REPLY = "Combinado! Qualquer coisa é só me chamar. 💗";
@@ -168,7 +216,10 @@ export function safeReplyFor(ctx: ReplyContext | null, problems: ReplyProblem[])
       ? "Pra eu te ajudar certinho: qual dos seus horários você quer ajustar, e para quando fica melhor pra você?"
       : "Pra eu te ajudar certinho: me confirma o dia e o horário do agendamento que você quer ajustar?";
   }
-  if (codes.has("claims_booking")) return "Pra eu te ajudar certinho: qual dia e turno (manhã, tarde ou noite) ficam melhores pra você?";
+  if (codes.has("claims_group") || codes.has("group_offer")) return "Pra duas pessoas eu organizo cada atendimento separado, um de cada vez. Me passa o nome completo e um telefone de contato de cada uma? Só confirmo o que estiver realmente reservado na agenda. 💗";
+  if (codes.has("claims_photos")) return "Não consegui enviar as fotos agora, mas posso te explicar direitinho como funciona e o que esperar. O que você gostaria de saber? 💗";
+  if (codes.has("unit_unproven") || codes.has("price_unproven") || codes.has("qualification")) return "Esse detalhe eu prefiro confirmar com a equipe antes de te passar, pra não te informar nada errado. Já deixo registrado pra pessoa certa te responder. 💗";
+  if (codes.has("claims_booking")) return "Pra eu te ajudar certinho: qual dia e turno (manhã, tarde ou noite) ficam melhores pra você? Só confirmo o horário depois que ele estiver reservado na agenda.";
   if (codes.has("slot_unproven") || codes.has("slot_request")) return "Pra eu te passar os horários certinhos: você prefere manhã, tarde ou noite? E algum dia da semana fica melhor pra você?";
   if (codes.has("not_offered")) return "Esse serviço não faz parte do que a gente oferece por aqui. Me conta o que você gostaria de tratar que eu vejo as opções que temos? 💗";
   if (codes.has("relevance")) return "Entendi! Pra isso quem indica o melhor caminho com segurança é a profissional. Me conta um pouco mais do que você gostaria de tratar? 💗";
@@ -219,6 +270,7 @@ export function serializeReplyContext(ctx: ReplyContext, complaintCount: number)
     },
     upcoming: ctx.upcoming.slice(0, 50), complaintCount: Math.max(0, Math.min(complaintCount, 10)), silentHandoff: ctx.silentHandoff, confirmationGuard: !!ctx.confirmationGuard,
     objective: ctx.objective, allowedProcedures: ctx.allowedProcedures?.slice(0, 50), notOffered: ctx.notOffered?.slice(0, 50),
+    companion: !!ctx.companion, professionals: ctx.professionals?.slice(0, 40), approvedUnits: ctx.approvedUnits?.slice(0, 40), unitsKnown: ctx.unitsKnown, approvedPrices: ctx.approvedPrices?.slice(0, 200),
   });
 }
 
@@ -239,6 +291,7 @@ export function deserializeReplyContext(json: string | null | undefined, convers
       },
       upcoming: p.upcoming ?? [], complaintTexts, silentHandoff: !!p.silentHandoff, confirmationGuard: !!p.confirmationGuard,
       ...(p.objective ? { objective: p.objective } : {}), ...(p.allowedProcedures ? { allowedProcedures: p.allowedProcedures } : {}), ...(p.notOffered ? { notOffered: p.notOffered } : {}),
+      ...(p.companion ? { companion: true } : {}), ...(p.professionals ? { professionals: p.professionals } : {}), ...(p.approvedUnits ? { approvedUnits: p.approvedUnits } : {}), ...(p.unitsKnown !== undefined ? { unitsKnown: p.unitsKnown } : {}), ...(p.approvedPrices ? { approvedPrices: p.approvedPrices } : {}),
     };
   } catch {
     return null;
@@ -279,7 +332,12 @@ export interface FinalChoice {
 // Escolhe o que sai: a reescrita da revisao SE passar nas travas; senao a original SE continuar valida; senao a original limpa (sem a oferta indevida);
 // senao uma resposta curta e segura. So "diz que encaminhou" sem transferencia nao descarta o texto: pede a transferencia (executada pelo chamador).
 export function chooseFinalReply(p: { ctx: ReplyContext | null; original: string; rewritten?: string | null; catalog?: { name: string; aliases?: string | null }[] }): FinalChoice {
-  const { ctx, original } = p;
+  const { ctx } = p;
+  // Dia da semana x data e rotulos 'hoje/amanha' sao montados pelo CODIGO a partir da data validada, tanto na original quanto na reescrita da revisao: o texto que
+  // passa pelas travas e exatamente o que sai (nada e alterado depois da validacao).
+  const fixDates = (t: string): string => (ctx ? fixRelativeDateLabels(fixRelativeDayLabels(fixWeekdayDatePairs(t, ctx.now, ctx.tz), ctx.now, ctx.tz), ctx.now, ctx.tz) : t);
+  const original = fixDates(p.original);
+  const rewritten = p.rewritten ? fixDates(p.rewritten) : p.rewritten;
   const rejected: FinalChoice["rejected"] = [];
   const evaluate = (text: string, strict: boolean, base?: string): ReplyProblem[] =>
     ctx ? checkFinalReply(text, ctx, { strict, catalog: p.catalog }) : base !== undefined ? checkRewriteWithoutContext(base, text) : [];
@@ -290,8 +348,8 @@ export function chooseFinalReply(p: { ctx: ReplyContext | null; original: string
     return null;
   };
 
-  if (p.rewritten) {
-    const hit = accept("rewrite", p.rewritten, evaluate(p.rewritten, true, original));
+  if (rewritten) {
+    const hit = accept("rewrite", rewritten, evaluate(rewritten, true, original));
     if (hit) return hit;
   }
   const origProblems = evaluate(original, false);
@@ -302,5 +360,6 @@ export function chooseFinalReply(p: { ctx: ReplyContext | null; original: string
     const hit = accept("cleaned", cleaned, evaluate(cleaned, false));
     if (hit) return hit;
   }
-  return { text: safeReplyFor(ctx, origProblems), source: "safe", needsHandoff: false, rejected };
+  const factual = origProblems.some((x) => x.code === "unit_unproven" || x.code === "price_unproven" || x.code === "qualification" || x.code === "claims_group" || x.code === "group_offer"); // a resposta segura promete que a equipe/pessoa certa responde: o encaminhamento e EXECUTADO
+  return { text: safeReplyFor(ctx, origProblems), source: "safe", needsHandoff: factual, rejected };
 }

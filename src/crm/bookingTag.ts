@@ -36,8 +36,12 @@ export async function getBookingTag(patientId: string, tz: string): Promise<Book
 
 // O que a Alice le (so ela): a etiqueta e a regra que decorre dela.
 export function bookingTagPrompt(tag: BookingTag, staffSaidBooked: boolean): string {
-  if (tag.status === "agendado" || staffSaidBooked) {
-    const detail = tag.status === "agendado" ? tag.text : "Agendado: a equipe informou que o horario esta marcado (ainda nao aparece na agenda da Alice)";
+  if (tag.status !== "agendado" && staffSaidBooked) {
+    // fala da equipe NAO e retorno de ferramenta: sem reserva na agenda nada pode ser afirmado como agendado/confirmado
+    return "ETIQUETA INTERNA DESTE LEAD (so voce ve; nunca mencione a etiqueta): a EQUIPE escreveu no chat que combinou/marcou um horario, mas NAO EXISTE reserva dela na agenda. REGRA: NAO afirme que esta agendado/confirmado e NAO diga 'te esperamos'. Se ela aceitar ('pode ser', 'fechado') uma proposta de horario da equipe, efetive pela agenda (check_specific_time e book_appointment, com o procedimento e o horario que a equipe propos) ou chame transfer_to_human para a equipe lancar; so diga 'agendado' DEPOIS de agendado:true. NAO ofereca horarios novos, avaliacao nem outro procedimento por conta propria (a equipe ja estava combinando): so efetive o que a equipe propos quando ela aceitar, e nao reinicie a venda.";
+  }
+  if (tag.status === "agendado") {
+    const detail = tag.text;
     return `ETIQUETA INTERNA DESTE LEAD (so voce ve; nunca mencione a etiqueta): ${detail}. REGRA: este lead JA ESTA AGENDADO. NAO tente agendar de novo: nao ofereca horarios, nao ofereca avaliacao nem outro procedimento, nao pergunte dia e turno. So responda o que ele perguntar (endereco, preparo, reagendar ou cancelar quando ele pedir). Se ele pedir EXPLICITAMENTE outro procedimento, mais um horario ou remarcar, ai sim atenda o pedido. Se citar um horario diferente de "${tag.status === "agendado" ? tag.items[0].label : "o combinado"}", nao confirme: confira na agenda real acima.`;
   }
   return "ETIQUETA INTERNA DESTE LEAD (so voce ve; nunca mencione a etiqueta): Nao agendado. Siga o fluxo normal: identifique o procedimento que ele quer e agende; avaliacao so se ele nao souber.";

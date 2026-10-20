@@ -10,6 +10,7 @@
 // ---------------------------------------------------------------------------
 
 import { isCourtesyOnly } from "./courtesy.js";
+import { isoDateInZone } from "../scheduling/time.js";
 import { extractMentions } from "./slotGuard.js";
 import { declinesOptions, wantsSchedule } from "./salesFlow.js";
 import { describeSlotRequest, isEmptyRequest, parseSlotRequest, type SlotRequest } from "./slotRequest.js";
@@ -58,6 +59,8 @@ export interface SituationInput {
   trailing: string[]; // mensagens novas da pessoa, sem resposta
   now: Date;
   todayIso: string;
+  tz?: string; // fuso da clinica: permite ancorar 'amanha' na DATA DA MENSAGEM (processamento depois da meia-noite nao desloca o compromisso)
+  refIso?: string; // dia (fuso da clinica) em que a mensagem nova da pessoa foi escrita; padrao: todayIso
   upcoming: UpcomingAppt[];
   pastVisits: number;
   schedulingSignal: boolean; // esta mensagem pede/aceita/recusa horario (ou a conversa esta no meio do agendamento): so entao a Alice pode listar horarios
@@ -142,7 +145,7 @@ export function resolveSituation(i: SituationInput): Situation {
   const trailText = i.trailing.join(" \n ");
   const trailFold = fold(trailText);
   const userRecent = i.history.filter((m) => m.role === "user").slice(-6).map((m) => m.content);
-  const request = parseSlotRequest([...userRecent.slice(-5), ...i.trailing], i.todayIso);
+  const request = parseSlotRequest([...userRecent.slice(-5), ...i.trailing], i.refIso ?? i.todayIso);
   // o horario que ela JA TEM nao e pedido novo
   const currentTimes = new Set(i.upcoming.map((a) => a.time));
   request.times = request.times.filter((t) => !currentTimes.has(t) || !i.upcoming.length);
@@ -196,6 +199,17 @@ export function resolveSituation(i: SituationInput): Situation {
       forbidEvaluationOffer: true,
       forbidSlotOffer: true,
       directive: "Ela so agradeceu a mensagem automatica da clinica. Responda com UMA frase curta de agradecimento e PARE: sem pergunta, sem oferta de avaliacao, sem horarios.",
+    });
+  }
+
+  // ----- 3a2) "OK, obrigada" a uma PERGUNTA de convite (ex.: "quer que eu veja um horario para a avaliacao?"): agradecer sem aceitar nao e aceite. Agradece e para, sem
+  //        listar horarios nem repetir o convite. "ok" SOZINHO (sem agradecimento) ou com palavra de aceite ("sim", "quero", "pode") continua sendo aceite. -----
+  if (lastOut && /\?/.test(lastOut.content) && i.trailing.length && i.trailing.every((t) => isCourtesyOnly(t)) && /\b(obrigad\w*|obg|valeu|vlw|agradec\w*)\b/.test(trailFold) && !/\b(sim|quero|pode|por favor|claro|bora|vamos|aceito|topo|fechado)\b/.test(trailFold)) {
+    return base("courtesy_ack", "ela agradeceu (sem aceitar) uma pergunta de convite", {
+      closeWith: "thanks",
+      forbidEvaluationOffer: true,
+      forbidSlotOffer: true,
+      directive: "Ela agradeceu sem aceitar o convite. Responda com UMA frase curta de agradecimento e PARE: sem repetir o convite, sem horarios, sem nova pergunta.",
     });
   }
 
@@ -291,7 +305,7 @@ export function resolveSituation(i: SituationInput): Situation {
   const schedulingReply =
     wantsSchedule(trailText) || declinesOptions(trailText) || !isEmptyRequest(request) || ACCEPT_SHORT_RE.test(trailFold.trim()) || /\b(nao da|nao posso|nao consigo|nao rola)\b/.test(trailFold);
   if ((staffTalk || resumed) && schedulingReply) {
-    const prop = lastStaff ? parseSlotRequest([lastStaff.content], i.todayIso) : null;
+    const prop = lastStaff ? parseSlotRequest([lastStaff.content], i.tz ? isoDateInZone(lastStaff.createdAt, i.tz) : i.todayIso) : null; // 'amanha' da EQUIPE = dia seguinte ao dia em que ela escreveu
     const proposed = prop && (prop.dates.length || prop.times.length) ? describeSlotRequest(prop) : "";
     return base("staff_followup", "a EQUIPE estava combinando o horario com ela e a Alice esta retomando: continuar de onde a equipe parou", {
       forbidEvaluationOffer: false,

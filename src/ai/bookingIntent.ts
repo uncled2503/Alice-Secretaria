@@ -223,8 +223,10 @@ export function offersSlots(text: string): boolean {
 // O agendamento feito na mao (ou so no Clinica Experts) pode nao estar na agenda da Alice ainda: a pessoa nao pode voltar a receber oferta de
 // horario (Adriana, 15/10: a equipe fechou o horario e a Alice, ao ver "obrigada", ofereceu drenagem de novo).
 const STAFF_BOOKED_RE = /\b(agendamento|horario)\b.{0,40}\b(concluid|confirmad|realizad|marcad|agendad|garantid)|\b(esta|ficou|foi|fica)\s+(agendad|marcad|confirmad|garantid)|\bagendei\b|\bmarquei\b/;
+// So conta a FRASE que afirma (nao pergunta nem proposta/condicional): "posso agendar amanha as 12h?" e "vamos concluir o agendamento" NAO dizem que esta marcado.
+const STAFF_HYPOTHETICAL_RE = /\?|\b(posso|podemos|poderia|gostaria|quer|queres|se |caso|vou |irei|vamos|para eu|pra eu|preciso|precisamos|falta|depois de|antes de|assim que|quando)\b/;
 export function staffConfirmedBooking(history: BookingMessage[], lookback = 20): boolean {
   return history
     .slice(-lookback)
-    .some((m) => m.role === "human" && STAFF_BOOKED_RE.test(fold(m.content)));
+    .some((m) => m.role === "human" && m.content.split(/(?<=[.!?])\s+|\n+/).some((s) => { const f = fold(s); return STAFF_BOOKED_RE.test(f) && !STAFF_HYPOTHETICAL_RE.test(f); }));
 }

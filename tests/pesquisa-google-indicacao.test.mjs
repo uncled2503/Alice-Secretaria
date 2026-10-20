@@ -723,7 +723,7 @@ test("INTEGRADO: atendimento elegivel -> pesquisa -> nota -> agradecimento + lin
   // 4) persistencia: etapas, ordem, versao
   const steps = await prisma.followUpDispatch.findMany({ where: { patientId: p.id }, orderBy: { createdAt: "asc" } });
   assert.deepEqual(steps.map((s) => [s.flow, s.state]), [["pesquisa", "sent"], ["indicacao", "sent"]]);
-  assert.ok(steps.every((s) => /^2026-10-1/.test(s.version)));
+  assert.ok(steps.every((s) => /^2026-10-/.test(s.version)));
 
   // 5) diagnostico da pessoa
   const trail = await flow.surveyTrail(c.id, p.id, t);
@@ -734,7 +734,7 @@ test("INTEGRADO: atendimento elegivel -> pesquisa -> nota -> agradecimento + lin
   assert.deepEqual(trail.etapas.map((e) => [e.flow, e.state]).sort(), [["indicacao", "sent"], ["pesquisa", "sent"]]);
   assert.equal(trail.linkDoGoogle.situacao, "pode ser enviado");
   assert.equal(trail.linkDoGoogle.confirmadoPor, "teste");
-  assert.match(trail.versao, /^2026-10-1/);
+  assert.match(trail.versao, /^2026-10-/);
   const jobs = await diagnoseJobs(c.id, sp("2026-10-15T00:00"), sp("2026-10-16T00:00"), sp("2026-10-15T13:10"));
   assert.ok(jobs.find((j) => j.job === "pesquisa-satisfacao" && j.sent === 1));
 });

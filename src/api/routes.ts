@@ -2354,6 +2354,7 @@ type ProcedureBody = {
   benefits?: string;
   aliases?: string;
   resultTimeline?: string;
+  includedQuantity?: string | null; // quantidade INCLUIDA na oferta (ex.: "50 UI"): dado comercial aprovado, nao recomendacao individual
   // Substitui TODAS as fotos do procedimento quando enviado (nao acumula) -
   // mesmo padrao de "set" ja usado pra relacoes many-to-many nesse arquivo.
   photos?: { dataUrl: string; caption?: string | null }[];
@@ -2377,6 +2378,7 @@ function procedureWriteData(body: ProcedureBody) {
     ...(body.benefits !== undefined ? { benefits: body.benefits || null } : {}),
     ...(body.aliases !== undefined ? { aliases: body.aliases || null } : {}),
     ...(body.resultTimeline !== undefined ? { resultTimeline: body.resultTimeline || null } : {}),
+    ...(body.includedQuantity !== undefined ? { includedQuantity: (body.includedQuantity ?? "").trim().slice(0, 60) || null } : {}),
   };
 }
 
@@ -2581,6 +2583,7 @@ apiRouter.post(
         clinicId: clinic.id,
         name,
         title: title?.trim() || null,
+        qualification: ((req.body as { qualification?: string }).qualification ?? "").trim().slice(0, 80) || null, // formacao informada pela clinica (o tratamento "Dra." nao indica formacao)
         instagram: instagram || null,
         bio: bio || null,
         color: color || null,
@@ -2637,6 +2640,7 @@ apiRouter.put(
       data: {
         ...(name !== undefined ? { name } : {}),
         ...(title !== undefined ? { title: title?.trim() || null } : {}),
+        ...((req.body as { qualification?: string }).qualification !== undefined ? { qualification: ((req.body as { qualification?: string }).qualification ?? "").trim().slice(0, 80) || null } : {}),
         ...(instagram !== undefined ? { instagram: instagram || null } : {}),
         ...(bio !== undefined ? { bio: bio || null } : {}),
         ...(color !== undefined ? { color: color || null } : {}),

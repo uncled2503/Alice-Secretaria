@@ -77,7 +77,7 @@ test("divergencia: agenda 08:00 x clinica 09:30 no mesmo dia; igual ou outro dia
 test("agenda velha: o CE tem 09:30 -> a Alice corrige o horario e nao ha mais divergencia", async () => {
   const { p, a } = await paciente("Rita Oliveira", "uuid-rita");
   handler = (u) => (u.pathname.endsWith("/bookings") ? json({ data: [{ uuid: "res-1", starts_at: "2026-10-20T09:30:00-03:00", status: "scheduled", patient: { uuid: "uuid-rita", name: "Rita Oliveira" } }] }) : json({}, 404));
-  const r = await checkClinicTimeConflicts(clinic.id, { id: p.id, name: p.name, ceUuid: p.ceUuid }, hist, TZ);
+  const r = await checkClinicTimeConflicts(clinic.id, { id: p.id, name: p.name, ceUuid: p.ceUuid }, hist, TZ, NOW);
   assert.equal(r.healed, 1);
   assert.equal(r.remaining.length, 0);
   const depois = await prisma.appointment.findUnique({ where: { id: a.id } });
@@ -89,7 +89,7 @@ test("agenda velha: o CE tem 09:30 -> a Alice corrige o horario e nao ha mais di
 test("o CE tambem nao confirma o horario da clinica: sobra a divergencia (a Alice nao afirma nada)", async () => {
   const { p, a } = await paciente("Maria Souza", "uuid-maria");
   handler = (u) => (u.pathname.endsWith("/bookings") ? json({ data: [{ uuid: "res-2", starts_at: "2026-10-20T08:00:00-03:00", status: "scheduled", patient: { uuid: "uuid-maria", name: "Maria Souza" } }] }) : json({}, 404));
-  const r = await checkClinicTimeConflicts(clinic.id, { id: p.id, name: p.name, ceUuid: p.ceUuid }, hist, TZ);
+  const r = await checkClinicTimeConflicts(clinic.id, { id: p.id, name: p.name, ceUuid: p.ceUuid }, hist, TZ, NOW);
   assert.equal(r.healed, 0);
   assert.equal(r.remaining.length, 1);
   assert.equal((await prisma.appointment.findUnique({ where: { id: a.id } })).scheduledAt.toISOString(), "2026-10-20T11:00:00.000Z", "nada e alterado");
@@ -98,7 +98,7 @@ test("o CE tambem nao confirma o horario da clinica: sobra a divergencia (a Alic
 test("CE fora do ar: nao corrige nada e a divergencia continua (equipe resolve)", async () => {
   const { p } = await paciente("Joana Lima", "uuid-joana");
   handler = () => { throw new Error("rede caiu"); };
-  const r = await checkClinicTimeConflicts(clinic.id, { id: p.id, name: p.name, ceUuid: p.ceUuid }, hist, TZ);
+  const r = await checkClinicTimeConflicts(clinic.id, { id: p.id, name: p.name, ceUuid: p.ceUuid }, hist, TZ, NOW);
   assert.equal(r.healed, 0);
   assert.equal(r.remaining.length, 1);
 });

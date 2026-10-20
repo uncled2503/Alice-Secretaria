@@ -70,7 +70,14 @@ test("o que a Alice le: Agendado = nao tenta agendar de novo; Nao agendado = flu
   assert.match(p1, /NAO tente agendar de novo/);
   assert.match(p1, /nunca mencione a etiqueta/);
   assert.match(p1, /EXPLICITAMENTE outro procedimento, mais um horario ou remarcar/);
-  assert.match(bookingTagPrompt({ status: "nao_agendado", items: [], text: "Nao agendado" }, true), /JA ESTA AGENDADO/, "a equipe disse que marcou (ainda nao na agenda da Alice)");
+  // A equipe DISSE no chat que marcou, mas nao ha reserva na agenda da Alice: fala humana nao e retorno de ferramenta. Nao re-oferece horario (a equipe ja combinava), mas tambem
+  // NUNCA afirma agendado/confirmado: efetiva pela agenda quando a pessoa aceita a proposta, ou passa para a equipe.
+  const staffOnly = bookingTagPrompt({ status: "nao_agendado", items: [], text: "Nao agendado" }, true);
+  assert.doesNotMatch(staffOnly, /JA ESTA AGENDADO/);
+  assert.match(staffOnly, /NAO EXISTE reserva dela na agenda/);
+  assert.match(staffOnly, /NAO afirme que esta agendado\/confirmado/);
+  assert.match(staffOnly, /NAO ofereca horarios novos/);
+  assert.match(staffOnly, /check_specific_time e book_appointment/);
   assert.match(bookingTagPrompt({ status: "nao_agendado", items: [], text: "Nao agendado" }, false), /Nao agendado\. Siga o fluxo normal/);
   assert.equal(renderBookingTag([]), "Nao agendado");
 });

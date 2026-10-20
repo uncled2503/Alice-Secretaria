@@ -240,3 +240,24 @@ test("remarcar e o CE RECUSA a troca: volta ao horario antigo, nada de 'remarque
   assert.equal(a.scheduledAt.getTime(), antigo.getTime(), "o horario antigo continua valendo");
   assert.ok(await prisma.activityLog.findFirst({ where: { patientId: c.patient.id, type: "ce_mirror_failed" } }));
 });
+
+test("CE com resultado INCERTO ao criar (rede caiu): nao diz 'agendado', registra o incerto e NAO tenta criar de novo (evita reserva em duplicidade); a equipe confere", async () => {
+  reset();
+  const c = await cenario("Gabi Souza", [["user", "Quero drenagem amanha as 15h"]]);
+  cePost = () => { throw new Error("socket hang up"); };
+  const resultados = [];
+  script = [
+    tool("book_appointment", { procedure_name: "Drenagem", date: DIA, time: "15:00", professional_id: suelen.id }),
+    (body) => { resultados.push(lastTool(body)); return tool("book_appointment", { procedure_name: "Drenagem", date: DIA, time: "15:00", professional_id: suelen.id }); }, // o modelo insiste
+    (body) => { resultados.push(lastTool(body)); return tool("transfer_to_human", { reason: "Reserva com resultado incerto no CE", summary: "Drenagem amanha 15h: o CE pode ter criado a reserva" }); },
+    { content: "" },
+  ];
+  await generateReply(c.conv.id);
+  assert.equal(resultados[0].agendado, false);
+  assert.equal(resultados[0].incerto, true);
+  assert.match(resultados[0].instrucao, /NAO diga que agendou e NAO tente de novo/);
+  assert.equal(resultados[1].agendado, false);
+  assert.match(resultados[1].motivo, /INCERTO/);
+  assert.equal(ceLog.filter((l) => l.method === "POST" && l.path.endsWith("/bookings")).length, 1, "so UMA tentativa de criar no CE: sem duplicidade");
+  assert.ok(await prisma.activityLog.findFirst({ where: { patientId: c.patient.id, type: "ce_mirror_uncertain" } }), "o incerto fica registrado para a equipe conferir");
+});

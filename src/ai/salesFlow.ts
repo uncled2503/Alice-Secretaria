@@ -7,6 +7,7 @@
 // ---------------------------------------------------------------------------
 
 import { chosenSlotDirective, wantedDirective, type ChosenSlot, type Wanted } from "./bookingIntent.js";
+import { asksOpeningHours } from "./replyFacts.js";
 import { asksDiscount, detectObjection, extractQuestions, interpretAnswer, isGoalCorrection, type AnswerMeaning, type ObjectionKind } from "./turnReading.js";
 
 function fold(s: string): string {
@@ -40,6 +41,8 @@ export interface TurnReading {
   objection: ObjectionKind | null;
   discountAsk: boolean;
   questions: string[]; // perguntas feitas nas mensagens novas: todas precisam de resposta
+  asksHours: boolean; // perguntou o EXPEDIENTE da clinica (dias/horarios de atendimento): nao e pedido de vagas
+  infoQuestionOnly: boolean; // pergunta INFORMATIVA (sessoes, duracao, o que inclui...): responde, nao muda para a agenda
 }
 
 const SCHEDULE_RE =
@@ -129,13 +132,15 @@ export function analyzeFlow(input: {
   // ALICE_TURN_READING=off desliga a leitura do turno (volta a jogada generica anterior); padrao: ligada
   const readingOn = process.env.ALICE_TURN_READING !== "off";
   const reading: TurnReading = !readingOn
-    ? { meaning: null, prevQuestion: "", goalCorrection: false, objection: null, discountAsk: false, questions: [] }
+    ? { meaning: null, prevQuestion: "", goalCorrection: false, objection: null, discountAsk: false, questions: [], asksHours: false, infoQuestionOnly: false }
     : {
     ...(() => { const r = interpretAnswer(lastAssistant, trailing); return { meaning: r.meaning, prevQuestion: r.prev.text }; })(),
     goalCorrection: isGoalCorrection(trailText),
     objection: detectObjection(trailText),
     discountAsk: asksDiscount(trailText),
     questions: extractQuestions(trailing),
+    asksHours: asksOpeningHours(trailText),
+    infoQuestionOnly: false, // calculado abaixo (depende de ter pedido/aceito horario)
   };
   const declined = declinesOptions(trailText) && !proposesTime && !reading.goalCorrection && (slotsOffered || evalOffered || scheduleAsked);
 
@@ -156,13 +161,19 @@ export function analyzeFlow(input: {
   // "Quero uma limpeza de pele": pediu um procedimento do catalogo pelo nome = quer agendar ESSE (nao e so curiosidade). Pergunta de valor/informacao nao conta.
   const namesProcedure = !reading.goalCorrection && input.wanted !== undefined && (input.wanted.kind === "specific" || input.wanted.kind === "options") && /\b(quero|queria|gostaria|tenho interesse|interesse em|fazer|marcar)\b/.test(fold(trailText)) && !priceAsked && !/\b(saber|informac\w*|duvida|como funciona|explic\w*|o que e)\b/.test(fold(trailText));
   const awaitingName = input.awaitingName === true && !hasBooking;
-  const wantsToBook = wantsSchedule(trailText) || accepted || gaveAvailability || !!chosen || namesProcedure || awaitingName;
+  // Pergunta INFORMATIVA (quantas sessoes? quanto tempo dura? inclui radiofrequencia?) nao e pedido de agenda: responde primeiro. So conta quando a fala nao traz nada de
+  // horario/dia/aceite, nao escolheu horario e nao esta entregando o nome de um agendamento em andamento.
+  const SCHED_WORD_RE = /\b(horario|horarios|vaga|vagas|agendar|agenda|marcar|marca|dia|dias|hora|horas|amanha|hoje|segunda|terca|quarta|quinta|sexta|sabado|domingo|manha|tarde|noite|disponivel|disponibilidade|encaixe|encaixar)\b/;
+  const awaitingNameEarly = input.awaitingName === true && !hasBooking;
+  if (readingOn && !priceAsked && reading.questions.length > 0 && !reading.asksHours && !hasBooking && !accepted && !gaveAvailability && !input.chosen && !awaitingNameEarly && !wantsSchedule(trailText) && !SCHED_WORD_RE.test(trailFold)) reading.infoQuestionOnly = true;
+  const hoursOnly = reading.asksHours && !accepted && !input.chosen && !awaitingNameEarly;
+  const wantsToBook = (wantsSchedule(trailText) || accepted || gaveAvailability || !!chosen || namesProcedure || awaitingName) && !hoursOnly;
 
   // Pedido ANTIGO de horario (scheduleAsked) so conta se a conversa ainda esta no meio do agendamento (a ultima fala ofereceu horario ou perguntou
   // de agendar). Antes valia pra sempre: depois de a pessoa pedir horario uma vez, TODA mensagem ("Ok.", "Nao.", "Pra minha amiga.") virava "va
   // direto ao agendamento" e a Alice listava horarios de avaliacao do nada (Clarinda, 16/10).
   // "Recente" = pediu horario numa das ULTIMAS 4 falas dela (a conversa ainda e de agendamento: ela responde as perguntas de qualificacao da Alice).
-  const scheduleRecent = !hasBooking && userAll.slice(-4).some((m) => wantsSchedule(m));
+  const scheduleRecent = !hasBooking && !hoursOnly && !reading.infoQuestionOnly && userAll.slice(-4).some((m) => wantsSchedule(m));
   const midScheduling = slotsOffered || lastOffered;
   // Recusou a oferta ou disse que vai pensar: nao ha pedido de agenda neste turno (mesmo que ela tenha pedido horario antes na conversa).
   const schedulingSignal = (wantsToBook || (declined && midScheduling) || scheduleRecent) && !refusesOffer && !hesitates;
@@ -266,8 +277,10 @@ const OBJECTION_MOVE: Record<ObjectionKind, string> = {
   bad_experience: "EXPERIENCIA ANTERIOR RUIM. Acolha sem minimizar nem julgar a outra clinica, pergunte (UMA vez, curta) o que aconteceu SE isso mudar a orientacao e explique o que o cadastro aprovado diz sobre o procedimento e a avaliacao individual. Nao prometa que 'aqui sera diferente' nem resultado.",
 };
 
+const HOURS_MOVE = "Ela perguntou o EXPEDIENTE da clinica (dias e horarios de atendimento), NAO por vagas. Responda PRIMEIRO isso, com o expediente cadastrado no contexto (dias e horas de funcionamento; a jornada de uma profissional so se ela perguntou dela). NAO consulte a agenda, NAO liste vagas de um dia e NAO volte ao assunto anterior. Se nao der para saber se ela quer o expediente ou vagas para marcar, faca UMA pergunta curta; so ofereca ver vagas como continuacao, depois de responder.";
+
 export function refineMove(move: string, intent: Intent, r: TurnReading, ctx: { priceAsked: boolean; hasBooking: boolean; noPrice: string }): string {
-  let out = move;
+  let out = r.asksHours ? HOURS_MOVE : move;
   // 1) resposta curta interpretada (so onde a jogada generica seria "descubra"/"explique de novo")
   if (["info", "price", "returning"].includes(intent)) {
     if (r.meaning === "experience_none")
@@ -278,6 +291,12 @@ export function refineMove(move: string, intent: Intent, r: TurnReading, ctx: { 
       out = "Ela ACEITOU a explicacao ('" + r.prevQuestion + "' -> sim). Isso NAO e pedido de agendamento: NAO ofereca horarios nem avaliacao agora e NAO agende. Explique em 2 ou 3 frases, so com o que esta CADASTRADO (o que e, como funciona, o que esperar), e termine perguntando se ficou alguma duvida; so proponha ver horarios se ela ja demonstrou querer fazer." + ctx.noPrice;
     else if (r.meaning === "declines_info")
       out = "Ela disse NAO a oferta de explicar ('" + r.prevQuestion + "'). Respeite em UMA frase, sem insistir; pergunte apenas se ha algo especifico que ela queira saber. NAO ofereca avaliacao nem horarios." + ctx.noPrice;
+  }
+  // 1b) pergunta INFORMATIVA (sessoes, duracao, o que inclui): a jogada generica de descoberta/horario sai; vale responder com o cadastro aprovado
+  if (r.infoQuestionOnly && ["info", "price", "returning"].includes(intent) && !r.meaning) {
+    const INFO_PREFIX = "Ela fez uma pergunta INFORMATIVA (nao pediu horario): responda PRIMEIRO com o que esta CADASTRADO (descricao, beneficios, FAQ); se a informacao nao estiver cadastrada (ex.: numero de sessoes, o que a oferta inclui), diga com honestidade que vai confirmar com a equipe e chame transfer_to_human - NUNCA 'vou verificar e ja te aviso' sem chamar a ferramenta, e NUNCA invente. NAO mude o assunto para agenda nem liste horarios. ";
+    // a jogada generica de DESCOBERTA sai (ela ja esta perguntando); as demais (ja contou a queixa, avaliacao ja oferecida...) continuam valendo depois da resposta
+    out = out.startsWith("Descubra") ? INFO_PREFIX + ctx.noPrice : INFO_PREFIX + out;
   }
   // 2) objecao identificavel: responder o impedimento real primeiro (nao a jogada de descoberta)
   const objectionHandled = !!r.objection && !r.discountAsk && ["info", "price", "returning"].includes(intent);
@@ -307,7 +326,7 @@ export function turnObligations(r: TurnReading, intent: Intent, objectionHandled
     return "Ela pediu DESCONTO/negociacao. NAO prometa, invente nem insinue desconto, promocao ou condicao. Responda em UMA frase que condicoes e negociacao sao tratadas pela equipe e chame transfer_to_human com o pedido dela (nao deixe a conversa sem resposta).";
   const parts: string[] = [];
   if (r.objection && !objectionHandled) parts.push("ELA LEVANTOU UMA OBJECAO neste turno: responda ao impedimento real com informacao aprovada ANTES de qualquer outra pergunta ou oferta. " + OBJECTION_MOVE[r.objection]);
-  const must = ["hesitate", "refuse", "decline", "booked", "returning", "manage", "staff"].includes(intent) || r.questions.length >= 2;
+  const must = ["hesitate", "refuse", "decline", "booked", "returning", "manage", "staff"].includes(intent) || r.questions.length >= 2 || r.infoQuestionOnly;
   if (r.questions.length && must) {
     parts.push("ELA PERGUNTOU" + (r.questions.length > 1 ? " VARIAS COISAS" : "") + ": " + r.questions.map((q, i) => (r.questions.length > 1 ? (i + 1) + ") " : "") + '"' + q.slice(0, 140) + '"').join(" ") + " RESPONDA " + (r.questions.length > 1 ? "TODAS" : "ESSA pergunta") + ", com o que esta cadastrado (se nao souber algo, diga que confirma com a equipe; nao invente), ANTES de qualquer acolhimento sobre pensar/agradecer. Nao volte a assuntos antigos nem repita o que ja respondeu.");
   }

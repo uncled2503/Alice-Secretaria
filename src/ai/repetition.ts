@@ -51,10 +51,12 @@ function overlap(a: string, b: string): number {
 
 // Quebra em frases (ponto, !, ? ou quebra de linha). Mantem a pontuacao no fim de cada uma.
 export function splitSentences(text: string): string[] {
-  return text
+  // "Dra. Sabrina", "Dr. Joao": o ponto do tratamento NAO termina a frase (senao a frase com o nome da profissional se parte ao meio)
+  const protectedText = text.replace(/\b(Dr|Dra|Sr|Sra|Srta|Prof|Profa)\./gi, (m) => m.replace(".", "\u0001"));
+  return protectedText
     .split(/\n+/)
     .flatMap((line) => line.split(/(?<=[.!?…])\s+/))
-    .map((s) => s.trim())
+    .map((s) => s.replace(/\u0001/g, ".").trim())
     .filter(Boolean);
 }
 
