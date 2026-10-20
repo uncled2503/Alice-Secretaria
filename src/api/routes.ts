@@ -80,7 +80,8 @@ import { syncBirthdaysFromCe } from "../clinicaexperts/birthdays.js";
 import { lastBookingDiagnostics, pullClinicBookings } from "../clinicaexperts/pull.js";
 import { auditProcedureLinks } from "../clinicaexperts/procedureLink.js";
 import { scheduleBriefingRefresh } from "../ai/leadBriefing.js";
-import { usageSnapshot as aiUsageSnapshot } from "../ai/usageStats.js";
+import { usageSnapshot as aiUsageSnapshot, persistedReport as aiPersistedReport, traceReport as aiTraceReport } from "../ai/usageStats.js";
+import { openAiHealth } from "../ai/openaiCall.js";
 import { attendanceHealth } from "../crm/attendanceHealth.js";
 import { dispatchTrail } from "../reminders/ledger.js";
 import { connectAccount, disconnectAccount, ceStatusFor } from "../clinicaexperts/client.js";
@@ -881,10 +882,19 @@ apiRouter.post(
 );
 
 // Onde vao os tokens da OpenAI (por finalidade, desde que o servidor subiu). So admin.
-apiRouter.get("/ai-usage", (req, res) => {
+apiRouter.get("/ai-usage", asyncRoute(async (req, res) => {
   if (!requireAdmin(req, res)) return;
-  res.json(aiUsageSnapshot());
-});
+  // ?days=N&clinicId=... = periodo PERSISTIDO (sobrevive a reinicio); ?trace=ID = as chamadas de UM atendimento; sem parametros = desde que o servidor subiu. Custo ESTIMADO, nao cobranca real.
+  const trace = typeof req.query.trace === "string" ? req.query.trace.slice(0, 40) : "";
+  if (trace) { res.json(await aiTraceReport(trace)); return; }
+  const days = Number(req.query.days);
+  const clinicId = typeof req.query.clinicId === "string" && req.query.clinicId ? req.query.clinicId : null;
+  res.json({
+    provider: openAiHealth(),
+    ...(Number.isFinite(days) && days > 0 ? { persisted: await aiPersistedReport({ days, clinicId }) } : {}),
+    ...aiUsageSnapshot(),
+  });
+}));
 
 // Diagnostico de "nao consigo entrar": contas da clinica (quando a senha foi trocada) + as ultimas tentativas que FALHARAM com o motivo. So admin.
 apiRouter.get(

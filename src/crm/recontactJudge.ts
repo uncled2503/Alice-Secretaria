@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 import { safeFetch } from "../ai/wellFormed.js";
 import { prisma } from "../db/client.js";
-import { recordUsage } from "../ai/usageStats.js";
+import { tracked } from "../ai/openaiCall.js";
 import { safeSlice } from "../ai/wellFormed.js";
 import { parseCategory, vetoStands, type VetoCategory } from "./vetoReasons.js";
 import { REVISION } from "../version.js";
@@ -17,7 +17,7 @@ import { REVISION } from "../version.js";
 // do que mandar mensagem sem sentido e queimar o numero).
 // ---------------------------------------------------------------------------
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: safeFetch, timeout: 60_000, maxRetries: 1 });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: safeFetch, timeout: 60_000, maxRetries: 0 });
 const MODEL = process.env.OPENAI_RECONTACT_MODEL ?? process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
 export interface JudgeInput {
@@ -92,7 +92,7 @@ export function toVerdict(parsed: { recontact?: unknown; reason?: unknown; categ
 // NUNCA registra o corpo da requisicao (tem conversa de paciente): so status, codigo, id da requisicao da OpenAI e tamanho.
 async function askJudge(system: string, user: string, tag: { clinicId?: string; conversationId?: string; job: string }): Promise<{ ok: true; verdict: JudgeVerdict } | { ok: false; failure: JudgeFailure }> {
   try {
-    const res = await openai.chat.completions.create({
+    const res = await tracked(openai, "juiz_recontato", { clinicId: tag.clinicId ?? null, conversationId: tag.conversationId ?? null }).chat.completions.create({
       model: MODEL,
       temperature: 0,
       response_format: { type: "json_object" },
@@ -101,7 +101,6 @@ async function askJudge(system: string, user: string, tag: { clinicId?: string; 
         { role: "user", content: user },
       ],
     });
-    recordUsage("juiz_recontato", res.usage);
     let parsed: { recontact?: unknown; reason?: unknown; categoria?: unknown };
     try {
       parsed = JSON.parse(res.choices[0]?.message?.content ?? "");

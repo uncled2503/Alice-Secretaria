@@ -387,7 +387,7 @@ test("POS: so depois de atendimento CONCLUIDO; avaliacao e cancelado nao recebem
   assert.ok(await prisma.activityLog.findFirst({ where: { clinicId: c.id, patientId: reclamou.p.id, type: "message_blocked_ai" } }), "o motivo do bloqueio esta no Diario");
 });
 
-test("POS: falha do provedor devolve a reserva e o pos sai quando o provedor volta, uma vez", async () => {
+test("POS: falha do provedor deixa a etapa em nova tentativa (retry) e o pos sai quando o provedor volta, uma vez", async () => {
   const horaLocal = wallClockInZone(new Date(), TZ).hour;
   if (horaLocal < 7 || horaLocal >= 21) return; // o pos so roda de 7h as 21h
   const c = await mkClinic("Clinica Pos Falhas");
@@ -400,7 +400,8 @@ test("POS: falha do provedor devolve a reserva e o pos sai quando o provedor vol
   await runPostProcedureCycle();
   providerMode = "ok";
   assert.equal(posts.length, 0);
-  assert.equal(await prisma.postProcedureSent.count({ where: { appointment: { patientId: p.id } } }), 0, "falha comum devolve a reserva: tenta na proxima rodada");
+  const linhas = await prisma.postProcedureSent.findMany({ where: { appointment: { patientId: p.id } } });
+  assert.deepEqual(linhas.map((l) => l.state), ["retry"], "falha comum: a etapa fica em nova tentativa (nao em 'enviada'), tenta na proxima rodada");
   await runPostProcedureCycle();
   assert.equal(posts.length, 1, "voltou: sai uma vez");
   await runPostProcedureCycle();
@@ -409,7 +410,11 @@ test("POS: falha do provedor devolve a reserva e o pos sai quando o provedor vol
 
 // ===================================================================== AUDITORIA (somente leitura)
 test("AUDITORIA: classifica cada registro sem declarar que tudo falhou nem que todo bloqueio foi correto; so leitura; telefones mascarados", async () => {
-  assert.equal(classificarRegistro({ state: "sent" }).categoria, "enviado");
+  assert.equal(classificarRegistro({ state: "sent" }).categoria, "aceito_pelo_provedor", "aceito pelo provedor NAO e entrega confirmada");
+  assert.equal(classificarRegistro({ state: "legacy" }).categoria, "sem_evidencia");
+  assert.equal(classificarRegistro({ state: "retry" }).categoria, "adiado");
+  assert.equal(classificarRegistro({ state: "sending" }).categoria, "a_conferir");
+  assert.equal(classificarRegistro({ state: "superseded", reason: "horario remarcado" }).categoria, "bloqueio_correto");
   assert.equal(classificarRegistro({ state: "unconfirmed" }).categoria, "aceito_sem_confirmacao");
   assert.equal(classificarRegistro({ state: "failed", reason: "HTTP 500" }).categoria, "falha_do_provedor");
   assert.equal(classificarRegistro({ state: "deferred", layer: "equipe_atendendo", reason: "pausa humana" }).categoria, "adiado");
@@ -427,11 +432,11 @@ test("AUDITORIA: classifica cada registro sem declarar que tudo falhou nem que t
   const antes = await contar();
   const rel = await auditarEnviosLisboa(c.id);
   assert.equal(rel.somenteLeitura, true);
-  assert.deepEqual(rel.fluxos.map((f) => f.fluxo.split(" ")[0]), ["Recontato", "Confirmacoes", "Pos-procedimento", "Aniversarios"]);
+  assert.deepEqual(rel.fluxos.map((f) => f.fluxo.split(" ")[0]), ["Recontato", "Confirmacoes", "Confirmacao", "Pos-procedimento", "Aniversarios"]);
   const rec = rel.fluxos[0];
   assert.ok(rec.observacoes.some((o) => /4 horas.*DESLIGADA/.test(o)), "diz que a regra de 4 h esta desligada no cadastro");
   assert.ok(rec.regras.some((r) => /etapa 1.*DESLIGADA/.test(r)) && rec.regras.some((r) => /etapa 2.*LIGADA/.test(r)));
-  const aniv = rel.fluxos[3];
+  const aniv = rel.fluxos[4];
   assert.equal(aniv.candidatos.length, 1);
   assert.match(aniv.candidatos[0].pessoa, /^Fulana \(\.\.\.\d{4}\)$/, "so primeiro nome e final do telefone");
   assert.ok(!JSON.stringify(rel).includes(p.phone), "telefone completo nunca aparece");

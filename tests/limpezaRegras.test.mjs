@@ -283,12 +283,15 @@ test("avaliacao ja oferecida e a cliente segue perguntando do tratamento: explic
   assert.doesNotMatch(info.nextMove, /feche com UMA pergunta concreta que leve a avaliacao/);
 });
 
-test("quer agendar algo que nao esta no catalogo (oferta de anuncio): avaliacao gratuita, sem 'nao localizei'", async () => {
+test("quer agendar algo que nao esta no catalogo (oferta de anuncio): vai para a equipe, SEM avaliacao no lugar e sem 'nao localizei' (a avaliacao no lugar contradizia a conducao de oferta sem cadastro)", async () => {
   const { analyzeFlow } = await import("../dist/ai/salesFlow.js");
   const f = analyzeFlow({ history: [{ role: "user", content: "Sim, quero agendar um horário o Protocolo do Olhar!" }], trailing: ["Sim, quero agendar um horário o Protocolo do Olhar!"], priceAsked: false, hasBooking: false });
   assert.equal(f.intent, "schedule");
   assert.match(f.nextMove, /NAO estiver no catalogo/);
-  assert.match(f.nextMove, /AVALIACAO gratuita/);
+  assert.match(f.nextMove, /NAO agende avaliacao no lugar/);
+  assert.match(f.nextMove, /transfer_to_human/);
+  assert.match(f.nextMove, /NAO diga que 'nao encontrou'/);
+  assert.doesNotMatch(f.nextMove, /NESSE MESMO dia e hora/);
   const src = fs.readFileSync(new URL("../src/ai/alice.ts", import.meta.url), "utf8");
   assert.match(src, /RESPONDA essa pergunta primeiro e nunca repita a mensagem anterior/);
 });

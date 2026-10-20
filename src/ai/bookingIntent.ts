@@ -6,6 +6,7 @@
 // ---------------------------------------------------------------------------
 
 import { extractMentions } from "./slotGuard.js";
+import { stripNonChoiceSegments } from "./turnReading.js";
 
 function fold(s: string): string {
   return s.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
@@ -49,8 +50,10 @@ const NEED_WORDS = new Set(
 const allNeedWords = (words: string[]) => words.length > 0 && words.every((w) => NEED_WORDS.has(w));
 
 // PURO: `texts` = mensagens da pessoa (e o anuncio de origem), em ordem; as ultimas pesam mais. Ignora avaliacao.
-export function identifyWanted(catalog: CatalogProc[], texts: string[]): Wanted {
-  const recent = texts.map((t) => t.trim()).filter(Boolean).slice(-8);
+// Mencionar nao e escolher: o que ela NEGOU ("nao quero botox"), a experiencia passada ("ja fiz peeling") e o relato de outra pessoa nao identificam o procedimento
+// desejado (stripNonChoiceSegments). `rawFirst` = quantos textos do inicio (o texto do anuncio) entram como estao.
+export function identifyWanted(catalog: CatalogProc[], texts: string[], rawFirst = 0): Wanted {
+  const recent = texts.map((t, i) => (i < rawFirst || process.env.ALICE_TURN_READING === "off" ? t : stripNonChoiceSegments(t)).trim()).filter(Boolean).slice(-8);
   if (!recent.length) return { kind: "none" };
   // O MAIS RECENTE vale: a mensagem mais nova que NOMEIA um procedimento (ou uma familia) decide, sem misturar palavras de mensagens diferentes
   // ("Clareamento Corporal" numa mensagem + "Limpeza de Pele" noutra batiam, juntas, no apelido "Clareamento de pele corporal"). Sem nenhuma

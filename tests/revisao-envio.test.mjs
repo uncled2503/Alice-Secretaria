@@ -508,7 +508,7 @@ test("economia: a memoria so manda as mensagens NOVAS (as notas anteriores carre
   // agendamento de 60-90 s de OUTRO teste deste arquivo pode disparar no meio e cair aqui.
   const dela = () => corpos.filter((c) => /papo mais longo da conversa/.test(c)).length;
   scheduleBriefingRefresh(q.id, { delayMs: 20 });
-  await new Promise((r) => setTimeout(r, 400));
+  for (let i = 0; i < 100 && dela() < 1; i++) await new Promise((r) => setTimeout(r, 100)); // espera a 1a atualizacao (ate 10 s: maquina lenta/suite em paralelo), nao um tempo fixo
   const primeira = dela();
   await prisma.message.create({ data: { conversationId: cq.id, role: "user", content: "mais uma mensagem", createdAt: new Date() } });
   scheduleBriefingRefresh(q.id, { delayMs: 20 });

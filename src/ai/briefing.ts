@@ -1,12 +1,13 @@
 import OpenAI from "openai";
 import { safeFetch } from "./wellFormed.js";
+import { tracked } from "./openaiCall.js";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { z } from "zod";
 import { prisma } from "../db/client.js";
 import { reseedRulesForProfile } from "./rules.js";
 import { logActivity } from "../crm/activity.js";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: safeFetch, timeout: 180_000, maxRetries: 1 });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: safeFetch, timeout: 180_000, maxRetries: 0 });
 // Briefing e uma chamada rara (uma por cliente novo) e vale um modelo melhor:
 // nao cai no OPENAI_MODEL (que costuma ser o mini) - usa gpt-4o por padrao.
 const MODEL = process.env.OPENAI_BRIEFING_MODEL ?? "gpt-4o";
@@ -798,7 +799,7 @@ export async function parseBriefing(text: string): Promise<ParseResult> {
 
   let raw: unknown;
   try {
-    const response = await openai.chat.completions.create({
+    const response = await tracked(openai, "briefing_clinica").chat.completions.create({
       model: MODEL,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },

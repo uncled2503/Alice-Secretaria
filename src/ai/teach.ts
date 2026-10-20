@@ -1,10 +1,11 @@
 import OpenAI from "openai";
 import { safeFetch } from "./wellFormed.js";
+import { tracked } from "./openaiCall.js";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { prisma } from "../db/client.js";
 import { RULE_CATEGORIES } from "./rules.js";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: safeFetch, timeout: 60_000, maxRetries: 1 });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: safeFetch, timeout: 60_000, maxRetries: 0 });
 const MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
 const RULE_CATEGORY_IDS = RULE_CATEGORIES.map((c) => c.id);
@@ -121,7 +122,7 @@ export interface TeachDraftResult {
 }
 
 async function draftFromText(rawInput: string): Promise<TeachDraftResult> {
-  const response = await openai.chat.completions.create({
+  const response = await tracked(openai, "ensinar_alice").chat.completions.create({
     model: MODEL,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },

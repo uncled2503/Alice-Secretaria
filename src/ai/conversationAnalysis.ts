@@ -89,3 +89,44 @@ export async function analyzeConversation(call: AnalysisCall, input: { brief: st
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// QUANDO FAZER A SEGUNDA LEITURA (uma chamada paga a mais por resposta). Antes bastava a conversa ter 4 mensagens. Agora o RESUMO DETERMINISTICO (ficha, historico, o que ja foi dito,
+// procedimento escolhido, reserva) responde sozinho a maior parte dos casos; a segunda leitura so entra quando a mensagem NOVA tem ambiguidade ou complexidade que esse resumo nao
+// resolve. Os criterios sao explicitos, deterministicos e cada decisao (executada ou dispensada) e registrada com o motivo.
+//   AI_SECOND_READING=off      desliga (como sempre)
+//   AI_SECOND_READING=always   volta ao comportamento antigo: toda conversa com 4+ mensagens
+//   (padrao)                   seletivo, pelos criterios abaixo
+// ---------------------------------------------------------------------------
+export interface ReadingDecision { run: boolean; reasons: string[]; skip: string | null }
+
+const rdFold = (s: string) => s.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
+const SCHEDULING_WORDS = /\b(agend|marc|horario|vaga|disponib|encaixe|remarc)/;
+const PRICE_OR_OBJECTION_WORDS = /(quanto|valor|preco|caro|parcel|desconto|medo|dor\b|doi|risco|seguro|vou pensar|nao sei|sera que|e se )/;
+const ANAPHORA = /\b(esse|essa|esses|essas|isso|aquele|aquela|aquilo|o outro|a outra|de novo|como (eu )?(falei|disse)|que (eu )?(falei|disse)|antes|tambem|mesmo|naquele)\b/;
+
+export function decideSecondReading(i: { history: { role: string; content: string }[]; trailing: string[]; catalog?: { name: string; aliases?: string | null }[]; mode?: string | null }): ReadingDecision {
+  const mode = (i.mode ?? "").trim().toLowerCase();
+  const messages = i.history.filter((m) => m.role !== "system").length;
+  if (mode === "off") return { run: false, reasons: [], skip: "desligada_por_configuracao" };
+  if (messages < 4) return { run: false, reasons: [], skip: "conversa_curta" };
+  if (mode === "always") return { run: true, reasons: ["modo_sempre"], skip: null };
+
+  const text = i.trailing.join(" ").trim();
+  const folded = rdFold(text);
+  const reasons: string[] = [];
+  if (i.trailing.length >= 3) reasons.push("varias_mensagens_novas");
+  if (text.length >= 180) reasons.push("mensagem_longa");
+  if ((text.match(/\?/g) ?? []).length >= 2) reasons.push("varias_perguntas");
+  if (i.catalog && i.catalog.length) {
+    const mentioned = i.catalog.filter((p) => {
+      const names = [p.name, ...(p.aliases ?? "").split(/[\n,;]+/)].map((x) => rdFold(x).trim()).filter((x) => x.length >= 4);
+      return names.some((n) => folded.includes(n));
+    });
+    if (mentioned.length >= 2) reasons.push("varios_procedimentos");
+  }
+  if (messages >= 6 && ANAPHORA.test(folded)) reasons.push("referencia_ao_que_foi_dito");
+  if (SCHEDULING_WORDS.test(folded) && PRICE_OR_OBJECTION_WORDS.test(folded)) reasons.push("intencoes_misturadas");
+  if (messages >= 14 && text.length >= 40) reasons.push("conversa_longa_com_novidade");
+  return reasons.length ? { run: true, reasons, skip: null } : { run: false, reasons: [], skip: "sem_ambiguidade_resumo_deterministico_basta" };
+}

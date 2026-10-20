@@ -355,7 +355,7 @@ test("a memoria do lead (notas atualizadas) vai na ficha que a Alice le antes de
 
 // ===== economia de tokens (16/10): sem mudar o que a Alice responde =====
 test("economia: a segunda leitura da conversa (uma chamada a mais) so roda quando o caminho NAO esta decidido pelo codigo", async () => {
-  // lead em conversa comum, com 4+ mensagens: a leitura roda
+  // conversa comum com 4+ mensagens e mensagem nova SIMPLES: o resumo deterministico basta, a segunda leitura (chamada paga a mais) e dispensada
   auxCalls.length = 0; openaiCalls.length = 0;
   const lead = await cenario("Lead Comum", [
     ["user", "Oi, queria saber de botox"], ["assistant", "Oi! Claro. O que você gostaria de melhorar?"],
@@ -363,7 +363,28 @@ test("economia: a segunda leitura da conversa (uma chamada a mais) so roda quand
   ]);
   script = [{ content: "Entendo o receio! O botox é aplicado com cuidado. Quer saber como funciona?" }];
   await generateReply(lead.conv.id);
-  assert.equal(auxCalls.length, 1, "conversa comum: a segunda leitura roda");
+  assert.equal(auxCalls.length, 0, "mensagem simples: segunda leitura dispensada (sem ambiguidade)");
+  // mensagem nova COMPLEXA (varias perguntas de uma vez): a segunda leitura roda
+  auxCalls.length = 0; openaiCalls.length = 0;
+  const complexa = await cenario("Lead Complexo", [
+    ["user", "Oi, queria saber de botox"], ["assistant", "Oi! Claro. O que você gostaria de melhorar?"],
+    ["user", "As linhas da testa"], ["assistant", "Entendi. Você já fez botox antes?"], ["user", "Nunca fiz. Quanto custa? Dói muito? Quanto tempo dura?"],
+  ]);
+  script = [{ content: "Vou te explicar com calma: o valor depende da avaliação, o desconforto é pequeno e o efeito dura alguns meses. Quer ver um horário?" }];
+  await generateReply(complexa.conv.id);
+  assert.equal(auxCalls.length, 1, "varias perguntas na mesma mensagem: a segunda leitura roda");
+  // modo antigo (AI_SECOND_READING=always): toda conversa com 4+ mensagens
+  auxCalls.length = 0; openaiCalls.length = 0;
+  process.env.AI_SECOND_READING = "always";
+  try {
+    const sempre = await cenario("Lead Modo Sempre", [
+      ["user", "Oi, queria saber de botox"], ["assistant", "Oi! Claro. O que você gostaria de melhorar?"],
+      ["user", "As linhas da testa"], ["assistant", "Entendi. Você já fez botox antes?"], ["user", "Nunca fiz, tenho receio"],
+    ]);
+    script = [{ content: "Entendo o receio! O botox é aplicado com cuidado. Quer saber como funciona?" }];
+    await generateReply(sempre.conv.id);
+    assert.equal(auxCalls.length, 1, "modo 'always' mantem o comportamento antigo");
+  } finally { delete process.env.AI_SECOND_READING; }
   // retomando depois da equipe, sem pedido de horario (plano ja decidido pelo codigo): nao gasta a leitura
   auxCalls.length = 0; openaiCalls.length = 0;
   const retomada = await cenario("Retomada Sem Pedido", [

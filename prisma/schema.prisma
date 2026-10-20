@@ -1033,9 +1033,19 @@ model PostProcedureSent {
   appointment   Appointment       @relation(fields: [appointmentId], references: [id])
   ruleId        String
   rule          PostProcedureRule @relation(fields: [ruleId], references: [id])
-  sentAt        DateTime          @default(now())
+  sentAt        DateTime          @default(now()) // (momento da RESERVA; so vale como envio quando state = sent)
+  // Estado real da etapa: reserved (reservada, provedor NAO chamado) | sending (tentativa iniciada: o provedor pode ter sido chamado) | sent | unconfirmed (resultado incerto: nunca
+  // reenvia as cegas) | retry (falha temporaria / WhatsApp fora / revisao fora: tenta de novo) | vetoed | blocked | duplicate | failed_permanent | legacy (registro anterior a esta
+  // coluna: so prova que a etapa foi reservada, nao que a mensagem saiu; nunca reaberto nem reenviado)
+  state         String            @default("legacy")
+  reservedAt    DateTime?
+  attemptedAt   DateTime?
+  finalAt       DateTime?
+  attempts      Int               @default(0)
+  note          String?
 
   @@unique([appointmentId, ruleId])
+  @@index([state, reservedAt])
 }
 
 // Pre-procedimento: orientacoes de preparo enviadas LOGO APOS a cliente confirmar o horario (a confirmacao feita na conversa com a
@@ -1234,6 +1244,29 @@ model LeadClassification {
 // copias do mesmo agendamento (a chave e o uuid da reserva no Clinica Experts, ou o id local quando nao ha CE) e NAO e apagada quando o
 // agendamento e remarcado: o historico do horario antigo fica, e o horario novo ganha o proprio controle. Sem relacao com Appointment de proposito
 // (e trilha: continua mesmo se o agendamento sumir).
+// Confirmacao de agendamento criado FORA da conversa (painel manual / API externa): uma linha por (agendamento, horario). Remarcar gera outro horario = outra linha (o texto antigo
+// nunca e reenviado). Estados: reserved (provedor NAO chamado) | sending (pode ter sido chamado) | sent | unconfirmed (incerto: nunca reenvia as cegas) | retry (falha temporaria:
+// a recuperacao tenta de novo dentro da janela) | superseded (cancelado/remarcado/passou) | blocked | vetoed | duplicate | failed_permanent. Sem relacao com Appointment de proposito (trilha).
+model AppointmentConfirmation {
+  id            String    @id @default(cuid())
+  clinicId      String
+  appointmentId String
+  patientId     String
+  startsAt      DateTime  // horario a que o texto se refere
+  state         String
+  attempts      Int       @default(0)
+  note          String?
+  reservedAt    DateTime?
+  attemptedAt   DateTime?
+  finalAt       DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([appointmentId, startsAt])
+  @@index([state, createdAt])
+  @@index([clinicId])
+}
+
 model ReminderDispatch {
   id            String   @id @default(cuid())
   clinicId      String
@@ -1358,4 +1391,51 @@ model ResumeTarget {
 
   @@unique([patientId, flow])
   @@index([clinicId, flow, status])
+}
+
+// ---------------------------------------------------------------------------
+// MEDICAO PERSISTENTE DA OPENAI (src/ai/usageStats.ts). Sem conteudo de conversa, sem credencial, sem dado pessoal: so identificadores, contagens e tempos.
+// AiCall = uma linha por TENTATIVA (inclusive as que falharam e as correcoes/reescritas), guardada por pouco tempo; AiUsageDaily = o agregado por dia/clinica/finalidade/modelo,
+// onde as linhas antigas de AiCall sao somadas antes de serem apagadas (o banco nao cresce sem limite). Sem chave estrangeira de proposito: apagar clinica nao trava a medicao.
+// ---------------------------------------------------------------------------
+model AiCall {
+  id             String   @id @default(cuid())
+  at             DateTime @default(now())
+  clinicId       String?
+  conversationId String?
+  traceId        String?  // agrupa as chamadas de UM atendimento (uma resposta gerada)
+  purpose        String   // conversa_alice | segunda_leitura | revisao_envio | memoria_do_lead | resumo_crm | juiz_recontato | reescrita_* | ...
+  requestedModel String?
+  model          String?  // modelo que a OpenAI informou ter usado (pode ser um snapshot datado)
+  inputTokens    Int      @default(0)
+  cachedTokens   Int      @default(0) // parte da entrada reaproveitada do cache (ja esta DENTRO de inputTokens)
+  outputTokens   Int      @default(0)
+  durationMs     Int      @default(0)
+  outcome        String   // ok | error | blocked
+  usageState     String   @default("known") // known = a API informou o uso | unknown = a requisicao FOI enviada e o consumo nao foi informado (timeout, erro, resposta sem uso) | not_sent = bloqueada localmente, nenhuma requisicao
+  errorKind      String?  // quota | auth | rate_limit | unavailable | model | timeout | bad_request | other
+  attemptReason  String?  // answer | tool_result | correction:<qual> | retry:<causa> | fallback_model
+  attempt        Int      @default(1)
+
+  @@index([at])
+  @@index([clinicId, at])
+  @@index([traceId])
+}
+
+model AiUsageDaily {
+  day          String   // AAAA-MM-DD (UTC)
+  clinicId     String   @default("") // "" = chamada sem clinica
+  purpose      String
+  model        String   @default("") // "" = modelo nao informado
+  calls        Int      @default(0)
+  okCalls      Int      @default(0)
+  errorCalls   Int      @default(0)
+  unknownCalls Int      @default(0) // tentativas enviadas SEM consumo informado: o total de tokens/custo do dia e um PISO, nao o total
+  notSentCalls Int      @default(0) // chamadas bloqueadas localmente (nenhuma requisicao saiu)
+  inputTokens  Int      @default(0)
+  cachedTokens Int      @default(0)
+  outputTokens Int      @default(0)
+  durationMs   Int      @default(0)
+
+  @@id([day, clinicId, purpose, model])
 }

@@ -8,6 +8,7 @@ import compression from "compression";
 import { rateLimit } from "express-rate-limit";
 import { startReminderJob } from "./reminders/cron.js";
 import { startPostProcedureJob } from "./reminders/postProcedure.js";
+import { startConfirmationRecoveryJob } from "./crm/appointmentMessages.js";
 import { startPreProcedureJob } from "./reminders/preProcedure.js";
 import { startAdsJobs } from "./ads/jobs.js";
 import { startPrescriptionReminderJob } from "./reminders/prescription.js";
@@ -31,6 +32,9 @@ import { startPhoneContactsJob } from "./crm/phoneContacts.js";
 import { startBroadcastJob } from "./crm/broadcast.js";
 import { startUazapiWebhookWorker, shutdownUazapiWorker } from "./uazapi/client.js";
 import { startBackupJob } from "./maintenance/backupJob.js";
+import { startAiUsageJob } from "./ai/usageJob.js";
+import { openAiHealth } from "./ai/openaiCall.js";
+import { flushUsageWithin } from "./ai/usageStats.js";
 import { startHotLeadJobs } from "./crm/hotLeads.js";
 import { startDailyReportJob } from "./crm/dailyReport.js";
 import { startLeadReactivationJob } from "./crm/leadReactivation.js";
@@ -129,7 +133,7 @@ app.get("/health", (_req, res) => {
   res.set("Cache-Control", "no-store");
   refreshDbHealth();
   refreshMigration();
-  res.json({ ok: true, database: dbHealthy ? "ok" : "unavailable", uptimeSeconds: Math.floor(process.uptime()), commit: buildInfo.commit, builtAt: buildInfo.builtAt, revision: REVISION, lastMigration });
+  res.json({ ok: true, database: dbHealthy ? "ok" : "unavailable", uptimeSeconds: Math.floor(process.uptime()), commit: buildInfo.commit, builtAt: buildInfo.builtAt, revision: REVISION, lastMigration, openai: openAiHealth().state });
 });
 
 // Painel administrativo: so a "casca" HTML/CSS/JS, sem dado nenhum - fica
@@ -352,6 +356,7 @@ const httpServer = app.listen(port, () => {
   console.log(`Alice rodando na porta ${port}`);
   startReminderJob();
   startPostProcedureJob();
+  startConfirmationRecoveryJob();
   startAdsJobs();
   startPreProcedureJob();
   startPrescriptionReminderJob();
@@ -374,6 +379,7 @@ const httpServer = app.listen(port, () => {
   startPhoneContactsJob();
   startUazapiWebhookWorker().catch((err) => console.error("Falha ao iniciar fila de webhooks UAZAPI:", err));
   startBackupJob();
+  startAiUsageJob();
   startHotLeadJobs();
   startDailyReportJob();
   startLeadReactivationJob();
@@ -394,6 +400,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
     console.error("[shutdown] falha ao finalizar a fila:", err);
   }
   await releaseMyLocks().then((n) => n && console.log(`[shutdown] ${n} concessao(oes) de tarefa devolvida(s) para a copia nova assumir sem esperar`)).catch(() => undefined);
+  await flushUsageWithin(5_000).catch(() => undefined); // grava a medicao pendente em ate 5 s; o que sobrar fica contado e no log
   await drainBackground(10_000).catch(() => undefined); // tarefas disparadas e esquecidas terminam antes de o banco ser solto
   await prisma.$disconnect().catch(() => undefined);
   process.exit(0);

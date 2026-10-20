@@ -48,7 +48,8 @@ test("recusou os horarios: nao encerra, pergunta dia/periodo e oferece outros", 
   const h = [U(LONGA), A("Qual dia?"), U("Amanhã dia 14 as 15 horas"), A("Terça 20/10 às 8h, 8h30 ou 9h30. Qual desses fica melhor pra você?"), U("Nenhum deles,obrigada")];
   const f = analyzeFlow({ history: h, trailing: ["Nenhum deles,obrigada"], priceAsked: false, hasBooking: false });
   assert.equal(f.intent, "decline");
-  assert.match(f.nextMove, /NAO se despeca/);
+  assert.match(f.nextMove, /Nao encerre ainda/); // continua no agendamento: nao se despede (o comportamento, nao a frase exata)
+  assert.match(f.nextMove, /Pare assim que ela disser que nao quer mais/);
   assert.match(f.nextMove, /periodo/);
 });
 

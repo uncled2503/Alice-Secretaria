@@ -7,6 +7,7 @@
 // ---------------------------------------------------------------------------
 
 import { chosenSlotDirective, wantedDirective, type ChosenSlot, type Wanted } from "./bookingIntent.js";
+import { asksDiscount, detectObjection, extractQuestions, interpretAnswer, isGoalCorrection, type AnswerMeaning, type ObjectionKind } from "./turnReading.js";
 
 function fold(s: string): string {
   return s.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
@@ -29,6 +30,16 @@ export interface SalesFlow {
   evalOffered: boolean; // a Alice ja falou de avaliacao nesta conversa
   hasBooking: boolean; // ela ja tem agendamento futuro (nao e lead em descoberta)
   nextMove: string; // instrucao pro modelo
+  reading: TurnReading; // o que as mensagens novas SIGNIFICAM (resposta curta, correcao de objetivo, objecao, perguntas): entrada do contrato de decisao do turno
+}
+
+export interface TurnReading {
+  meaning: AnswerMeaning; // resposta curta interpretada em relacao a pergunta anterior da Alice
+  prevQuestion: string; // a pergunta/oferta anterior (texto), "" se nao havia
+  goalCorrection: boolean; // "nao quero X, quero Y": corrige o objetivo, nao recusa
+  objection: ObjectionKind | null;
+  discountAsk: boolean;
+  questions: string[]; // perguntas feitas nas mensagens novas: todas precisam de resposta
 }
 
 const SCHEDULE_RE =
@@ -99,6 +110,7 @@ export function analyzeFlow(input: {
   chosenFullName?: string | null; // nome completo que ela ja deu (pra book_appointment)
   evaluationName?: string | null; // nome da avaliacao no catalogo
   awaitingName?: boolean; // ela acabou de responder o NOME que a Alice pediu para concluir um agendamento em andamento
+  unmappedOffer?: string | null; // oferta anunciada/citada SEM cadastro: nao vira avaliacao nem outro procedimento (vem da conducao)
   needOptions?: string[]; // procedimentos APROVADOS no cadastro para a queixa dela (vem da conducao); [] = nenhum com indicacao aprovada
 }): SalesFlow {
   const { history, trailing, priceAsked, hasBooking } = input;
@@ -114,11 +126,22 @@ export function analyzeFlow(input: {
   const statedGoal = statesGoal(userAll);
   // "Nao posso hoje, pode ser amanha as 15h?" recusou E propos outro horario: segue o agendamento (nao e recusa).
   const proposesTime = /\b\d{1,2}\s?(h\b|horas|:\d\d)|\b(amanha|hoje|segunda|terca|quarta|quinta|sexta|sabado|domingo)\b/.test(fold(trailText));
-  const declined = declinesOptions(trailText) && !proposesTime && (slotsOffered || evalOffered || scheduleAsked);
+  // ALICE_TURN_READING=off desliga a leitura do turno (volta a jogada generica anterior); padrao: ligada
+  const readingOn = process.env.ALICE_TURN_READING !== "off";
+  const reading: TurnReading = !readingOn
+    ? { meaning: null, prevQuestion: "", goalCorrection: false, objection: null, discountAsk: false, questions: [] }
+    : {
+    ...(() => { const r = interpretAnswer(lastAssistant, trailing); return { meaning: r.meaning, prevQuestion: r.prev.text }; })(),
+    goalCorrection: isGoalCorrection(trailText),
+    objection: detectObjection(trailText),
+    discountAsk: asksDiscount(trailText),
+    questions: extractQuestions(trailing),
+  };
+  const declined = declinesOptions(trailText) && !proposesTime && !reading.goalCorrection && (slotsOffered || evalOffered || scheduleAsked);
 
   // Disse "nao"/"vou pensar"/"vou me organizar" sem propor nada: a Alice nao pode responder so "ok" nem ficar esperando.
   const trailFold = fold(trailText);
-  const hardNo = HARD_NO_RE.test(trailFold);
+  const hardNo = HARD_NO_RE.test(trailFold) && !reading.goalCorrection; // "nao quero tratar gordura, quero clarear" e CORRECAO do objetivo, nao recusa
   const softStall = SOFT_STALL_RE.test(trailFold) && !slotsOffered;
   const hesitates = !proposesTime && (hardNo || softStall);
   const lastOfferedEarly = OFFER_RE.test(fold(lastAssistant)) && /\?/.test(lastAssistant);
@@ -131,7 +154,7 @@ export function analyzeFlow(input: {
   const gaveAvailability = lastOffered && DAYPART_RE.test(trailFold) && !REFUSE_RE.test(trailFold);
   const chosen = hasBooking ? null : input.chosen ?? null; // ja agendada: nada a escolher
   // "Quero uma limpeza de pele": pediu um procedimento do catalogo pelo nome = quer agendar ESSE (nao e so curiosidade). Pergunta de valor/informacao nao conta.
-  const namesProcedure = input.wanted !== undefined && (input.wanted.kind === "specific" || input.wanted.kind === "options") && /\b(quero|queria|gostaria|tenho interesse|interesse em|fazer|marcar)\b/.test(fold(trailText)) && !priceAsked && !/\b(saber|informac\w*|duvida|como funciona|explic\w*|o que e)\b/.test(fold(trailText));
+  const namesProcedure = !reading.goalCorrection && input.wanted !== undefined && (input.wanted.kind === "specific" || input.wanted.kind === "options") && /\b(quero|queria|gostaria|tenho interesse|interesse em|fazer|marcar)\b/.test(fold(trailText)) && !priceAsked && !/\b(saber|informac\w*|duvida|como funciona|explic\w*|o que e)\b/.test(fold(trailText));
   const awaitingName = input.awaitingName === true && !hasBooking;
   const wantsToBook = wantsSchedule(trailText) || accepted || gaveAvailability || !!chosen || namesProcedure || awaitingName;
 
@@ -166,10 +189,12 @@ export function analyzeFlow(input: {
         (awaitingName
           ? "ELA ACABOU DE INFORMAR O NOME QUE VOCE PEDIU para CONCLUIR um agendamento que ja estava em andamento: isso e a CONTINUACAO, nao um recomeço. NAO reinicie a venda, NAO ofereca avaliacao, NAO explique o procedimento de novo e NAO liste outros horarios. Use o procedimento e o horario combinados nas mensagens acima e chame book_appointment (patient_full_name com o nome dela). So se nao estiver claro QUAL horario ela escolheu, pergunte apenas isso. "
           : "") +
-        (input.wanted
+        (input.unmappedOffer
+          ? `OFERTA SEM CADASTRO: ela falou de "${input.unmappedOffer}", que ainda nao esta cadastrada (sem procedimento nem agenda no sistema). NAO liste horarios dela, NAO escolha um procedimento parecido e NAO agende avaliacao no lugar. `
+          : input.wanted
           ? wantedDirective(needWanted ?? wanted, evalName)
           : "QUAL PROCEDIMENTO: se ela quer um procedimento especifico do catalogo (ex.: limpeza de pele, drenagem), agende ESSE procedimento (nome exato do catalogo), nao a avaliacao. A avaliacao gratuita e para quem pediu avaliacao ou ainda nao sabe o que quer. ") +
-        "Se ela pediu a avaliacao gratuita de forma explicita, agende a avaliacao. Se o procedimento citado ou a oferta do anuncio NAO estiver no catalogo, NAO diga que nao encontrou nem pergunte de novo: se ja combinaram dia e hora, agende a AVALIACAO gratuita NESSE MESMO dia e hora (a equipe apresenta a oferta, sem prometer valor ou condicao); senao ofereca os horarios da avaliacao. " +
+        "Se ela pediu a avaliacao gratuita de forma explicita, agende a avaliacao. Se o procedimento citado ou a oferta do anuncio NAO estiver no catalogo: NAO diga que 'nao encontrou' nem pergunte de novo; NAO agende avaliacao no lugar, NAO associe a outro procedimento e NAO prometa valor, condicao nem disponibilidade. Diga em UMA frase que vai confirmar essa oferta com a equipe e chame transfer_to_human; a avaliacao so entra se ELA pedir a avaliacao. " +
         "HORARIOS: chame check_availability (ja devolve os mais proximos) e ofereca NO MAXIMO 3 horarios reais, hoje e amanha primeiro; nunca liste mais de 3. Se ela disse o turno (manha, tarde ou noite), passe period e ofereca so desse turno; se ainda nao disse, pode perguntar UMA vez qual turno prefere. Se ela ja citou dia/hora, chame check_specific_time. " +
         "Se o horario pedido nao esta livre, diga so que 'esse horario nao esta disponivel' (NUNCA cite outro paciente) e ofereca os mais proximos. " +
         "NUNCA escreva 'conseguimos agendar', 'agendei' ou 'esta agendado' antes de book_appointment dar certo: ate la voce so OFERECE ('tenho estes horarios'). Horario escolhido: book_appointment. Se ela fez outra pergunta junto (endereco, valor), responda tambem." +
@@ -177,7 +202,7 @@ export function analyzeFlow(input: {
       break;
     case "decline":
       nextMove =
-        "A cliente RECUSOU as opcoes que voce deu. NAO se despeca e NAO encerre ('se mudar de ideia...' perde a venda). Em UMA frase curta, pergunte qual dia da semana e periodo (manha, tarde ou noite) ficam melhores pra ela, e ja chame check_availability para ver OUTROS dias (inclusive amanha em outro horario) e ofereca 2 opcoes novas. So pare se ela disser claramente que nao quer mais." +
+        "A cliente RECUSOU os horarios que voce deu, mas continua no agendamento. Nao encerre ainda: em UMA frase curta, pergunte qual dia da semana e periodo (manha, tarde ou noite) ficam melhores pra ela, e ja chame check_availability para ver OUTROS dias (inclusive amanha em outro horario) e ofereca ate 2 opcoes novas. Pare assim que ela disser que nao quer mais ou que nao quer agendar." +
         noPrice;
       break;
     case "hesitate":
@@ -210,7 +235,7 @@ export function analyzeFlow(input: {
         ? evalOffered
           ? "Ela JA contou o que quer e voce JA falou de avaliacao sem que ela pedisse. NAO repita a oferta nem pergunte de novo o que ela quer melhorar. Converse de verdade: explique o procedimento do catalogo que resolve a queixa dela (o que e, para que serve, como funciona) em 2 ou 3 frases, sem despejar tudo, e termine com UMA pergunta NOVA sobre o interesse ou a duvida dela. So volte a falar de avaliacao se ela demonstrar interesse em agendar." +
             noPrice
-          : "Ela JA contou o que quer (queixa/regiao). NAO pergunte de novo 'o que voce gostaria de melhorar'. Reconheca a queixa com as palavras dela (1 frase), conecte a solucao do catalogo (1 frase) e feche com UMA pergunta concreta que leve ao horario: " +
+          : "Ela JA contou o que quer (queixa/regiao). NAO pergunte de novo 'o que voce gostaria de melhorar'. Reconheca a queixa com as palavras dela (1 frase), conecte a solucao do catalogo (1 frase) e, se fizer sentido para o momento dela, feche com UMA pergunta concreta que leve ao proximo passo (sem obrigar pergunta no fim se ela so agradeceu ou ja decidiu): " +
             (wanted.kind === "specific"
               ? `ela quer "${wanted.procedure}", entao pergunte se quer que voce veja um horario pra esse procedimento (NAO fale de avaliacao).`
               : wanted.kind === "options"
@@ -222,7 +247,49 @@ export function analyzeFlow(input: {
         : "Descubra o que ela quer com UMA pergunta especifica ao assunto dela (se veio de anuncio, use o procedimento do anuncio; ex.: gordura -> qual regiao). Curto, natural." + noPrice;
   }
 
-  return { intent, askedPrice: priceAsked, statedGoal, scheduleAsked, schedulingSignal, slotsOffered, evalOffered, hasBooking, nextMove };
+  nextMove = refineMove(nextMove, intent, reading, { priceAsked, hasBooking, noPrice });
+  return { intent, askedPrice: priceAsked, statedGoal, scheduleAsked, schedulingSignal, slotsOffered, evalOffered, hasBooking, nextMove, reading };
+}
+
+// ---------------------------------------------------------------------------
+// REFINAMENTO DA JOGADA pela leitura do turno. NAO e outra camada de regras empilhada: onde a jogada generica ignorava o que a pessoa acabou de dizer (resposta curta,
+// objecao, pergunta junto de "vou pensar"), ela e SUBSTITUIDA (ou completada com a obrigacao de responder). Casos de agenda (schedule), horario ja marcado (booked),
+// recusa da oferta (refuse) e as travas de conducao/situacao continuam mandando como antes.
+// ---------------------------------------------------------------------------
+const OBJECTION_MOVE: Record<ObjectionKind, string> = {
+  price: "OBJECAO DE PRECO ('achei caro'). Responda ao impedimento REAL antes de qualquer pergunta: reconheca sem discutir, mostre o que o cadastro aprovado diz de beneficio/duracao/o que esta incluido e, SE a clinica tiver condicoes de pagamento cadastradas (FAQ, mensagens prontas, regras), diga quais; se NAO tiver, diga com honestidade que a equipe apresenta o investimento e as condicoes e como seguir. NAO invente desconto, parcelamento, promocao, urgencia nem comparacao com outras clinicas, e NAO transfira so por ela achar caro (transfira apenas se ela PEDIR desconto/negociacao). Pergunta curta so se precisar entender o que pesou.",
+  time: "OBJECAO DE TEMPO ('sem tempo'). Acolha em meia frase e responda ao impedimento: use a duracao e a frequencia que o cadastro aprovado informa (sem inventar), e mostre que o horario pode se encaixar (dias/turnos que a clinica atende). Ofereca alternativas compativeis SO se ela quiser ver horarios; nao pressione.",
+  distance: "OBJECAO DE DISTANCIA ('moro longe'). Acolha e responda com o que o cadastro informa (endereco, como chegar, estacionamento, duracao do atendimento, numero de sessoes SE cadastrado) para ela decidir se compensa; nao invente atendimento remoto nem beneficio de deslocamento. Pergunta curta so se precisar saber o dia/turno que facilita.",
+  fear: "MEDO/DUVIDA SOBRE O PROCEDIMENTO. Acolha primeiro (sem exagerar nem prometer 'sem dor' ou 'sem risco') e responda com a informacao aprovada do cadastro (como e feito, o que se sente, cuidados). Duvida clinica, contraindicacao ou saude: transfer_to_human. Pergunta curta so se precisar saber qual e a duvida especifica.",
+  compare: "COMPARACAO ('vi em outra clinica', 'qual a diferenca'). Nao fale mal de ninguem nem compare preco: explique o que ESTA no cadastro desta clinica (o que e, como funciona, para quem) e o criterio para escolher bem; a escolha individual e da profissional na avaliacao. Nao invente diferencial, resultado nem garantia.",
+  third_party: "ELA PRECISA CONVERSAR COM OUTRA PESSOA (marido, mae...). Respeite: facilite a decisao dela com as informacoes aprovadas que ela possa levar (o que e, duracao, como funciona), sem pressao e sem nova rodada de oferta. Pode dizer que fica a disposicao; so registre retorno (schedule_recontact) se ELA disser quando.",
+  bad_experience: "EXPERIENCIA ANTERIOR RUIM. Acolha sem minimizar nem julgar a outra clinica, pergunte (UMA vez, curta) o que aconteceu SE isso mudar a orientacao e explique o que o cadastro aprovado diz sobre o procedimento e a avaliacao individual. Nao prometa que 'aqui sera diferente' nem resultado.",
+};
+
+export function refineMove(move: string, intent: Intent, r: TurnReading, ctx: { priceAsked: boolean; hasBooking: boolean; noPrice: string }): string {
+  let out = move;
+  // 1) resposta curta interpretada (so onde a jogada generica seria "descubra"/"explique de novo")
+  if (["info", "price", "returning"].includes(intent)) {
+    if (r.meaning === "experience_none")
+      out = "Ela respondeu NAO a pergunta '" + r.prevQuestion + "': significa que NUNCA fez (primeira vez). NAO e recusa e NAO e desinteresse. NAO pergunte de novo se ja fez. Acolha em meia frase (sem exagerar) e avance: explique em 2 ou 3 frases, com o que esta CADASTRADO, como funciona/o que esperar para quem faz pela primeira vez, e termine com no maximo UMA pergunta util para o proximo passo (so se ainda faltar saber o que ela quer tratar, ou se ela ja demonstrou querer ver horarios)." + ctx.noPrice;
+    else if (r.meaning === "experience_yes")
+      out = "Ela respondeu que JA FEZ antes ('" + r.prevQuestion + "'). NAO explique do zero. Pergunte (uma vez, curto) quando/como foi SO se isso mudar a orientacao, e conecte ao que o cadastro aprovado diz do procedimento." + ctx.noPrice;
+    else if (r.meaning === "accepts_info")
+      out = "Ela ACEITOU a explicacao ('" + r.prevQuestion + "' -> sim). Isso NAO e pedido de agendamento: NAO ofereca horarios nem avaliacao agora e NAO agende. Explique em 2 ou 3 frases, so com o que esta CADASTRADO (o que e, como funciona, o que esperar), e termine perguntando se ficou alguma duvida; so proponha ver horarios se ela ja demonstrou querer fazer." + ctx.noPrice;
+    else if (r.meaning === "declines_info")
+      out = "Ela disse NAO a oferta de explicar ('" + r.prevQuestion + "'). Respeite em UMA frase, sem insistir; pergunte apenas se ha algo especifico que ela queira saber. NAO ofereca avaliacao nem horarios." + ctx.noPrice;
+  }
+  // 2) objecao identificavel: responder o impedimento real primeiro (nao a jogada de descoberta)
+  const objectionHandled = !!r.objection && !r.discountAsk && ["info", "price", "returning"].includes(intent);
+  if (objectionHandled && r.objection) {
+    out = OBJECTION_MOVE[r.objection];
+    if (r.objection === "price" && !ctx.priceAsked) out += " (Ela falou do preco: pode tratar do valor conforme a regra de valores desta clinica.)";
+  }
+  // 3) e 4) pedido de desconto e perguntas feitas junto: valem em QUALQUER jogada (tambem quando a conducao ou a situacao a substituem, ver turnObligations)
+  const ob = turnObligations(r, intent, objectionHandled);
+  if (r.discountAsk) out = ob;
+  else if (ob) out += " " + ob;
+  return out;
 }
 
 // Reclamacao direta do atendimento automatico ("a IA de voces e pessima", "repetitiva", "nao ajuda em nada"): pessoa de verdade.
@@ -231,4 +298,18 @@ const BOT_COMPLAINT_RE =
 
 export function complainsAboutBot(text: string): boolean {
   return BOT_COMPLAINT_RE.test(fold(text));
+}
+
+// Obrigacoes do turno que NAO dependem de qual jogada esta valendo: pedido de desconto (nao se inventa), perguntas que ficaram sem resposta e a objecao dita agora.
+// alice.ts acrescenta este texto tambem quando a conducao (so queixa/so regiao/recusa) ou a situacao (cancelar/remarcar...) substituem a jogada do fluxo.
+export function turnObligations(r: TurnReading, intent: Intent, objectionHandled = false): string {
+  if (r.discountAsk)
+    return "Ela pediu DESCONTO/negociacao. NAO prometa, invente nem insinue desconto, promocao ou condicao. Responda em UMA frase que condicoes e negociacao sao tratadas pela equipe e chame transfer_to_human com o pedido dela (nao deixe a conversa sem resposta).";
+  const parts: string[] = [];
+  if (r.objection && !objectionHandled) parts.push("ELA LEVANTOU UMA OBJECAO neste turno: responda ao impedimento real com informacao aprovada ANTES de qualquer outra pergunta ou oferta. " + OBJECTION_MOVE[r.objection]);
+  const must = ["hesitate", "refuse", "decline", "booked", "returning", "manage", "staff"].includes(intent) || r.questions.length >= 2;
+  if (r.questions.length && must) {
+    parts.push("ELA PERGUNTOU" + (r.questions.length > 1 ? " VARIAS COISAS" : "") + ": " + r.questions.map((q, i) => (r.questions.length > 1 ? (i + 1) + ") " : "") + '"' + q.slice(0, 140) + '"').join(" ") + " RESPONDA " + (r.questions.length > 1 ? "TODAS" : "ESSA pergunta") + ", com o que esta cadastrado (se nao souber algo, diga que confirma com a equipe; nao invente), ANTES de qualquer acolhimento sobre pensar/agradecer. Nao volte a assuntos antigos nem repita o que ja respondeu.");
+  }
+  return parts.join(" ");
 }

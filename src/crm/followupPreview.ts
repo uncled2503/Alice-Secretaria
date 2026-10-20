@@ -1,7 +1,7 @@
 import { prisma } from "../db/client.js";
 import { decideTiming, describeRule, MIN_GAP_BETWEEN_AUTOMATED_MS, MAX_OVERDUE_MS, validRecoveryHours, type RecoveryPolicy } from "./followupSchedule.js";
 import { competingContact } from "./followupLedger.js";
-import { isClosingMessage } from "./followupGuards.js";
+import { isClosingMessage, isExplicitRefusal } from "./followupGuards.js";
 import { isNonCommercialHandoff, nonCommercialByContext } from "./nonCommercial.js";
 import { getFunnelStages } from "./stages.js";
 import { loadCandidates, recheckBeforeSend } from "./followup.js";
@@ -91,6 +91,7 @@ export async function previewFollowUpRound(clinicId: string, now = new Date()): 
     });
     if (active) { skip("ja_tem_horario"); continue; }
     if (isClosingMessage(last.content)) { skip("encerrou_o_assunto"); continue; }
+    if (isExplicitRefusal(last.content)) { skip("recusou_explicitamente"); continue; }
     const recentUser = await prisma.message.findMany({ where: { conversationId: conv.id, role: "user" }, orderBy: { createdAt: "desc" }, take: 5, select: { content: true } });
     const nc = nonCommercialByContext({ interestNote: conv.patient.interestNote, patientTexts: recentUser.map((m) => m.content), adText: conv.patient.adName });
     if (nc) { skip("contato_nao_comercial"); continue; }

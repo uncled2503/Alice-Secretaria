@@ -1,8 +1,9 @@
 import OpenAI from "openai";
 import { safeFetch } from "./wellFormed.js";
+import { tracked } from "./openaiCall.js";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: safeFetch, timeout: 60_000, maxRetries: 1 });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: safeFetch, timeout: 60_000, maxRetries: 0 });
 const MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
 // Base de conhecimento do assistente de ajuda do painel do CLIENTE (a clinica).
@@ -219,7 +220,7 @@ export async function answerSiteQuestion(history: SiteMessage[]): Promise<string
     return "Me conta qual e a sua duvida sobre o painel da Alice 🙂";
   }
 
-  const response = await openai.chat.completions.create({
+  const response = await tracked(openai, "assistente_ajuda").chat.completions.create({
     model: MODEL,
     messages: [{ role: "system", content: SYSTEM_PROMPT }, ...trimmed],
     temperature: 0.3,

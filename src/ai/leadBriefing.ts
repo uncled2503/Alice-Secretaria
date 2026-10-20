@@ -8,7 +8,7 @@ import { formatDateTimeInZone } from "../scheduling/time.js";
 import { automationKindOf } from "./situation.js";
 import { aiExtraEnabled } from "./aiSwitch.js";
 import { displayProcedureName } from "../clinicaexperts/placeholderProcedure.js";
-import { recordUsage } from "./usageStats.js";
+import { tracked } from "./openaiCall.js";
 import { deliveredOnly } from "./delivery.js";
 
 // ---------------------------------------------------------------------------
@@ -26,7 +26,7 @@ import { deliveredOnly } from "./delivery.js";
 
 const MODEL = process.env.OPENAI_CRM_MODEL ?? process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 let client: OpenAI | null = null;
-const openai = () => (client ??= new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: safeFetch, timeout: 30_000, maxRetries: 1 }));
+const openai = () => (client ??= new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: safeFetch, timeout: 30_000, maxRetries: 0 }));
 
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s);
 const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
@@ -177,7 +177,24 @@ Regras:
 - Registre tambem o que NAO fazer quando for claro ("nao oferecer avaliacao: ja foi avaliada", "nao mandar pesquisa: reclamou").
 - Remova notas que ficaram velhas (horario que ja passou, cancelamento resolvido). Atualize em vez de duplicar.
 - Nao repita o que ja esta na ficha ao vivo (agenda e lista de atendimentos); foque no que a ficha NAO mostra.
+- O PERFIL DO CRM (quando houver) ja guarda interesse, objecoes, recusas e preferencias que o resumo do CRM extraiu da conversa: NAO repita esses itens nas notas. Registre so o que o perfil NAO mostra ou o que MUDOU depois dele (ex.: ela voltou atras de uma recusa).
 - Sem nada relevante: {"notas": []}.`;
+
+// PERFIL JA EXTRAIDO PELO RESUMO DO CRM (leadSummary.ts): os dois processos leem a mesma conversa e extraem os mesmos fatos (interesse, objecoes, recusas, preferencias). Os processos
+// continuam separados (momentos e saidas diferentes: a memoria atualiza em minutos e guarda notas para a Alice; o resumo espera a conversa esfriar e preenche o card da equipe), mas a
+// memoria agora RECEBE o que o resumo ja extraiu e nao o reescreve. Isso reduz a saida repetida e evita o mesmo fato aparecer duas vezes no contexto da Alice (perfil + memoria).
+export function crmProfileText(p: { crmSummaryAt?: Date | null; interestNote?: string | null; objections?: string | null; refusedProcedures?: string | null; preferredPeriod?: string | null; preferredDays?: string | null; preferredProfessional?: string | null; urgency?: string | null; noInterest?: boolean | null }): string {
+  const lines: string[] = [];
+  if (p.interestNote?.trim()) lines.push(`interesse: ${clip(oneLine(p.interestNote), 120)}`);
+  if (p.objections?.trim()) lines.push(`objecoes: ${p.objections.trim()}`);
+  if (p.refusedProcedures?.trim()) lines.push(`recusou: ${clip(oneLine(p.refusedProcedures), 120)}`);
+  if (p.preferredProfessional?.trim()) lines.push(`profissional preferida: ${p.preferredProfessional.trim()}`);
+  if (p.preferredPeriod?.trim()) lines.push(`periodo preferido: ${p.preferredPeriod.trim()}`);
+  if (p.preferredDays?.trim()) lines.push(`dias preferidos: ${p.preferredDays.trim()}`);
+  if (p.urgency?.trim()) lines.push(`urgencia: ${p.urgency.trim()}`);
+  if (p.noInterest) lines.push("sem interesse (disse que nao quer mais)");
+  return lines.length ? `PERFIL DO CRM (ja extraido; nao repita nas notas${p.crmSummaryAt ? `; atualizado ${p.crmSummaryAt.toISOString().slice(0, 10)}` : ""}):\n- ${lines.join("\n- ")}` : "";
+}
 
 // PURO: valida o JSON do modelo e devolve o texto das notas ("- ...\n- ...") ou null.
 export function parseNotes(raw: string | null | undefined): string | null {
@@ -198,11 +215,10 @@ const refreshing = new Set<string>();
 
 export type NotesCall = (system: string, user: string) => Promise<string | null>;
 const defaultCall: NotesCall = async (system, user) => {
-  const res = await openai().chat.completions.create({
+  const res = await tracked(openai(), "memoria_do_lead").chat.completions.create({
     model: MODEL, temperature: 0.1, max_tokens: 500, response_format: { type: "json_object" },
     messages: [{ role: "system", content: system }, { role: "user", content: user }],
   });
-  recordUsage("memoria_do_lead", res.usage);
   return res.choices[0]?.message?.content ?? null;
 };
 
@@ -212,7 +228,7 @@ export async function refreshBriefingNotes(patientId: string, opts: { force?: bo
   if (refreshing.has(patientId)) return null;
   refreshing.add(patientId);
   try {
-    const patient = await prisma.patient.findUnique({ where: { id: patientId }, select: { id: true, briefingNotes: true, briefingNotesAt: true } });
+    const patient = await prisma.patient.findUnique({ where: { id: patientId }, select: { id: true, briefingNotes: true, briefingNotesAt: true, crmSummaryAt: true, interestNote: true, objections: true, refusedProcedures: true, preferredPeriod: true, preferredDays: true, preferredProfessional: true, urgency: true, noInterest: true } });
     if (!patient) return null;
     const conversation = await prisma.conversation.findFirst({ where: { patientId }, orderBy: { lastMessageAt: "desc" }, select: { id: true } });
     if (!conversation) return null;
@@ -236,7 +252,8 @@ export async function refreshBriefingNotes(patientId: string, opts: { force?: bo
     const transcript = msgs
       .map((m) => `${m.role === "user" ? "PESSOA" : m.role === "human" ? "EQUIPE" : automationKindOf(m) ? "AUTOMATICA" : "ALICE"}: ${clip(oneLine(m.content), 200)}`)
       .join("\n");
-    const user = `NOTAS ATUAIS:\n${patient.briefingNotes?.trim() || "(nenhuma)"}\n\nFICHA AO VIVO:\n${facts?.text ?? ""}\n\nCONVERSA (a ultima e a mais recente):\n${transcript}`;
+    const profile = crmProfileText(patient);
+    const user = `NOTAS ATUAIS:\n${patient.briefingNotes?.trim() || "(nenhuma)"}\n\nFICHA AO VIVO:\n${facts?.text ?? ""}\n\n${profile ? profile + "\n\n" : ""}CONVERSA (a ultima e a mais recente):\n${transcript}`;
     const raw = await (opts.call ?? defaultCall)(NOTES_SYSTEM, user);
     const notes = parseNotes(raw);
     if (notes === null) return null;

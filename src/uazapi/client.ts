@@ -7,6 +7,7 @@ import { prisma } from "../db/client.js";
 import { recordIncomingMessage, generateReply, recordOutgoingFromDevice, executeHandoff } from "../ai/alice.js";
 import { isFreePlan } from "../crm/plan.js";
 import { isOptOutRequest, applyOptOut, OPTOUT_CONFIRMATION } from "../crm/optout.js";
+import { trackedRequest, credentialIdOf } from "../ai/openaiCall.js";
 import { reviewOutbound, ReviewUnavailableError, isReviewUnavailable, holdInfo, type OutboundKind } from "../ai/sendGate.js";
 import { chooseFinalReply, forgetReplyContext, recallReplyContext, safeReplyFor, type ReplyContext } from "../ai/replyGuard.js";
 import { loadPersistedReplyContext, pruneReplyContexts } from "../ai/replyContextStore.js";
@@ -79,7 +80,7 @@ const AVATAR_TTL_MS = 6 * 60 * 60 * 1000;
 const STATUS_TTL_MS = 4_000;
 const avatarCache = new Map<string, { url: string | null; fetchedAt: number }>();
 const statusCache = new Map<string, { status: UazapiConnectionStatus; fetchedAt: number }>();
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 60_000, maxRetries: 1 });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 60_000, maxRetries: 0 });
 let webhookWorkerRunning = false;
 
 function record(value: unknown): JsonRecord | null {
@@ -1192,7 +1193,8 @@ async function transcribeAudio(clinicId: string, messageId: string): Promise<str
     }
     const base64 = encoded.includes(",") ? encoded.slice(encoded.indexOf(",") + 1) : encoded;
     const file = await toFile(Buffer.from(base64, "base64"), "audio.mp3");
-    const result = await openai.audio.transcriptions.create({ file, model: "whisper-1" });
+    // transcricao: cobrada por minuto de audio (nao por token): registra a chamada, o custo fica "nao calculado"
+    const result = await trackedRequest({ purpose: "transcricao_audio", clinicId, credential: credentialIdOf(openai) }, "whisper-1", async () => ({ value: await openai.audio.transcriptions.create({ file, model: "whisper-1" }), usage: null, model: "whisper-1" }));
     return result.text?.trim() || null;
   } catch (error) {
     console.error("[UAZAPI] Falha ao transcrever audio:", error);

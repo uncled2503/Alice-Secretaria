@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import { safeFetch } from "./wellFormed.js";
-import type { ChatCompletion, ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
+import type { ChatCompletion, ChatCompletionCreateParamsNonStreaming, ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
 import { prisma } from "../db/client.js";
 import { ceMirrorEnabled, enrichPatientFromCe, syncAppointment } from "../clinicaexperts/sync.js";
 import { invalidateCeCache } from "../clinicaexperts/availability.js";
@@ -34,7 +34,8 @@ import { recordIntentSignals } from "../crm/intent.js";
 import { handoffCard } from "../crm/handoffCard.js";
 import { findRepetitions, removeSentences, askedAgain, conversationMemory, splitSentences } from "./repetition.js";
 import { announcesAction, brokenPromise, PROMISE_NUDGE } from "./promises.js";
-import { analyzeFlow, askedForName, complainsAboutBot, wantsSchedule, type SalesFlow } from "./salesFlow.js";
+import { decideTurn, turnDecisionLog } from "./turnDecision.js";
+import { analyzeFlow, askedForName, complainsAboutBot, turnObligations, wantsSchedule, type SalesFlow } from "./salesFlow.js";
 import { understandConversation, planConduct, gateDecision, parseNotOffered, notOfferedIn, stripNotOffered, NOT_OFFERED_REPLY, type ConductGate, type ConductPlan, type Understanding } from "./conduct.js";
 import { REVISION } from "../version.js";
 import { confirmationThanks, isConfirmationReply } from "./confirmation.js";
@@ -46,7 +47,10 @@ import { findChosenSlot, identifyWanted, offersSlots, staffConfirmedBooking } fr
 import { statementsNote } from "./clinicStatements.js";
 import { resolveSituation, RULE_HIERARCHY } from "./situation.js";
 import { scheduleBriefingRefresh } from "./leadBriefing.js";
-import { recordUsage } from "./usageStats.js";
+import { tracked, trackedChat, runWithAiContext, newTraceId, aiContext, classifyOpenAiError } from "./openaiCall.js";
+import { noteReadingDecision } from "./usageStats.js";
+import { decideSecondReading } from "./conversationAnalysis.js";
+import { selectContent, queryFromMessages, forcedPlaybookTypes, renderIndex, searchContent } from "./contextSelect.js";
 import { EVAL_OFFER_RE, NEUTRAL_REPLY, rememberReplyContext, serializeReplyContext, type ReplyContext } from "./replyGuard.js";
 import { deliveredOnly } from "./delivery.js";
 import { displayProcedureName } from "../clinicaexperts/placeholderProcedure.js";
@@ -78,7 +82,7 @@ import { bookingRiskNote } from "../crm/patientRisk.js";
 import { isFreePlan } from "../crm/plan.js";
 import type { Procedure } from "@prisma/client";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: safeFetch, timeout: 60_000, maxRetries: 1 });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: safeFetch, timeout: 60_000, maxRetries: 0 }); // as novas tentativas sao da aplicacao (ai/openaiCall.ts), nao do SDK
 // gpt-4o-mini por padrao: conversa de qualificacao/agendamento nao precisa do
 // modelo mais caro. Troque via OPENAI_MODEL se a qualidade exigir.
 const MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
@@ -222,6 +226,22 @@ const tools: ChatCompletionTool[] = [
           note: { type: "string", description: "Preferencia do paciente em texto livre, ex: 'quinta de manha', 'qualquer dia a tarde'." },
         },
         required: ["procedure_name"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "consultar_conteudo_da_clinica",
+      description:
+        "Busca no FAQ, nas mensagens prontas e nos roteiros CADASTRADOS da clinica o que nao veio no contexto desta conversa (ha um indice dos titulos no fim do contexto). Use ANTES de dizer que a clinica nao tem/faz algo ou de transferir por falta de informacao. Nao serve para agenda, valor ou catalogo de procedimentos (esses vem das outras fontes).",
+      parameters: {
+        type: "object",
+        properties: {
+          busca: { type: "string", description: "O assunto, com as palavras da pessoa (ex.: 'estacionamento', 'pode ir acompanhada', 'forma de pagamento')." },
+          tipo: { type: "string", enum: ["faq", "mensagem_pronta", "roteiro", "qualquer"], description: "Onde procurar. Padrao: qualquer." },
+        },
+        required: ["busca"],
       },
     },
   },
@@ -464,6 +484,27 @@ async function runTool(
   const tz = clinic.timezone || "America/Sao_Paulo";
   const patientLabelOf = (p: { name: string | null; phone: string } | null) => p?.name ?? p?.phone ?? "paciente";
 
+  if (name === "consultar_conteudo_da_clinica") {
+    const busca = String(input?.busca ?? "").slice(0, 200);
+    const tipo = String(input?.tipo ?? "qualquer");
+    const [faqs, templates, playbooks] = await Promise.all([
+      tipo === "faq" || tipo === "qualquer" ? prisma.clinicFaq.findMany({ where: { clinicId, active: true } }) : Promise.resolve([]),
+      tipo === "mensagem_pronta" || tipo === "qualquer" ? prisma.messageTemplate.findMany({ where: { clinicId, active: true } }) : Promise.resolve([]),
+      tipo === "roteiro" || tipo === "qualquer" ? prisma.playbook.findMany({ where: { clinicId, active: true } }) : Promise.resolve([]),
+    ]);
+    const f = searchContent(faqs.map((x) => ({ ...x, title: x.question, aux: x.alternates })), busca);
+    const t = searchContent(templates.map((x) => ({ ...x, title: x.name, aux: x.whenToUse ?? "" })), busca);
+    const r = searchContent(playbooks.map((x) => ({ ...x, title: x.name, aux: `${x.triggerText ?? ""} ${x.goal ?? ""}` })), busca);
+    if (!f.length && !t.length && !r.length) {
+      return JSON.stringify({ encontrado: false, aviso: "Nada cadastrado com esse assunto no FAQ, nas mensagens prontas e nos roteiros. Isso NAO prova que a clinica nao faz/oferece: para procedimento, valor ou agenda use as outras fontes; se nao souber, encaminhe para a equipe (transfer_to_human) em vez de negar." });
+    }
+    return JSON.stringify({
+      encontrado: true,
+      faq: f.map((x) => ({ pergunta: x.question, resposta: x.answer, responder_exatamente: x.exactAnswer })),
+      mensagens_prontas: t.map((x) => ({ nome: x.name, quando_usar: x.whenToUse, modo: x.mode === "exact" ? "modo exato" : "adaptar tom", texto: x.body })),
+      roteiros: r.map((x) => ({ nome: x.name, quando_usar: x.triggerText, objetivo: x.goal, passos: x.steps.split("\n").filter(Boolean) })),
+    });
+  }
   if (name === "transfer_to_human") {
     const reason = String(input.reason ?? "").slice(0, 120).trim() || "atendimento humano necessario";
     const summary = String(input.summary ?? "").slice(0, 1500).trim();
@@ -1220,7 +1261,7 @@ function personaInstruction(clinic: { name: string; assistantName: string; assis
   return `Voce se apresenta apenas como parte da equipe ${prepLugar(clinic.name)}, sem citar cargo. Ex: "Oi! Aqui e a ${a}, da equipe ${prepLugar(clinic.name)}".${grammar}`;
 }
 
-export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: string; flow?: SalesFlow; focusTexts?: string[] } = {}): Promise<string> {
+export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: string; flow?: SalesFlow; focusTexts?: string[]; recentUserTexts?: string[]; firstContact?: boolean } = {}): Promise<string> {
   const clinic = await prisma.clinic.findUniqueOrThrow({
     where: { id: clinicId },
     include: {
@@ -1270,7 +1311,7 @@ NAO FIQUE SE DESPEDINDO: se voce ja se despediu ou disse "fico a disposicao"/"e 
 
   const postureLine = consultivo
     ? `\nPOSTURA CONSULTIVA: conduza como um consultorio, sem pressao comercial. Responda a duvida atual primeiro; so pergunte de novo quando a resposta mudar o proximo passo; se ja respondeu, aguardar e uma acao valida. Nao encerre com pergunta generica so pra manter a conversa. Nao empurre o agendamento - ofereca o caminho da avaliacao quando houver interesse real.`
-    : `\nPOSTURA COMERCIAL - MAQUINA DE VENDAS CONSULTIVA. Cada mensagem sua tem UM objetivo: levar a cliente ao proximo passo (avaliacao ou agendamento), com naturalidade e sem enrolar. Como:
+    : `\nPOSTURA COMERCIAL - MAQUINA DE VENDAS CONSULTIVA. Responda primeiro ao que a pessoa disse ou perguntou e ajude-a a dar UM passo de cada vez, com naturalidade e sem enrolar; o proximo passo pode ser explicar, tirar uma duvida, mostrar horarios ou simplesmente aguardar (a JOGADA AGORA diz qual). Como:
 - SO leve ao agendamento quando a pessoa esta em conversa de compra (contou o que quer, perguntou de um procedimento, pediu ou aceitou horario). Resposta curta ("ok", "nao", "vou tentar"), agradecimento, assunto de amiga/familiar, conversa de quem JA foi atendida ou que a equipe estava conduzindo: responda so o que ela disse; NUNCA liste horarios nem ofereca avaliacao se ela nao pediu.
 - LEIA a conversa inteira antes de responder. Nunca pergunte o que ela ja contou; nunca repita pergunta, informacao ou oferta que voce ja fez.
 - Ela ja disse o que quer TRATAR (a queixa)? Reconheca com as palavras dela (1 frase) e conecte so o que o CADASTRO aprovado indica para essa queixa (1 frase). O proximo passo e o que a JOGADA AGORA mandar: se ela ESCOLHEU um procedimento que agenda direto, siga com ESSE; se so contou a queixa, NAO escolha o procedimento por ela nem liste horarios; avaliacao so quando for mesmo o caminho. Ela ainda nao disse? Faca UMA pergunta curta sobre o que quer tratar (a regiao sozinha nao define o tratamento; se veio de anuncio, use o procedimento do anuncio).
@@ -1280,7 +1321,7 @@ NAO FIQUE SE DESPEDINDO: se voce ja se despediu ou disse "fico a disposicao"/"e 
 - Objecao (preco, medo, tempo, indecisao): acolha, reconecte com o resultado que ela quer, use so as orientacoes cadastradas e proponha o proximo passo menor que a JOGADA AGORA indicar (sem empurrar avaliacao a quem escolheu um procedimento direto). Nunca invente desconto, garantia nem urgencia.
 - Respondeu "nao", "vou pensar" ou "vou me organizar"? Acolha em UMA frase calorosa, sem pressao: NAO ofereca avaliacao nem horarios e NAO insista (a JOGADA AGORA detalha). So se ELA disser quando quer ser chamada, chame schedule_recontact.
 - NAO monte pacote, combo nem junte procedimentos por conta propria. Indicacao de procedimento se baseia na QUEIXA que ela contou e no que o CADASTRO aprovado diz que cada procedimento atende - a regiao do corpo sozinha NUNCA e criterio, e queixa que ela nao citou nao autoriza sugestao (quem fala de clareamento nao recebe gordura, celulite nem flacidez, a menos que ela mesma fale disso). Sem procedimento aprovado para a queixa, diga com naturalidade que vai confirmar com a equipe e use transfer_to_human, sem adivinhar. Combo/pacote so se ja estiver cadastrado como condicao vigente ou se ela pedir.
-- Mensagens curtas (ate 3 frases), uma pergunta so, tom de WhatsApp, sem formulario, sem repetir a mesma abertura nem a mesma pergunta de fechamento.
+- Mensagens curtas (ate 3 frases), no maximo uma pergunta principal (e so quando ela ajuda a avancar), tom de WhatsApp, sem formulario, sem repetir a mesma abertura nem a mesma pergunta de fechamento.
 - Nunca diga que "ja tem outro paciente" no horario: diga so que "esse horario nao esta disponivel" e ofereca o mais proximo.
 Tudo isso sem quebrar regra nenhuma: nao invente valor, prazo, garantia nem urgencia que nao seja real.`;
 
@@ -1502,23 +1543,42 @@ FERIADOS PROXIMOS: ${holidayItems.join("; ")}. Se a pessoa perguntar se funciona
   // Descritivos comerciais (Lisboa): quando os procedimentos trazem "Pergunta para continuar a conversa", a Alice explica em
   // etapas, sem prometer resultado, e continua com a pergunta - nunca encerra so explicando.
   const explainLine = clinic.procedures.some((p) => p.description?.includes("Pergunta para continuar a conversa:"))
-    ? `\nCOMO EXPLICAR PROCEDIMENTOS: use a "Descricao" do procedimento. NAO mande o texto inteiro de uma vez: explique em 2 ou 3 frases e va aprofundando conforme a cliente demonstrar interesse (o que e -> o que pode ajudar a melhorar -> personalizacao/avaliacao -> pergunta). Depois de explicar, faca a "Pergunta para continuar a conversa" daquele procedimento (ou uma equivalente sobre a queixa dela), sem repetir uma pergunta que ja fez; nunca encerre so explicando. Nao prometa resultado nem use "vai eliminar", "garantido", "sem risco" ou "resultado certo". Se perguntarem qual e o melhor para ela, a escolha depende de avaliacao individual. Medicamento, contraindicacao, gestacao/amamentacao, intercorrencia, reacao, dor ou duvida clinica: chame transfer_to_human. Nao defina numero de sessoes, dosagem, ml nem intervalo sem informacao cadastrada. Protocolo proprio da clinica so pode ser descrito conforme a descricao cadastrada. Se a Descricao disser que a Alice nao deve orientar (medicamento de prescricao), nao explique nem ofereca: encaminhe para a equipe. Quando houver interesse, o proximo passo e oferecer avaliacao ou horarios disponiveis, de forma natural e sem pressao.`
+    ? `\nCOMO EXPLICAR PROCEDIMENTOS: use a "Descricao" do procedimento. NAO mande o texto inteiro de uma vez: explique em 2 ou 3 frases e va aprofundando conforme a cliente demonstrar interesse (o que e -> o que pode ajudar a melhorar -> personalizacao/avaliacao -> pergunta). Depois de explicar, SO se a JOGADA AGORA e a SITUACAO da ficha permitirem seguir a conversa (ela nao recusou, nao agradeceu/encerrou, nao esta ja agendada e a equipe nao esta atendendo), faca a "Pergunta para continuar a conversa" daquele procedimento (ou uma equivalente sobre a queixa dela), sem repetir uma pergunta que ja fez; com a conversa em andamento nao encerre so explicando. Se a JOGADA AGORA mandar acolher, agradecer, aguardar ou nao oferecer nada, obedeca a JOGADA: sem pergunta de continuidade, sem avaliacao e sem horarios. Nao prometa resultado nem use "vai eliminar", "garantido", "sem risco" ou "resultado certo". Se perguntarem qual e o melhor para ela, a escolha depende de avaliacao individual. Medicamento, contraindicacao, gestacao/amamentacao, intercorrencia, reacao, dor ou duvida clinica: chame transfer_to_human. Nao defina numero de sessoes, dosagem, ml nem intervalo sem informacao cadastrada. Protocolo proprio da clinica so pode ser descrito conforme a descricao cadastrada. Se a Descricao disser que a Alice nao deve orientar (medicamento de prescricao), nao explique nem ofereca: encaminhe para a equipe. Quando houver interesse e nada acima proibir, o proximo passo e o da JOGADA AGORA: horarios do procedimento que ELA escolheu (avaliacao so para quem ainda nao sabe qual procedimento quer; nunca troque o procedimento escolhido por avaliacao), de forma natural e sem pressao. Depois de agendar, nao ofereca novos horarios.`
     : "";
 
-  const templatesBlock = clinic.messageTemplates.length
-    ? `\n\nMensagens prontas${isGeneric ? "" : " da clinica"} (reaproveite quando fizer sentido; ${"{"}modo exato${"}"} = enviar o texto exatamente como esta, so trocando as variaveis):\n${clinic.messageTemplates
+  // SELECAO do conteudo da clinica pertinente a ESTA conversa (contextSelect.ts). Sem recentUserTexts (ex.: chamada de teste/painel) ou com AI_CONTEXT_SELECT=off, entra tudo, como antes.
+  const selecting = process.env.AI_CONTEXT_SELECT !== "off" && ctx.recentUserTexts !== undefined;
+  const query = queryFromMessages(ctx.recentUserTexts ?? []);
+  const lastUserFolded = (ctx.recentUserTexts ?? []).slice(-1).join(" ").toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
+  const forcedTypes = forcedPlaybookTypes({ intent: ctx.flow?.intent ?? null, firstContact: !!ctx.firstContact, priceAsked: PRICE_ASK_RE.test(lastUserFolded) });
+  const selFaqs = selecting ? selectContent("faq", clinic.faqs.map((f) => ({ ...f, title: f.question, aux: f.alternates })), query) : { selected: clinic.faqs, rest: [] as typeof clinic.faqs, why: {} as Record<string, string> };
+  const selTemplates = selecting ? selectContent("template", clinic.messageTemplates.map((t) => ({ ...t, title: t.name, aux: t.whenToUse ?? "" })), query) : { selected: clinic.messageTemplates, rest: [] as typeof clinic.messageTemplates, why: {} as Record<string, string> };
+  const selPlaybooks = selecting
+    ? selectContent("playbook", clinic.playbooks.map((pb) => ({ ...pb, title: pb.name, aux: `${pb.triggerText ?? ""} ${pb.goal ?? ""}` })), query, { forced: new Set(clinic.playbooks.filter((pb) => forcedTypes.has(pb.scriptType)).map((pb) => pb.id)) })
+    : { selected: clinic.playbooks, rest: [] as typeof clinic.playbooks, why: {} as Record<string, string> };
+  const contentIndex = renderIndex([
+    { label: "FAQ", titles: selFaqs.rest.map((f) => f.question) },
+    { label: "Mensagens prontas", titles: selTemplates.rest.map((t) => t.name) },
+    { label: "Roteiros", titles: selPlaybooks.rest.map((pb) => pb.name) },
+  ]);
+  if (selecting && (selFaqs.rest.length || selTemplates.rest.length || selPlaybooks.rest.length)) {
+    console.log(`[contexto] faq=${selFaqs.selected.length}/${clinic.faqs.length} mensagens=${selTemplates.selected.length}/${clinic.messageTemplates.length} roteiros=${selPlaybooks.selected.length}/${clinic.playbooks.length} (os demais ficam no indice e na ferramenta de consulta)`);
+  }
+
+  const templatesBlock = selTemplates.selected.length
+    ? `\n\nMensagens prontas${isGeneric ? "" : " da clinica"} (reaproveite quando fizer sentido; ${"{"}modo exato${"}"} = enviar o texto exatamente como esta, so trocando as variaveis):\n${selTemplates.selected
         .map((t) => `- ${t.name}${t.whenToUse ? ` (usar quando: ${t.whenToUse})` : ""} [${t.mode === "exact" ? "modo exato" : "adaptar tom"}]:\n  "${t.body}"`)
         .join("\n")}`
     : "";
 
-  const faqBlock = clinic.faqs.length
-    ? `\n\nFAQ${isGeneric ? "" : " operacional da clinica"} (use SO estas respostas pra estes assuntos${isGeneric ? "" : "; agenda, catalogo e preco continuam vindo das outras fontes"}):\n${clinic.faqs
+  const faqBlock = selFaqs.selected.length
+    ? `\n\nFAQ${isGeneric ? "" : " operacional da clinica"} (use SO estas respostas pra estes assuntos${isGeneric ? "" : "; agenda, catalogo e preco continuam vindo das outras fontes"}):\n${selFaqs.selected
         .map((f) => `- P: ${f.question}${f.alternates.trim() ? ` (tambem: ${f.alternates.split("\n").filter(Boolean).join(" / ")})` : ""}\n  R${f.exactAnswer ? " (responder exatamente)" : ""}: ${f.answer}`)
         .join("\n")}`
     : "";
 
-  const playbookBlock = clinic.playbooks.length
-    ? `\n\nRoteiros (conduza a conversa nestes passos quando a situacao corresponder):\n${clinic.playbooks
+  const playbookBlock = selPlaybooks.selected.length
+    ? `\n\nRoteiros (conduza a conversa nestes passos quando a situacao corresponder):\n${selPlaybooks.selected
         .map((p) => `- ${p.name}${p.triggerText ? ` — usar quando: ${p.triggerText}` : ""}${p.goal ? `\n  Objetivo: ${p.goal}` : ""}\n  Passos:\n${p.steps.split("\n").filter(Boolean).map((s, i) => `   ${i + 1}. ${s}`).join("\n")}`)
         .join("\n")}`
     : "";
@@ -1607,7 +1667,7 @@ Seu trabalho:
 2. Manter a etapa do cliente no funil atualizada (update_crm_stage) conforme a conversa avanca.
 3. Nunca invente estoque, prazo de entrega, status de pedido, preco ou politica que nao estejam cadastrados. Nesses casos, mande a pessoa ver no site (link da peca ou da colecao) ou, se precisar mesmo de uma pessoa, use transfer_to_human - nunca mande link de WhatsApp.
 4. Conduzir o cliente ate a compra: recomendar, mandar o link certo e levar pro proximo passo (esse e o objetivo).
-5. Quando fizer sentido, termine com um proximo passo claro (um link, uma opcao ou uma pergunta), sempre diferente do que voce ja disse e perguntou antes.${sellerLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${genericHandoffLine}${noRepeatLine}${locationLine}${catalogBlock}${stagesBlock}${templatesBlock}${faqBlock}${playbookBlock}
+5. Quando fizer sentido, termine com um proximo passo claro (um link, uma opcao ou uma pergunta), sempre diferente do que voce ja disse e perguntou antes.${sellerLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${surveyLine}${genericHandoffLine}${noRepeatLine}${locationLine}${catalogBlock}${stagesBlock}${templatesBlock}${faqBlock}${playbookBlock}${contentIndex}
 
 Responda sempre em portugues do Brasil, em mensagens curtas como quem digita no WhatsApp. ${GRAMMAR_REMINDER}${await getActiveRulesPrompt(clinicId)}`;
   }
@@ -1635,11 +1695,11 @@ Seu trabalho:
 Procedimentos oferecidos pela clinica (lista resumida: nome, duracao e valor; a descricao completa so vem, no fim do contexto, para os procedimentos em foco na conversa):
 ${procedureListCompact || "(nenhum procedimento cadastrado ainda)"}
 
-Use so os dados de valor, beneficio, indicacao e prazo cadastrados na lista acima e nos DETALHES DOS PROCEDIMENTOS EM FOCO (fim do contexto). Procedimento que aparece so na lista (sem detalhes): nao descreva nem prometa nada dele alem de nome, duracao e valor; diga que a profissional explica na avaliacao. Marcador [tem fotos]: ofereca enviar resultados quando houver interesse (send_procedure_photos). Se o paciente perguntar algo que nao esta ali (preco de um item sem valor, prazo de um item sem prazo cadastrado, etc.), diga que precisa confirmar na avaliacao/com a equipe - nunca invente numero, garantia ou prazo.${scheduleBlock}${stagesBlock}${templatesBlock}${faqBlock}${playbookBlock}
+Use so os dados de valor, beneficio, indicacao e prazo cadastrados na lista acima e nos DETALHES DOS PROCEDIMENTOS EM FOCO (fim do contexto). Procedimento que aparece so na lista (sem detalhes): nao descreva nem prometa nada dele alem de nome, duracao e valor; diga que a profissional explica na avaliacao. Marcador [tem fotos]: ofereca enviar resultados quando houver interesse (send_procedure_photos). Se o paciente perguntar algo que nao esta ali (preco de um item sem valor, prazo de um item sem prazo cadastrado, etc.), diga que precisa confirmar na avaliacao/com a equipe - nunca invente numero, garantia ou prazo.${scheduleBlock}${stagesBlock}
 
 Responda sempre em portugues do Brasil, em mensagens curtas como quem digita no WhatsApp. ${GRAMMAR_REMINDER}${await getActiveRulesPrompt(clinicId)}
 
-=== CONTEXTO DESTA CONVERSA (muda a cada mensagem; vale mais que o texto padrao acima) ===${scheduleDynamic}${dateLine}${holidayLine}${apptLine}${profileLine}${adLine}${objectionLine}${continuityLine}${evalPitchLine}${firstContactLine}${discoveryLine}${surveyLine}${focusBlock}${professionalsBlock}`;
+=== CONTEXTO DESTA CONVERSA (muda a cada mensagem; vale mais que o texto padrao acima) ===${scheduleDynamic}${dateLine}${holidayLine}${apptLine}${profileLine}${adLine}${objectionLine}${continuityLine}${evalPitchLine}${firstContactLine}${discoveryLine}${surveyLine}${focusBlock}${templatesBlock}${faqBlock}${playbookBlock}${contentIndex}${professionalsBlock}`;
 }
 
 export interface IncomingReferral {
@@ -1958,7 +2018,7 @@ export const SAYS_HANDOFF_RE =
 // Reescreve a resposta tirando as frases que a Alice JA tinha dito: responde so ao que a pessoa mandou agora.
 async function rewriteWithoutRepetition(draft: string, userNow: string, repeated: string[], clinicName: string): Promise<string | null> {
   try {
-    const res = await openai.chat.completions.create({
+    const res = await tracked(openai, "reescrita_repeticao", { reason: "correction:repeticao" }).chat.completions.create({
       model: MODEL,
       temperature: 0.4,
       messages: [
@@ -1980,7 +2040,7 @@ async function rewriteWithoutRepetition(draft: string, userNow: string, repeated
 // Tira a oferta de avaliacao / pedido de dia e turno de uma resposta que ia insistir nisso.
 async function removeEvaluationPitch(draft: string, patientMessages: string[], clinicName: string): Promise<string | null> {
   try {
-    const res = await openai.chat.completions.create({
+    const res = await tracked(openai, "reescrita_sem_pressao", { reason: "correction:sem_pressao" }).chat.completions.create({
       model: MODEL,
       temperature: 0.3,
       messages: [
@@ -2002,7 +2062,7 @@ async function removeEvaluationPitch(draft: string, patientMessages: string[], c
 // Reescreve a resposta que indicou procedimento de OUTRA regiao: responde a queixa dela e, se houver, indica so o que serve.
 async function rewriteForRelevance(draft: string, patientMessages: string[], areaLabel: string, wrongProcedure: string, fits: string[], clinicName: string): Promise<string | null> {
   try {
-    const res = await openai.chat.completions.create({
+    const res = await tracked(openai, "reescrita_relevancia", { reason: "correction:relevancia" }).chat.completions.create({
       model: MODEL,
       temperature: 0.3,
       messages: [
@@ -2024,7 +2084,7 @@ async function rewriteForRelevance(draft: string, patientMessages: string[], are
 // Reescreve a primeira resposta em no maximo 2 frases: apresentacao + UMA pergunta.
 async function shortenFirstReply(draft: string, patientMessages: string[], clinicName: string, assistantName: string): Promise<string | null> {
   try {
-    const res = await openai.chat.completions.create({
+    const res = await tracked(openai, "reescrita_primeira_resposta", { reason: "correction:primeira_resposta" }).chat.completions.create({
       model: MODEL,
       temperature: 0.3,
       messages: [
@@ -2039,6 +2099,35 @@ async function shortenFirstReply(draft: string, patientMessages: string[], clini
     return text && text.length >= 20 && text.length < draft.length ? text : null;
   } catch (err) {
     console.error("[primeira-resposta] falha ao encurtar:", err);
+    return null;
+  }
+}
+
+// REESCRITA CONSOLIDADA: quando mais de um problema da MESMA resposta continua depois das correcoes deterministicas (procedimento de outra regiao, repeticao de frases,
+// primeira mensagem longa demais), uma unica chamada corrige tudo, em vez de uma chamada por problema. Cada correcao individual tem o mesmo texto de instrucao de antes.
+export interface RewriteProblems { relevance?: { areaLabel: string; wrong: string; fits: string[] }; repeated?: string[]; shortFirst?: { assistantName: string } }
+export function consolidatedRewritePrompt(clinicName: string, p: RewriteProblems): string {
+  const parts: string[] = [];
+  if (p.shortFirst) parts.push(`PRIMEIRA MENSAGEM a um contato novo, longa demais: reescreva em UMA unica mensagem de NO MAXIMO 2 frases curtas: (1) apresentacao curta ("Oi! Aqui e a ${p.shortFirst.assistantName}, da equipe ${clinicName}.") e (2) UMA unica pergunta para comecar a conversa (o nome da pessoa, se ainda nao se sabe, OU o que ela gostaria de melhorar, especifica ao assunto). PROIBIDO explicar o procedimento, listar beneficios, falar de avaliacao gratuita, valores, agendamento ou dia/turno.`);
+  if (p.relevance) parts.push(`PROCEDIMENTO DE OUTRA REGIAO: o rascunho indica "${p.relevance.wrong}", que NAO e da regiao da queixa da pessoa (${p.relevance.areaLabel}). NAO cite esse procedimento. ${p.relevance.fits.length ? `Se fizer sentido, indique apenas: ${p.relevance.fits.join(", ")}.` : "Nao indique nenhum procedimento: diga que a profissional define o melhor caminho para essa regiao na avaliacao."} Use as palavras dela.`);
+  if (p.repeated?.length) parts.push(`REPETICAO: o rascunho REPETE frases que ja foram ditas (lista abaixo). Responda APENAS ao que a pessoa perguntou agora, SEM repetir essas frases nem o mesmo assunto; se o rascunho traz informacao NOVA que responde a pergunta atual, mantenha so ela. Termine, se fizer sentido, com UMA pergunta curta DIFERENTE das anteriores (ou apenas pare, se a pergunta ja foi respondida).\n\nFRASES JA DITAS (nao repetir):\n${p.repeated.map((r) => `- ${r}`).join("\n")}`);
+  return `Voce reescreve UMA resposta de uma secretaria de clinica (${clinicName}) no WhatsApp corrigindo TODOS os problemas abaixo de uma vez, numa unica mensagem natural, em no maximo ${p.shortFirst ? 2 : 3} frases curtas, no maximo UMA pergunta, sem markdown, no maximo 1 emoji. Nao invente nada (sem valor, prazo, resultado nem horario): use so o que esta no rascunho.\n\n${parts.map((x, i) => `${i + 1}) ${x}`).join("\n\n")}\n\nResponda SO com a mensagem.`;
+}
+
+async function rewriteConsolidated(draft: string, patientMessages: string[], clinicName: string, problems: RewriteProblems): Promise<string | null> {
+  try {
+    const res = await tracked(openai, "reescrita_consolidada", { reason: "correction:consolidada" }).chat.completions.create({
+      model: MODEL,
+      temperature: 0.3,
+      messages: [
+        { role: "system", content: consolidatedRewritePrompt(clinicName, problems) },
+        { role: "user", content: `Mensagens recentes da pessoa:\n${patientMessages.join("\n").slice(0, 600)}\n\nRascunho:\n${draft.slice(0, 1500)}` },
+      ],
+    });
+    const text = res.choices[0]?.message?.content?.trim();
+    return text && text.length >= 12 ? text : null;
+  } catch (err) {
+    console.error("[reescrita-consolidada] falha ao reescrever:", err instanceof Error ? err.message.slice(0, 160) : err);
     return null;
   }
 }
@@ -2058,20 +2147,23 @@ function samplingFor(model: string): Record<string, unknown> {
 function logUsage(model: string, res: ChatCompletion): void {
   const u = res.usage as (ChatCompletion["usage"] & { prompt_tokens_details?: { cached_tokens?: number } }) | undefined;
   if (!u) return;
-  recordUsage("conversa_alice", u);
   const cached = u.prompt_tokens_details?.cached_tokens ?? 0;
   console.log(`[tokens] ${model} entrada=${u.prompt_tokens} cache=${cached} (${u.prompt_tokens ? Math.round((cached / u.prompt_tokens) * 100) : 0}%) saida=${u.completion_tokens}`);
 }
 
-async function createChat(model: string, messages: ChatCompletionMessageParam[], activeTools: ChatCompletionTool[]) {
+async function createChat(model: string, messages: ChatCompletionMessageParam[], activeTools: ChatCompletionTool[], reason = "answer") {
+  const build = (m: string) => ({ model: m, messages, tools: activeTools, ...samplingFor(m) }) as unknown as ChatCompletionCreateParamsNonStreaming;
   try {
-    const res = (await openai.chat.completions.create({ model, messages, tools: activeTools, ...samplingFor(model) } as Parameters<typeof openai.chat.completions.create>[0] & { stream?: false })) as ChatCompletion;
+    const res = await trackedChat(openai, build(model), { purpose: "conversa_alice", reason });
     logUsage(model, res);
     return res;
   } catch (err) {
-    if (model === MODEL) throw err;
-    console.error(`[modelo] ${model} falhou, usando ${MODEL}:`, err);
-    const res = (await openai.chat.completions.create({ model: MODEL, messages, tools: activeTools, ...samplingFor(MODEL) } as Parameters<typeof openai.chat.completions.create>[0] & { stream?: false })) as ChatCompletion;
+    // Trocar de modelo so ajuda quando o problema e do MODELO desta clinica (nome errado, sem acesso, parametro recusado). Saldo esgotado, credencial invalida, limite temporario,
+    // indisponibilidade e timeout NAO melhoram com outro modelo (so gastariam outra chamada): o erro segue para quem trata (a conversa vai para a equipe, nunca fica muda em silencio).
+    const kind = (err as { aiKind?: string }).aiKind ?? classifyOpenAiError(err).kind;
+    if (model === MODEL || !(kind === "model" || kind === "bad_request" || kind === "other")) throw err;
+    console.error(`[modelo] ${model} falhou (${kind}), usando ${MODEL}:`, err instanceof Error ? err.message.slice(0, 160) : err);
+    const res = await trackedChat(openai, build(MODEL), { purpose: "conversa_alice", reason: "fallback_model" });
     logUsage(MODEL, res);
     return res;
   }
@@ -2086,6 +2178,7 @@ async function readConversation(p: {
   trailing: string[];
   pastVisitCount: number;
   skipAnalysis?: boolean;
+  skipReason?: string;
 }): Promise<string> {
   try {
     const [clinic, patient, upcoming, catalog] = await Promise.all([
@@ -2113,12 +2206,18 @@ async function readConversation(p: {
       pastVisits: p.pastVisitCount,
       catalog,
     });
-    // Segunda leitura so quando ha conversa suficiente para valer a chamada.
+    // SEGUNDA LEITURA (uma chamada paga a mais): so quando ha ambiguidade ou complexidade que o resumo deterministico acima nao resolve. O criterio e explicito
+    // (conversationAnalysis.ts: decideSecondReading) e a decisao - executada ou dispensada, e por que - fica no log e no contador do painel de uso.
     let analysisText = "";
-    if (!p.skipAnalysis && process.env.AI_SECOND_READING !== "off" && p.history.filter((m) => m.role !== "system").length >= 4) {
+    const decision = p.skipAnalysis
+      ? { run: false, reasons: [] as string[], skip: p.skipReason ?? "situacao_ja_decidida_pelo_codigo" }
+      : decideSecondReading({ history: p.history, trailing: p.trailing, catalog, mode: process.env.AI_SECOND_READING });
+    noteReadingDecision(decision.run, decision.run ? decision.reasons.join("+") : decision.skip ?? "dispensada");
+    console.log(`[segunda-leitura] ${decision.run ? `EXECUTADA motivos=${decision.reasons.join("+")}` : `dispensada motivo=${decision.skip}`} atendimento=${aiContext().traceId ?? "-"}`);
+    if (decision.run) {
       const analysis = await analyzeConversation(
         async (system, user) => {
-          const res = await openai.chat.completions.create({
+          const res = await tracked(openai, "segunda_leitura", { reason: `second_reading:${decision.reasons.join("+").slice(0, 40)}` }).chat.completions.create({
             model: MODEL,
             temperature: 0.2,
             response_format: { type: "json_object" },
@@ -2127,7 +2226,6 @@ async function readConversation(p: {
               { role: "user", content: user },
             ],
           });
-          recordUsage("segunda_leitura", res.usage);
           return res.choices[0]?.message?.content ?? null;
         },
         { brief, history: p.history, trailing: p.trailing },
@@ -2151,7 +2249,8 @@ export function generateReply(
   opts: { imageDataUrl?: string; guardAgainstNewerThan?: Date; resumedAfterStaffDelay?: boolean } = {},
 ): Promise<string> {
   const prev = replyLocks.get(conversationId) ?? Promise.resolve();
-  const run = prev.catch(() => undefined).then(() => generateReplyUnlocked(conversationId, opts));
+  // cada resposta gerada e UM atendimento: o traceId agrupa todas as chamadas a OpenAI feitas por ela (resposta, ferramentas, correcoes, reescritas, nova tentativa)
+  const run = prev.catch(() => undefined).then(() => runWithAiContext({ conversationId, traceId: newTraceId() }, () => generateReplyUnlocked(conversationId, opts)));
   replyLocks.set(conversationId, run);
   void run.finally(() => {
     if (replyLocks.get(conversationId) === run) replyLocks.delete(conversationId);
@@ -2181,6 +2280,7 @@ async function generateReplyUnlocked(
   if (conversation.humanTakeover) return "";
 
   const clinicId = conversation.patient.clinicId;
+  aiContext().clinicId = clinicId; // a medicao das chamadas deste atendimento leva a clinica
   // Nada a responder: a ultima fala da conversa ja e da Alice (ou da equipe). Acontece
   // quando duas chamadas disputam a mesma mensagem - a primeira ja respondeu tudo.
   const lastTurn = await prisma.message.findFirst({
@@ -2515,7 +2615,7 @@ async function generateReplyUnlocked(
   // avaliacao e pra quem nao sabe o que quer (15/10/2026).
   const bookingCatalog = await prisma.procedure.findMany({ where: { clinicId, internalOnly: false }, select: { name: true, aliases: true, goals: true, benefits: true, description: true, bookingMode: true } });
   const adForWanted = (await prisma.patient.findUnique({ where: { id: patient.id }, select: { adName: true } }))?.adName ?? "";
-  const wanted = identifyWanted(bookingCatalog, [adForWanted, ...history.filter((m) => m.role === "user").map((m) => m.content), ...trailingNow].filter(Boolean));
+  const wanted = identifyWanted(bookingCatalog, [adForWanted, ...history.filter((m) => m.role === "user").map((m) => m.content), ...trailingNow].filter(Boolean), adForWanted ? 1 : 0);
   const flowTz = (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { timezone: true } }))?.timezone || "America/Sao_Paulo";
   const chosen = findChosenSlot(history, trailingNow, isoDateInZone(new Date(), flowTz), bookingCatalog.map((p) => p.name));
   const lastNameAsk = [...history].reverse().find((m) => m.role !== "user")?.content ?? "";
@@ -2553,6 +2653,7 @@ async function generateReplyUnlocked(
     evaluationName: bookingCatalog.find((p) => /avalia/i.test(p.name))?.name ?? null,
     awaitingName,
     needOptions: understanding && understanding.objective.concerns.length ? understanding.families : undefined,
+    unmappedOffer: understanding?.unmappedAsked ?? null,
   });
   // SITUACAO + FICHA (hierarquia de regras, ver ai/situation.ts): o codigo olha os fatos (agenda dela, ultima mensagem automatica, equipe que estava
   // negociando, o que ela pediu de dia/hora) e escolhe UMA situacao pela ordem de prioridade; cada uma traz a ordem exata pro modelo.
@@ -2594,6 +2695,7 @@ async function generateReplyUnlocked(
     situation.forbidEvaluationOffer = situation.forbidEvaluationOffer || plan.forbidEvaluationOffer;
     situation.forbidSlotOffer = situation.forbidSlotOffer || plan.forbidSlotOffer;
     console.log(`[conduta] clinica=${clinicId} conversa=${conversation.id} ${Object.entries(plan.trace).map(([k, v]) => `${k}=${v}`).join(" ")} revisao=${REVISION.split(":")[0]}`);
+    console.log(`[decisao] conversa=${conversation.id} ${turnDecisionLog(decideTurn({ flow, situation, understanding, plan, wanted, nextBookingLabel: apptRows[0] ? formatInZone(apptRows[0].scheduledAt, tagTz) : null, chosenSlotLabel: chosen?.label ?? null }))}`);
     if (flow.intent === "hesitate" || flow.intent === "refuse") void recordLeadDecision(clinicId, patient.id, flow.intent);
   }
   const forcedTransfer = situation.forceTransfer ?? (plan?.handoffForced ? plan.handoff : null);
@@ -2633,12 +2735,17 @@ async function generateReplyUnlocked(
     // A conducao vem ANTES da jogada generica; quando as duas conflitam (so queixa, so regiao, recusa, procedimento bloqueado) a jogada generica sai.
     const conduct = [plan.safety, situation.directive ? "" : plan.directive].filter(Boolean).join("\n");
     if (conduct) flow.nextMove = !situation.directive && plan.replacesFlowMove ? conduct : `${conduct}\n${flow.nextMove}`;
+    // O que ela disse AGORA (objecao, pedido de desconto, perguntas) nao se perde quando a conducao/situacao substituiu a jogada do fluxo.
+    if (situation.directive || plan.replacesFlowMove) {
+      const ob = turnObligations(flow.reading, flow.intent);
+      if (ob) flow.nextMove += `\nPRIORIDADE NESTE TURNO: ${ob}`;
+    }
   }
   const focusTexts = [
     ...history.filter((m) => m.role !== "user").slice(-3).map((m) => m.content),
     ...history.filter((m) => m.role === "user").slice(-8).map((m) => m.content),
   ];
-  const system = await buildSystemPrompt(clinicId, { patientId: patient.id, flow, focusTexts });
+  const system = await buildSystemPrompt(clinicId, { patientId: patient.id, flow, focusTexts, recentUserTexts: history.filter((m) => m.role === "user").map((m) => m.content).slice(-4), firstContact: !history.some((m) => m.role === "assistant") });
 
   const messages: ChatCompletionMessageParam[] = [
     { role: "system", content: system },
@@ -2696,8 +2803,8 @@ async function generateReplyUnlocked(
   {
     const trailing = trailingUser;
     if (trailing.length) {
-      const memory = conversationMemory(priorReplies, answeredUser);
-      const reading = await readConversation({ clinicId, patientId: patient.id, history, trailing, pastVisitCount, skipAnalysis: flow.intent === "booked" || flow.intent === "manage" || flow.intent === "staff" || situation.kind !== "default" || trailing.every((t) => isCourtesyOnly(t)) });
+      const memory = conversationMemory(priorReplies, answeredUser, { includeAnswered: false });
+      const reading = await readConversation({ clinicId, patientId: patient.id, history, trailing, pastVisitCount, skipAnalysis: flow.intent === "booked" || flow.intent === "manage" || flow.intent === "staff" || situation.kind !== "default" || trailing.every((t) => isCourtesyOnly(t)), skipReason: flow.intent === "booked" || flow.intent === "manage" || flow.intent === "staff" ? `intencao_${flow.intent}` : situation.kind !== "default" ? `situacao_${situation.kind}` : "so_cortesia" });
       messages.push({
         role: "system",
         content: `FICHA DESTA PESSOA (leia ANTES de responder; a SITUACAO abaixo manda mais que qualquer outra regra):\n${situation.briefing.join("\n")}\n\n${reading ? reading + "\n\n" : ""}${statementsInfo ? statementsInfo + "\n\n" : ""}${bookingTagLine ? bookingTagLine + "\n\n" : ""}JOGADA AGORA (siga isto): ${flow.nextMove}\n\n${memory ? memory + "\n\n" : ""}LEMBRETE FINAL: ${trailing.length > 1 ? "as mensagens novas da pessoa (ainda sem resposta) sao" : "a mensagem nova da pessoa e"}: ${trailing.map((t) => `"${t.slice(0, 300)}"`).join(" + ")}. Responda SOMENTE a isso, UMA vez${trailing.length > 1 ? ", juntando as mensagens numa resposta so" : ""}. O que ela perguntou ANTES ja foi respondido nas mensagens anteriores: NAO responda de novo, NAO repita valores, endereco, horarios, avisos nem frases que voce ja disse, e NAO feche com a mesma pergunta das mensagens anteriores (mude a pergunta ou so responda e pare). Fale como uma pessoa conversando: curto, direto, natural, continuando a conversa de onde ela parou.`,
@@ -2706,7 +2813,9 @@ async function generateReplyUnlocked(
   }
 
   const canBook = (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { aliceCanBook: true } }))?.aliceCanBook ?? true;
-  const activeTools = canBook ? tools : tools.filter((t) => !(t.type === "function" && BOOKING_TOOLS.has(t.function.name)));
+  const baseTools = canBook ? tools : tools.filter((t) => !(t.type === "function" && BOOKING_TOOLS.has(t.function.name)));
+  // a consulta ao conteudo da clinica so existe quando parte dele ficou fora do contexto (senao e peso morto em toda chamada)
+  const activeTools = system.includes("consultar_conteudo_da_clinica") ? baseTools : baseTools.filter((t) => !(t.type === "function" && t.function.name === "consultar_conteudo_da_clinica"));
 
   let finalText = "";
   let didTransfer = false;
@@ -2737,8 +2846,13 @@ async function generateReplyUnlocked(
   const slotCheck = (text: string) =>
     checkSlotMentions({ text, state: slotState, known: slotToolUsed ? knownStrict : knownLoose, toolUsed: slotToolUsed, now: new Date(), tz: guardTz });
   const chatModel = usageClinic?.aiModel?.trim() || MODEL;
+  // Por que cada chamada do ciclo existe: a resposta (answer), a continuacao depois de ferramentas (tool_result) ou uma CORRECAO (correction:<qual>). Nova tentativa por falha tecnica
+  // (retry) e troca de modelo (fallback_model) sao registradas pelo proprio createChat/openaiCall. O limite de 6 continua: um agendamento pode precisar de varias ferramentas.
+  let callReason = "answer";
+  const loopCalls = { answer: 0, tool_result: 0, correction: 0 };
   for (let turn = 0; turn < 6; turn++) {
-    const response = await createChat(chatModel, messages, activeTools);
+    loopCalls[callReason === "answer" ? "answer" : callReason === "tool_result" ? "tool_result" : "correction"]++;
+    const response = await createChat(chatModel, messages, activeTools, callReason);
 
     const choice = response.choices[0].message;
     finalText = choice.content ?? "";
@@ -2750,6 +2864,7 @@ async function generateReplyUnlocked(
         console.warn(`[promessa] resposta anunciou acao sem executar - reforcando (conv ${conversation.id}): ${finalText.slice(0, 120)}`);
         messages.push(choice);
         messages.push({ role: "system", content: PROMISE_NUDGE });
+        callReason = "correction:promessa";
         continue;
       }
       // Ela NAO pediu horario nem agendamento: nada de lista de horarios nem oferta de avaliacao "do nada" (Clarinda: "Ok." virou 3 horarios de avaliacao).
@@ -2758,6 +2873,7 @@ async function generateReplyUnlocked(
         console.warn(`[sem-pedido] resposta ofereceu horario/avaliacao sem a pessoa pedir - refazendo (${situation.kind}, conv ${conversation.id}): ${finalText.slice(0, 100)}`);
         messages.push(choice);
         messages.push({ role: "system", content: NO_OFFER_NUDGE });
+        callReason = "correction:oferta_nao_pedida";
         continue;
       }
       // O que ela pediu de dia/hora (so aos sabados, antes das 18:40, terca...) tem que mandar na oferta: nada de 'horarios mais proximos' por cima.
@@ -2772,6 +2888,7 @@ async function generateReplyUnlocked(
           console.warn(`[pedido] oferta nao respeita o pedido dela - refazendo (conv ${conversation.id}): ${violation.slice(0, 120)}`);
           messages.push(choice);
           messages.push({ role: "system", content: `ATENCAO: ${violation}` });
+          callReason = "correction:pedido_dia_hora";
           continue;
         }
       }
@@ -2782,6 +2899,7 @@ async function generateReplyUnlocked(
           console.warn(`[dia-hora] clinica=${clinicId} conversa=${conversation.id} revisao=${REVISION.split(":")[0]} TEXTO DO MODELO RECUSADO (nao e o que sai): ${verdict.problems.join("; ")} | recusado="${safeSlice(finalText, 100)}" - pedindo ao modelo que refaca com os horarios devolvidos pela agenda`);
           messages.push(choice);
           messages.push({ role: "system", content: SLOT_NUDGE });
+          callReason = "correction:horario_nao_provado";
           continue;
         }
       }
@@ -2812,7 +2930,9 @@ async function generateReplyUnlocked(
       }
       messages.push({ role: "tool", tool_call_id: toolCall.id, content: result });
     }
+    callReason = "tool_result";
   }
+  console.log(`[ia] atendimento=${aiContext().traceId ?? "-"} clinica=${clinicId} conversa=${conversation.id} ciclo: resposta=${loopCalls.answer} apos_ferramenta=${loopCalls.tool_result} correcao=${loopCalls.correction} (nova tentativa por falha tecnica e troca de modelo ficam no registro de cada tentativa)`);
 
   // Se mesmo depois do reforco a resposta ainda promete ("um instante", "ja volto"), corta a promessa: ela nao tem como voltar.
   if (canBook && !didTransfer && finalText.trim() && announcesAction(finalText)) {
@@ -2873,6 +2993,11 @@ async function generateReplyUnlocked(
     }
   }
 
+  // Modo das reescritas: "consolidated" (padrao) tenta primeiro as correcoes deterministicas e junta o que sobrar numa UNICA chamada; "legacy" = uma chamada por problema (comportamento antigo).
+  const consolidated = (process.env.AI_REWRITE_MODE ?? "consolidated").trim().toLowerCase() !== "legacy";
+  let pendingRelevance: { mismatch: NonNullable<ReturnType<typeof findRelevanceMismatch>>; fits: string[]; recheck: (t: string) => ReturnType<typeof findRelevanceMismatch> } | null = null;
+  let pendingRepeated: string[] | null = null;
+  let pendingShort: string | null = null;
   // TRAVA DE RELEVANCIA: a resposta recomenda um procedimento que o CADASTRO aprovado nao indica para a QUEIXA dela (ex.: gordura/celulite/flacidez para quem
   // quer clarear) ou, sem queixa identificada, de OUTRA regiao (ex.: "Preenchimento Labial" para sobrancelha). Troca por uma resposta que continua util.
   if (!didTransfer && !fixedReply && finalText.trim() && usageClinic?.businessType !== "geral") {
@@ -2892,6 +3017,8 @@ async function generateReplyUnlocked(
       const trimmed = naming.length ? removeSentences(finalText, naming).trim() : "";
       if (trimmed.length >= 12 && !findRelevanceMismatch({ complaintTexts, reply: trimmed, procedures: catalog, objective, allowed })) {
         finalText = trimmed;
+      } else if (consolidated) {
+        pendingRelevance = { mismatch, fits, recheck: (t) => findRelevanceMismatch({ complaintTexts, reply: t, procedures: catalog, objective, allowed }) };
       } else {
         const rewritten = await rewriteForRelevance(finalText, userMsgs.slice(-3), mismatch.complaintLabel, mismatch.procedure, fits, clinicName);
         const stillBad = rewritten ? findRelevanceMismatch({ complaintTexts, reply: rewritten, procedures: catalog, objective, allowed }) : null;
@@ -2905,8 +3032,12 @@ async function generateReplyUnlocked(
   if (!didTransfer && !fixedReply && finalText.trim() && (finalText.length > FIRST_REPLY_MAX_CHARS || (finalText.match(/\?/g) ?? []).length > 1) && !history.some((m) => m.role === "assistant")) {
     const conciseOn = (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { conciseFirstReply: true, name: true, assistantName: true } })) ?? null;
     if (conciseOn?.conciseFirstReply) {
-      const shortText = await shortenFirstReply(finalText, history.filter((m) => m.role === "user").map((m) => m.content).slice(-3), conciseOn.name, conciseOn.assistantName || "Alice");
-      if (shortText) finalText = shortText;
+      if (consolidated) {
+        pendingShort = conciseOn.assistantName || "Alice";
+      } else {
+        const shortText = await shortenFirstReply(finalText, history.filter((m) => m.role === "user").map((m) => m.content).slice(-3), conciseOn.name, conciseOn.assistantName || "Alice");
+        if (shortText) finalText = shortText;
+      }
     }
   }
 
@@ -2927,7 +3058,16 @@ async function generateReplyUnlocked(
       const userNow = trailingUser.join(" ");
       const detect = (t: string) => (bookingTurn ? [] : findRepetitions(t, recentReplies, userNow));
       const repeated = detect(finalText);
-      if (repeated.length) {
+      if (repeated.length && consolidated) {
+        // 1) corte deterministico das frases repetidas: se o que sobra ainda e uma resposta inteira (e nao repete mais nada), nao gasta chamada
+        const stripped = removeSentences(finalText, repeated);
+        if (stripped.trim().length >= 40 && detect(stripped).length === 0) {
+          console.warn(`[repeticao] ${repeated.length} frase(s) repetida(s) cortada(s) sem chamar o modelo (conv ${conversation.id})`);
+          finalText = stripped;
+        } else {
+          pendingRepeated = repeated;
+        }
+      } else if (repeated.length) {
         console.warn(`[repeticao] ${repeated.length} frase(s) repetida(s) na resposta (conv ${conversation.id}) - reescrevendo`);
         const rewritten = await rewriteWithoutRepetition(finalText, trailingUser.join(" / "), repeated, (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { name: true } }))?.name ?? "a clinica");
         // Confere a reescrita com o MESMO detector; se ainda repetir algo, corta so essas frases.
@@ -2940,6 +3080,34 @@ async function generateReplyUnlocked(
         finalText = candidate;
       }
     }
+  }
+
+  // REESCRITA CONSOLIDADA: o que as correcoes deterministicas nao resolveram vai junto numa UNICA chamada (antes: ate tres chamadas separadas para a mesma resposta).
+  // Depois dela cada problema e conferido pelo MESMO detector de antes; o que ainda falhar cai na saida segura/corte de antes. Nunca sai texto que o detector recusa.
+  if (pendingRelevance || pendingRepeated || pendingShort) {
+    const clinicName = (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { name: true } }))?.name ?? "a clinica";
+    const problems: RewriteProblems = {
+      ...(pendingRelevance ? { relevance: { areaLabel: pendingRelevance.mismatch.complaintLabel, wrong: pendingRelevance.mismatch.procedure, fits: pendingRelevance.fits } } : {}),
+      ...(pendingRepeated ? { repeated: pendingRepeated } : {}),
+      ...(pendingShort ? { shortFirst: { assistantName: pendingShort } } : {}),
+    };
+    console.warn(`[reescrita] 1 chamada para: ${Object.keys(problems).join("+")} (conv ${conversation.id})`);
+    const draftBefore = finalText;
+    const rewritten = await rewriteConsolidated(finalText, history.filter((m) => m.role === "user").map((m) => m.content).slice(-3), clinicName, problems);
+    let candidate = rewritten ?? draftBefore;
+    if (pendingRelevance) {
+      const stillBad = rewritten ? pendingRelevance.recheck(rewritten) : pendingRelevance.mismatch;
+      if (!rewritten || stillBad) candidate = safeReplyForMismatch(pendingRelevance.mismatch, flow.evalOffered);
+    }
+    if (pendingRepeated && candidate !== undefined && !(pendingRelevance && candidate !== rewritten)) {
+      const again = findRepetitions(candidate, priorReplies.slice(-8), trailingUser.join(" "));
+      if (again.length) {
+        const stripped = removeSentences(candidate, again);
+        if (stripped.length >= 15) candidate = stripped;
+      }
+    }
+    if (pendingShort && rewritten && rewritten.length >= draftBefore.length) candidate = draftBefore; // so vale se realmente encurtou
+    finalText = candidate;
   }
 
   // JA AGENDADA (pela Alice, pelo painel ou pela equipe) e so agradeceu/perguntou: nao recebe lista de horarios nem oferta de avaliacao (15/10).

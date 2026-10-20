@@ -22,6 +22,35 @@ function intervalMs(value: number, unit: string): number {
 // recriar a regra mandou a mensagem pra toda a base de pacientes de uma vez.
 const MAX_OVERDUE_MS = 3 * 24 * 60 * 60_000; // 3 dias de folga alem do prazo da regra
 const MAX_PER_TICK = 30; // teto de seguranca por regra a cada execucao (15min)
+const POST_MAX_ATTEMPTS = 6; // tentativas (com falha antes da resposta do provedor) antes de fechar a etapa e avisar a equipe
+const POST_STALE_MS = 10 * 60_000; // "reserved"/"sending" mais velho que isso: o processo caiu no meio
+
+// Estados em que a etapa esta FECHADA (nunca reabre nem reenvia). "legacy" = registro anterior ao controle por estado: prova a reserva, nao a entrega; ambiguo, entao nao se reenvia.
+export const POST_FINAL_STATES = ["legacy", "sent", "unconfirmed", "vetoed", "blocked", "duplicate", "failed_permanent"];
+
+// Reserva/reivindica a etapa (atendimento x regra) de forma atomica. Devolve null quando a etapa nao e deste processo agora.
+async function claimPostStep(appointmentId: string, ruleId: string, now: Date): Promise<{ id: string } | null> {
+  const existing = await prisma.postProcedureSent.findUnique({ where: { appointmentId_ruleId: { appointmentId, ruleId } } });
+  if (!existing) {
+    try {
+      const row = await prisma.postProcedureSent.create({ data: { appointmentId, ruleId, state: "reserved", reservedAt: now } });
+      return { id: row.id };
+    } catch {
+      return null; // reserva atomica: outro processo ja pegou
+    }
+  }
+  const stale = existing.reservedAt != null && now.getTime() - existing.reservedAt.getTime() > POST_STALE_MS;
+  // "reserved" velho: o processo caiu ANTES de chamar o provedor (attemptedAt vazio) => seguro tentar de novo. "retry" => nova tentativa. O resto nao e nosso.
+  const claimable = existing.state === "retry" || (existing.state === "reserved" && stale && existing.attemptedAt == null);
+  if (!claimable) return null;
+  // reivindica comparando o reservedAt lido: dois processos que leram a mesma linha velha nao ganham os dois
+  const c = await prisma.postProcedureSent.updateMany({ where: { id: existing.id, state: existing.state, reservedAt: existing.reservedAt }, data: { state: "reserved", reservedAt: now } });
+  return c.count === 1 ? { id: existing.id } : null;
+}
+
+async function finishPostStep(id: string, state: string, note: string, now: Date): Promise<void> {
+  await prisma.postProcedureSent.updateMany({ where: { id, state: { in: ["reserved", "sending"] } }, data: { state, note: note.slice(0, 200), finalAt: now } });
+}
 
 // PURO: o atendimento (inicio + duracao) ja terminou ate `limit`?
 export function appointmentEndedBy(appt: { scheduledAt: Date; procedure: { durationMin: number } }, limit: Date): boolean {
@@ -52,6 +81,8 @@ export async function runPostProcedureCycle(clock: () => Date = () => new Date()
     });
     const clinicInfoCache = new Map<string, Awaited<ReturnType<typeof getClinicTemplateInfo>>>();
 
+    // Tentativa que ficou "sending" (o processo caiu depois de marcar a tentativa): o provedor PODE ter sido chamado => incerto, nunca reenvia as cegas.
+    await prisma.postProcedureSent.updateMany({ where: { state: "sending", attemptedAt: { lt: new Date(clock().getTime() - POST_STALE_MS) } }, data: { state: "unconfirmed", finalAt: clock(), note: "o processo parou durante o envio: pode ter sido entregue, nao reenviado" } });
     for (const rule of rules) rec(rule.clinicId); // uma linha por clinica com regra ativa, mesmo sem candidatos: prova que o job rodou
     for (const rule of rules) {
       const now = clock();
@@ -71,7 +102,7 @@ export async function runPostProcedureCycle(clock: () => Date = () => new Date()
           scheduledAt: { lte: cutoff, gte: floor },
           ...(procedureFilter.length ? { procedureId: { in: procedureFilter } } : {}),
           procedure: { name: { not: PLACEHOLDER_PROCEDURE_NAME } }, // "horario sem procedimento" (reserva do CE sem procedimento) nao tem o que acompanhar
-          postProcedureSent: { none: { ruleId: rule.id } },
+          postProcedureSent: { none: { ruleId: rule.id, state: { in: POST_FINAL_STATES } } }, // etapa FECHADA nao reabre; "retry"/"reserved" velho voltam a ser candidatos
           patient: {
             optedOut: false, // quem pediu pra parar nao recebe mensagem automatica
             // Relatou reacao ao procedimento (a Alice transferiu pra equipe como "REAÇÃO"): o fluxo automatico para.
@@ -114,41 +145,67 @@ export async function runPostProcedureCycle(clock: () => Date = () => new Date()
           when: appt.scheduledAt,
         });
 
+        // RESERVA/REIVINDICACAO atomica, com estado: a linha so vira "sent" quando o provedor aceitou. Linha nova => reserva; "retry" ou "reserved" velha (o processo caiu ANTES de
+        // chamar o provedor) => reivindica de novo; "sending" recente => outra rodada esta enviando; qualquer estado final => nao reabre.
+        const claimed = await claimPostStep(appt.id, rule.id, now);
+        if (!claimed) continue;
+        let started = false;
         try {
-          await prisma.postProcedureSent.create({ data: { appointmentId: appt.id, ruleId: rule.id } });
-        } catch {
-          continue; // reserva atomica: outro processo ja pegou
-        }
-        try {
-          const outcome = await sendText(appt.clinicId, appt.patient.phone, text, { kind: "pos" });
-          if (outcome === "sent") { await recordAutomatedMessage(appt.patientId, text, rule.name || "Pós-procedimento automático"); r.add("enviado", "pos"); }
-          // barrado pela revisao / plano / identica: a reserva FICA (e a decisao e definitiva para este atendimento) e o resumo da rodada registra, nao como envio
-          else r.add(outcome === "vetoed" ? "vetado" : "ignorado", outcome === "vetoed" ? "revisao_de_envio_barrou" : outcome === "blocked" ? "envio_bloqueado_pelo_plano" : "mensagem_identica_ja_enviada");
+          const outcome = await sendText(appt.clinicId, appt.patient.phone, text, {
+            kind: "pos",
+            // IMEDIATAMENTE antes de o provedor ser chamado: a tentativa passa a constar ("reserved" prova que o provedor nao foi chamado).
+            beforeProvider: async () => {
+              const c = await prisma.postProcedureSent.updateMany({ where: { id: claimed.id, state: "reserved" }, data: { state: "sending", attemptedAt: now, attempts: { increment: 1 } } });
+              if (c.count !== 1) throw new Error("pos: outra rodada ja cuida desta etapa");
+              started = true;
+            },
+          });
+          if (outcome === "sent") { await finishPostStep(claimed.id, "sent", "enviada", now); await recordAutomatedMessage(appt.patientId, text, rule.name || "Pós-procedimento automático"); r.add("enviado", "pos"); }
+          // barrado pela revisao / plano / identica: a decisao e definitiva para este atendimento (estado final) e o resumo da rodada registra, nao como envio
+          else if (outcome === "vetoed") { await finishPostStep(claimed.id, "vetoed", "revisao por IA barrou a mensagem (motivo no Diario de atividades)", now); r.add("vetado", "revisao_de_envio_barrou"); }
+          else if (outcome === "blocked") { await finishPostStep(claimed.id, "blocked", "envio automatico bloqueado para esta clinica (plano)", now); r.add("ignorado", "envio_bloqueado_pelo_plano"); }
+          else { await finishPostStep(claimed.id, "duplicate", "mensagem identica ja enviada a esta pessoa", now); r.add("ignorado", "mensagem_identica_ja_enviada"); }
         } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg.startsWith("pos: outra rodada")) { r.add("ignorado", "outra_rodada_cuida"); continue; }
           if (isAmbiguousSendError(err)) {
-            // timeout depois de enviar: PODE ter chegado. Mantem a reserva e NUNCA reenvia as cegas (antes devolvia a reserva e podia mandar em dobro).
+            // timeout depois de enviar: PODE ter chegado. A etapa fica "unconfirmed" e NUNCA reenvia as cegas (antes devolvia a reserva e podia mandar em dobro).
+            await finishPostStep(claimed.id, "unconfirmed", "tempo esgotado no provedor: pode ter sido entregue, nao reenviado", now);
             r.add("incerto", "envio_nao_confirmado");
             continue;
           }
           if (isPermanentSendError(err)) {
+            await finishPostStep(claimed.id, "failed_permanent", "numero sem WhatsApp", now);
             r.add("falha", "numero_sem_whatsapp");
-            // Numero sem WhatsApp: mantem a reserva (nao tenta de novo a cada 15 min) e avisa a equipe uma vez.
+            // Numero sem WhatsApp: etapa fechada (nao tenta de novo a cada 15 min) e avisa a equipe uma vez.
             console.error(`Pos-procedimento nao enviado: ${appt.patient.phone} nao tem WhatsApp.`);
             await notifyStaff(appt.clinicId, "automation_failed", `⚠️ O número de ${appt.patient.name ?? appt.patient.phone} (${appt.patient.phone}) não tem WhatsApp, então a mensagem de acompanhamento ("${rule.name}") não foi enviada. Confira o telefone no cadastro.`);
             continue;
           }
-          await prisma.postProcedureSent.deleteMany({ where: { appointmentId: appt.id, ruleId: rule.id } }); // devolve a reserva
-          if (isSendDeferred(err)) { r.add("adiado", deferralInfo(err).tag); console.warn(`[pos] adiado para ...${appt.patient.phone.slice(-4)} (${err instanceof Error ? err.message : "indisponivel"})`); continue; } // sem aviso a cada rodada: o aviso e unico (Diario + Canais)
-          r.add("falha", "envio_falhou_tentara_de_novo");
+          if (isSendDeferred(err)) {
+            // WhatsApp fora / revisao fora: nada saiu e nao e falha da pessoa. A etapa volta para "retry" SEM gastar tentativa; o aviso e unico (Diario + Canais).
+            await prisma.postProcedureSent.updateMany({ where: { id: claimed.id, state: { in: ["reserved", "sending"] } }, data: { state: "retry", note: deferralInfo(err).tag, ...(started ? { attempts: { decrement: 1 } } : {}) } });
+            r.add("adiado", deferralInfo(err).tag);
+            console.warn(`[pos] adiado para ...${appt.patient.phone.slice(-4)} (${msg})`);
+            continue;
+          }
+          // erro DEFINITIVO antes de sair (provedor recusou / rede caiu antes da resposta): volta para nova tentativa, com teto
+          const cur = await prisma.postProcedureSent.findUnique({ where: { id: claimed.id }, select: { attempts: true } });
+          const attempts = (cur?.attempts ?? 0) + (started ? 0 : 1);
+          const exhausted = attempts >= POST_MAX_ATTEMPTS;
+          await prisma.postProcedureSent.updateMany({ where: { id: claimed.id, state: { in: ["reserved", "sending"] } }, data: { state: exhausted ? "failed_permanent" : "retry", attempts, note: `falha no envio: ${msg.slice(0, 120)}`, finalAt: exhausted ? now : null } });
+          r.add("falha", exhausted ? "envio_falhou_tentativas_esgotadas" : "envio_falhou_tentara_de_novo");
           console.error(`Falha ao enviar pos-procedimento (regra ${rule.id}) para ${appt.patient.phone}:`, err);
-          // Sem isso a falha so aparecia no log do servidor - a clinica nunca
-          // ficava sabendo que a mensagem automatica nao saiu. O robo tenta de
-          // novo no proximo ciclo (15min); o aviso repete ate resolver ou sair.
-          await notifyStaff(
-            appt.clinicId,
-            "automation_failed",
-            `⚠️ Falha ao enviar mensagem automática de acompanhamento ("${rule.name}") para ${appt.patient.name ?? appt.patient.phone} (${appt.patient.phone}). O sistema vai tentar novamente, mas convém checar a conexão do WhatsApp.`
-          );
+          // Sem isso a falha so aparecia no log do servidor. Avisa na primeira falha e quando as tentativas se esgotam (nao a cada ciclo de 15 min).
+          if (attempts === 1 || exhausted) {
+            await notifyStaff(
+              appt.clinicId,
+              "automation_failed",
+              exhausted
+                ? `⚠️ Não consegui enviar a mensagem automática de acompanhamento ("${rule.name}") para ${appt.patient.name ?? appt.patient.phone} (${appt.patient.phone}) depois de várias tentativas. Confira a conexão do WhatsApp e o contato.`
+                : `⚠️ Falha ao enviar mensagem automática de acompanhamento ("${rule.name}") para ${appt.patient.name ?? appt.patient.phone} (${appt.patient.phone}). O sistema vai tentar novamente, mas convém checar a conexão do WhatsApp.`,
+            );
+          }
         }
       }
     }

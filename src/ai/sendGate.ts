@@ -6,7 +6,7 @@ import { logActivity } from "../crm/activity.js";
 import { aiExtraEnabled } from "./aiSwitch.js";
 import { patientFacts } from "./leadBriefing.js";
 import { extractMentions } from "./slotGuard.js";
-import { recordUsage } from "./usageStats.js";
+import { tracked } from "./openaiCall.js";
 import { isFixedReply } from "./fixedReplies.js";
 
 // ---------------------------------------------------------------------------
@@ -211,7 +211,7 @@ export type GateCall = (system: string, user: string) => Promise<string | null>;
 let client: OpenAI | null = null;
 const defaultCall: GateCall = async (system, user) => {
   client ??= new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: safeFetch, maxRetries: 0 });
-  const res = await client.chat.completions.create(
+  const res = await tracked(client, "revisao_envio", { retries: 0 }).chat.completions.create(
     {
       model: process.env.OPENAI_GATE_MODEL ?? process.env.OPENAI_MODEL ?? "gpt-4o-mini",
       temperature: 0, max_tokens: 140, response_format: { type: "json_object" },
@@ -219,7 +219,6 @@ const defaultCall: GateCall = async (system, user) => {
     },
     { timeout: 12_000 },
   );
-  recordUsage("revisao_envio", res.usage);
   return res.choices[0]?.message?.content ?? null;
 };
 

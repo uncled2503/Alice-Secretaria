@@ -6,7 +6,7 @@ import { getFunnelStages } from "./stages.js";
 import { movePatientToKind, movePatientToStage } from "./stageAutomation.js";
 import { renderMessageTemplate, getClinicTemplateInfo, type ClinicTemplateInfo } from "./template.js";
 import { PAID_CLINIC_WHERE } from "./plan.js";
-import { isClosingMessage } from "./followupGuards.js";
+import { isClosingMessage, isExplicitRefusal } from "./followupGuards.js";
 import { judgeConversation, JUDGE_TTL_MS, type JudgeResult } from "./recontactJudge.js";
 import { decideTiming, MIN_GAP_BETWEEN_AUTOMATED_MS, ruleThresholdMin, validRecoveryHours, type RecoveryPolicy, type SendCalendar } from "./followupSchedule.js";
 import { acquireFlow, competingContact, conversationFingerprint, finishFlow as finishFlowAt, MAX_VETOES, recordFlowDecision as recordFlowDecisionAt, VETO_RETRY_MS, DEFER_RETRY_MS, FAIL_GAP_MS, type DecisionMeta, type FlowKey, type FlowState } from "./followupLedger.js";
@@ -165,6 +165,8 @@ async function runFollowUpCheckInner(deps: FollowUpDeps): Promise<void> {
 
     // Encerrou o assunto ("ok", "estarei ai", "obrigada"): nao ha o que retomar.
     if (isClosingMessage(lastPatientMessage.content)) return void r.add("ignorado", "encerrou_o_assunto");
+    // Recusou o interesse de forma inequivoca: nao ha o que retomar (respeita a decisao dela; adiamento como "vou pensar" continua com o juiz).
+    if (isExplicitRefusal(lastPatientMessage.content)) return void r.add("ignorado", "recusou_explicitamente");
 
     // CONTEXTO nao comercial (candidatura, fornecedor, parceria, cobranca, interesse gravado que e uma vaga de emprego): fora do recontato ANTES de gerar e de enviar
     // (nao depende do revisor nem de a transferencia ter sido gravada).

@@ -158,7 +158,8 @@ export function findRepetitions(draft: string, priorReplies: string[], userNow: 
 // ---------------------------------------------------------------------------
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s);
 
-export function conversationMemory(priorReplies: string[], answeredUserMessages: string[]): string {
+// `includeAnswered: false` omite a lista de mensagens ja respondidas: elas ja estao, na integra, no historico que o modelo recebe (repetir so gasta tokens); o lembrete final ja manda nao responder de novo.
+export function conversationMemory(priorReplies: string[], answeredUserMessages: string[], opts: { includeAnswered?: boolean } = {}): string {
   const told = new Set<string>();
   for (const r of priorReplies) for (const t of topicsIn(r)) told.add(t.label);
 
@@ -168,7 +169,7 @@ export function conversationMemory(priorReplies: string[], answeredUserMessages:
     if (q && !questions.includes(q)) questions.push(q);
   }
 
-  const answered = answeredUserMessages.map((m) => m.trim()).filter((m) => m && m !== "[imagem]").slice(-4);
+  const answered = opts.includeAnswered === false ? [] : answeredUserMessages.map((m) => m.trim()).filter((m) => m && m !== "[imagem]").slice(-4);
 
   const lines: string[] = [];
   if (told.size) lines.push(`- Informacoes que voce JA deu: ${[...told].join(", ")}. So volte a elas se a pessoa pedir de novo.`);

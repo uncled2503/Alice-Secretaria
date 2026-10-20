@@ -4,7 +4,7 @@ import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
 import { FREE_PLAN } from "./plan.js";
-import { recordUsage } from "../ai/usageStats.js";
+import { tracked } from "../ai/openaiCall.js";
 import { formatDayInZone, isoDateInZone, zonedWallClockToUtc } from "../scheduling/time.js";
 
 // ---------------------------------------------------------------------------
@@ -24,7 +24,7 @@ import { formatDayInZone, isoDateInZone, zonedWallClockToUtc } from "../scheduli
 // conversa gera ~1 chamada, em vez de uma por mensagem.
 // ---------------------------------------------------------------------------
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: safeFetch, timeout: 60_000, maxRetries: 1 });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, fetch: safeFetch, timeout: 60_000, maxRetries: 0 });
 const MODEL = process.env.OPENAI_CRM_MODEL ?? process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
 const QUIET_MINUTES = 10; // conversa precisa estar parada ha esse tanto
@@ -172,7 +172,7 @@ async function summarizeConversation(conversationId: string, todayLabel: string)
     .join("\n")
     .slice(0, 12_000);
 
-  const response = await openai.chat.completions.create({
+  const response = await tracked(openai, "resumo_crm").chat.completions.create({
     model: MODEL,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
@@ -184,7 +184,6 @@ ${transcript}` },
     tool_choice: { type: "function", function: { name: "salvar_resumo" } },
   });
 
-  recordUsage("resumo_crm", response.usage);
   const call = response.choices[0]?.message?.tool_calls?.[0];
   if (!call || call.type !== "function") return null;
 

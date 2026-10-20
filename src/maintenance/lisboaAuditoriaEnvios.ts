@@ -11,12 +11,15 @@ import { REVISION } from "../version.js";
 // AUDITORIA DOS ENVIOS POR FLUXO (relatos da Lisboa, 19/10/2026: "nao fez recontato apos 4h e nem os demais", "nao enviou todas as confirmacoes e nem o pos", "nem os aniversariantes").
 // SOMENTE LEITURA: nao envia nada, nao grava nada, nao consome tentativa, nao reabre etapa. Cruza as REGRAS cadastradas com os REGISTROS reais (controle persistente dos recontatos e das
 // confirmacoes, resumo de cada rodada dos jobs, historico de atividades) e classifica cada candidato em UMA categoria:
-//   job_nao_executou | nao_selecionada | bloqueio_correto | bloqueio_indevido | falha_do_provedor | aceito_sem_confirmacao | enviado | aguardando | adiado | a_conferir
+//   job_nao_executou | nao_selecionada | bloqueio_correto | bloqueio_indevido | falha_do_provedor | aceito_sem_confirmacao | aceito_pelo_provedor | sem_evidencia | aguardando | adiado | a_conferir
+// ACEITO != ENTREGUE: "aceito_pelo_provedor" quer dizer que a UAZAPI aceitou a mensagem; o sistema NAO recebe recibo de entrega das mensagens automaticas, entao nenhuma categoria aqui afirma que a pessoa
+// recebeu. "sem_evidencia" = existe um registro, mas ele nao prova nem envio nem tentativa (registro antigo, anterior ao controle por estado). Ausencia de registro NAO prova que o job nao rodou:
+// isso so se afirma pelo resumo da rodada (AutomationRun).
 // "bloqueio_correto" / "bloqueio_indevido" sao CLASSIFICACAO POR REGRA DO CODIGO (categoria legitima do veto x motivo que so descreve o publico da automacao): o que ficar "a_conferir" precisa
 // de uma pessoa. Nada aqui declara que todos os envios falharam nem que todos os bloqueios foram corretos. Pessoas aparecem so com primeiro nome e final do telefone.
 // ---------------------------------------------------------------------------
 
-export type Categoria = "job_nao_executou" | "nao_selecionada" | "bloqueio_correto" | "bloqueio_indevido" | "falha_do_provedor" | "aceito_sem_confirmacao" | "enviado" | "aguardando" | "adiado" | "a_conferir";
+export type Categoria = "job_nao_executou" | "nao_selecionada" | "bloqueio_correto" | "bloqueio_indevido" | "falha_do_provedor" | "aceito_sem_confirmacao" | "aceito_pelo_provedor" | "sem_evidencia" | "aguardando" | "adiado" | "a_conferir";
 
 export interface Candidato {
   pessoa: string; // "Maria (...1234)"
@@ -47,6 +50,8 @@ export interface AuditoriaEnvios {
   faltaParaConcluir: string[];
 }
 
+// momento em que o aniversario passou a gravar o registro so depois do envio (revisao de 19/10/2026)
+const BIRTHDAY_FIX_AT = new Date("2026-10-19T00:00:00-03:00");
 const first = (n: string | null | undefined) => (n ?? "").trim().split(/\s+/)[0] || "(sem nome)";
 const who = (n: string | null | undefined, phone: string | null | undefined) => `${first(n)} (${maskPhone(phone)})`;
 const dayOf = (d: Date, tz: string) => { const w = wallClockInZone(d, tz); return `${w.year}-${String(w.month).padStart(2, "0")}-${String(w.day).padStart(2, "0")}`; };
@@ -56,7 +61,11 @@ const stamp = (d: Date | null | undefined, tz: string) => { if (!d) return null;
 export function classificarRegistro(r: { state: string; layer?: string | null; reason?: string | null; temporary?: boolean }): { categoria: Categoria; frase: string } {
   const reason = r.reason ?? "";
   switch (r.state) {
-    case "sent": return { categoria: "enviado", frase: "envio registrado" };
+    case "sent": return { categoria: "aceito_pelo_provedor", frase: "aceito pelo provedor (o sistema nao recebe recibo de entrega: nao prova que a pessoa recebeu)" };
+    case "legacy": return { categoria: "sem_evidencia", frase: "registro anterior ao controle por estado: prova a reserva, nao o envio nem a entrega (nao reenviado de proposito)" };
+    case "retry": return { categoria: "adiado", frase: `nova tentativa programada${reason ? `: ${reason}` : ""}` };
+    case "sending": return { categoria: "a_conferir", frase: "tentativa iniciada sem desfecho (o processo parou durante o envio?): pode ter saido" };
+    case "superseded": return { categoria: "bloqueio_correto", frase: `nao enviada porque a situacao mudou: ${reason || "cancelado/remarcado/passou"}` };
     case "unconfirmed": return { categoria: "aceito_sem_confirmacao", frase: "o provedor nao confirmou a entrega (nao reenviado de proposito)" };
     case "failed": case "failed_permanent": return { categoria: "falha_do_provedor", frase: `falha de envio: ${reason || "sem detalhe"}` };
     case "deferred": return { categoria: "adiado", frase: `adiado (${r.layer ?? "?"}): ${reason || "sem detalhe"}` };
@@ -181,6 +190,24 @@ export async function auditarEnviosLisboa(clinicId: string, opts: { dia?: string
     });
   }
 
+  // ---------------------------------------------------------------- CONFIRMACAO DE AGENDAMENTO CRIADO FORA DA CONVERSA (painel manual / API externa)
+  {
+    const registros = await prisma.appointmentConfirmation.findMany({ where: { clinicId, OR: [{ createdAt: { gte: from, lt: to } }, { updatedAt: { gte: from, lt: to } }] }, orderBy: { createdAt: "asc" }, take: 400 });
+    const pacientes = new Map((await prisma.patient.findMany({ where: { id: { in: [...new Set(registros.map((r) => r.patientId))] } }, select: { id: true, name: true, phone: true } })).map((p) => [p.id, p]));
+    const candidatos: Candidato[] = registros.map((r) => {
+      const p = pacientes.get(r.patientId);
+      const c = classificarRegistro({ state: r.state, reason: r.note });
+      return { pessoa: who(p?.name, p?.phone), eventoDeOrigem: `agendamento criado fora da conversa para ${stamp(r.startsAt, tz)}`, venceEm: null, elegibilidade: "gatilho: criacao pelo painel ou pela API externa", resultado: `${c.frase} (${r.attempts} tentativa(s))`, categoria: c.categoria };
+    });
+    fluxos.push({
+      fluxo: "Confirmacao de agendamento criado fora da conversa (painel / API)",
+      regras: ["sempre ligada: uma confirmacao por agendamento e horario; falha temporaria tenta de novo ate 6 h; cancelou/remarcou => nao sai o texto antigo"],
+      job: { ...(jobDe("confirmacao-agendamento") ?? { estado: "sem registro (job sem resumo de rodada: o proprio controle e a trilha)", ultimaRodada: null, rodadasNoDia: 0 }), rodadasNoDia: 0 },
+      totais: somar(candidatos), candidatos,
+      observacoes: ["Antes de 19/10 era uma tentativa unica sem registro: agendamentos criados antes disso NAO aparecem aqui e nao ha como saber se a confirmacao saiu (nao foram reenviados de proposito)."],
+    });
+  }
+
   // ---------------------------------------------------------------- POS-PROCEDIMENTO (acompanhamento depois de atendimento concluido)
   {
     const regras = await prisma.postProcedureRule.findMany({ where: { clinicId } });
@@ -191,13 +218,18 @@ export async function auditarEnviosLisboa(clinicId: string, opts: { dia?: string
       const desde = new Date(agora.getTime() - (horas + 72) * 3_600_000);
       const atend = await prisma.appointment.findMany({
         where: { clinicId, scheduledAt: { gte: desde, lte: agora }, ...(filtro.length ? { procedureId: { in: filtro } } : {}) },
-        include: { patient: { select: { name: true, phone: true, optedOut: true } }, procedure: { select: { name: true, durationMin: true } }, postProcedureSent: { where: { ruleId: regra.id }, select: { sentAt: true } } },
+        include: { patient: { select: { name: true, phone: true, optedOut: true } }, procedure: { select: { name: true, durationMin: true } }, postProcedureSent: { where: { ruleId: regra.id }, select: { sentAt: true, state: true, note: true, attempts: true } } },
         orderBy: { scheduledAt: "desc" }, take: 150,
       });
       for (const a of atend) {
         const vence = new Date(a.scheduledAt.getTime() + (regra.intervalUnit === "hours" ? a.procedure.durationMin * 60_000 : 0) + horas * 3_600_000);
         const base = { pessoa: who(a.patient.name, a.patient.phone), eventoDeOrigem: `${a.procedure.name} em ${stamp(a.scheduledAt, tz)} (status ${a.status})`, venceEm: stamp(vence, tz) };
-        if (a.postProcedureSent.length) { candidatos.push({ ...base, elegibilidade: "elegivel", resultado: `reserva/registro de pos em ${stamp(a.postProcedureSent[0].sentAt, tz)} (a reserva e gravada ANTES do envio: nao prova entrega; confira o chat)`, categoria: "enviado" }); continue; }
+        if (a.postProcedureSent.length) {
+          const reg = a.postProcedureSent[0];
+          const c = classificarRegistro({ state: reg.state, reason: reg.note });
+          candidatos.push({ ...base, elegibilidade: "elegivel", resultado: `${c.frase} (registro de ${stamp(reg.sentAt, tz)}, ${reg.attempts} tentativa(s))`, categoria: c.categoria });
+          continue;
+        }
         let motivo: string | null = null; let cat: Categoria = "nao_selecionada";
         if (!regra.active) motivo = "regra de pos DESLIGADA";
         else if (a.status === "cancelled" || a.status === "no_show") { motivo = `atendimento ${a.status}: nao houve atendimento`; cat = "bloqueio_correto"; }
@@ -216,7 +248,7 @@ export async function auditarEnviosLisboa(clinicId: string, opts: { dia?: string
       totais: somar(candidatos), candidatos,
       observacoes: [
         "'Pos' pode significar tres fluxos DIFERENTES: (1) acompanhamento pos-procedimento (este), (2) pesquisa de satisfacao (NPS, job proprio, 1 a cada 15 dias por pessoa), (3) preparo PRE-procedimento (nao e pos). Confirme com a clinica qual deles ela esperava.",
-        "A linha de controle do pos e criada ANTES do envio e nao tem estado: barrado pela revisao / plano / identica tambem fica gravado (o resumo da rodada, a partir de 19/10, diz qual foi o desfecho).",
+        "A linha de controle do pos tem ESTADO (reservada, enviando, aceita, sem confirmacao, nova tentativa, barrada, bloqueada, duplicada, falha). Registros anteriores a esse controle aparecem como \"sem evidencia\": eram gravados ANTES do envio e nao provam nem envio nem tentativa; nao sao reenviados.",
       ],
     });
   }
@@ -233,7 +265,11 @@ export async function auditarEnviosLisboa(clinicId: string, opts: { dia?: string
       const barr = barradas.find((b) => b.patientId === p.id);
       const base = { pessoa: who(p.name, p.phone), eventoDeOrigem: `aniversario em ${String(d).padStart(2, "0")}/${String(m).padStart(2, "0")} (data cadastrada, dia da clinica)`, venceEm: regras[0] ? `${regras[0].sendHour}h` : null };
       if (p.optedOut) return { ...base, elegibilidade: "pediu para nao receber mensagens", resultado: "nao enviar", categoria: "bloqueio_correto" as Categoria };
-      if (enviado) return { ...base, elegibilidade: "elegivel", resultado: `registro de aniversario em ${stamp(enviado.sentAt, tz)}${barr ? " (ATENCAO: houve veto da revisao no mesmo dia e o registro antigo era gravado mesmo sem envio)" : ""}`, categoria: barr ? ("a_conferir" as Categoria) : ("enviado" as Categoria) };
+      // Antes da correcao de 19/10 o registro era gravado ANTES do envio (barrado/falho tambem ficava como "ja enviado"): registro anterior a isso e AMBIGUO, nao prova envio.
+      if (enviado) {
+        const antigo = enviado.sentAt.getTime() < BIRTHDAY_FIX_AT.getTime();
+        return { ...base, elegibilidade: "elegivel", resultado: `registro de aniversario em ${stamp(enviado.sentAt, tz)}${antigo ? " (anterior a correcao de 19/10: o registro era gravado mesmo sem envio; nao prova envio)" : " (aceito pelo provedor; sem recibo de entrega)"}${barr ? " (ATENCAO: houve veto da revisao no mesmo dia)" : ""}`, categoria: antigo || barr ? (barr ? ("a_conferir" as Categoria) : ("sem_evidencia" as Categoria)) : ("aceito_pelo_provedor" as Categoria) };
+      }
       if (barr) { const c = classificarRegistro({ state: "vetoed", reason: barr.description ?? "" }); return { ...base, elegibilidade: "elegivel", resultado: c.frase, categoria: c.categoria }; }
       const ativa = regras.some((r) => r.active);
       return { ...base, elegibilidade: ativa ? "elegivel" : "regra de aniversario DESLIGADA", resultado: "sem registro de envio nem de bloqueio", categoria: !ativa ? "nao_selecionada" : jobs.find((j) => j.job === "aniversario")?.state === "nunca_rodou" ? "job_nao_executou" : "a_conferir" };
@@ -254,7 +290,7 @@ export async function auditarEnviosLisboa(clinicId: string, opts: { dia?: string
   falta.push(
     "Esta auditoria precisa rodar contra o banco de PRODUCAO (somente leitura): sem isso, as categorias acima descrevem as regras e o que o codigo faria, nao o que aconteceu em 19/10.",
     "Dias anteriores a 19/10 nao tem resumo de rodada para lembretes, pos e aniversarios (esses jobs nao gravavam): 'job nao executou' so pode ser afirmado a partir de agora; para o passado use os registros de controle e os logs do servidor (EasyPanel).",
-    "Prova de entrega no WhatsApp so existe no proprio aparelho/provedor: 'enviado' aqui significa aceito pelo provedor e registrado.",
+    "Prova de entrega no WhatsApp so existe no proprio aparelho/provedor: 'aceito_pelo_provedor' significa aceito e registrado, NUNCA entregue/lido; 'sem_evidencia' e registro antigo ambiguo.",
   );
   return { somenteLeitura: true, clinica: clinic.name, fuso: tz, dia, geradoEm: stamp(agora, tz) ?? "", revisaoDoCodigo: REVISION.split(":")[0], fluxos, faltaParaConcluir: falta };
 }
