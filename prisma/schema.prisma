@@ -528,6 +528,7 @@ model Patient {
   hasPrescription Boolean @default(false) // controla se os lembretes de renovacao de receita aparecem/valem
   phoneContactName String? // nome com que o paciente foi salvo na agenda do celular da clinica (null = ainda nao salvo)
   ceUuid          String?  // uuid do paciente no Clinica Experts (cache pra nao buscar toda vez)
+  attendees       Attendee[] @relation("AttendeeContact")
 
   // Atribuicao de campanha Meta, capturada na criacao do lead (Click-to-WhatsApp).
   // Fica vinculada ao lead pra eventos posteriores do CRM baterem com o anuncio.
@@ -906,6 +907,19 @@ model Appointment {
   confirmedAt    DateTime?
   createdAt      DateTime      @default(now())
 
+  // ---- Clinica Experts (21/10/2026): a reserva la e a verdade; estes campos guardam o que ELE disse e o que ainda falta sincronizar ----
+  endsAt         DateTime?     // fim da reserva (ends_at do CE ou inicio + duracao): e o que ocupa a agenda; null = derivar da duracao do procedimento (registros antigos)
+  ceStatus       String?       // estado BRUTO do CE (scheduled | confirmed | done | canceled | noshow | rescheduled | waiting | progress | reserved | ...): nunca reescrito pela Alice
+  ceUpdatedAt    DateTime?     // updated_at da reserva no CE na ultima leitura (versao: distingue cancelamento nosso nao sincronizado de reativacao da recepcao)
+  ceSyncedAt     DateTime?     // ultima leitura bem-sucedida desta reserva no CE
+  ceCancelState  String?       // null | pending (cancelado aqui; o CE ainda nao confirmou) | confirmed (o CE confirmou)
+  cePresenceState String?      // null | pending (paciente confirmou; falta o PATCH /confirm no CE) | synced | skipped (sem vinculo)
+  cePresenceAt   DateTime?     // quando a confirmacao de presenca foi sincronizada com o CE
+  attendeeId     String?       // quem E ATENDIDO quando nao e a pessoa do WhatsApp (ex.: marido): null = a propria pessoa do contato
+  attendee       Attendee?     @relation(fields: [attendeeId], references: [id])
+  bookedByPatientId String?    // quem pediu a reserva (quando difere de patientId)
+  procedures     AppointmentProcedure[]
+
   reminders      ReminderSent[]
   postProcedureSent PostProcedureSent[]
   preProcedureSent  PreProcedureSent[]
@@ -913,6 +927,64 @@ model Appointment {
 
   @@index([clinicId, scheduledAt])
   @@index([patientId, scheduledAt])
+  @@index([clinicId, ceBookingUuid])
+}
+
+// TODOS os procedimentos de uma reserva do Clinica Experts (uma reserva pode ter varios: avaliacao + procedimento, dois procedimentos...). Appointment.procedureId continua sendo o
+// principal (compatibilidade); aqui fica o conjunto, para preparo, pos-procedimento, mensagens e duracao nao perderem informacao.
+model AppointmentProcedure {
+  id            String      @id @default(cuid())
+  appointmentId String
+  appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  procedureId   String?     // procedimento local (null = o CE tem, a Alice ainda nao vinculou)
+  ceProcedureId Int?
+  name          String
+  durationMin   Int?
+  position      Int         @default(0)
+
+  @@index([appointmentId])
+}
+
+// Pessoa ATENDIDA que compartilha o telefone de quem conversa (marido, filha...). Nao e um contato de WhatsApp: as mensagens vao para o telefone do contato e citam o nome do atendido. Se o
+// acompanhante tem telefone PROPRIO, ele vira um Patient normal (nao um Attendee). Nunca se funde com outro cadastro automaticamente.
+model Attendee {
+  id               String        @id @default(cuid())
+  clinicId         String
+  contactPatientId String
+  contactPatient   Patient       @relation("AttendeeContact", fields: [contactPatientId], references: [id])
+  name             String
+  relation         String?       // como a pessoa o descreveu ("marido"); so informacao
+  ceUuid           String?       // uuid DESTA pessoa no Clinica Experts (nunca o do contato)
+  birthDate        DateTime?
+  createdAt        DateTime      @default(now())
+  appointments     Appointment[]
+
+  @@index([clinicId, contactPatientId])
+  @@index([ceUuid])
+}
+
+// Tentativa de criar/alterar/cancelar/confirmar uma reserva no Clinica Experts. Existe para o RESULTADO INCERTO (rede caiu, tempo esgotado, 5xx): a Alice nunca recria as cegas; o
+// reconciliador procura la uma reserva que combine em TODOS os campos (paciente, profissional, procedimentos, inicio e fim) e so entao vincula; sem prova, a equipe confere.
+model CeBookingAttempt {
+  id             String    @id @default(cuid())
+  clinicId       String
+  appointmentId  String
+  kind           String    // create | reschedule | cancel | confirm
+  state          String    // pending | created | uncertain | linked_existing | failed | unresolved
+  startsAt       DateTime?
+  endsAt         DateTime?
+  professionalUuid String?
+  patientUuid    String?
+  procedureCeIds String?   // json [ids]
+  ceBookingUuid  String?
+  attempts       Int       @default(1)
+  lastError      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  resolvedAt     DateTime?
+
+  @@index([clinicId, state])
+  @@index([appointmentId, kind])
 }
 
 // Conexao da clinica com o Google Agenda (OAuth). Uma por clinica.
@@ -1136,6 +1208,8 @@ model BirthdayRule {
 
 model BirthdaySent {
   id        String       @id @default(cuid())
+  // state: reserved (reservado, provedor NAO chamado) | sent (aceito pelo provedor) | unconfirmed (resultado incerto: nunca reenvia) | failed_permanent (numero sem WhatsApp) | legacy (registro antigo: so prova a reserva)
+  state     String       @default("legacy")
   patientId String
   patient   Patient      @relation(fields: [patientId], references: [id])
   ruleId    String

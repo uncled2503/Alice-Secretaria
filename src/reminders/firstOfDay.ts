@@ -9,6 +9,7 @@ import { isoDateInZone, zonedWallClockToUtc } from "../scheduling/time.js";
 interface DayAppt {
   id: string;
   patientId: string;
+  attendeeId?: string | null; // acompanhante que divide o telefone: e outra PESSOA
   scheduledAt: Date;
 }
 
@@ -18,7 +19,7 @@ export function firstOfDayIds(appts: DayAppt[], timeZone: string): Set<string> {
   const seen = new Set<string>();
   const first = new Set<string>();
   for (const a of sorted) {
-    const key = `${a.patientId}|${isoDateInZone(a.scheduledAt, timeZone)}`;
+    const key = `${a.patientId}|${a.attendeeId ?? ""}|${isoDateInZone(a.scheduledAt, timeZone)}`;
     if (seen.has(key)) continue;
     seen.add(key);
     first.add(a.id);

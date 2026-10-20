@@ -1,3 +1,4 @@
+import { RESERVATION_SELECT, reservationDurationMin, reservationEndMs } from "./reservation.js";
 import { prisma } from "../db/client.js";
 import { wallClockInZone, zonedWallClockToUtc, formatInZone, formatDayInZone, isoDateInZone } from "./time.js";
 import { googleBusyIntervals } from "../google/calendar.js";
@@ -292,7 +293,7 @@ async function loadBusyContext(
       // ocupado. Continuam contando pra qualquer outro procedimento.
       ...(opts.excludeProcedureId ? { procedureId: { not: opts.excludeProcedureId } } : {}),
     },
-    select: { scheduledAt: true, ceBookingUuid: true, procedure: { select: { durationMin: true } } },
+    select: RESERVATION_SELECT,
   });
 
   const scheduleBlocks = await prisma.scheduleBlock.findMany({
@@ -312,7 +313,7 @@ async function loadBusyContext(
   return {
     busy: appts.map((a) => ({
       start: a.scheduledAt.getTime(),
-      end: a.scheduledAt.getTime() + a.procedure.durationMin * 60_000,
+      end: reservationEndMs(a),
       ce: !!a.ceBookingUuid,
     })),
     blocks: [...scheduleBlocks.map((b) => ({ start: b.startsAt.getTime(), end: b.endsAt.getTime() })), ...googleBusy],
@@ -745,6 +746,9 @@ export async function createBooking(params: {
   enforceHours?: boolean;
   // true = quem chamou espelha no Clinica Experts (e confere o resultado) antes de confirmar; aqui so nao dispara o espelho em segundo plano.
   deferMirror?: boolean;
+  // ACOMPANHANTE: a pessoa ATENDIDA divide o telefone de quem conversa (patientId = o contato; attendeeId = quem sera atendido); bookedByPatientId = quem pediu a reserva.
+  attendeeId?: string | null;
+  bookedByPatientId?: string | null;
 }): Promise<BookingSuccess | { ok: false; error: BookingErrorCode }> {
   const { clinicId, patientId, procedureId, startUtc } = params;
 
@@ -795,7 +799,7 @@ export async function createBooking(params: {
         // pacientes podem dividir o mesmo horario de proposito.
         ...(procedure.allowConcurrentBooking ? { procedureId: { not: procedure.id } } : {}),
       },
-      select: { scheduledAt: true, ceBookingUuid: true, procedure: { select: { durationMin: true } } },
+      select: RESERVATION_SELECT,
     });
     const blockRows = await tx.scheduleBlock.findMany({
       where: {
@@ -807,7 +811,7 @@ export async function createBooking(params: {
 
     const busy: BusyInterval[] = appts.map((a) => ({
       start: a.scheduledAt.getTime(),
-      end: a.scheduledAt.getTime() + a.procedure.durationMin * 60_000,
+      end: reservationEndMs(a),
       ce: !!a.ceBookingUuid,
     }));
     const blocks: BusyInterval[] = [
@@ -830,6 +834,9 @@ export async function createBooking(params: {
         procedureId,
         professionalId: professional?.id ?? null,
         scheduledAt: startUtc,
+        endsAt: new Date(startUtc.getTime() + procedure.durationMin * 60_000), // fim explicito da reserva (e o que ocupa a agenda)
+        attendeeId: params.attendeeId ?? null,
+        bookedByPatientId: params.bookedByPatientId ?? null,
         source: params.source ?? "whatsapp",
       },
     });
@@ -857,7 +864,7 @@ export interface RescheduleSuccess {
   appointmentId: string;
   scheduledAt: Date;
   label: string;
-  before: { scheduledAt: Date; patientConfirmed: boolean; confirmedAt: Date | null };
+  before: { scheduledAt: Date; endsAt: Date | null; patientConfirmed: boolean; confirmedAt: Date | null; cePresenceState: string | null; cePresenceAt: Date | null };
 }
 
 // Remarca REVALIDANDO tudo dentro da transacao (a disponibilidade pode ter mudado entre a consulta e a gravacao): mesmo procedimento, mesma
@@ -872,9 +879,10 @@ export async function rescheduleBooking(params: {
   const { clinicId, appointmentId, startUtc } = params;
   if (isNaN(startUtc.getTime())) return { ok: false, error: "invalid_datetime" };
   const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId } });
-  const appt = await prisma.appointment.findFirst({ where: { id: appointmentId, clinicId, status: "confirmed" }, include: { procedure: true, professional: true } });
+  const appt = await prisma.appointment.findFirst({ where: { id: appointmentId, clinicId, status: "confirmed" }, include: { procedure: true, professional: true, procedures: true } });
   if (!appt) return { ok: false, error: "procedure_not_found" };
   const procedure = appt.procedure;
+  const durationMin = reservationDurationMin(appt); // a RESERVA inteira (varios procedimentos / fim gravado pelo CE), nao so o procedimento principal
   const professional = appt.professional;
   const tz = clinic.timezone || "America/Sao_Paulo";
 
@@ -894,7 +902,7 @@ export async function rescheduleBooking(params: {
   const ceGate = params.enforceHours === false ? null : await ceGateFor(clinicId, professional, startUtc, 1, tz);
 
   const result = await prisma.$transaction(async (tx) => {
-    const fresh = await tx.appointment.findFirst({ where: { id: appt.id, status: "confirmed" }, select: { scheduledAt: true, patientConfirmed: true, confirmedAt: true } });
+    const fresh = await tx.appointment.findFirst({ where: { id: appt.id, status: "confirmed" }, select: { scheduledAt: true, endsAt: true, patientConfirmed: true, confirmedAt: true, cePresenceState: true, cePresenceAt: true } });
     if (!fresh) return { ok: false as const, error: "conflict" as BookingErrorCode };
     const others = await tx.appointment.findMany({
       where: {
@@ -902,22 +910,25 @@ export async function rescheduleBooking(params: {
         ...(professional ? { OR: [{ professionalId: professional.id }, { professionalId: null }] } : {}),
         ...(procedure.allowConcurrentBooking ? { procedureId: { not: procedure.id } } : {}),
       },
-      select: { scheduledAt: true, ceBookingUuid: true, procedure: { select: { durationMin: true } } },
+      select: RESERVATION_SELECT,
     });
     const blockRows = await tx.scheduleBlock.findMany({
       where: { clinicId, ...(professional ? { OR: [{ professionalId: professional.id }, { professionalId: null }] } : { professionalId: null }) },
       select: { startsAt: true, endsAt: true },
     });
-    const busy: BusyInterval[] = others.map((a) => ({ start: a.scheduledAt.getTime(), end: a.scheduledAt.getTime() + a.procedure.durationMin * 60_000, ce: !!a.ceBookingUuid }));
+    const busy: BusyInterval[] = others.map((a) => ({ start: a.scheduledAt.getTime(), end: reservationEndMs(a), ce: !!a.ceBookingUuid }));
     const blocks: BusyInterval[] = [...blockRows.map((b) => ({ start: b.startsAt.getTime(), end: b.endsAt.getTime() })), ...googleBusy];
-    const verdict = evaluateSlot({ startUtc, durationMin: procedure.durationMin, hours, busy, blocks, enforceHours: params.enforceHours, gate: ceGate });
+    const verdict = evaluateSlot({ startUtc, durationMin, hours, busy, blocks, enforceHours: params.enforceHours, gate: ceGate });
     logAgenda(verdict.ok ? "remarcacao-validada" : "remarcacao-recusada", clinicId, {
       agendamento: appt.id, ce: appt.ceBookingUuid, procedimento: procedure.name, profissional: professional?.name ?? "agenda-da-clinica", duracao: procedure.durationMin,
       de: fresh.scheduledAt.toISOString(), para: startUtc.toISOString(), jornada: hhmm(hours.workStartMinutes) + "-" + hhmm(hours.workEndMinutes), motivo: verdict.ok ? undefined : verdict.reason,
     });
     if (!verdict.ok) return { ok: false as const, error: verdict.reason };
-    await tx.appointment.update({ where: { id: appt.id }, data: { scheduledAt: startUtc, patientConfirmed: false, confirmedAt: null } });
-    return { ok: true as const, before: { scheduledAt: fresh.scheduledAt, patientConfirmed: fresh.patientConfirmed, confirmedAt: fresh.confirmedAt } };
+    await tx.appointment.update({
+      where: { id: appt.id },
+      data: { scheduledAt: startUtc, endsAt: new Date(startUtc.getTime() + durationMin * 60_000), patientConfirmed: false, confirmedAt: null, cePresenceState: null, cePresenceAt: null },
+    });
+    return { ok: true as const, before: { scheduledAt: fresh.scheduledAt, endsAt: fresh.endsAt, patientConfirmed: fresh.patientConfirmed, confirmedAt: fresh.confirmedAt, cePresenceState: fresh.cePresenceState, cePresenceAt: fresh.cePresenceAt } };
   });
   if (!result.ok) return result;
   return { ok: true, appointmentId: appt.id, scheduledAt: startUtc, label: formatInZone(startUtc, tz), before: result.before };

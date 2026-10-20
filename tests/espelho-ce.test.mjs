@@ -91,7 +91,8 @@ test("rede cai no POST mas a reserva JA existe no CE: nao falha e nao duplica (c
   handler = ({ method, path }) => {
     if (method === "POST" && path.endsWith("/bookings")) throw new Error("socket hang up");
     if (method === "GET" && path.endsWith("/bookings")) {
-      return json(200, { data: [{ uuid: "reserva-existente", starts_at: "2026-10-17T08:30:00-03:00", status: "scheduled", patient: { uuid: "uuid-paciente" } }] });
+      // (a reconciliacao exige que a reserva ENCONTRADA combine em tudo: paciente, profissional, procedimento, inicio e fim - ver os testes de reconciliacao estrita)
+      return json(200, { data: [{ uuid: "reserva-existente", starts_at: "2026-10-17T08:30:00-03:00", ends_at: "2026-10-17T09:00:00-03:00", status: "scheduled", patient: { uuid: "uuid-paciente" }, professional: { uuid: "uuid-amanda" }, procedures: [{ id: 1013701 }] }] });
     }
     return json(404, {});
   };
@@ -155,7 +156,8 @@ test("book_appointment espera o CE: cria sem espelhar em segundo plano, confere 
   assert.match(trecho, /status: "cancelled"/, "desfaz o agendamento quando o CE recusa");
   assert.match(trecho, /transfer_to_human/, "e passa o caso pra equipe");
   // o "agendado: true" so vem DEPOIS do espelho
-  assert.ok(alice.indexOf('JSON.stringify({ agendado: true', i) > alice.indexOf("syncAppointment(booking.appointmentId", i));
+  const okAt = i + alice.slice(i).search(/JSON\.stringify\(\{\s*agendado: true, quando/);
+  assert.ok(okAt > i && okAt > alice.indexOf("syncAppointment(booking.appointmentId", i));
   const slots = fs.readFileSync(new URL("../src/scheduling/slots.ts", import.meta.url), "utf8");
   assert.match(slots, /if \(result\.ok && !params\.deferMirror\) pushAppointmentInBackground/);
 });

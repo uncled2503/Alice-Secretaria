@@ -117,6 +117,21 @@ const MAX_SENDS_PER_RUN = 12;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let reminderRunning = false;
 
+// PURO: a janela planejada de uma regra para um agendamento (o envio e a PREVIA do painel usam esta mesma conta).
+//  - "janela": regra com inicio e fim (dayOffset/sendHour/sendEndHour): vale [from, to);
+//  - "ponto": horario fixo ou "N horas antes" (adiado para 7h se cair de madrugada): vale de `from` ate `from` + tolerancia (inclusive).
+export function ruleWindow(
+  rule: Pick<ReminderRule, "dayOffset" | "sendHour" | "sendMinute" | "sendEndHour" | "hoursBefore">,
+  scheduledAt: Date,
+  tz: string,
+): { from: Date; to: Date; kind: "janela" | "ponto" } {
+  if (rule.dayOffset != null && rule.sendHour != null && rule.sendEndHour != null) {
+    return { from: fixedReminderTime(scheduledAt, rule.dayOffset, rule.sendHour, rule.sendMinute, tz), to: fixedReminderTime(scheduledAt, rule.dayOffset, rule.sendEndHour, 0, tz), kind: "janela" };
+  }
+  const sendAt = rule.dayOffset != null && rule.sendHour != null ? fixedReminderTime(scheduledAt, rule.dayOffset, rule.sendHour, rule.sendMinute, tz) : reminderSendTime(scheduledAt, rule.hoursBefore, tz);
+  return { from: sendAt, to: new Date(sendAt.getTime() + SEND_TOLERANCE_MS), kind: "ponto" };
+}
+
 // PURO: a regra esta dentro da janela de envio para este agendamento AGORA? "window" = janela normal; "late" = reposicao de quem foi agendado
 // depois que a janela do dia fechou; null = nao vale agora. Mesma conta da selecao, repetida imediatamente antes de cada envio (um adiamento nunca
 // vira lembrete vencido ou fora de hora).
@@ -156,7 +171,7 @@ export async function selectDueAppointments(rule: ReminderRule, now: Date, tz: s
         ? { patientConfirmed: false, AND: [{ reminders: { none: { ruleId: rule.id } } }, { reminders: { some: { ruleId: rule.parentRuleId } } }] }
         : { reminders: { none: { ruleId: rule.id } } }),
     },
-    include: { patient: true, procedure: true, professional: true, reminders: { where: { ruleId: rule.parentRuleId ?? "-" }, select: { sentAt: true } } },
+    include: { patient: true, attendee: true, procedure: true, professional: true, reminders: { where: { ruleId: rule.parentRuleId ?? "-" }, select: { sentAt: true } } },
   });
   const lateIds = new Set<string>();
   let due = candidates.filter((appt) => {
@@ -187,6 +202,7 @@ export async function selectDueAppointments(rule: ReminderRule, now: Date, tz: s
         where: {
           clinicId: rule.clinicId,
           patientId: appt.patientId,
+          attendeeId: appt.attendeeId, // a MESMA pessoa: o marido que divide o telefone da esposa e outra pessoa (recebe a propria confirmacao)
           id: { not: appt.id },
           scheduledAt: { gte: start, lt: end },
           OR: [
@@ -357,10 +373,19 @@ export async function runReminderCycle(opts: { now?: Date } = {}): Promise<void>
         };
         try {
           // (0) O agendamento mudou desde a selecao (a importacao do CE roda a cada 10 min e pausas entre envios levam minutos)?
-          const fresh = await prisma.appointment.findUnique({ where: { id: appt.id }, select: { status: true, scheduledAt: true } });
+          const fresh = await prisma.appointment.findUnique({ where: { id: appt.id }, select: { status: true, scheduledAt: true, patientConfirmed: true } });
           if (!fresh || fresh.status !== "confirmed" || fresh.scheduledAt.getTime() !== appt.scheduledAt.getTime()) {
             logDecision("pular", { ...base, motivo: "o agendamento mudou depois da selecao (cancelado/atendido/outro horario)" });
             continue;
+          }
+          // COBRANCA ("ainda nao recebemos sua confirmacao"): a pessoa confirmou (ou respondeu) durante a rodada = nao cobra. Vale a confirmacao DE AGORA, nao a da selecao.
+          if (rule.parentRuleId) {
+            const parentSentAt = appt.reminders[0]?.sentAt;
+            if (fresh.patientConfirmed) { logDecision("pular", { ...base, tipo: key.kind, motivo: "o paciente confirmou antes da cobranca" }); continue; }
+            if (parentSentAt && (await prisma.message.count({ where: { role: "user", createdAt: { gt: parentSentAt }, conversation: { patientId: appt.patientId } } })) > 0) {
+              logDecision("pular", { ...base, tipo: key.kind, motivo: "o paciente respondeu antes da cobranca" });
+              continue;
+            }
           }
           // (1) A janela de envio desta regra ainda vale AGORA? (nada de lembrete vencido ou fora de hora pra compensar falha anterior)
           if (!sendWindowOf(rule, appt, stamp, tz)) {
@@ -377,7 +402,7 @@ export async function runReminderCycle(opts: { now?: Date } = {}): Promise<void>
           // (3) Reserva do Clinica Experts: confere ao vivo. Inconclusivo = ADIA (nao envia, nao cancela, nao consome).
           let ceResult: string | undefined;
           if (appt.ceBookingUuid) {
-            const label = appt.patient.name ?? "paciente";
+            const label = appt.attendee?.name ?? appt.patient.name ?? "paciente";
             const down = ceDown.get(rule.clinicId);
             const verdict = down ? null : await verifyBookingLive(appt, tz);
             const action: LiveAction = verdict ? await applyLiveVerdict(appt, verdict, label) : "defer";
@@ -409,7 +434,7 @@ export async function runReminderCycle(opts: { now?: Date } = {}): Promise<void>
 
           const noProcedure = isPlaceholderProcedure(appt.procedure);
           const text = renderMessageTemplate(noProcedure ? stripProcedureLines(rule.message) : rule.message, {
-            patientName: appt.patient.name,
+            patientName: appt.attendee?.name ?? appt.patient.name, // quem sera ATENDIDO (acompanhante), nao so o contato do telefone
             patientPhone: appt.patient.phone,
             clinicName: clinicInfo.name,
             locationName: clinicInfo.primaryLocation?.name,
@@ -440,8 +465,8 @@ export async function runReminderCycle(opts: { now?: Date } = {}): Promise<void>
           // Menor intervalo possivel entre as conferencias e o envio: le o estado de novo logo antes de reservar (a importacao do CE pode ter
           // mudado o agendamento enquanto a consulta ao CE e a montagem do texto aconteciam). O que ainda pode mudar nos segundos entre aqui e a
           // entrega no WhatsApp (revisao por IA incluida) e uma limitacao inevitavel: o CE e externo e nao ha como "travar" a reserva la.
-          const again = await prisma.appointment.findUnique({ where: { id: appt.id }, select: { status: true, scheduledAt: true } });
-          if (!again || again.status !== "confirmed" || again.scheduledAt.getTime() !== appt.scheduledAt.getTime()) {
+          const again = await prisma.appointment.findUnique({ where: { id: appt.id }, select: { status: true, scheduledAt: true, patientConfirmed: true } });
+          if (!again || again.status !== "confirmed" || again.scheduledAt.getTime() !== appt.scheduledAt.getTime() || (rule.parentRuleId && again.patientConfirmed)) {
             logDecision("pular", { ...base, ce: ceResult, motivo: "o agendamento mudou durante a conferencia" });
             continue;
           }

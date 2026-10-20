@@ -160,7 +160,7 @@ test("diagnostico de horario e so admin e somente leitura", () => {
 test("agendar sem profissional informado escolhe um que esteja livre (nao valida contra a clinica inteira)", () => {
   const src = fs.readFileSync(new URL("../src/ai/alice.ts", import.meta.url), "utf8");
   const i = src.indexOf('if (name === "book_appointment")');
-  const corpo = src.slice(i, i + 9000);
+  const corpo = src.slice(i, i + 15000); // (o bloco de "outra pessoa/acompanhante" veio antes da escolha de profissional)
   assert.match(corpo, /candidateProIds/);
   assert.match(corpo, /checkSpecificTime\(clinicId, procedure\.id, \{ year: wc\.year/);
   assert.ok(corpo.indexOf("candidateProIds.length > 1") < corpo.indexOf("await createBooking("));
@@ -331,8 +331,9 @@ test("aviso do Clinica Experts: 'reserva sem procedimento' em vez de '?', e rese
   assert.equal(skipReasonText({ reason: "procedimento_sem_vinculo", procedureNames: ["#12"] }), "procedimento sem vínculo: #12");
   assert.match(skipReasonText({ reason: "procedimento_sem_vinculo", procedureNames: [] }), /reserva sem procedimento no Clínica Experts/);
   const src = fs.readFileSync(new URL("../src/clinicaexperts/pull.ts", import.meta.url), "utf8");
-  const casar = src.indexOf("if (!procedure && phone) {");
-  const semProcedimento = src.indexOf("ensurePlaceholderProcedure(clinicId)");
+  // (a ligacao com o agendamento que ja existe agora e o comparador estrito, e continua vindo ANTES de criar a reserva sem procedimento)
+  const casar = src.indexOf("const match = pickUniqueMatch(locals");
+  const semProcedimento = src.indexOf("ensurePlaceholderProcedure(clinicId)", casar);
   assert.ok(casar > 0 && semProcedimento > casar, "o casamento com o agendamento existente tem que vir ANTES de criar a reserva sem procedimento");
-  assert.ok(src.indexOf("if (!phone) {") > casar, "sem telefone continua sendo descartado, depois do casamento");
+  assert.ok(src.includes('reason: "sem_telefone"'), "sem telefone e sem cadastro identificavel continua sendo descartado e avisado");
 });

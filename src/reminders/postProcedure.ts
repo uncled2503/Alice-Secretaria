@@ -1,4 +1,5 @@
 import { scheduleLocked } from "../jobs/lock.js";
+import { reservationEndMs } from "../scheduling/reservation.js";
 import { prisma } from "../db/client.js";
 import { sendText, isPermanentSendError, isAmbiguousSendError, isSendDeferred, deferralInfo } from "../uazapi/client.js";
 import { RunRecorder } from "../crm/automationRuns.js";
@@ -53,14 +54,22 @@ async function finishPostStep(id: string, state: string, note: string, now: Date
 }
 
 // PURO: o atendimento (inicio + duracao) ja terminou ate `limit`?
-export function appointmentEndedBy(appt: { scheduledAt: Date; procedure: { durationMin: number } }, limit: Date): boolean {
-  return appt.scheduledAt.getTime() + appt.procedure.durationMin * 60_000 <= limit.getTime();
+export function appointmentEndedBy(appt: { scheduledAt: Date; endsAt?: Date | null; procedure: { durationMin: number } }, limit: Date): boolean {
+  return reservationEndMs(appt) <= limit.getTime(); // o fim da RESERVA (ends_at do CE / soma dos procedimentos), nao so a duracao do procedimento principal
 }
 
 // PURO: avaliacao nao recebe "pos-procedimento" (nao houve procedimento), a menos que a regra liste esse procedimento de
 // proposito (procedureIds). Pedido da Lisboa (checklist 15/10): "nao enviar pos de avaliacao".
-export function skipsPostForEvaluation(appt: { procedureId: string; procedure: { name: string } }, procedureFilter: string[]): boolean {
+export function skipsPostForEvaluation(appt: { procedureId: string; procedure: { name: string }; procedures?: { procedureId: string | null; name: string }[] }, procedureFilter: string[]): boolean {
+  // reserva com procedimento de verdade ALEM da avaliacao: nao e "so avaliacao" (o pos acompanha o procedimento)
+  if ((appt.procedures ?? []).some((p) => !/avalia/i.test(p.name))) return false;
   return /avalia/i.test(appt.procedure.name) && !procedureFilter.includes(appt.procedureId);
+}
+
+// PURO: o procedimento que o pos acompanha: o que a regra lista (se a reserva tem varios) ou o principal.
+export function postProcedureNameFor(appt: { procedureId: string; procedure: { name: string }; procedures?: { procedureId: string | null; name: string }[] }, procedureFilter: string[]): string {
+  if (!procedureFilter.length || procedureFilter.includes(appt.procedureId)) return appt.procedure.name;
+  return (appt.procedures ?? []).find((p) => p.procedureId != null && procedureFilter.includes(p.procedureId))?.name ?? appt.procedure.name;
 }
 
 // Roda a cada 15min. So dispara uma vez por agendamento por regra (marca em
@@ -100,7 +109,8 @@ export async function runPostProcedureCycle(clock: () => Date = () => new Date()
           clinicId: rule.clinicId,
           ...(rule.onlyIfCompleted ? { status: "completed" } : { status: { notIn: ["cancelled", "no_show"] } }),
           scheduledAt: { lte: cutoff, gte: floor },
-          ...(procedureFilter.length ? { procedureId: { in: procedureFilter } } : {}),
+          // reserva com varios procedimentos: vale se QUALQUER um deles esta no filtro da regra
+          ...(procedureFilter.length ? { OR: [{ procedureId: { in: procedureFilter } }, { procedures: { some: { procedureId: { in: procedureFilter } } } }] } : {}),
           procedure: { name: { not: PLACEHOLDER_PROCEDURE_NAME } }, // "horario sem procedimento" (reserva do CE sem procedimento) nao tem o que acompanhar
           postProcedureSent: { none: { ruleId: rule.id, state: { in: POST_FINAL_STATES } } }, // etapa FECHADA nao reabre; "retry"/"reserved" velho voltam a ser candidatos
           patient: {
@@ -109,7 +119,7 @@ export async function runPostProcedureCycle(clock: () => Date = () => new Date()
             conversations: { none: { handoffReason: { startsWith: "REAÇÃO" }, lastMessageAt: { gte: new Date(now.getTime() - 7 * 24 * 3_600_000) } } },
           },
         },
-        include: { patient: true, procedure: true, professional: true },
+        include: { patient: true, attendee: true, procedure: true, procedures: true, professional: true },
         take: MAX_PER_TICK * 4, // margem: as avaliacoes saem no filtro abaixo e nao podem esgotar o teto
       });
       for (let i = due.length - 1; i >= 0; i--) {
@@ -135,12 +145,12 @@ export async function runPostProcedureCycle(clock: () => Date = () => new Date()
 
       for (const appt of due) {
         const text = renderMessageTemplate(rule.message, {
-          patientName: appt.patient.name,
+          patientName: appt.attendee?.name ?? appt.patient.name, // quem foi ATENDIDO
           patientPhone: appt.patient.phone,
           clinicName: clinicInfo.name,
           locationName: clinicInfo.primaryLocation?.name,
           locationAddress: clinicInfo.primaryLocation?.fullAddress,
-          procedureName: appt.procedure.name,
+          procedureName: postProcedureNameFor(appt, procedureFilter),
           professionalName: appt.professional?.name,
           when: appt.scheduledAt,
         });

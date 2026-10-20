@@ -1,6 +1,7 @@
 import { prisma } from "../db/client.js";
 import { logActivity } from "../crm/activity.js";
-import { ceRequest, dayBoundIso, getAccount } from "../clinicaexperts/client.js";
+import { ceListAll, dayBoundIso, getAccount } from "../clinicaexperts/client.js";
+import { parseBookingResource, type CeBookingParsed } from "../clinicaexperts/contract.js";
 import { invalidateCeCache } from "../clinicaexperts/availability.js";
 import { wallClockInZone, zonedWallClockToUtc } from "../scheduling/time.js";
 import { clinicTimeStatements, findTimeConflicts, type ClinicStatement, type HistoryMessage, type TimeConflict } from "./clinicStatements.js";
@@ -48,20 +49,26 @@ export async function checkClinicTimeConflicts(
     const base = wallClockInZone(now, tz);
     const year = c.mm < base.month || (c.mm === base.month && c.dd < base.day - 1) ? base.year + 1 : base.year;
     const dayStart = zonedWallClockToUtc(tz, year, c.mm, c.dd, 12, 0);
-    const res = await ceRequest<{ data: { uuid: string; starts_at: string; status: string; patient: { uuid: string; name: string } | null }[] }>(clinicId, "/bookings", {
-      query: { starts_at: dayBoundIso(dayStart, tz, "start"), ends_at: dayBoundIso(dayStart, tz, "end"), per_page: 1000 },
-    });
+    const res = await ceListAll<Record<string, unknown>>(clinicId, "/bookings", { starts_at: dayBoundIso(dayStart, tz, "start"), ends_at: dayBoundIso(dayStart, tz, "end") }, { perPage: 1000 });
     if (!res.ok) continue;
-    const mine = (res.data.data ?? []).filter(
-      (b) => b.status !== "canceled" && ((patient.ceUuid && b.patient?.uuid === patient.ceUuid) || (patient.name && b.patient?.name && foldName(b.patient.name) === foldName(patient.name))),
+    const parsed: CeBookingParsed[] = [];
+    for (const raw of res.items) { const p = parseBookingResource(raw, tz); if (p.ok) parsed.push(p.booking); } // o horario e lido NO FUSO DA CLINICA (nunca no do servidor)
+    const mine = parsed.filter(
+      (b) => b.status.meaning !== "cancelled" && ((patient.ceUuid && b.patient?.uuid === patient.ceUuid) || (!patient.ceUuid && patient.name && b.patient?.name && foldName(b.patient.name) === foldName(patient.name))),
     );
-    const match = mine.find((b) => {
-      const wc = wallClockInZone(new Date(b.starts_at), tz);
+    const matches = mine.filter((b) => {
+      const wc = wallClockInZone(b.startsAt, tz);
       return `${pad(wc.hour)}:${pad(wc.minute)}` === c.clinicTime;
     });
-    if (!match) continue; // o CE tambem nao tem esse horario: nao da pra concluir
+    if (matches.length !== 1) continue; // o CE nao tem esse horario (ou ha mais de um): nao da pra concluir
+    const match = matches[0];
     const target = sameDay[0];
-    await prisma.appointment.update({ where: { id: target.id }, data: { scheduledAt: new Date(match.starts_at), ...(target.ceBookingUuid ? {} : { ceBookingUuid: match.uuid }) } });
+    // so liga/corrige a reserva se ela nao for de outro agendamento daqui
+    if (!target.ceBookingUuid && (await prisma.appointment.count({ where: { clinicId, ceBookingUuid: match.uuid, id: { not: target.id } } })) > 0) continue;
+    await prisma.appointment.update({
+      where: { id: target.id },
+      data: { scheduledAt: match.startsAt, patientConfirmed: false, confirmedAt: null, cePresenceState: null, cePresenceAt: null, ...(match.endsAt ? { endsAt: match.endsAt } : {}), ...(target.ceBookingUuid ? {} : { ceBookingUuid: match.uuid }) },
+    });
     invalidateCeCache(clinicId);
     await logActivity({
       clinicId,

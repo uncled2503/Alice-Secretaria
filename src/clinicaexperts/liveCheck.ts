@@ -1,7 +1,7 @@
 import { prisma } from "../db/client.js";
-import { ceRequest, getAccount } from "./client.js";
+import { ceRequest, getAccount, type CeErrorKind } from "./client.js";
 import { logActivity } from "../crm/activity.js";
-import { mapCeStatus, parseCeInstant } from "./pull.js";
+import { ceStatusInfo, hasExplicitOffset, parseCeInstant } from "./contract.js";
 import { scheduleBriefingRefreshForAppointment } from "../ai/leadBriefing.js";
 
 // ---------------------------------------------------------------------------
@@ -24,24 +24,23 @@ export interface CeSeen { status?: string; startsAt?: string }
 export type LiveVerdict =
   | { kind: "ok"; seen?: CeSeen } // reserva ativa e o horario confere
   | { kind: "gone"; why: string; localStatus: LocalEnd; seen?: CeSeen } // nao deve receber o lembrete; o status daqui acompanha o do CE
-  | { kind: "moved"; to: Date; seen?: CeSeen } // horario trocado la (instante com fuso): corrige aqui e nao manda o antigo
+  | { kind: "moved"; to: Date; endsAt?: Date | null; seen?: CeSeen } // horario trocado la (instante com fuso): corrige aqui e nao manda o antigo
   | { kind: "unknown"; reason: string; systemic: boolean } // inconclusivo: ADIAR. systemic = problema do CE/rede/token (vale pra todas as reservas da clinica)
   | { kind: "unlinked" }; // reserva so da Alice (sem vinculo com o CE) ou CE desconectado: segue como sempre
 
 // "send" = pode enviar; "skip" = nao envia (a copia estava velha e ja foi corrigida); "defer" = nao envia AGORA e tenta de novo.
 export type LiveAction = "send" | "skip" | "defer";
 
-const HAS_OFFSET = /(Z|[+-]\d{2}:?\d{2})$/i;
-
 // PURO: o que o CE disse sobre a reserva (GET /bookings/{uuid}; 404/410 = apagada). Formatos suportados: corpo { data: { uuid, status, starts_at } }
 // (ou o objeto direto), status em texto ("scheduled", "canceled"...), starts_at ISO com ou sem fuso (sem fuso = horario de parede da clinica).
 export function judgeLiveBooking(
   appt: { scheduledAt: Date; ceBookingUuid?: string | null },
-  res: { ok: true; data: unknown } | { ok: false; status: number },
+  res: { ok: true; data: unknown } | { ok: false; status: number; kind?: CeErrorKind },
   tz: string,
   now = new Date(),
 ): LiveVerdict {
   if (!res.ok) {
+    if (res.kind === "invalid_response") return { kind: "unknown", systemic: true, reason: "o Clínica Experts respondeu com um corpo ilegível ou vazio" };
     if (res.status === 404 || res.status === 410) return { kind: "gone", why: "a reserva foi apagada no Clínica Experts", localStatus: "cancelled" };
     if (res.status === 401 || res.status === 403) return { kind: "unknown", systemic: true, reason: "o Clínica Experts recusou o acesso (token inválido ou sem permissão)" };
     if (res.status === 0) return { kind: "unknown", systemic: true, reason: "sem resposta do Clínica Experts (rede ou tempo esgotado)" };
@@ -55,8 +54,11 @@ export function judgeLiveBooking(
 
   // status: obrigatorio. Cada estado terminal tem o SEU significado (nao e tudo "cancelada").
   if (typeof b.status !== "string" || !b.status.trim()) return { kind: "unknown", systemic: false, reason: "resposta do Clínica Experts sem o status da reserva" };
-  const st = mapCeStatus(b.status);
+  const info = ceStatusInfo(b.status);
+  const st = info.meaning;
   const seen: CeSeen = { status: b.status.trim().slice(0, 30), startsAt: typeof b.starts_at === "string" ? b.starts_at.trim().slice(0, 40) : undefined };
+  // estado que a Alice nao conhece NUNCA vira "reserva ativa": nao envia, nao cancela, nao altera (ADIA) e o texto bruto fica no motivo
+  if (st == null) return { kind: "unknown", systemic: false, reason: `estado de reserva desconhecido no Clínica Experts ("${info.raw.slice(0, 30)}")` };
   if (st === "cancelled") return { kind: "gone", why: "a reserva foi cancelada no Clínica Experts", localStatus: "cancelled", seen };
   if (st === "no_show") return { kind: "gone", why: "a reserva foi marcada como falta no Clínica Experts", localStatus: "no_show", seen };
   if (st === "completed") return { kind: "gone", why: "a reserva já consta como atendida no Clínica Experts", localStatus: "completed", seen };
@@ -68,7 +70,11 @@ export function judgeLiveBooking(
   if (Number.isNaN(at.getTime())) return { kind: "unknown", systemic: false, reason: "horário da reserva ilegível no Clínica Experts" };
   if (Math.abs(at.getTime() - appt.scheduledAt.getTime()) < 60_000) return { kind: "ok", seen };
   // Horario diferente: so e "trocou" quando o CE devolve o instante COM fuso (sem fuso a leitura poderia deslocar 3h e corromper o horario) e no futuro.
-  if (HAS_OFFSET.test(raw) && at.getTime() > now.getTime()) return { kind: "moved", to: at, seen };
+  if (hasExplicitOffset(raw) && at.getTime() > now.getTime()) {
+    const endRaw = typeof (b as { ends_at?: unknown }).ends_at === "string" ? ((b as { ends_at: string }).ends_at).trim() : "";
+    const end = endRaw ? parseCeInstant(endRaw, tz) : null;
+    return { kind: "moved", to: at, endsAt: end && !Number.isNaN(end.getTime()) && end.getTime() > at.getTime() ? end : null, seen };
+  }
   return { kind: "unknown", systemic: false, reason: "horário da reserva no Clínica Experts diverge do cadastrado e não dá pra confirmar qual vale" };
 }
 
@@ -77,7 +83,7 @@ export async function verifyBookingLive(appt: { clinicId: string; ceBookingUuid:
   try {
     if (!(await getAccount(appt.clinicId))) return { kind: "unlinked" }; // CE desconectado da clinica: o vinculo antigo nao tem mais o que conferir
     const res = await ceRequest<unknown>(appt.clinicId, `/bookings/${appt.ceBookingUuid}`);
-    return judgeLiveBooking(appt, res.ok ? { ok: true, data: res.data } : { ok: false, status: res.status }, tz);
+    return judgeLiveBooking(appt, res.ok ? { ok: true, data: res.data } : { ok: false, status: res.status, kind: res.kind }, tz);
   } catch (err) {
     console.error("[lembrete] falha ao conferir a reserva no CE:", err instanceof Error ? err.message : err);
     return { kind: "unknown", systemic: true, reason: "falha ao consultar o Clínica Experts" }; // a conferencia nunca derruba o ciclo dos lembretes
@@ -92,7 +98,7 @@ const GONE_ACTIVITY: Record<LocalEnd, { type: string; title: string }> = {
 
 // Aplica o veredito na copia local e diz o que fazer com o lembrete. "unknown" NAO altera nada.
 export async function applyLiveVerdict(
-  appt: { id: string; clinicId: string; patientId: string; scheduledAt: Date },
+  appt: { id: string; clinicId: string; patientId: string; scheduledAt: Date; endsAt?: Date | null },
   verdict: LiveVerdict,
   label: string,
 ): Promise<LiveAction> {
@@ -103,7 +109,8 @@ export async function applyLiveVerdict(
         data: {
           status: verdict.localStatus,
           // origem do cancelamento: so "cancelada" no CE prova; reserva APAGADA pode ser remarcacao/troca (nao e desistencia)
-          ...(verdict.localStatus === "cancelled" ? { cancelledAt: new Date(), cancelSource: /apagada/i.test(verdict.why) ? "ce_apagada" : "ce_cancelada" } : {}),
+          ...(verdict.localStatus === "cancelled" ? { cancelledAt: new Date(), cancelSource: /apagada/i.test(verdict.why) ? "ce_apagada" : "ce_cancelada", ceCancelState: "confirmed" } : {}),
+          ceSyncedAt: new Date(),
         },
       });
       const a = GONE_ACTIVITY[verdict.localStatus];
@@ -118,7 +125,14 @@ export async function applyLiveVerdict(
     case "moved":
       // novo horario: corrige a copia, zera a confirmacao do horario antigo e libera os lembretes pra sairem no horario novo.
       // (O historico de envios do horario antigo fica no controle ReminderDispatch; so a reserva atual e liberada.)
-      await prisma.appointment.update({ where: { id: appt.id }, data: { scheduledAt: verdict.to, patientConfirmed: false, confirmedAt: null } });
+      // (fim: o que o CE informou; sem ele, mantem a duracao da reserva)
+      await prisma.appointment.update({
+        where: { id: appt.id },
+        data: {
+          scheduledAt: verdict.to, patientConfirmed: false, confirmedAt: null, cePresenceState: null, cePresenceAt: null, ceSyncedAt: new Date(),
+          endsAt: verdict.endsAt ?? new Date(verdict.to.getTime() + (appt.endsAt ? appt.endsAt.getTime() - appt.scheduledAt.getTime() : 0)),
+        },
+      });
       await prisma.reminderSent.deleteMany({ where: { appointmentId: appt.id } });
       console.warn(`[lembrete] ${label}: o horario mudou no Clínica Experts - corrigido; lembrete do horario antigo NAO enviado`);
       scheduleBriefingRefreshForAppointment(appt.id);
@@ -159,6 +173,56 @@ export async function reconcileMissingBookings(
       if (verdict.kind === "gone") out.cancelled++;
       else out.moved++;
     }
+  }
+  return out;
+}
+
+// ESTADOS FINAIS REGISTRADOS TARDE: a recepcao lanca "concluido"/"falta"/"cancelada" dias depois do atendimento, fora da janela de importacao (hoje -2 dias). Recuperacao LIMITADA
+// e auditavel: so agendamentos ligados ao CE que seguem como "confirmados" ha ate `days` dias, no maximo `max` por rodada e cada um conferido no maximo a cada 6 h. Nao varre historico:
+// quem nunca esteve aqui nao e criado. Cada mudanca fica no Diario de atividades.
+export async function recoverLateStatuses(
+  clinicId: string,
+  tz: string,
+  opts: { days?: number; max?: number; now?: Date; recheckMs?: number } = {},
+): Promise<{ checked: number; updated: number; inconclusive: number }> {
+  const now = opts.now ?? new Date();
+  const days = opts.days ?? 7;
+  const out = { checked: 0, updated: 0, inconclusive: 0 };
+  const pastWindowEnd = new Date(now.getTime() - 2 * 24 * 3_600_000); // a importacao normal ja cuida dos ultimos dias
+  const stale = new Date(now.getTime() - (opts.recheckMs ?? 6 * 3_600_000));
+  const rows = await prisma.appointment.findMany({
+    where: {
+      clinicId, status: "confirmed", ceBookingUuid: { not: null },
+      scheduledAt: { gte: new Date(now.getTime() - days * 24 * 3_600_000), lt: pastWindowEnd },
+      OR: [{ ceSyncedAt: null }, { ceSyncedAt: { lt: stale } }],
+    },
+    include: { patient: { select: { name: true, phone: true } }, attendee: { select: { name: true } } },
+    orderBy: { scheduledAt: "desc" },
+    take: opts.max ?? 25,
+  });
+  for (const a of rows) {
+    out.checked++;
+    const verdict = await verifyBookingLive(a, tz);
+    if (verdict.kind === "unknown") {
+      out.inconclusive++;
+      if (verdict.systemic) break;
+      continue;
+    }
+    if (verdict.kind === "gone") {
+      const who = a.attendee?.name ?? a.patient.name ?? a.patient.phone;
+      const done = await prisma.appointment.updateMany({
+        where: { id: a.id, status: "confirmed" },
+        data: { status: verdict.localStatus, ceSyncedAt: now, ...(verdict.localStatus === "cancelled" ? { cancelledAt: now, cancelSource: "ce_cancelada", ceCancelState: "confirmed" } : {}) },
+      });
+      if (done.count) {
+        out.updated++;
+        const t = GONE_ACTIVITY[verdict.localStatus];
+        await logActivity({ clinicId, patientId: a.patientId, type: t.type, area: "agenda", title: `${t.title} (registrado depois)`, description: `${who}: ${verdict.why}; o estado final só foi registrado no Clínica Experts depois da janela normal de importação.`, actorName: null }).catch(() => undefined);
+        scheduleBriefingRefreshForAppointment(a.id);
+      }
+      continue;
+    }
+    await prisma.appointment.update({ where: { id: a.id }, data: { ceSyncedAt: now } }); // conferido: segue como esta
   }
   return out;
 }

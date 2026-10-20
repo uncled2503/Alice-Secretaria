@@ -72,10 +72,11 @@ export function mentionsCompanion(text: string): boolean {
 }
 
 export const GROUP_BOOKING_DIRECTIVE =
-  "AGENDAMENTO PARA MAIS DE UMA PESSOA (ela e outra pessoa): cada pessoa e um atendimento e um cadastro SEPARADOS. (1) Reserve com book_appointment SO o horario da pessoa que esta conversando (patient_full_name = o nome DELA; NUNCA o nome do acompanhante, senao o cadastro dela e sobrescrito). " +
-  "(2) Para a OUTRA pessoa NAO use book_appointment: peca o nome completo e um telefone de contato dela (reaproveite o que ja foi dito) e chame transfer_to_human com 'RESERVA PENDENTE' (nome, procedimento, dia e horario combinados) para a equipe lancar. " +
-  "(3) NAO presuma que a mesma profissional atende duas pessoas ao mesmo tempo: consulte a agenda (check_availability) e ofereca horarios INDIVIDUAIS e sequenciais (um depois do outro) ou de outra profissional habilitada. " +
-  "(4) NUNCA escreva 'os dois/voces estao agendados/confirmados': diga exatamente o que foi concluido (so o que book_appointment devolveu agendado:true) e o que continua pendente com a equipe.";
+  "AGENDAMENTO PARA MAIS DE UMA PESSOA (ela e outra pessoa): cada pessoa e um atendimento e um cadastro SEPARADOS, cada um com a sua chamada de book_appointment. " +
+  "(1) A pessoa que conversa: book_appointment normal (patient_full_name = o nome DELA; NUNCA o nome do acompanhante, senao o cadastro dela e sobrescrito). " +
+  "(2) A OUTRA pessoa: peca o NOME COMPLETO dela e como falar com ela ('o contato dele(a) e este mesmo WhatsApp ou ele(a) tem outro numero?'); depois chame book_appointment com attendee_full_name (+ attendee_relation) e attendee_shares_phone=true OU attendee_phone. Nao presuma que o telefone e dos dois. " +
+  "(3) NAO presuma que a mesma profissional atende duas pessoas ao mesmo tempo: consulte a agenda (check_availability) e ofereca horarios INDIVIDUAIS e sequenciais (um depois do outro) ou de outra profissional habilitada; cada chamada revalida a agenda na hora. " +
+  "(4) NUNCA escreva 'os dois/voces estao agendados/confirmados' antes de book_appointment devolver agendado:true PARA CADA pessoa. Se so uma ficou, diga exatamente quem ficou (dia, hora, profissional) e quem NAO ficou; a reserva que deu certo continua valendo. Se o resultado de uma ficou incerto, a equipe confirma.";
 
 // ---------- datas ----------
 const WD_NAMES = ["domingo", "segunda", "terça", "quarta", "quinta", "sexta", "sábado"];

@@ -1,3 +1,4 @@
+import { shiftedEnd } from "../../scheduling/reservation.js";
 import express, { Router, type Request, type Response, type NextFunction, type RequestHandler } from "express";
 import { rateLimit } from "express-rate-limit";
 import { prisma } from "../../db/client.js";
@@ -580,8 +581,8 @@ externalApiRouter.patch(
       where: { id: existing.id },
       data: {
         ...(b.status ? { status: b.status } : {}),
-        ...(b.status === "cancelled" && existing.status !== "cancelled" ? { cancelledAt: new Date(), cancelSource: "api_externa" } : {}),
-        ...(start ? { scheduledAt: start, patientConfirmed: false, confirmedAt: null } : {}),
+        ...(b.status === "cancelled" && existing.status !== "cancelled" ? { cancelledAt: new Date(), cancelSource: "api_externa", ceCancelState: existing.ceBookingUuid ? "pending" : null } : {}),
+        ...(start ? { scheduledAt: start, endsAt: shiftedEnd(existing, start), patientConfirmed: false, confirmedAt: null, cePresenceState: null, cePresenceAt: null } : {}),
         ...(b.professional_id !== undefined ? { professionalId: b.professional_id || null } : {}),
       },
       include: { procedure: { select: { name: true } }, professional: { select: { id: true, name: true } }, patient: { select: { id: true, name: true, phone: true } } },

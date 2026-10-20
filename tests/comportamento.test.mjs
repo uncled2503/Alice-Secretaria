@@ -118,6 +118,6 @@ test("entrega da Alice: timeout nao reenvia (6 mensagens iguais p/ a Elaine) e r
 
 test("avaliacao em cima de avaliacao: check_availability e book_appointment recusam quando ja existe uma marcada", () => {
   const src = fs.readFileSync(new URL("../src/ai/alice.ts", import.meta.url), "utf8");
-  assert.ok((src.match(/futureEvaluation\(patientId\)/g) ?? []).length >= 2);
+  assert.ok((src.match(/futureEvaluation\(/g) ?? []).length >= 2); // (book_appointment agora consulta por PESSOA: futureEvaluation(target.patientId, target.attendeeId))
   assert.match(src, /esta pessoa JA tem uma avaliacao marcada/);
 });

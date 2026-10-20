@@ -83,6 +83,10 @@ import { scheduleBriefingRefresh } from "../ai/leadBriefing.js";
 import { usageSnapshot as aiUsageSnapshot, persistedReport as aiPersistedReport, traceReport as aiTraceReport } from "../ai/usageStats.js";
 import { openAiHealth } from "../ai/openaiCall.js";
 import { attendanceHealth } from "../crm/attendanceHealth.js";
+import { ceHealth } from "../clinicaexperts/health.js";
+import { markPatientConfirmed, reconcileOpenAttempts } from "../clinicaexperts/sync.js";
+import { shiftedEnd } from "../scheduling/reservation.js";
+import { previewReminders } from "../reminders/preview.js";
 import { dispatchTrail } from "../reminders/ledger.js";
 import { connectAccount, disconnectAccount, ceStatusFor } from "../clinicaexperts/client.js";
 import { auditExecutors, auditUnmirrored, syncCatalog } from "../clinicaexperts/sync.js";
@@ -317,6 +321,52 @@ apiRouter.get(
     }
     res.set("Cache-Control", "no-store");
     res.json({ appointmentId, trail: await dispatchTrail(clinic.id, { appointmentId }) });
+  })
+);
+
+// PREVIA dos lembretes (somente leitura): o que sai hoje/amanha, quando e por que (ou por que nao), com a mesma conta do envio. Nao consulta o CE, nao envia e nao grava.
+apiRouter.get(
+  "/clinic/reminder-preview",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const day = req.query.day === "tomorrow" ? "tomorrow" : "today";
+    res.set("Cache-Control", "no-store");
+    res.json(await previewReminders(clinic.id, { day }));
+  })
+);
+
+// "Por que esta pessoa nao recebeu a mensagem?" - avalia UMA reserva (de qualquer dia) com a mesma conta do envio, e traz a trilha persistida.
+apiRouter.get(
+  "/clinic/reminder-why",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const appointmentId = typeof req.query.appointmentId === "string" ? req.query.appointmentId : undefined;
+    if (!appointmentId) {
+      res.status(400).json({ error: "Informe appointmentId." });
+      return;
+    }
+    res.set("Cache-Control", "no-store");
+    const [preview, trail] = await Promise.all([previewReminders(clinic.id, { appointmentId }), dispatchTrail(clinic.id, { appointmentId })]);
+    res.json({ appointmentId, row: preview.rows[0] ?? null, overlaps: preview.overlaps, trail, whatsapp: preview.whatsapp });
+  })
+);
+
+// Saude da AGENDA / Clinica Experts: ultima sincronizacao boa, escritas incertas, confirmacoes de presenca pendentes, proximos envios. So leitura do banco.
+apiRouter.get(
+  "/clinic/agenda-health",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    res.set("Cache-Control", "no-store");
+    res.json(await ceHealth(clinic.id));
+  })
+);
+
+// Recuperacao CONTROLADA: so reconcilia o que ficou em aberto (escritas incertas e confirmacoes de presenca pendentes). Nunca reenvia mensagens nem recria reservas.
+apiRouter.post(
+  "/clinic/agenda-health/reconcile",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    res.json(await reconcileOpenAttempts(clinic.id));
   })
 );
 
@@ -3837,9 +3887,10 @@ apiRouter.put(
       data: {
         ...(procedureId !== undefined ? { procedureId } : {}),
         ...(professionalId !== undefined ? { professionalId: professionalId || null } : {}),
-        ...(parsedNewStart ? { scheduledAt: parsedNewStart } : {}),
+        // troca de horario: o fim da reserva acompanha (mantem a duracao) e a confirmacao de presenca do horario ANTIGO cai
+        ...(parsedNewStart ? { scheduledAt: parsedNewStart, endsAt: procedureId !== undefined && procedureId !== existing.procedureId ? null : shiftedEnd(existing, parsedNewStart), cePresenceState: null, cePresenceAt: null } : {}),
         ...(status !== undefined ? { status } : {}),
-        ...(status === "cancelled" && existing.status !== "cancelled" ? { cancelledAt: new Date(), cancelSource: "equipe_painel" } : {}),
+        ...(status === "cancelled" && existing.status !== "cancelled" ? { cancelledAt: new Date(), cancelSource: "equipe_painel", ceCancelState: existing.ceBookingUuid ? "pending" : null } : {}),
         ...(source !== undefined ? { source: source || null } : {}),
         ...(patientConfirmed !== undefined
           ? { patientConfirmed, confirmedAt: patientConfirmed ? new Date() : null }
@@ -3847,6 +3898,9 @@ apiRouter.put(
       },
       include: { procedure: true },
     });
+
+    // Confirmacao de presenca marcada pela equipe: segue o mesmo caminho da confirmacao do paciente (sincroniza com o CE; pendente e visivel se ele nao responder).
+    if (patientConfirmed === true && !existing.patientConfirmed && appointment.status === "confirmed") await markPatientConfirmed([appointment.id]);
 
     // Reflete no Google Agenda: cancelado sai da agenda, qualquer outra
     // mudanca (horario, procedimento, profissional) atualiza o evento.

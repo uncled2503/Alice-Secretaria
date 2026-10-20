@@ -22,6 +22,7 @@ const openaiCalls = [];
 const ceLog = []; // { method, path, body }
 let cePost = () => ({ status: 200, body: { data: { uuid: "ce-novo" } } });
 let cePut = () => ({ status: 200, body: { data: {} } });
+let ceDetail = () => ({ status: 200, body: { data: [] } }); // GET /bookings/{uuid}
 let ceAvailable = () => ({ status: 200, body: { data: cells() } });
 const cells = () => { const out = []; for (let m = 0; m < 24 * 60; m += 15) out.push(`${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`); return out; };
 const jsonRes = (status, body) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -49,6 +50,7 @@ globalThis.fetch = async (url, init = {}) => {
     if (method === "POST" && u.pathname.endsWith("/patients")) return jsonRes(200, { data: { uuid: "pac-uuid" } });
     if (method === "POST" && u.pathname.endsWith("/bookings")) { const r = cePost(body); return jsonRes(r.status, r.body); }
     if (method === "PUT") { const r = cePut(body); return jsonRes(r.status, r.body); }
+    if (method === "GET" && /\/bookings\/[^/]+$/.test(u.pathname)) { const r = ceDetail(u.pathname.split("/").pop()); return jsonRes(r.status, r.body); }
     return jsonRes(200, { data: [] });
   }
   return jsonRes(200, {});
@@ -93,7 +95,7 @@ async function cenario(nome, mensagens, { appt = null } = {}) {
     : null;
   return { patient, conv, appointment };
 }
-const reset = () => { invalidateCeCache(clinic.id); script = []; openaiCalls.length = 0; ceLog.length = 0; cePost = () => ({ status: 200, body: { data: { uuid: "ce-novo" } } }); cePut = () => ({ status: 200, body: { data: {} } }); ceAvailable = () => ({ status: 200, body: { data: cells() } }); };
+const reset = () => { invalidateCeCache(clinic.id); script = []; openaiCalls.length = 0; ceLog.length = 0; cePost = () => ({ status: 200, body: { data: { uuid: "ce-novo" } } }); cePut = () => ({ status: 200, body: { data: {} } }); ceAvailable = () => ({ status: 200, body: { data: cells() } }); ceDetail = () => ({ status: 200, body: { data: [] } }); };
 const lastTool = (body) => JSON.parse(body.messages.filter((m) => m.role === "tool").at(-1).content);
 const tool = (name, args) => ({ tool: { name, args } });
 
@@ -201,6 +203,10 @@ test("remarcar: fora da jornada e recusado; dentro, preserva procedimento/profis
   reset();
   const antigo = localUtc(14, 0);
   const c = await cenario("Fabi Souza", [["user", "Preciso mudar meu horario de drenagem para as 20:30"]], { appt: { professionalId: suelen.id, when: antigo, uuid: "ce-fabi" } });
+  // o CE devolve a reserva ATUAL (a Alice a le antes de trocar) e, depois do PUT aceito, a reserva no horario novo
+  let ceInicio = antigo;
+  ceDetail = (uuid) => ({ status: 200, body: { data: { uuid, starts_at: ceInicio.toISOString(), ends_at: new Date(ceInicio.getTime() + 60 * 60_000).toISOString(), status: "scheduled", professional: { uuid: "pro-suelen" }, patient: { uuid: "x" }, procedures: [{ id: 201 }] } } });
+  cePut = (b) => { ceInicio = new Date(b.starts_at); return { status: 200, body: { data: {} } }; };
   const resultados = [];
   script = [
     tool("manage_my_appointment", { action: "reschedule", new_date: DIA, new_time: "20:30" }),

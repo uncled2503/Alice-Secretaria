@@ -1,6 +1,8 @@
 import { prisma } from "../db/client.js";
 import { scheduleLocked } from "../jobs/lock.js";
-import { ceRequest } from "./client.js";
+import { ceListAll } from "./client.js";
+import { samePhone } from "./identity.js";
+import { namesCompatible } from "./match.js";
 
 // ---------------------------------------------------------------------------
 // ANIVERSARIO dos pacientes/leads vindo do Clinica Experts (pedido da Lisboa, 14/10/2026): a Alice so dispara parabens para quem tem
@@ -9,7 +11,7 @@ import { ceRequest } from "./client.js";
 // O nome do campo na API do CE nao esta documentado aqui: aceitamos os nomes usuais e o relatorio mostra quais campos o CE devolveu.
 // ---------------------------------------------------------------------------
 
-const BIRTH_KEYS = ["birth_date", "birthdate", "birthday", "date_of_birth", "dob", "born_at", "birth", "data_nascimento", "nascimento", "aniversario", "birth_day"];
+const BIRTH_KEYS = ["birth_date", "date_birth", "birthdate", "birthday", "date_of_birth", "dob", "born_at", "birth", "data_nascimento", "nascimento", "aniversario", "birth_day"];
 
 // PURO: data de nascimento em varios formatos -> Date (meia-noite UTC, so dia/mes importam) ou null se invalida/implausivel.
 export function parseCeBirthDate(raw: unknown, now = new Date()): Date | null {
@@ -61,39 +63,44 @@ export interface BirthdaySyncResult {
   toFill: number; // a Alice ainda nao tinha a data (sao preenchidos)
   alreadyHad: number; // a Alice ja tinha (ficam como estao)
   notInAlice: number; // com data, mas ainda nao sao contatos da Alice
+  ambiguous: number; // telefone compartilhado por mais de um cadastro do CE e sem uuid que desempate: nada e preenchido
+  incomplete: boolean; // a listagem do CE nao fechou o total: so preencheu o que leu
   fieldsSeen: string[]; // campos que o CE devolveu (para achar o nome certo se nada casar)
   birthKey: string | null;
   error?: string;
 }
 
-async function fetchCePatients(clinicId: string): Promise<CePatient[] | null> {
-  const out: CePatient[] = [];
-  for (let page = 1; page <= 40; page++) {
-    const res = await ceRequest<{ data: CePatient[]; meta?: { last_page?: number } }>(clinicId, "/patients", { query: { per_page: 1000, page } });
-    if (!res.ok) return null;
-    out.push(...(res.data.data ?? []));
-    if (!res.data.meta?.last_page || page >= res.data.meta.last_page) break;
-  }
-  return out;
+// Todas as paginas (a conferencia de total e feita em ceListAll). Lista incompleta so preenche MENOS (nunca preenche errado), entao segue e avisa.
+async function fetchCePatients(clinicId: string): Promise<{ items: CePatient[]; complete: boolean } | null> {
+  const res = await ceListAll<CePatient>(clinicId, "/patients", {}, { perPage: 1000, maxPages: 60 });
+  return res.ok ? { items: res.items, complete: res.complete } : null;
 }
 
 // Le os pacientes do CE e preenche a data de nascimento dos contatos da Alice que ainda nao tem. dryRun so conta.
 export async function syncBirthdaysFromCe(clinicId: string, opts: { dryRun: boolean }): Promise<BirthdaySyncResult> {
-  const result: BirthdaySyncResult = { dryRun: opts.dryRun, read: 0, withBirth: 0, invalidBirth: 0, matched: 0, toFill: 0, alreadyHad: 0, notInAlice: 0, fieldsSeen: [], birthKey: null };
-  const cePatients = await fetchCePatients(clinicId);
-  if (!cePatients) return { ...result, error: "Nao consegui ler os pacientes do Clinica Experts (veja o erro na tela)." };
+  const result: BirthdaySyncResult = { dryRun: opts.dryRun, read: 0, withBirth: 0, invalidBirth: 0, matched: 0, toFill: 0, alreadyHad: 0, notInAlice: 0, ambiguous: 0, incomplete: false, fieldsSeen: [], birthKey: null };
+  const fetched = await fetchCePatients(clinicId);
+  if (!fetched) return { ...result, error: "Nao consegui ler os pacientes do Clinica Experts (veja o erro na tela)." };
+  const cePatients = fetched.items;
+  result.incomplete = !fetched.complete;
   result.read = cePatients.length;
   result.fieldsSeen = Object.keys(cePatients[0] ?? {});
 
-  const mine = await prisma.patient.findMany({ where: { clinicId }, select: { id: true, phone: true, birthDate: true, ceUuid: true } });
+  const mine = await prisma.patient.findMany({ where: { clinicId }, select: { id: true, phone: true, name: true, birthDate: true, ceUuid: true } });
+  const attendees = await prisma.attendee.findMany({ where: { clinicId, ceUuid: { not: null } }, select: { id: true, birthDate: true, ceUuid: true } });
   const byUuid = new Map(mine.filter((p) => p.ceUuid).map((p) => [p.ceUuid as string, p]));
-  const byPhone = new Map<string, (typeof mine)[number]>();
+  const attByUuid = new Map(attendees.map((a) => [a.ceUuid as string, a]));
+  const byPhone = new Map<string, (typeof mine)[number][]>();
   for (const p of mine) {
     const k = phoneKey(p.phone);
-    if (k && !byPhone.has(k)) byPhone.set(k, p);
+    if (k) byPhone.set(k, [...(byPhone.get(k) ?? []), p]);
   }
+  // quantos cadastros do CE dividem cada telefone: com mais de um, o telefone NAO identifica a pessoa
+  const ceByPhone = new Map<string, number>();
+  for (const cp of cePatients) { const k = phoneKey(cp.phone); if (k) ceByPhone.set(k, (ceByPhone.get(k) ?? 0) + 1); }
 
   const updates: { id: string; birthDate: Date; ceUuid?: string }[] = [];
+  const attUpdates: { id: string; birthDate: Date }[] = [];
   const done = new Set<string>();
   for (const cp of cePatients) {
     const field = birthFieldOf(cp);
@@ -106,7 +113,22 @@ export async function syncBirthdaysFromCe(clinicId: string, opts: { dryRun: bool
     }
     result.withBirth++;
     const k = phoneKey(cp.phone);
-    const mineP = (cp.uuid ? byUuid.get(cp.uuid) : undefined) ?? (k ? byPhone.get(k) : undefined);
+    // 1) pelo uuid do CE (cadastro ou acompanhante); 2) pelo telefone SO quando ele identifica a pessoa: um unico cadastro de cada lado e o nome nao contradiz. Telefone dividido
+    // (casal/familia) nunca empresta a data de nascimento de um para o outro.
+    const attP = cp.uuid ? attByUuid.get(cp.uuid) : undefined;
+    if (attP) {
+      result.matched++;
+      if (attP.birthDate) result.alreadyHad++;
+      else { result.toFill++; attUpdates.push({ id: attP.id, birthDate: birth }); }
+      continue;
+    }
+    let mineP = cp.uuid ? byUuid.get(cp.uuid) : undefined;
+    if (!mineP && k) {
+      const cands = byPhone.get(k) ?? [];
+      if ((ceByPhone.get(k) ?? 0) > 1 || cands.length > 1) { result.ambiguous++; continue; }
+      const c = cands[0];
+      if (c && samePhone(c.phone, cp.phone) && !(c.ceUuid && cp.uuid && c.ceUuid !== cp.uuid) && namesCompatible(c.name, cp.name)) mineP = c;
+    }
     if (!mineP) {
       result.notInAlice++;
       continue;
@@ -123,8 +145,10 @@ export async function syncBirthdaysFromCe(clinicId: string, opts: { dryRun: bool
   if (!opts.dryRun) {
     for (const u of updates) {
       // so preenche se continua vazio (a equipe pode ter digitado entre a leitura e agora)
-      await prisma.patient.updateMany({ where: { id: u.id, birthDate: null }, data: { birthDate: u.birthDate, ...(u.ceUuid ? { ceUuid: u.ceUuid } : {}) } });
+      const claimed = u.ceUuid ? await prisma.patient.findFirst({ where: { clinicId, ceUuid: u.ceUuid, id: { not: u.id } }, select: { id: true } }) : null;
+      await prisma.patient.updateMany({ where: { id: u.id, birthDate: null }, data: { birthDate: u.birthDate, ...(u.ceUuid && !claimed ? { ceUuid: u.ceUuid } : {}) } });
     }
+    for (const u of attUpdates) await prisma.attendee.updateMany({ where: { id: u.id, birthDate: null }, data: { birthDate: u.birthDate } });
   }
   return result;
 }

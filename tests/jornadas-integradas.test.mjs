@@ -286,6 +286,10 @@ test("C) remarcacao: mantem o procedimento, o CE aceita, o historico fica, o lem
   await prisma.reminderDispatch.create({ data: { clinicId: L.clinic.id, bookingKey: "ce:ce-remarca", appointmentId: c.appointment.id, patientId: c.patient.id, ruleId: "regra-x", kind: "dia_seguinte", startsAt: antigo, sendDay: "2026-01-01", state: "sent" } });
   await prisma.resumeFlowConfig.create({ data: { clinicId: L.clinic.id, flow: "avaliacao_cancelada", enabled: true, weekday: null, message: "Oi, {primeiro_nome}! Aqui e a Alice da {unidade}. Se quiser retomar a avaliacao, me responde aqui.", lookbackDays: 7 } });
 
+  // o CE devolve a reserva ATUAL (a Alice a le antes de trocar) e, depois do PUT aceito, a reserva no horario novo
+  let ceInicio = antigo;
+  ceDetail = (uuid) => ({ status: 200, body: { data: { uuid, status: "scheduled", starts_at: ceInicio.toISOString(), ends_at: new Date(ceInicio.getTime() + 30 * 60_000).toISOString() } } });
+  cePut = (b) => { ceInicio = new Date(b.starts_at); return { status: 200, body: { data: {} } }; };
   script = [
     tool("manage_my_appointment", { action: "reschedule", new_date: DIA, new_time: "16:00" }),
     { content: "Pronto, remarquei sua avaliação! 💗" },
@@ -944,6 +948,9 @@ test("CONFIRMACAO: mais de uma reserva -> mesmo dia confirma as duas; dias difer
   const dia2 = new Date(c.when.getTime() + 29 * HOUR); // depois de amanha 14:00 (SP)
   const a2 = await prisma.appointment.create({ data: { clinicId: L.clinic.id, patientId: c.patient.id, procedureId: c.proc.id, professionalId: L.suelen.id, scheduledAt: dia2, ceBookingUuid: "res-dia2", status: "confirmed", source: "presencial" } });
   const rule = await prisma.reminderRule.findFirst({ where: { clinicId: L.clinic.id, hoursBefore: 24 } });
+  // o CE devolve CADA reserva no seu horario (a confirmacao confere a reserva ao vivo)
+  const inicioPorReserva = { [c.appt.ceBookingUuid]: c.when, "res-dia2": dia2 };
+  ceDetail = (uuid) => ({ status: 200, body: { data: { uuid, status: "scheduled", starts_at: inicioPorReserva[uuid].toISOString() } } });
   await prisma.reminderDispatch.create({ data: { clinicId: L.clinic.id, bookingKey: "ce:res-dia2", appointmentId: a2.id, patientId: c.patient.id, ruleId: rule.id, kind: "dia_seguinte", startsAt: dia2, sendDay: isoDay(0), state: "sent" } });
   // o lembrete que ela viu cita as DUAS reservas (mensagem unica): o contexto nao identifica qual
   const [, M2, D2] = [0, ...isoDayOf(dia2).split("-").slice(1).map(Number)];

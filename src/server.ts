@@ -25,6 +25,7 @@ import { startReferralJob } from "./reminders/surveyFlow.js";
 import { startBriefingJob } from "./ai/leadBriefing.js";
 import { startLeadSummaryJob } from "./crm/leadSummary.js";
 import { startCeBookingPullJob } from "./clinicaexperts/pull.js";
+import { startCeReconcileJob } from "./clinicaexperts/sync.js";
 import { startCeBirthdayJob } from "./clinicaexperts/birthdays.js";
 import { REVISION } from "./version.js";
 import { startUnansweredJob } from "./crm/unanswered.js";
@@ -374,6 +375,7 @@ const httpServer = app.listen(port, () => {
   startLearningJob();
   startLeadSummaryJob();
   startCeBookingPullJob();
+  startCeReconcileJob();
   startCeBirthdayJob();
   startUnansweredJob();
   startPhoneContactsJob();

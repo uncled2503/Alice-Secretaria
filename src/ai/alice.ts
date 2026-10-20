@@ -2,7 +2,10 @@ import OpenAI from "openai";
 import { safeFetch } from "./wellFormed.js";
 import type { ChatCompletion, ChatCompletionCreateParamsNonStreaming, ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
 import { prisma } from "../db/client.js";
-import { ceMirrorEnabled, enrichPatientFromCe, syncAppointment } from "../clinicaexperts/sync.js";
+import { ceMirrorEnabled, enrichPatientFromCe, hasOpenCreateAttempt, markPatientConfirmed, syncAppointment } from "../clinicaexperts/sync.js";
+import { applyLiveVerdict, verifyBookingLive } from "../clinicaexperts/liveCheck.js";
+import { resolveCompanionTarget } from "../scheduling/companions.js";
+import { namesCompatible } from "../clinicaexperts/match.js";
 import { invalidateCeCache } from "../clinicaexperts/availability.js";
 import { fixRelativeDateLabels, fixRelativeDayLabels, fixWeekdayDatePairs } from "./relativeDays.js";
 import { pickSpread, filterByPeriod, filterByTimeWindow, findNearestSlots,
@@ -173,7 +176,11 @@ const tools: ChatCompletionTool[] = [
           date: { type: "string", description: "Alternativa ao start_iso: AAAA-MM-DD do horario combinado, no ano corrente do contexto." },
           time: { type: "string", description: "Alternativa ao start_iso: HH:MM em 24h do horario combinado." },
           professional_id: { type: "string", description: "Opcional: o 'profissional_id' retornado junto com o horario escolhido." },
-          patient_full_name: { type: "string", description: "Nome COMPLETO (nome e sobrenome) do paciente, quando ele informou. Obrigatorio se o sistema disser que o cadastro nao foi localizado." },
+          patient_full_name: { type: "string", description: "Nome COMPLETO (nome e sobrenome) do paciente DESTA CONVERSA, quando ele informou. Obrigatorio se o sistema disser que o cadastro nao foi localizado. NUNCA o nome de outra pessoa." },
+          attendee_full_name: { type: "string", description: "SO quando o agendamento e para OUTRA pessoa (marido, filha, amiga...): o nome COMPLETO dela. Cada pessoa tem a sua chamada, com o seu horario e profissional; o cadastro de quem conversa nao e alterado." },
+          attendee_relation: { type: "string", description: "Opcional: quem e a outra pessoa para quem conversa (marido, filha...). So informacao." },
+          attendee_phone: { type: "string", description: "Telefone PROPRIO da outra pessoa (com DDD), se ela tiver outro numero. Se for o mesmo desta conversa, use attendee_shares_phone." },
+          attendee_shares_phone: { type: "boolean", description: "true SO se a pessoa disse que o contato da outra pessoa e este mesmo WhatsApp. Nao presuma: pergunte." },
         },
         required: ["procedure_name"],
       },
@@ -184,7 +191,7 @@ const tools: ChatCompletionTool[] = [
     function: {
       name: "manage_my_appointment",
       description:
-        "Gerencia os agendamentos futuros do proprio paciente. Use 'confirm' quando ele confirmar presenca (ex: 'confirmado', 'pode confirmar', 'sim vou' - confirma todos os horarios do dia), 'cancel' quando pedir pra cancelar (tira da agenda), 'reschedule' quando pedir pra remarcar (informe new_date e new_time). Se ele tiver MAIS DE UM agendamento, para cancelar/remarcar informe qual com appointment_date (+ appointment_time), ou all_that_day=true pra cancelar todos os horarios do dia; sem isso a ferramenta devolve a lista e voce pergunta qual.",
+        "Gerencia os agendamentos futuros do proprio paciente. Use 'confirm' quando ele confirmar presenca (ex: 'confirmado', 'pode confirmar', 'sim vou' - confirma todos os horarios do dia), 'cancel' quando pedir pra cancelar (tira da agenda), 'reschedule' quando pedir pra remarcar (informe new_date e new_time). Se ele tiver MAIS DE UM agendamento, para cancelar/remarcar informe qual com appointment_date (+ appointment_time), ou all_that_day=true pra cancelar todos os horarios do dia; sem isso a ferramenta devolve a lista e voce pergunta qual. Quando ha agendamentos de mais de uma pessoa (ela e um acompanhante), informe person_name da pessoa a quem o pedido se refere.",
       parameters: {
         type: "object",
         properties: {
@@ -193,7 +200,8 @@ const tools: ChatCompletionTool[] = [
           new_time: { type: "string", description: "So para reschedule: HH:MM em 24h." },
           appointment_date: { type: "string", description: "Qual agendamento (quando ha mais de um): AAAA-MM-DD do agendamento atual, como vem na lista de agendamentos." },
           appointment_time: { type: "string", description: "Qual agendamento (quando ha varios no mesmo dia): HH:MM do agendamento atual." },
-          all_that_day: { type: "boolean", description: "So para cancel: true = cancelar TODOS os horarios do dia de appointment_date." },
+          all_that_day: { type: "boolean", description: "confirm/cancel: true = TODOS os horarios do dia de appointment_date (de todas as pessoas daquele dia)." },
+          person_name: { type: "string", description: "Quando ha agendamentos de MAIS DE UMA pessoa (ela e um acompanhante): o nome (ou primeiro nome) da pessoa a quem o pedido se refere." },
         },
         required: ["action"],
       },
@@ -376,9 +384,9 @@ async function noEligibleProfessional(clinic: Parameters<typeof procedureEligibi
 }
 
 // A pessoa JA tem uma avaliacao marcada (futura)? A Alice nao agenda avaliacao em cima de avaliacao.
-async function futureEvaluation(patientId: string) {
+async function futureEvaluation(patientId: string, attendeeId: string | null = null) {
   return prisma.appointment.findFirst({
-    where: { patientId, status: "confirmed", scheduledAt: { gte: new Date() }, procedure: { name: { contains: "avalia" } } },
+    where: { patientId, attendeeId, status: "confirmed", scheduledAt: { gte: new Date() }, procedure: { name: { contains: "avalia" } } },
     orderBy: { scheduledAt: "asc" },
     select: { scheduledAt: true },
   });
@@ -713,8 +721,16 @@ async function runTool(
   if (name === "book_appointment") {
     const procedure = await findProcedure(clinicId, input.procedure_name);
     if (!procedure) return await procedureNotFoundMessage(clinicId, input.procedure_name, patientId);
+    // OUTRA pessoa na mesma conversa (marido, filha...): cada pessoa e um agendamento e um cadastro SEPARADOS; o cadastro de quem conversa nunca e alterado.
+    let target: { patientId: string; attendeeId: string | null; bookedByPatientId: string | null; displayName: string | null } = { patientId, attendeeId: null, bookedByPatientId: null, displayName: null };
+    if (String(input.attendee_full_name ?? "").trim()) {
+      const t = await resolveCompanionTarget(clinicId, patientId, { fullName: input.attendee_full_name, relation: input.attendee_relation, phone: input.attendee_phone, sharesPhone: input.attendee_shares_phone });
+      if (!t.ok) return JSON.stringify({ agendado: false, motivo: t.motivo, instrucao: t.instrucao });
+      target = { patientId: t.patientId, attendeeId: t.attendeeId, bookedByPatientId: t.bookedByPatientId, displayName: t.displayName };
+    }
+    const forOther = target.patientId !== patientId || target.attendeeId != null;
     if (/avalia/i.test(procedure.name)) {
-      const dup = await futureEvaluation(patientId);
+      const dup = await futureEvaluation(target.patientId, target.attendeeId);
       if (dup) {
         return JSON.stringify({
           agendado: false,
@@ -738,7 +754,7 @@ async function runTool(
       })();
       if (dayStart && !Number.isNaN(dayStart.getTime())) {
         const sameDay = await prisma.appointment.findFirst({
-          where: { patientId, procedureId: procedure.id, status: "confirmed", scheduledAt: { gte: dayStart, lt: new Date(dayStart.getTime() + 24 * 3_600_000) } },
+          where: { patientId: target.patientId, attendeeId: target.attendeeId, procedureId: procedure.id, status: "confirmed", scheduledAt: { gte: dayStart, lt: new Date(dayStart.getTime() + 24 * 3_600_000) } },
           select: { scheduledAt: true },
         });
         if (sameDay) {
@@ -755,14 +771,14 @@ async function runTool(
     const fullNameGiven = String(input.patient_full_name ?? "").replace(/\s+/g, " ").trim().slice(0, 120);
     const bookingPatient = await prisma.patient.findUnique({ where: { id: patientId }, select: { name: true, ceUuid: true } });
     const hasSurname = (n: string | null | undefined) => (n ?? "").trim().split(/\s+/).filter(Boolean).length >= 2;
-    if (bookingPatient && !bookingPatient.ceUuid && (await ceConnected(clinicId))) {
+    if (!forOther && bookingPatient && !bookingPatient.ceUuid && (await ceConnected(clinicId))) {
       if (hasSurname(fullNameGiven)) {
         // O nome completo informado precisa ser DA PESSOA desta conversa: o de outra pessoa (marido, filha...) nunca sobrescreve o cadastro dela.
         if (looksLikeRealName(bookingPatient.name) && !sameFirstName(bookingPatient.name, fullNameGiven)) {
           return JSON.stringify({
             agendado: false,
             motivo: `o nome informado ("${fullNameGiven}") parece ser de OUTRA pessoa: o cadastro desta conversa e de "${bookingPatient.name}" e NAO sera sobrescrito. Esta ferramenta agenda so a pessoa que esta conversando.`,
-            instrucao: "NAO use book_appointment para outra pessoa. Para o acompanhante, colete nome completo e telefone de contato e chame transfer_to_human com 'RESERVA PENDENTE' (nome, procedimento, dia e horario combinados). Nao diga que ele(a) esta agendado(a).",
+            instrucao: "Esse nome e de OUTRA pessoa. Para agendar a outra pessoa chame book_appointment com attendee_full_name (nome completo dela) e como falar com ela (attendee_shares_phone=true se o contato e este WhatsApp, ou attendee_phone). Para a pessoa desta conversa, patient_full_name = o nome DELA.",
           });
         }
         await prisma.patient.update({ where: { id: patientId }, data: { name: fullNameGiven } });
@@ -795,7 +811,7 @@ async function runTool(
 
     // Tentativa anterior para ESTE horario teve resultado INCERTO no Clinica Experts (pode ter sido criada la): nao tenta de novo (evita reserva em duplicidade); a equipe confere.
     if (!isNaN(startUtc.getTime())) {
-      const uncertain = await prisma.activityLog.findFirst({ where: { patientId, type: "ce_mirror_uncertain", createdAt: { gte: new Date(Date.now() - 60 * 60_000) }, description: { contains: startUtc.toISOString() } }, select: { id: true } });
+      const uncertain = await hasOpenCreateAttempt(clinicId, target.patientId, target.attendeeId, startUtc);
       if (uncertain) {
         return JSON.stringify({
           agendado: false,
@@ -841,7 +857,9 @@ async function runTool(
     const mirrorCe = await ceMirrorEnabled(clinicId);
     const booking = await createBooking({
       clinicId,
-      patientId,
+      patientId: target.patientId,
+      attendeeId: target.attendeeId,
+      bookedByPatientId: target.bookedByPatientId,
       procedureId: procedure.id,
       professionalId,
       startUtc,
@@ -881,8 +899,9 @@ async function runTool(
           patientId,
         });
         if (!mirror.definitive) {
-          // Nao deu para saber se o CE criou a reserva (rede/tempo esgotado): registra para NAO recriar as cegas e passa para a equipe conferir.
-          await logActivity({ clinicId, type: "ce_mirror_uncertain", area: "agenda", title: "Resultado incerto ao criar a reserva no Clínica Experts", description: `startsAt=${booking.scheduledAt.toISOString()} ${procedure.name}: o CE pode ter criado a reserva; a equipe precisa conferir antes de recriar.`, actorName: null, patientId });
+          // Nao deu para saber se o CE criou a reserva (rede/tempo esgotado): a TENTATIVA fica aberta no banco (CeBookingAttempt) e o reconciliador procura a reserva la; nada e recriado
+          // as cegas. A equipe e avisada para conferir (e o Diario de atividades registra o incerto).
+          await logActivity({ clinicId, type: "ce_mirror_uncertain", area: "agenda", title: "Resultado incerto ao criar a reserva no Clínica Experts", description: `${procedure.name} em ${formatDateTimeInZone(booking.scheduledAt, tz)}: o CE pode ter criado a reserva; a Alice nao recria e continua procurando (a equipe confere a agenda).`, actorName: null, patientId });
           return JSON.stringify({
             agendado: false,
             incerto: true,
@@ -903,27 +922,33 @@ async function runTool(
     }
 
     await prisma.conversation.updateMany({ where: { patientId }, data: { status: "scheduled" } });
-    await movePatientToKind(clinicId, patientId, "avaliacao_agendada", { note: "agendou pela Alice" });
-    void enqueueSchedule(clinicId, booking.appointmentId).catch((err) => console.error("[meta] enqueueSchedule:", err));
+    if (!forOther) {
+      await movePatientToKind(clinicId, patientId, "avaliacao_agendada", { note: "agendou pela Alice" });
+      void enqueueSchedule(clinicId, booking.appointmentId).catch((err) => console.error("[meta] enqueueSchedule:", err));
+    }
 
     const patient = await prisma.patient.findUnique({ where: { id: patientId } });
     const whenLabel = formatDateTimeInZone(booking.scheduledAt, tz);
     const withPro = booking.professionalName ? ` com ${booking.professionalName}` : "";
+    const whoLabel = forOther ? `${target.displayName} (pedido por ${patientLabelOf(patient)})` : patientLabelOf(patient);
     await notifyStaff(
       clinicId,
       "new_appointment",
-      `Novo agendamento (via Alice): ${patientLabelOf(patient)} - ${booking.procedureName}${withPro} em ${whenLabel}.${await bookingRiskNote(patientId)}`,
+      `Novo agendamento (via Alice): ${whoLabel} - ${booking.procedureName}${withPro} em ${whenLabel}.${await bookingRiskNote(target.patientId)}`,
     );
     await logActivity({
       clinicId,
       type: "appointment_booked",
       area: "agenda",
       title: "Agendamento criado pela Alice",
-      description: `${patientLabelOf(patient)} — ${booking.procedureName}${withPro} em ${whenLabel}.`,
+      description: `${whoLabel} — ${booking.procedureName}${withPro} em ${whenLabel}.`,
       actorName: null,
     });
 
-    return JSON.stringify({ agendado: true, quando: booking.label, profissional: booking.professionalName ?? undefined });
+    return JSON.stringify({
+      agendado: true, quando: booking.label, profissional: booking.professionalName ?? undefined,
+      ...(forOther ? { pessoa: target.displayName, instrucao: "Esta reserva e de OUTRA pessoa. So diga que as DUAS (ou todas) estao agendadas depois que book_appointment devolver agendado:true para CADA uma; se alguma falhar, diga exatamente quem ficou agendado (dia, hora, profissional) e quem NAO ficou." } : {}),
+    });
   }
 
   if (name === "manage_my_appointment") {
@@ -932,7 +957,7 @@ async function runTool(
       where: { patientId, status: "confirmed", scheduledAt: { gte: new Date() } },
       orderBy: { scheduledAt: "asc" },
       take: 10,
-      include: { procedure: true, professional: true, patient: true },
+      include: { procedure: true, professional: true, patient: true, attendee: true },
     });
     if (upcoming.length === 0) return JSON.stringify({ ok: false, motivo: "nao encontrei um agendamento futuro pra esse paciente" });
 
@@ -942,6 +967,7 @@ async function runTool(
       return `${pad2(wc.hour)}:${pad2(wc.minute)}`;
     };
     const describe = (a: (typeof upcoming)[number]) => ({
+      ...(a.attendee ? { pessoa: a.attendee.name } : {}),
       quando: formatDateTimeInZone(a.scheduledAt, tz),
       procedimento: displayProcedureName(a.procedure.name),
       appointment_date: isoDateInZone(a.scheduledAt, tz),
@@ -956,8 +982,11 @@ async function runTool(
     let candidates = upcoming;
     if (dayWanted) candidates = candidates.filter((a) => isoDateInZone(a.scheduledAt, tz) === dayWanted);
     if (timeWanted) candidates = candidates.filter((a) => hhmmOf(a.scheduledAt) === timeWanted);
+    // Varias pessoas na mesma conversa (ela e um acompanhante): o pedido pode ser de uma so.
+    const personWanted = String(input.person_name ?? "").trim();
+    if (personWanted) candidates = candidates.filter((a) => namesCompatible(a.attendee?.name ?? a.patient.name, personWanted));
     if (candidates.length === 0) {
-      return JSON.stringify({ ok: false, motivo: "nao encontrei agendamento nesse dia/horario", agendamentos: upcoming.map(describe) });
+      return JSON.stringify({ ok: false, motivo: personWanted ? "nao encontrei agendamento dessa pessoa nesse dia/horario" : "nao encontrei agendamento nesse dia/horario", agendamentos: upcoming.map(describe) });
     }
     const askWhich = () =>
       JSON.stringify({
@@ -971,11 +1000,34 @@ async function runTool(
     if (action === "confirm") {
       // A confirmacao e uma so por dia: confirma TODOS os horarios do dia do agendamento escolhido (o lembrete so cita o primeiro).
       const day = isoDateInZone(candidates[0].scheduledAt, tz);
-      const group = upcoming.filter((a) => isoDateInZone(a.scheduledAt, tz) === day);
-      await prisma.appointment.updateMany({
-        where: { id: { in: group.map((a) => a.id) } },
-        data: { patientConfirmed: true, confirmedAt: new Date() },
-      });
+      const sameDay = (personWanted ? candidates : upcoming).filter((a) => isoDateInZone(a.scheduledAt, tz) === day);
+      if (!personWanted && input.all_that_day !== true && new Set(sameDay.map((a) => a.attendeeId ?? "self")).size > 1) {
+        return JSON.stringify({
+          ok: false,
+          motivo: "ha agendamentos de mais de uma pessoa nesse dia: preciso saber de quem e a confirmacao",
+          agendamentos: sameDay.map(describe),
+          instrucao: "Pergunte de QUEM e a confirmacao (ou se ela confirma por todos) e chame de novo com person_name, ou all_that_day=true se ela confirmar por todos.",
+        });
+      }
+      // A reserva ainda existe, esta ativa e no MESMO horario? A confirmacao de presenca so vale para o que de fato esta na agenda da clinica (consulta ao vivo no Clinica Experts).
+      // Consulta inconclusiva (CE fora do ar) NAO impede: a confirmacao do paciente e guardada e a sincronizacao com o CE fica pendente.
+      const group: typeof sameDay = [];
+      const notValid: string[] = [];
+      for (const a of sameDay) {
+        if (a.ceBookingUuid) {
+          const v = await verifyBookingLive(a, tz);
+          if (v.kind === "gone" || v.kind === "moved") {
+            await applyLiveVerdict(a, v, patientLabelOf(a.patient));
+            notValid.push(v.kind === "moved" ? `${displayProcedureName(a.procedure.name)} mudou para ${formatDateTimeInZone(v.to, tz)} na agenda da clinica` : `${displayProcedureName(a.procedure.name)} de ${formatDateTimeInZone(a.scheduledAt, tz)} nao esta mais ativo na agenda da clinica`);
+            continue;
+          }
+        }
+        group.push(a);
+      }
+      if (!group.length) {
+        return JSON.stringify({ ok: false, motivo: notValid.join("; "), instrucao: "NAO confirmou a presenca. Diga o que mudou na agenda e pergunte se o novo horario serve ou se ela prefere remarcar/cancelar. Nunca diga 'confirmado'." });
+      }
+      await markPatientConfirmed(group.map((a) => a.id)); // guarda a confirmacao do paciente e sincroniza com o CE (pendente e visivel se o CE nao responder)
       const label = formatDateTimeInZone(group[0].scheduledAt, tz);
       const procs = group.map((a) => a.procedure.name).join(", ");
       await notifyStaff(clinicId, "confirmed", `Presenca confirmada: ${who} - ${procs} em ${label}${group.length > 1 ? ` (${group.length} horarios no dia)` : ""}.`);
@@ -999,6 +1051,7 @@ async function runTool(
         ok: true,
         confirmado: label,
         horarios_confirmados: group.length,
+        ...(notValid.length ? { nao_confirmados: notValid, instrucao_parcial: "Parte dos horarios mudou ou nao esta mais ativa: diga exatamente quais ficaram confirmados e o que mudou." } : {}),
         ...(preparo ? { orientacoes_de_preparo: "O sistema envia sozinho, como resposta, a mensagem de agradecimento com as orientacoes de preparo. Nao escreva as orientacoes; responda so uma frase curta." } : {}),
       });
     }
@@ -1014,16 +1067,22 @@ async function runTool(
         return askWhich();
       }
 
+      const cePending: string[] = [];
       for (const appt of targets) {
-        await prisma.appointment.update({ where: { id: appt.id }, data: { status: "cancelled", cancelledAt: new Date(), cancelSource: "paciente_whatsapp" } });
-        removeAppointmentInBackground(appt.id); // tira do Google Agenda e do Clinica Experts
+        await prisma.appointment.update({ where: { id: appt.id }, data: { status: "cancelled", cancelledAt: new Date(), cancelSource: "paciente_whatsapp", ceCancelState: appt.ceBookingUuid ? "pending" : null } });
+        // Clinica Experts: o cancelamento so vale la depois que ele aceita. Falha = fica PENDENTE (visivel, com nova tentativa e aviso a equipe), nunca "esquecido".
+        if (appt.ceBookingUuid && (await ceMirrorEnabled(clinicId))) {
+          const res = await syncAppointment(appt.id);
+          if (!res.ok) cePending.push(`${displayProcedureName(appt.procedure.name)} em ${formatDateTimeInZone(appt.scheduledAt, tz)}`);
+        }
+        removeAppointmentInBackground(appt.id); // tira do Google Agenda (o Clinica Experts ja foi tratado acima)
         await logActivity({
           clinicId, type: "appointment_cancelled", area: "agenda", patientId,
           title: "Agendamento cancelado pelo paciente",
           description: `${who} — ${appt.procedure.name} em ${formatDateTimeInZone(appt.scheduledAt, tz)}.`, actorName: null,
         });
       }
-      const labels = targets.map((a) => `${displayProcedureName(a.procedure.name)} em ${formatDateTimeInZone(a.scheduledAt, tz)}`);
+      const labels = targets.map((a) => `${a.attendee ? `${a.attendee.name}: ` : ""}${displayProcedureName(a.procedure.name)} em ${formatDateTimeInZone(a.scheduledAt, tz)}`);
       await notifyStaff(clinicId, "cancel", `Agendamento cancelado pelo paciente: ${who} - ${labels.join("; ")}.`);
       await movePatientToRecovery(clinicId, patientId, { note: "cancelou o agendamento" });
       for (const appt of targets) {
@@ -1032,7 +1091,8 @@ async function runTool(
       return JSON.stringify({
         ok: true,
         cancelado: labels.join("; "),
-        removido_da_agenda: true,
+        removido_da_agenda: cePending.length === 0,
+        ...(cePending.length ? { agenda_da_clinica_pendente: cePending, aviso: "O cancelamento ja vale aqui, mas a agenda da clinica (Clinica Experts) ainda nao confirmou a baixa; a equipe foi avisada. Diga ao paciente que o cancelamento foi registrado, sem prometer que ja saiu da agenda da recepcao." } : {}),
         instrucao:
           "Confirme em UMA frase que o horario foi cancelado e OFERECA reagendar: pergunte se ela quer remarcar e qual dia/periodo fica melhor (use check_availability pra oferecer horarios reais). Se ela disser que nao quer remarcar agora, respeite e deixe a porta aberta, sem insistir.",
       });
@@ -1096,6 +1156,14 @@ async function runTool(
             title: "Remarcação da Alice desfeita: o Clínica Experts não aceitou",
             description: `${who} — ${appt.procedure.name}: ${formatDateTimeInZone(before.scheduledAt, tz)} -> ${check.requestedLabel}. Motivo: ${mirror.error}`, actorName: null, patientId,
           });
+          if (mirror.uncertain) {
+            return JSON.stringify({
+              ok: false,
+              incerto: true,
+              motivo: "nao foi possivel confirmar se a agenda da clinica (Clinica Experts) aplicou a troca",
+              instrucao: "NAO diga que remarcou NEM que nao conseguiu: a agenda da clinica nao respondeu se aplicou a troca (a conferencia continua em segundo plano). Chame transfer_to_human com o procedimento, o horario atual e o novo horario pedido; diga so que a equipe vai confirmar o novo horario e que o atual segue valendo ate la.",
+            });
+          }
           return JSON.stringify({
             ok: false,
             motivo: "a agenda da clinica (Clinica Experts) nao aceitou a troca",

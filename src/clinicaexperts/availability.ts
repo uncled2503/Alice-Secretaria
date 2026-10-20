@@ -1,6 +1,7 @@
 import { prisma } from "../db/client.js";
 import { isoDateInZone, zonedWallClockToUtc } from "../scheduling/time.js";
 import { ceRequest, getAccount, isoWithOffset, noteError } from "./client.js";
+import { parseAvailableHours } from "./contract.js";
 
 // O endpoint /available-hours do Clinica Experts devolve, pra um profissional
 // num dia, os horarios de INICIO livres (ja descontando a escala dele,
@@ -54,7 +55,7 @@ export function buildGate(freeCells: Set<number>, loadedDays: Set<string>, timeZ
 // Cache curto por (clinica, profissional, dia): a busca de horarios chama isso
 // varias vezes seguidas e o Clinica Experts nao precisa ser consultado a cada
 // uma. 45s e curto o bastante pra um agendamento recem-feito aparecer.
-const dayCache = new Map<string, { at: number; hours: string[] | null }>();
+const dayCache = new Map<string, { at: number; hours: number[] | null }>(); // instantes (epoch ms) de inicio livres; null = nao verificado
 const CACHE_MS = 45_000;
 const FAILURE_CACHE_MS = 10_000; // falha do CE vale por pouco: nao martela um CE fora do ar, mas volta a oferecer logo que ele responde
 
@@ -67,19 +68,30 @@ async function hoursForDay(
   uuid: string,
   date: { year: number; month: number; day: number },
   timeZone: string,
-): Promise<string[] | null> {
+): Promise<number[] | null> {
   const key = `${clinicId}|${uuid}|${date.year}-${date.month}-${date.day}`;
   const hit = dayCache.get(key);
   if (hit && Date.now() - hit.at < (hit.hours ? CACHE_MS : FAILURE_CACHE_MS)) return hit.hours;
 
   const midnight = zonedWallClockToUtc(timeZone, date.year, date.month, date.day, 0, 0);
-  const res = await ceRequest<{ data: string[] }>(clinicId, "/available-hours", {
+  const res = await ceRequest<{ data: unknown }>(clinicId, "/available-hours", {
     query: { professional_uuid: uuid, date: isoWithOffset(midnight, timeZone), interval: CELL_MIN },
   });
-  const hours = res.ok && Array.isArray(res.data?.data) ? res.data.data : null;
+  // A documentacao define `data` como lista de OBJETOS sem campos; a implementacao sempre leu texto "HH:MM". Os dois formatos sao aceitos; uma forma NAO reconhecida NUNCA vira
+  // "dia sem horarios livres" (isso fecharia a agenda da profissional sem ninguem saber): vira "disponibilidade nao verificada" e a causa aparece no painel.
+  let hours: number[] | null = null;
+  let why = res.ok ? "resposta inesperada" : res.error;
+  if (res.ok) {
+    const body = res.data as { data?: unknown } | null;
+    if (body && Array.isArray(body.data)) {
+      const parsed = parseAvailableHours(body.data, timeZone, date);
+      if (parsed.unrecognized === 0) hours = parsed.starts;
+      else why = `formato de horario nao reconhecido (${parsed.unrecognized} item(ns), ${parsed.shape}); a Alice nao presume que nao ha horarios`;
+    } else why = "resposta sem a lista `data`";
+  }
   // Falha aqui FECHA o portao pra esse dia (a disponibilidade nao foi confirmada) - entao a falha PRECISA aparecer, senao a Alice
   // some com os horarios dessa profissional sem ninguem saber por que. Aparece em Configuracoes > Clinica Experts.
-  if (!hours) await noteError(clinicId, `Consulta de disponibilidade falhou (a Alice não oferece horários dessa profissional até o Clínica Experts responder): ${res.ok ? "resposta inesperada" : res.error}`);
+  if (!hours) await noteError(clinicId, `Consulta de disponibilidade falhou (a Alice não oferece horários dessa profissional até o Clínica Experts responder): ${why}`);
   dayCache.set(key, { at: Date.now(), hours });
   return hours;
 }
@@ -115,7 +127,7 @@ export async function ceGateFor(
       const hours = await hoursForDay(clinicId, professional.ceUuid!, day, timeZone);
       if (!hours) return;
       loaded.add(day.key);
-      for (const ms of cellStarts(timeZone, day, hours)) free.add(ms);
+      for (const ms of hours) free.add(ms);
     }),
   );
   if (loaded.size === 0) {

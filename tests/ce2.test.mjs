@@ -25,7 +25,7 @@ test("a importacao tenta outros campos e o detalhe da reserva antes de desistir 
   const j = src.indexOf("Reservas novas e futuras cujo procedimento ainda nao existe");
   assert.ok(i > 0 && j > i, "o enriquecimento vem antes de procurar procedimentos faltantes");
   const bloco = src.slice(i, j);
-  assert.match(bloco, /extractProcedureIds\(b\)/);
+  assert.match(bloco, /extractProcedureIds\((b|w\.raw)\)/); // (a reserva agora e um objeto validado `b` + o registro bruto `w.raw`; a extracao de outros campos continua igual)
   assert.match(bloco, /\/bookings\/\$\{b\.uuid\}/);
   assert.match(bloco, /detailCalls < 20/); // teto por rodada
   assert.match(bloco, /3_600_000/); // 1x por hora por reserva

@@ -39,14 +39,30 @@ export function ruleCoversProcedure(procedureIds: string, procedureId: string): 
   return ids.length === 0 || ids.includes(procedureId);
 }
 
+// PURO: a regra vale para ALGUM procedimento da RESERVA? (uma reserva do CE pode ter varios: o principal e os demais). procedureIds vazio = todos.
+export function ruleCoversReservation(procedureIds: string, a: { procedureId: string; procedures?: { procedureId: string | null }[] }): boolean {
+  const ids = procedureIds.split(",").filter(Boolean);
+  if (ids.length === 0) return true;
+  return ids.includes(a.procedureId) || (a.procedures ?? []).some((p) => p.procedureId != null && ids.includes(p.procedureId));
+}
+
+// PURO: o procedimento que a regra orienta (o da regra que a reserva tem), para o texto citar o certo e nao so o principal.
+export function procedureNameForRule(rule: { procedureIds: string }, a: { procedureId: string; procedure: { name: string }; procedures?: { procedureId: string | null; name: string }[] }): string {
+  const ids = rule.procedureIds.split(",").filter(Boolean);
+  if (ids.length === 0 || ids.includes(a.procedureId)) return a.procedure.name;
+  return (a.procedures ?? []).find((p) => p.procedureId != null && ids.includes(p.procedureId))?.name ?? a.procedure.name;
+}
+
 interface ConfirmedAppointment {
   id: string;
   clinicId: string;
   scheduledAt: Date;
   procedureId: string;
   procedure: { name: string };
+  procedures?: { procedureId: string | null; name: string }[];
   professional?: { name: string } | null;
   patient: { name: string | null; phone: string };
+  attendee?: { name: string } | null; // quem sera ATENDIDO quando nao e a pessoa do telefone
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +108,7 @@ export async function buildPreProcedureText(appts: ConfirmedAppointment[]): Prom
   for (const appt of [...appts].sort((a, b) => a.scheduledAt.getTime() - b.scheduledAt.getTime())) {
     for (const rule of rules) {
       if (usedRules.has(rule.id) || alreadyRule.has(rule.id) || sentKeys.has(`${appt.id}|${rule.id}`)) continue;
-      if (!ruleCoversProcedure(rule.procedureIds, appt.procedureId)) continue;
+      if (!ruleCoversReservation(rule.procedureIds, appt)) continue;
       if (appt.procedure.name === PLACEHOLDER_PROCEDURE_NAME) continue; // reserva sem procedimento: nao ha preparo a orientar
       try {
         await prisma.preProcedureSent.create({ data: { appointmentId: appt.id, ruleId: rule.id, state: "reserved", channel: "resposta", reservedAt: new Date() } }); // reserva atomica (NAO e envio)
@@ -104,12 +120,12 @@ export async function buildPreProcedureText(appts: ConfirmedAppointment[]): Prom
       texts.push(
         tidyGreeting(
           renderMessageTemplate(rule.message, {
-            patientName: appt.patient.name,
+            patientName: appt.attendee?.name ?? appt.patient.name,
             patientPhone: appt.patient.phone,
             clinicName: info.name,
             locationName: info.primaryLocation?.name,
             locationAddress: info.primaryLocation?.fullAddress,
-            procedureName: appt.procedure.name,
+            procedureName: procedureNameForRule(rule, appt),
             professionalName: appt.professional?.name,
             when: appt.scheduledAt,
           }),
@@ -177,7 +193,7 @@ async function dispatchPreProcedure(clinicId: string, keys: PreReservation[], no
   };
   const rows = await prisma.preProcedureSent.findMany({
     where: { ...keyWhere(keys), state: { in: [...RECOVERABLE] } },
-    include: { rule: true, appointment: { include: { patient: true, procedure: true, professional: true } } },
+    include: { rule: true, appointment: { include: { patient: true, attendee: true, procedure: true, procedures: true, professional: true } } },
   });
   if (!rows.length) return out;
   const clinic = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { timezone: true } });
@@ -190,7 +206,7 @@ async function dispatchPreProcedure(clinicId: string, keys: PreReservation[], no
     if (a.status !== "confirmed") { await setFinal(k, "superseded", `agendamento ${a.status}: a orientacao nao se aplica mais`); continue; }
     if (a.scheduledAt.getTime() - now.getTime() < PRE_MIN_LEAD_MS) { await setFinal(k, "expired", "faltam menos de 1h (ou o horario ja passou): a orientacao perdeu a pertinencia"); continue; }
     if (a.patient.optedOut) { await setFinal(k, "superseded", "a pessoa pediu para nao receber mensagens"); continue; }
-    if (!r.rule.active || !ruleCoversProcedure(r.rule.procedureIds, a.procedureId) || a.procedure.name === PLACEHOLDER_PROCEDURE_NAME) { await setFinal(k, "superseded", "a regra nao cobre mais o procedimento atual"); continue; }
+    if (!r.rule.active || !ruleCoversReservation(r.rule.procedureIds, a) || a.procedure.name === PLACEHOLDER_PROCEDURE_NAME) { await setFinal(k, "superseded", "a regra nao cobre mais o(s) procedimento(s) atual(is)"); continue; }
     valid.push(r);
   }
   if (!valid.length) return out;
@@ -199,14 +215,15 @@ async function dispatchPreProcedure(clinicId: string, keys: PreReservation[], no
 
   const info = await getClinicTemplateInfo(clinicId);
   const patient = valid[0].appointment.patient;
+  const personName = valid[0].appointment.attendee?.name ?? patient.name; // o grupo e de UMA pessoa: quem sera atendido
   const ordered = [...valid].sort((a, b) => a.appointment.scheduledAt.getTime() - b.appointment.scheduledAt.getTime());
   const text = tidyGreeting(
     combinePreProcedureTexts(
       ordered.map((r, i) =>
         renderMessageTemplate(i === 0 ? toAdvanceIntro(r.rule.message) : r.rule.message, {
-          patientName: patient.name, patientPhone: patient.phone, clinicName: info.name,
+          patientName: personName, patientPhone: patient.phone, clinicName: info.name,
           locationName: info.primaryLocation?.name, locationAddress: info.primaryLocation?.fullAddress,
-          procedureName: r.appointment.procedure.name, professionalName: r.appointment.professional?.name, when: r.appointment.scheduledAt,
+          procedureName: procedureNameForRule(r.rule, r.appointment), professionalName: r.appointment.professional?.name, when: r.appointment.scheduledAt,
         }),
       ),
     ),
@@ -332,14 +349,14 @@ export async function reconcilePreProcedure(now: Date = new Date()): Promise<{ r
         { state: "vetoed", attempts: { lt: MAX_VETOES }, reevaluateAt: { lte: now } },
       ],
     },
-    include: { appointment: { select: { clinicId: true, patientId: true, scheduledAt: true, clinic: { select: { timezone: true } } } } },
+    include: { appointment: { select: { clinicId: true, patientId: true, attendeeId: true, scheduledAt: true, clinic: { select: { timezone: true } } } } },
     orderBy: { reservedAt: "asc" },
     take: 100,
   });
   const groups = new Map<string, { clinicId: string; keys: PreReservation[] }>();
   for (const c of cand) {
     const tz = c.appointment.clinic.timezone || "America/Sao_Paulo";
-    const key = `${c.appointment.patientId}|${isoDateInZone(c.appointment.scheduledAt, tz)}`;
+    const key = `${c.appointment.patientId}|${c.appointment.attendeeId ?? ""}|${isoDateInZone(c.appointment.scheduledAt, tz)}`;
     const g = groups.get(key) ?? { clinicId: c.appointment.clinicId, keys: [] };
     g.keys.push({ appointmentId: c.appointmentId, ruleId: c.ruleId });
     groups.set(key, g);
@@ -373,7 +390,7 @@ export async function sendAdvancePreProcedure(now: Date = new Date()): Promise<n
         scheduledAt: { gte: new Date(now.getTime() + PRE_MIN_LEAD_MS), lte: new Date(now.getTime() + widest * 3_600_000) },
         patient: { optedOut: false },
       },
-      include: { patient: true, procedure: true, professional: true },
+      include: { patient: true, attendee: true, procedure: true, procedures: true, professional: true },
       orderBy: { scheduledAt: "asc" },
       take: 400,
     });
@@ -384,7 +401,7 @@ export async function sendAdvancePreProcedure(now: Date = new Date()): Promise<n
     // Um texto por paciente e por dia (varios procedimentos no mesmo dia viram uma mensagem so).
     const groups = new Map<string, typeof candidates>();
     for (const a of candidates) {
-      const key = `${a.patientId}|${isoDateInZone(a.scheduledAt, tz)}`;
+      const key = `${a.patientId}|${a.attendeeId ?? ""}|${isoDateInZone(a.scheduledAt, tz)}`; // uma pessoa (nao um telefone) por mensagem
       groups.set(key, [...(groups.get(key) ?? []), a]);
     }
 
@@ -396,7 +413,7 @@ export async function sendAdvancePreProcedure(now: Date = new Date()): Promise<n
         for (const rule of clinicRules) {
           if (usedRules.has(rule.id) || sentKeys.has(`${appt.id}|${rule.id}`)) continue;
           if (!isPreProcedureDue(appt.scheduledAt, now, rule.sendHoursBefore ?? 0)) continue;
-          if (!ruleCoversProcedure(rule.procedureIds, appt.procedureId)) continue;
+          if (!ruleCoversReservation(rule.procedureIds, appt)) continue;
           if (appt.procedure.name === PLACEHOLDER_PROCEDURE_NAME) continue; // reserva sem procedimento: nao ha preparo a orientar
           try {
             await prisma.preProcedureSent.create({ data: { appointmentId: appt.id, ruleId: rule.id, state: "reserved", channel: "antecipado", reservedAt: now } }); // reserva atomica (NAO e envio)
