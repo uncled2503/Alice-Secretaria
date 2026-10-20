@@ -35,10 +35,11 @@ test("estrutura semantica: um H1, skip link, secoes com ids, cabecalho e rodape"
 });
 
 test("textos obrigatorios do briefing e nenhuma promessa sem prova", () => {
-  for (const t of ["Seu próximo cliente não pode ficar", "Quero conhecer a Alice", "Ver como funciona", "Já sou cliente", "Você investe para atrair clientes.", "Sua empresa.", "Dê ao seu próximo cliente um atendimento que", "Encontre a configuração ideal para sua operação"]) assert.ok(html.includes(t), t);
-  for (const proibido of [/100% das conversas/i, /\+\s?40\s?%/, /30 minutos/i, /garantia/i, /a melhor/i, /depoimento/i, /24 horas por dia/i, /sem fidelidade/i, /devolvemos/i, /ilimitad/i, /\bR\$\s?1\.\d{3}/, /multa/i, /dobr(a|e)/i, /agenda cheia/i, /sem erro/i]) assert.doesNotMatch(text, proibido, String(proibido));
-  const precos = text.match(/R\$\s?\d+/g) ?? [];
-  assert.deepEqual(precos, [], "nenhum preco na pagina");
+  for (const t of ["Seu próximo cliente não pode ficar", "Quero conhecer a Alice", "Ver como funciona", "Já sou cliente", "Você investe para atrair clientes.", "Sua empresa.", "Dê ao seu próximo cliente um atendimento que", "quanto mais tempo, maior o desconto"]) assert.ok(html.includes(t), t);
+  for (const proibido of [/100% das conversas/i, /\+\s?40\s?%/, /30 minutos/i, /garantia/i, /a melhor/i, /depoimento/i, /24 horas por dia/i, /sem fidelidade/i, /devolvemos/i, /multa/i, /dobr(a|e)/i, /agenda cheia/i, /sem erro/i]) assert.doesNotMatch(text, proibido, String(proibido));
+  // precos: so os tres valores mensais dos planos; qualquer outro R$ na pagina estatica e erro
+  const precos = [...new Set(text.match(/R\$\s?[\d.]+(?:,\d{2})?/g) ?? [])].map((p) => p.replace(/\s/g, ""));
+  assert.deepEqual(precos.sort(), ["R$1.397,00", "R$597,00", "R$897,00"].sort(), "so os tres precos mensais na pagina estatica");
   assert.ok(html.includes("Demonstração ilustrativa"));
   assert.doesNotMatch(html, /aggregateRating|"Review"|"Offer"|ratingValue/, "sem avaliacao/oferta estruturada inventada");
 });
@@ -180,4 +181,17 @@ test("alice. acompanha o menu depois do hero e a imagem do hero e leve", () => {
   assert.ok(fs.statSync(new URL("../public/assets/hero-1600.jpg", import.meta.url)).size < 300 * 1024, "hero abaixo de 300 KB");
   assert.match(js, /paintIO|is-off/);
   assert.match(css, /\.is-off, \.is-off \*/);
+});
+
+test("planos e valores: tres planos com os precos mensais, descontos 5/10/15/20/25% por periodo, calculo no navegador e sem promessas de garantia", () => {
+  for (const n of ["Realce", "Prime", "Prestige"]) assert.match(html, new RegExp("Plano " + n));
+  const data = JSON.parse(html.match(/<script type="application\/json" id="planData">([\s\S]*?)<\/script>/)[1]);
+  assert.deepEqual(data.plans.map((p) => p.price), [597, 897, 1397]);
+  assert.deepEqual(data.periods.map((p) => [p.m, p.d]), [[1, 0], [3, 5], [6, 10], [9, 15], [12, 20], [24, 25]]);
+  assert.equal((html.match(/role="radio"/g) ?? []).length, 6);
+  assert.match(html, /Mais escolhido/);
+  assert.match(js, /round2\(base \* \(1 - d \/ 100\)\)/);
+  assert.match(text, /A forma de pagamento e as condições do período de teste são combinadas na demonstração/);
+  assert.doesNotMatch(text, /garantia|devolvemos|sem fidelidade|cancele quando/i);
+  for (const c of ["plano-realce", "plano-prime", "plano-prestige"]) assert.match(html, new RegExp('data-cta="' + c + '"'));
 });

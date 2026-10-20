@@ -374,6 +374,45 @@
     });
   }
 
+  /* ---------- planos: periodo escolhido muda o valor mensal com desconto ---------- */
+  var planBar = $("#ppBar"), planData = null;
+  try { planData = JSON.parse(($("#planData") || {}).textContent || "null"); } catch (e) { planData = null; }
+  if (planBar && planData) {
+    var fmt = function (n) { return n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+    var money = function (n) { return "R$ " + fmt(n); };
+    var round2 = function (n) { return Math.round(n * 100) / 100; };
+    var pBtns = $$(".pp-btn", planBar), pNote = $("#ppNote");
+    var tween = function (el, from, to) {
+      if (reduced() || !window.requestAnimationFrame) { el.textContent = fmt(to); return; }
+      var t0 = performance.now(), dur = 450;
+      (function step(t) { var k = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - k, 3); el.textContent = fmt(from + (to - from) * e); if (k < 1) requestAnimationFrame(step); })(t0);
+    };
+    var applyPeriod = function (btn) {
+      var m = Number(btn.getAttribute("data-m")), d = Number(btn.getAttribute("data-d"));
+      pBtns.forEach(function (x) { var on = x === btn; x.setAttribute("aria-checked", String(on)); x.tabIndex = on ? 0 : -1; });
+      $$(".plan-card").forEach(function (card) {
+        var base = Number(card.querySelector(".pc-val").getAttribute("data-base")), now = round2(base * (1 - d / 100));
+        var val = card.querySelector(".pc-val"), old = card.querySelector(".pc-old"), tot = card.querySelector(".pc-total"), sav = card.querySelector(".pc-save");
+        var from = Number(String(val.textContent).replace(/\./g, "").replace(",", ".")) || base;
+        tween(val, from, now);
+        if (d > 0) {
+          old.hidden = false; old.textContent = money(base) + "/mês";
+          tot.hidden = false; tot.textContent = "Total no período: " + money(round2(now * m)) + " em " + m + (m === 1 ? " mês" : " meses");
+          sav.hidden = false; sav.textContent = "Você economiza " + money(round2((base - now) * m)); sav.style.animation = "none"; void sav.offsetWidth; sav.style.animation = "";
+        } else { old.hidden = true; tot.hidden = true; sav.hidden = true; }
+      });
+      if (pNote) pNote.textContent = d > 0 ? "Plano de " + btn.firstChild.textContent.toLowerCase() + ": " + d + "% de desconto sobre o valor mensal." : "Valor mensal, sem desconto. Contratando por mais tempo, o desconto aumenta.";
+    };
+    pBtns.forEach(function (btn, i) {
+      btn.addEventListener("click", function () { applyPeriod(btn); });
+      btn.addEventListener("keydown", function (e) {
+        var n = null;
+        if (e.key === "ArrowRight" || e.key === "ArrowDown") n = (i + 1) % pBtns.length; else if (e.key === "ArrowLeft" || e.key === "ArrowUp") n = (i - 1 + pBtns.length) % pBtns.length;
+        if (n !== null) { e.preventDefault(); applyPeriod(pBtns[n]); pBtns[n].focus(); }
+      });
+    });
+  }
+
   /* ---------- desempenho: animacoes infinitas so rodam nas secoes que estao na tela ---------- */
   if ("IntersectionObserver" in window) {
     var paintIO = new IntersectionObserver(function (es) { es.forEach(function (e) { e.target.classList.toggle("is-off", !e.isIntersecting); }); }, { rootMargin: "200px 0px" });
