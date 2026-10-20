@@ -131,7 +131,7 @@ test("imagens: dimensoes definidas, logo oficial preservado (copia reduzida do M
   for (const m of html.matchAll(/<img\b[^>]*>/g)) { assert.match(m[0], /width="\d+"/, m[0]); assert.match(m[0], /height="\d+"/, m[0]); assert.match(m[0], /alt="/, m[0]); }
   for (const f of ["logo-site.png", "logotipo-branca-site.png"]) assert.ok(fs.existsSync(new URL(`../public/assets/${f}`, import.meta.url)));
   assert.ok(fs.existsSync(new URL("../public/assets/logo.webp", import.meta.url)), "o arquivo oficial original segue intacto");
-  assert.match(html, /<img class="hero-bg" src="\/assets\/hero-1672\.jpg"[^>]*width="1672" height="941" fetchpriority="high"/);
+  assert.match(html, /<img class="hero-bg" src="\/assets\/hero-1600\.jpg"[^>]*width="1600" height="900" fetchpriority="high"/);
 });
 
 test("jornada em S: palco fixo (sticky) so no desktop com JS e sem reduzir movimento; 6 checkpoints; fallback vertical preservado", () => {
@@ -177,7 +177,7 @@ test("alice. acompanha o menu depois do hero e a imagem do hero e leve", () => {
   assert.match(html, /id="brandDock"/);
   assert.match(js, /classList\.toggle\("dock-on"/);
   assert.match(css, /\.header\.dock-on \.brand-dock/);
-  assert.ok(fs.statSync(new URL("../public/assets/hero-1672.jpg", import.meta.url)).size < 300 * 1024, "hero abaixo de 300 KB");
+  assert.ok(fs.statSync(new URL("../public/assets/hero-1600.jpg", import.meta.url)).size < 300 * 1024, "hero abaixo de 300 KB");
   assert.match(js, /paintIO|is-off/);
   assert.match(css, /\.is-off, \.is-off \*/);
 });
