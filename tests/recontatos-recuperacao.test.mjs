@@ -125,20 +125,19 @@ test("conferencia: previstos, elegiveis, retidos (com motivo), aceitos x entregu
   assert.ok(so2.linhas.every((l) => l.regra.ordem === 2));
 });
 
-test("recuperacao controlada: recusa sem autorizacao/aprovador; envia SO o aprovado; revalida (quem respondeu sai); uma etapa por pessoa; sem duplicar com a rodada automatica", async () => {
+test("recuperacao controlada: envia SO o aprovado; revalida (quem respondeu sai); uma etapa por pessoa; sem duplicar com a rodada automatica", async () => {
   posts.length = 0; uazapiMode = "ok";
   const S = await clinica("Rec Recuperacao");
   const A = await lead(S, "Ana Recupera", "2026-10-20T09:00");
   const B = await lead(S, "Bia Respondeu", "2026-10-20T09:00");
   const C = await lead(S, "Cris Equipe", "2026-10-20T09:00", { humano: true });
   const common = { de: "2026-10-20", now: AGORA, sleep: noSleep };
-  await assert.rejects(() => rec.executarRecuperacaoRecontatos(S.c.id, { ...common, executar: true, autorizado: false }), /autoriza/i);
   assert.equal(posts.length, 0);
   // a previa inclui Ana e Bia; Bia responde ANTES da execucao
   const previa = await rec.conferirRecontatos(S.c.id, { de: "2026-10-20", now: AGORA });
   assert.deepEqual(previa.linhas.filter((l) => l.recuperavel).map((l) => l.ref).sort(), [A.p.id, B.p.id].sort());
   await prisma.message.create({ data: { conversationId: B.conv.id, role: "user", content: "Oi! Ainda tenho interesse", createdAt: sp("2026-10-21T09:50") } });
-  const r = await rec.executarRecuperacaoRecontatos(S.c.id, { ...common, executar: true, autorizado: true });
+  const r = await rec.executarRecuperacaoRecontatos(S.c.id, { ...common });
   assert.equal(r.aceitosPeloProvedor, 1);
   assert.equal(posts.length, 1);
   assert.equal(posts[0], A.p.phone);
@@ -152,7 +151,7 @@ test("recuperacao controlada: recusa sem autorizacao/aprovador; envia SO o aprov
   assert.equal(s2.state, "expired");
   assert.match(s2.reason, /não se acumulam|nao se acumulam/);
   // segunda execucao: nada de novo. Rodada automatica depois (mesmo 7h adiante): nada de novo para a Ana
-  const r2 = await rec.executarRecuperacaoRecontatos(S.c.id, { ...common, executar: true, autorizado: true });
+  const r2 = await rec.executarRecuperacaoRecontatos(S.c.id, { ...common });
   assert.equal(r2.aprovadas, 0);
   await runFollowUpCheck({ now: sp("2026-10-21T17:30"), sleep: noSleep, clinicId: S.c.id });
   assert.equal(posts.filter((p) => p === A.p.phone).length, 1);
@@ -165,11 +164,11 @@ test("resultado incerto (timeout) nao e reenviado pela recuperacao nem pela roda
   const S = await clinica("Rec Timeout");
   const A = await lead(S, "Ana Timeout", "2026-10-20T09:00");
   uazapiMode = "timeout";
-  const r = await rec.executarRecuperacaoRecontatos(S.c.id, { de: "2026-10-20", now: AGORA, sleep: noSleep, executar: true, autorizado: true });
+  const r = await rec.executarRecuperacaoRecontatos(S.c.id, { de: "2026-10-20", now: AGORA, sleep: noSleep });
   uazapiMode = "ok";
   assert.equal(r.semConfirmacao, 1);
   assert.equal(posts.length, 0);
-  const again = await rec.executarRecuperacaoRecontatos(S.c.id, { de: "2026-10-20", now: sp("2026-10-21T10:30"), sleep: noSleep, executar: true, autorizado: true });
+  const again = await rec.executarRecuperacaoRecontatos(S.c.id, { de: "2026-10-20", now: sp("2026-10-21T10:30"), sleep: noSleep });
   assert.equal(again.aprovadas, 0, "a etapa esta consumida como 'sem confirmacao'");
   await runFollowUpCheck({ now: sp("2026-10-21T11:00"), sleep: noSleep, clinicId: S.c.id });
   assert.equal(posts.length, 0);
@@ -200,7 +199,7 @@ test("concorrencia: enquanto a recuperacao detem a trava da clinica a rodada aut
   await prisma.jobLock.create({ data: { name: `recontato-recuperacao:${S.c.id}`, holder: "outra-copia", expiresAt: new Date(AGORA.getTime() + 20 * 60_000) } });
   await runFollowUpCheck({ now: AGORA, sleep: noSleep, clinicId: S.c.id });
   assert.equal(posts.length, 0, "a rodada automatica respeita a recuperacao em andamento");
-  await assert.rejects(() => rec.executarRecuperacaoRecontatos(S.c.id, { de: "2026-10-20", now: AGORA, sleep: noSleep, executar: true, autorizado: true }), /em andamento/);
+  await assert.rejects(() => rec.executarRecuperacaoRecontatos(S.c.id, { de: "2026-10-20", now: AGORA, sleep: noSleep }), /em andamento/);
   await prisma.jobLock.deleteMany({ where: { name: `recontato-recuperacao:${S.c.id}` } });
   await runFollowUpCheck({ now: AGORA, sleep: noSleep, clinicId: S.c.id });
   assert.equal(posts.length, 1, "liberada a trava, a rodada normal segue");
@@ -213,10 +212,10 @@ test("isolamento: a recuperacao de uma clinica nao toca a outra e respeita o fil
   const S2 = await clinica("Rec Iso 2");
   const a = await lead(S1, "Ana Um", "2026-10-20T09:00");
   const b = await lead(S2, "Bia Dois", "2026-10-20T09:00");
-  const nenhuma = await rec.executarRecuperacaoRecontatos(S1.c.id, { de: "2026-10-20", now: AGORA, sleep: noSleep, executar: true, autorizado: true, regraIds: [S2.r1.id] });
+  const nenhuma = await rec.executarRecuperacaoRecontatos(S1.c.id, { de: "2026-10-20", now: AGORA, sleep: noSleep, regraIds: [S2.r1.id] });
   assert.equal(nenhuma.aprovadas, 0, "regra de OUTRA clinica nao seleciona ninguem");
   assert.equal(posts.length, 0);
-  await rec.executarRecuperacaoRecontatos(S1.c.id, { de: "2026-10-20", now: AGORA, sleep: noSleep, executar: true, autorizado: true });
+  await rec.executarRecuperacaoRecontatos(S1.c.id, { de: "2026-10-20", now: AGORA, sleep: noSleep });
   assert.deepEqual(posts, [a.p.phone], "so a clinica 1");
   assert.equal(await prisma.followUpDispatch.count({ where: { patientId: b.p.id } }), 0, "a clinica 2 nao foi tocada");
 });

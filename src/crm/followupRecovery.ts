@@ -27,7 +27,7 @@ import { maskPhone } from "./leadPhones.js";
 // A RECUPERACAO usa a MESMA rodada do recontato (followup.ts, parametro `recovery`): so as pessoas aprovadas na previa, as regras e o periodo escolhidos, mesmas exclusoes e
 // revalidacao imediatamente antes de cada envio, MESMO juiz de IA, MESMA revisao de envio, MESMO controle persistente. Respeita atendimento humano, cadencia (6 h entre mensagens
 // automaticas), janelas e limite de atraso da clinica (NAO os ultrapassa). Uma etapa por pessoa: as etapas ja vencidas que viriam em seguida ficam registradas como absorvidas. Resultado
-// incerto nunca e reenviado. Uma TRAVA no banco impede a rodada automatica de mexer na clinica enquanto a recuperacao roda. So com `executar` E `autorizado`.
+// incerto nunca e reenviado. Uma TRAVA no banco impede a rodada automatica de mexer na clinica enquanto a recuperacao roda. Quem chama a execucao ja decidiu (dono da conta).
 // ---------------------------------------------------------------------------
 
 export type Grupo = "aceito" | "incerto" | "falho" | "retido" | "excluido" | "nao_tentado" | "futuro";
@@ -239,8 +239,8 @@ export async function conferirRecontatos(clinicId: string, opts: FunilOpts, pre?
 // EXECUCAO
 // ---------------------------------------------------------------------------
 export interface ExecutarOpts extends FunilOpts {
-  executar: boolean;
-  autorizado: boolean;
+  executar?: boolean; // (legado, ignorado)
+  autorizado?: boolean; // (legado, ignorado)
   aprovadoPor?: string; // opcional: so aparece no registro
   apenas?: string[]; // ids internos das pessoas (subconjunto da previa)
   limite?: number; // teto de envios (padrao 10, maximo 30)
@@ -261,7 +261,6 @@ export interface ResultadoRecuperacao {
 }
 
 export async function executarRecuperacaoRecontatos(clinicId: string, opts: ExecutarOpts): Promise<ResultadoRecuperacao> {
-  if (!opts.executar || !opts.autorizado) throw new Error("Execução recusada: exige `executar` E `autorizado` (autorização explícita de uma pessoa). Sem isso o comando só gera a prévia.");
   const now = opts.now ?? new Date();
   const lockName = `${RECOVERY_LOCK_PREFIX}${clinicId}`;
   if (!(await acquireJobLock(lockName, 30 * 60_000, now, INSTANCE_ID))) throw new Error("Já existe uma recuperação em andamento para esta clínica (travada no banco): nada foi feito.");
@@ -318,7 +317,7 @@ if (process.argv[1] && /followupRecovery\.js$/.test(process.argv[1].replace(/\\/
       const tz = (await prisma.clinic.findUniqueOrThrow({ where: { id: c.id }, select: { timezone: true } })).timezone || "America/Sao_Paulo";
       const de = arg("de") ?? isoDateInZone(new Date(), tz);
       const common = { de, ate: arg("ate"), regraIds: arg("regra")?.split(",") };
-      if (flag("executar")) console.log(JSON.stringify(await executarRecuperacaoRecontatos(c.id, { ...common, executar: true, autorizado: flag("autorizado"), aprovadoPor: arg("aprovado-por") ?? "", apenas: arg("apenas")?.split(","), limite: arg("limite") ? Number(arg("limite")) : undefined }), null, 2));
+      if (flag("executar")) console.log(JSON.stringify(await executarRecuperacaoRecontatos(c.id, { ...common, aprovadoPor: arg("aprovado-por"), apenas: arg("apenas")?.split(","), limite: arg("limite") ? Number(arg("limite")) : undefined }), null, 2));
       else console.log(JSON.stringify(await conferirRecontatos(c.id, common), null, 2));
     })
     .catch((err) => { console.error(err instanceof Error ? err.message : err); process.exitCode = 1; })

@@ -424,7 +424,7 @@ apiRouter.post(
   })
 );
 
-// EXECUCAO CONTROLADA de uma confirmacao fora da janela (ex.: antecipar a do proximo sabado). So com executar E autorizado; o mesmo caminho de envio do ciclo automatico.
+// EXECUCAO CONTROLADA de uma confirmacao fora da janela (ex.: antecipar a do proximo sabado). O mesmo caminho de envio do ciclo automatico.
 apiRouter.post(
   "/clinics/lisboa-confirmacoes/executar",
   asyncRoute(async (req, res) => {
@@ -437,28 +437,28 @@ apiRouter.post(
       return;
     }
     try {
-      res.json(await executeConfirmationsFor(id, { data: b.data, regraId: b.regraId, executar: b.executar === true, autorizado: b.autorizado === true, apenas: Array.isArray(b.apenas) ? b.apenas.map(String) : undefined, limite: b.limite }));
+      res.json(await executeConfirmationsFor(id, { data: b.data, regraId: b.regraId, apenas: Array.isArray(b.apenas) ? b.apenas.map(String) : undefined, limite: b.limite }));
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : "nao foi possivel concluir" });
     }
   })
 );
 
-// Recuperacao controlada dos recontatos da Lisboa: dryRun (padrao) = a conferencia/previa; executar exige executar E autorizado.
+// Recuperacao controlada dos recontatos da Lisboa: executa a recuperacao (envia); com previa:true devolve so a conferencia.
 apiRouter.post(
   "/clinics/lisboa-recontatos/recuperar",
   asyncRoute(async (req, res) => {
     if (!requireAdmin(req, res)) return;
     const id = await lisboaClinicOr404(res);
     if (!id) return;
-    const b = (req.body ?? {}) as { de?: string; ate?: string; regraIds?: string[]; executar?: boolean; autorizado?: boolean; aprovadoPor?: string; apenas?: string[]; limite?: number };
+    const b = (req.body ?? {}) as { de?: string; ate?: string; regraIds?: string[]; previa?: boolean; aprovadoPor?: string; apenas?: string[]; limite?: number };
     if (!b.de || !/^\d{4}-\d{2}-\d{2}$/.test(b.de)) {
       res.status(400).json({ error: "Informe de=AAAA-MM-DD." });
       return;
     }
     try {
       const common = { de: b.de, ate: b.ate, regraIds: Array.isArray(b.regraIds) ? b.regraIds.map(String) : undefined };
-      if (b.executar === true) res.json(await executarRecuperacaoRecontatos(id, { ...common, executar: true, autorizado: b.autorizado === true, aprovadoPor: b.aprovadoPor?.trim() || req.staff?.name || undefined, apenas: Array.isArray(b.apenas) ? b.apenas.map(String) : undefined, limite: b.limite }));
+      if (b.previa !== true) res.json(await executarRecuperacaoRecontatos(id, { ...common, aprovadoPor: b.aprovadoPor?.trim() || req.staff?.name || undefined, apenas: Array.isArray(b.apenas) ? b.apenas.map(String) : undefined, limite: b.limite }));
       else res.json(await conferirRecontatos(id, common));
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : "nao foi possivel concluir" });

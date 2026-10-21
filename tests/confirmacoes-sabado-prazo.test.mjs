@@ -352,23 +352,22 @@ test("PREVIA do proximo sabado: data explicita, quantidade e motivos; nao grava 
   assert.equal(controlled.nextDateOfWeekday(sp("2026-10-23T23:30"), TZ, 6), "2026-10-24", "23h30 de sexta em SP (sabado em UTC) ainda e sexta");
 });
 
-test("EXECUCAO controlada da antecipacao: recusa sem autorizacao; com autorizacao envia uma vez; o ciclo automatico depois nao repete", async () => {
+test("EXECUCAO controlada da antecipacao: envia uma vez; o ciclo automatico depois nao repete", async () => {
   zera();
   const L = await clinica("Conf Antecipa");
   const a = await agenda(L.c, "Antecipa Um", "2026-10-31T10:00");
   const b = await agenda(L.c, "Antecipa Dois", "2026-10-31T11:00");
-  await assert.rejects(() => controlled.executeConfirmationsFor(L.c.id, { data: "2026-10-31", regraId: L.quarta.id, executar: true, autorizado: false }), /autoriza/i);
   assert.equal(enviados.length, 0);
-  const r = await controlled.executeConfirmationsFor(L.c.id, { data: "2026-10-31", regraId: L.quarta.id, executar: true, autorizado: true, now: () => sp("2026-10-21T11:00"), sleep: async () => undefined });
+  const r = await controlled.executeConfirmationsFor(L.c.id, { data: "2026-10-31", regraId: L.quarta.id, now: () => sp("2026-10-21T11:00"), sleep: async () => undefined });
   assert.equal(r.tentados, 2);
   assert.equal(para(a.p).length, 1);
   assert.equal(para(b.p).length, 1);
-  const r2 = await controlled.executeConfirmationsFor(L.c.id, { data: "2026-10-31", regraId: L.quarta.id, executar: true, autorizado: true, now: () => sp("2026-10-21T11:05"), sleep: async () => undefined });
+  const r2 = await controlled.executeConfirmationsFor(L.c.id, { data: "2026-10-31", regraId: L.quarta.id, now: () => sp("2026-10-21T11:05"), sleep: async () => undefined });
   assert.equal(r2.tentados, 0, "ja atendidas");
   await rodar("2026-10-28T08:10"); // a quarta da semana seguinte: ja recebeu
   assert.equal(enviados.length, 2);
   // regra que nao vale para o dia: recusa
-  await assert.rejects(() => controlled.executeConfirmationsFor(L.c.id, { data: "2026-10-30", regraId: L.quarta.id, executar: true, autorizado: true }), /dia da semana/);
+  await assert.rejects(() => controlled.executeConfirmationsFor(L.c.id, { data: "2026-10-30", regraId: L.quarta.id }), /dia da semana/);
 });
 
 test("resposta de confirmacao entre quarta e sexta e associada ao agendamento de sabado (mais de 72h de distancia); ambiguidade pede esclarecimento", async () => {

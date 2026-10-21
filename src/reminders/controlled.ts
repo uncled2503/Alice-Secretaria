@@ -16,7 +16,7 @@ import { effectivePurpose, formatWeekdays, ruleAppliesOnWeekday, weekdayInZone, 
 //
 // PREVIA: somente leitura. Mostra a data EXPLICITA, quantos agendamentos existem, quantos seriam elegiveis e, para cada um, o motivo. Nao envia, nao reserva, nao grava, nao consulta
 // o Clinica Experts (a execucao confere cada reserva AO VIVO antes de enviar).
-// EXECUCAO: so com `executar` E `autorizado` (decisao de uma pessoa, nao deste codigo), com teto por chamada e revalidacao de cada pessoa com o banco de agora.
+// EXECUCAO: quem chama ja decidiu (dono da conta); com teto por chamada e revalidacao de cada pessoa com o banco de agora.
 // ---------------------------------------------------------------------------
 
 export type LineVerdict = "elegivel" | "nao_elegivel" | "ja_atendida_por_esta_etapa";
@@ -176,8 +176,8 @@ export interface ExecuteOpts {
   now?: () => Date;
   data: string;
   regraId: string;
-  executar: boolean;
-  autorizado: boolean;
+  executar?: boolean; // (legado, ignorado: chamar a execucao ja e a decisao)
+  autorizado?: boolean; // (legado, ignorado)
   apenas?: string[];
   limite?: number; // teto de envios por chamada (padrao 30)
   sleep?: (ms: number) => Promise<void>;
@@ -195,7 +195,6 @@ export interface ExecuteResult {
 // EXECUCAO CONTROLADA. Cada pessoa passa pela mesma via do ciclo automatico (deliverReminder): estado fresco, conferencia ao vivo no CE, reserva atomica, envio, desfecho como aconteceu.
 // Janela ignorada de proposito (e o objetivo); tudo o mais vale. Nunca reenvia resultado incerto e nunca acumula: uma etapa por pessoa.
 export async function executeConfirmationsFor(clinicId: string, opts: ExecuteOpts): Promise<ExecuteResult> {
-  if (!opts.executar || !opts.autorizado) throw new Error("Execução recusada: exige `executar` E `autorizado` (autorização explícita de uma pessoa). Sem isso o comando só gera a prévia.");
   const clock = opts.now ?? (() => new Date());
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { timezone: true } });
