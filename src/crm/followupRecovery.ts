@@ -241,7 +241,7 @@ export async function conferirRecontatos(clinicId: string, opts: FunilOpts, pre?
 export interface ExecutarOpts extends FunilOpts {
   executar: boolean;
   autorizado: boolean;
-  aprovadoPor: string;
+  aprovadoPor?: string; // opcional: so aparece no registro
   apenas?: string[]; // ids internos das pessoas (subconjunto da previa)
   limite?: number; // teto de envios (padrao 10, maximo 30)
   sleep?: (ms: number) => Promise<void>;
@@ -262,7 +262,6 @@ export interface ResultadoRecuperacao {
 
 export async function executarRecuperacaoRecontatos(clinicId: string, opts: ExecutarOpts): Promise<ResultadoRecuperacao> {
   if (!opts.executar || !opts.autorizado) throw new Error("Execução recusada: exige `executar` E `autorizado` (autorização explícita de uma pessoa). Sem isso o comando só gera a prévia.");
-  if (!opts.aprovadoPor?.trim()) throw new Error("Execução recusada: informe `aprovadoPor` (quem da clínica aprovou a lista).");
   const now = opts.now ?? new Date();
   const lockName = `${RECOVERY_LOCK_PREFIX}${clinicId}`;
   if (!(await acquireJobLock(lockName, 30 * 60_000, now, INSTANCE_ID))) throw new Error("Já existe uma recuperação em andamento para esta clínica (travada no banco): nada foi feito.");
@@ -283,7 +282,7 @@ export async function executarRecuperacaoRecontatos(clinicId: string, opts: Exec
       now, clinicId, ...(opts.sleep ? { sleep: opts.sleep } : {}),
       recovery: {
         patientIds: new Set(aprovadas), ruleIds: opts.regraIds ? new Set(rules.map((r) => r.id)) : undefined,
-        dueFrom: dayStart(opts.de, tz), dueTo: dayStart(opts.ate ?? opts.de, tz, 1), maxSends: Math.min(opts.limite ?? 10, 30), approvedBy: opts.aprovadoPor,
+        dueFrom: dayStart(opts.de, tz), dueTo: dayStart(opts.ate ?? opts.de, tz, 1), maxSends: Math.min(opts.limite ?? 10, 30), approvedBy: opts.aprovadoPor?.trim() || "administrador",
       },
     });
     if (!ran) { out.rodadaAutomaticaEmAndamento = true; out.naoProcessados = aprovadas; return out; }

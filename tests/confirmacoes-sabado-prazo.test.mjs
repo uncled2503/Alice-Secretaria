@@ -413,9 +413,8 @@ test("assistente da Lisboa: o plano propoe janelas REAPROVEITADAS, expoe as deci
   assert.equal(plano.previaProximoSabado.dataDoAtendimento, "2026-10-24");
   assert.equal(plano.previaProximoSabado.regra.real, false, "ainda e a proposta");
   assert.equal(plano.sabado.lembrete.includes(d0.id), true, "o lembrete de sabado e o do dia cadastrado, janela preservada");
-  await assert.rejects(() => conferirConfirmacoesLisboa(c.id, { dryRun: false }), /aprovadoPor/);
   // aplica: regras de sabado nascem DESLIGADAS; a generica termina as 9h; textos e janelas do lembrete intactos
-  const ap = await conferirConfirmacoesLisboa(c.id, { dryRun: false, aprovadoPor: "Aline", agora: sp("2026-10-21T10:00") });
+  const ap = await conferirConfirmacoesLisboa(c.id, { dryRun: false, agora: sp("2026-10-21T10:00") });
   assert.equal(ap.aplicado, true);
   const g2 = await prisma.reminderRule.findUnique({ where: { id: g.id } });
   assert.deepEqual([g2.sendHour, g2.sendEndHour, g2.purpose], [8, 10, "confirmacao"]);
@@ -432,12 +431,12 @@ test("assistente da Lisboa: o plano propoe janelas REAPROVEITADAS, expoe as deci
   assert.equal([sx.sendHour, sx.sendEndHour].join("-"), "15-16");
   assert.equal((await prisma.reminderRule.findUnique({ where: { id: ch.id } })).purpose, "cobranca");
   // idempotente
-  const outra = await conferirConfirmacoesLisboa(c.id, { dryRun: false, aprovadoPor: "Aline", agora: sp("2026-10-21T10:00") });
+  const outra = await conferirConfirmacoesLisboa(c.id, { dryRun: false, agora: sp("2026-10-21T10:00") });
   assert.equal(await prisma.reminderRule.count({ where: { clinicId: c.id, weekdays: "6" } }), 2);
   assert.ok(outra.itens.every((i) => i.acao === "manter"));
   // ligar o sabado exige os horarios aprovados
-  await assert.rejects(() => conferirConfirmacoesLisboa(c.id, { dryRun: false, aprovadoPor: "Aline", ativarSabado: true }), /janelasAprovadas/);
-  await conferirConfirmacoesLisboa(c.id, { dryRun: false, aprovadoPor: "Aline", ativarSabado: true, janelasAprovadas: { quarta: "08:00-10:00", sexta: "15:00-16:00" } });
+  await assert.rejects(() => conferirConfirmacoesLisboa(c.id, { dryRun: false, ativarSabado: true }), /janelasAprovadas/);
+  await conferirConfirmacoesLisboa(c.id, { dryRun: false, ativarSabado: true, janelasAprovadas: { quarta: "08:00-10:00", sexta: "15:00-16:00" } });
   assert.ok((await prisma.reminderRule.findMany({ where: { clinicId: c.id, weekdays: "6" } })).every((r) => r.active));
   // texto sem a marca '(amanhã)': nao inventa
   assert.equal(sabadoTextFrom("Confirme sua presença amanhã."), null);

@@ -184,15 +184,14 @@ test("configuracao especifica: so a regra do Lavieen; regra de todos os procedim
   assert.equal(previa.regras.find((r) => r.id === S.regra.id).acao, "ligar");
   assert.equal(previa.regras.find((r) => r.id === todos.id).acao, "pendencia");
   assert.equal((await prisma.postProcedureRule.findUnique({ where: { id: S.regra.id } })).lateSendUntilHour, null, "previa nao altera");
-  await assert.rejects(() => configurarPosDepoisDoFechamento(S.c.id, { dryRun: false }), /aprovadoPor/);
   await assert.rejects(() => configurarPosDepoisDoFechamento(S.c.id, { ateHora: 19 }), /entre 21 e 24/);
-  const ap = await configurarPosDepoisDoFechamento(S.c.id, { dryRun: false, aprovadoPor: "Aline", ateHora: 23 });
+  const ap = await configurarPosDepoisDoFechamento(S.c.id, { dryRun: false, ateHora: 23 });
   assert.equal(ap.aplicado, true);
   const r = await prisma.postProcedureRule.findUnique({ where: { id: S.regra.id } });
   assert.deepEqual([r.lateSendUntilHour, r.message, r.intervalValue, r.intervalUnit], [23, TEXTO_POS, 1, "hours"]);
   assert.equal((await prisma.postProcedureRule.findUnique({ where: { id: todos.id } })).lateSendUntilHour, null, "a regra geral nao foi tocada");
   // decisao da clinica (21/10): vale para o pos de TODOS os atendimentos
-  const tudo = await configurarPosDepoisDoFechamento(S.c.id, { dryRun: false, aprovadoPor: "Aline", ateHora: 23, todosProcedimentos: true });
+  const tudo = await configurarPosDepoisDoFechamento(S.c.id, { dryRun: false, ateHora: 23, todosProcedimentos: true });
   assert.equal(tudo.regras.find((r) => r.id === todos.id).acao, "ligar");
   const g = await prisma.postProcedureRule.findUnique({ where: { id: todos.id } });
   assert.deepEqual([g.lateSendUntilHour, g.message, g.intervalValue, g.intervalUnit], [23, "Texto geral", 1, "days"], "so o limite muda; texto e intervalo intactos");

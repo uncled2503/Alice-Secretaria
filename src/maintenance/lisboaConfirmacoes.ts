@@ -9,7 +9,7 @@ import { previewConfirmationsFor, type ConfirmationsPreview } from "../reminders
 //   1. Confirmacao do dia seguinte: enviada numa janela matinal do DIA ANTERIOR que termina as 9h (fuso da clinica) - nao "24 horas antes".
 //   2. Sabado: solicitacao na QUARTA, LEMBRETE na SEXTA para TODOS (inclusive quem ja confirmou; texto "Estamos te esperando amanha" ja cadastrado) e lembrete de novo no SABADO. A regra de sabado SUBSTITUI a generica nesse dia (nunca as duas).
 //
-// PREVIA POR PADRAO: nao altera nada. Aplicar exige `aprovadoPor` e os HORARIOS APROVADOS (a clinica nao definiu a janela da quarta nem a da sexta: o plano apenas REAPROVEITA a
+// PREVIA POR PADRAO: nao altera nada. Aplicar exige os HORARIOS APROVADOS (a aprovacao e do dono da conta; `aprovadoPor` e opcional e so aparece no diario) (a clinica nao definiu a janela da quarta nem a da sexta: o plano apenas REAPROVEITA a
 // configuracao cadastrada que seja compativel e expoe a escolha). Idempotente. Regras de sabado nascem DESLIGADAS, a menos que `ativarSabado` venha com os horarios aprovados.
 // Nunca apaga regra, nunca mexe em registros de envio e nunca envia nada.
 // ---------------------------------------------------------------------------
@@ -66,7 +66,6 @@ export async function conferirConfirmacoesLisboa(clinicId: string, opts: Confirm
   const dryRun = opts.dryRun !== false;
   const prazo = opts.prazoHora ?? PRAZO_PADRAO_HORA;
   if (!Number.isInteger(prazo) || prazo < 7 || prazo > 12) throw new Error("prazoHora deve ser um inteiro entre 7 e 12.");
-  if (!dryRun && !(opts.aprovadoPor ?? "").trim()) throw new Error("Aplicar exige `aprovadoPor` (quem da clinica aprovou os horarios). Sem isso so a previa e gerada.");
   const agora = opts.agora ?? new Date();
 
   const rules = await prisma.reminderRule.findMany({ where: { clinicId }, orderBy: { createdAt: "asc" } });
@@ -201,7 +200,7 @@ export async function conferirConfirmacoesLisboa(clinicId: string, opts: Confirm
       for (const r of [quartaRule, sextaRule]) if (r && !r.active) await prisma.reminderRule.update({ where: { id: r.id }, data: { active: true } });
     }
     aplicado = true;
-    await logActivity({ clinicId, type: "automation_updated", area: "automacoes", title: "Política de confirmações aplicada (prazo das " + prazo + "h e sábado)", description: `Aprovado por ${opts.aprovadoPor}. ${itens.filter((i) => i.acao !== "manter").map((i) => i.descricao).join(" ")}`.slice(0, 900), actorName: opts.actorName ?? null }).catch(() => undefined);
+    await logActivity({ clinicId, type: "automation_updated", area: "automacoes", title: "Política de confirmações aplicada (prazo das " + prazo + "h e sábado)", description: `Aprovado por ${opts.aprovadoPor?.trim() || opts.actorName || "administrador"}. ${itens.filter((i) => i.acao !== "manter").map((i) => i.descricao).join(" ")}`.slice(0, 900), actorName: opts.actorName ?? null }).catch(() => undefined);
   }
 
   // ---- validacao do resultado (o que ficaria) ----

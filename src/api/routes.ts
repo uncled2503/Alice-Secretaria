@@ -408,7 +408,7 @@ async function lisboaClinicOr404(res: Response): Promise<string | null> {
 }
 
 // Politica de confirmacoes da Lisboa: confirmacao do dia seguinte ate as 9h do dia anterior + rotina de SABADO (quarta, sexta, lembrete no dia). dryRun (padrao) so mostra o plano, os
-// horarios que a clinica precisa decidir, os problemas/conflitos e a previa do proximo sabado. Aplicar exige aprovadoPor. So admin e SO a Lisboa. Nao envia nada.
+// horarios que a clinica precisa decidir, os problemas/conflitos e a previa do proximo sabado. So admin e SO a Lisboa. Nao envia nada.
 apiRouter.post(
   "/clinics/lisboa-confirmacoes",
   asyncRoute(async (req, res) => {
@@ -444,7 +444,7 @@ apiRouter.post(
   })
 );
 
-// Recuperacao controlada dos recontatos da Lisboa: dryRun (padrao) = a conferencia/previa; executar exige executar E autorizado E aprovadoPor.
+// Recuperacao controlada dos recontatos da Lisboa: dryRun (padrao) = a conferencia/previa; executar exige executar E autorizado.
 apiRouter.post(
   "/clinics/lisboa-recontatos/recuperar",
   asyncRoute(async (req, res) => {
@@ -458,7 +458,7 @@ apiRouter.post(
     }
     try {
       const common = { de: b.de, ate: b.ate, regraIds: Array.isArray(b.regraIds) ? b.regraIds.map(String) : undefined };
-      if (b.executar === true) res.json(await executarRecuperacaoRecontatos(id, { ...common, executar: true, autorizado: b.autorizado === true, aprovadoPor: String(b.aprovadoPor ?? ""), apenas: Array.isArray(b.apenas) ? b.apenas.map(String) : undefined, limite: b.limite }));
+      if (b.executar === true) res.json(await executarRecuperacaoRecontatos(id, { ...common, executar: true, autorizado: b.autorizado === true, aprovadoPor: b.aprovadoPor?.trim() || req.staff?.name || undefined, apenas: Array.isArray(b.apenas) ? b.apenas.map(String) : undefined, limite: b.limite }));
       else res.json(await conferirRecontatos(id, common));
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : "nao foi possivel concluir" });
@@ -466,7 +466,7 @@ apiRouter.post(
   })
 );
 
-// Pos-procedimento do Lavieen depois do fechamento (so a regra do Lavieen, so este fluxo). dryRun (padrao) mostra o plano e as decisoes; aplicar exige aprovadoPor. So admin e SO a Lisboa.
+// Pos-procedimento do Lavieen depois do fechamento (so a regra do Lavieen, so este fluxo). dryRun (padrao) mostra o plano e as decisoes; So admin e SO a Lisboa.
 apiRouter.post(
   "/clinics/lisboa-pos-fechamento",
   asyncRoute(async (req, res) => {

@@ -117,7 +117,6 @@ export async function configurarPosDepoisDoFechamento(clinicId: string, opts: Co
   const dryRun = opts.dryRun !== false;
   const ateHora = opts.ateHora ?? LATE_UNTIL_DEFAULT;
   if (!validLateUntilHour(ateHora)) throw new Error("ateHora deve ser um inteiro entre 21 e 24.");
-  if (!dryRun && !(opts.aprovadoPor ?? "").trim()) throw new Error("Aplicar exige `aprovadoPor`.");
   const procs = await lavieenProcedures(clinicId, opts.padrao ?? /lavieen/i);
   const ids = new Set(procs.map((p) => p.id));
   const rules = await prisma.postProcedureRule.findMany({ where: { clinicId }, orderBy: { createdAt: "asc" } });
@@ -145,7 +144,7 @@ export async function configurarPosDepoisDoFechamento(clinicId: string, opts: Co
   if (!dryRun && toApply.length) {
     await prisma.postProcedureRule.updateMany({ where: { id: { in: toApply }, clinicId }, data: { lateSendUntilHour: ateHora } });
     out.aplicado = true;
-    await logActivity({ clinicId, type: "automation_updated", area: "automacoes", title: "Pós-procedimento do Lavieen pode sair depois do fechamento", description: `Aprovado por ${opts.aprovadoPor}. Até ${ateHora}h, só para quem venceu há pouco; texto e intervalo inalterados.`, actorName: opts.actorName ?? null }).catch(() => undefined);
+    await logActivity({ clinicId, type: "automation_updated", area: "automacoes", title: "Pós-procedimento do Lavieen pode sair depois do fechamento", description: `Aprovado por ${opts.aprovadoPor?.trim() || opts.actorName || "administrador"}. Até ${ateHora}h, só para quem venceu há pouco; texto e intervalo inalterados.`, actorName: opts.actorName ?? null }).catch(() => undefined);
   }
   return out;
 }
