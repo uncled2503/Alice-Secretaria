@@ -915,6 +915,8 @@ model Appointment {
   ceCancelState  String?       // null | pending (cancelado aqui; o CE ainda nao confirmou) | confirmed (o CE confirmou)
   cePresenceState String?      // null | pending (paciente confirmou; falta o PATCH /confirm no CE) | synced | skipped (sem vinculo)
   cePresenceAt   DateTime?     // quando a confirmacao de presenca foi sincronizada com o CE
+  scheduleChangedAt DateTime?  // quando o HORARIO mudou pela ultima vez (remarcacao). Preenchido pela camada do banco (db/client.ts), em qualquer caminho. null = nunca remarcado
+  completedAt    DateTime?     // quando o atendimento passou a "concluido" AQUI (registro de conclusao). null = nao concluido ou concluido antes deste registro existir
   attendeeId     String?       // quem E ATENDIDO quando nao e a pessoa do WhatsApp (ex.: marido): null = a propria pessoa do contato
   attendee       Attendee?     @relation(fields: [attendeeId], references: [id])
   bookedByPatientId String?    // quem pediu a reserva (quando difere de patientId)
@@ -1066,6 +1068,13 @@ model ReminderRule {
   message     String   // suporta as mesmas variaveis do broadcast + {procedimento}/{profissional}/{hora}
   active      Boolean  @default(true)
   createdAt   DateTime @default(now())
+  // Politica por DIA DA SEMANA DO ATENDIMENTO (data local da clinica; 0 = domingo ... 6 = sabado), ex.: "6" = so atendimentos de sabado. null = vale para todos os dias.
+  // Uma regra COM dias substitui a regra generica (sem dias) do mesmo proposito nesses dias: nunca as duas.
+  weekdays    String?
+  // O que a mensagem E: confirmacao (pede confirmacao de presenca) | cobranca (nova solicitacao a quem nao confirmou) | lembrete (so informa). null = legado (classificado pelo texto).
+  purpose     String?
+  // Politica explicita: uma regra de confirmacao NAO e enviada a quem ja confirmou, a menos que isto seja true.
+  resendIfConfirmed Boolean @default(false)
 
   sentLogs    ReminderSent[]
 }
@@ -1097,6 +1106,9 @@ model PostProcedureRule {
   procedureIds    String   @default("") // vazio = todos; senao ids separados por virgula
   active          Boolean  @default(true)
   createdAt       DateTime @default(now())
+  // Limite (hora local, 21..24) ate quando ESTA regra pode sair depois do fechamento. null = padrao do fluxo (nada entre 21h e 7h). Vale so para este fluxo e so para quem
+  // venceu ha pouco (nunca para mensagem antiga acumulada); nunca antes das 7h.
+  lateSendUntilHour Int?
 
   sentLogs        PostProcedureSent[]
 }

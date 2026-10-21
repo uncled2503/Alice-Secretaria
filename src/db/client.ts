@@ -13,7 +13,58 @@ function withLockTimeout(url: string | undefined): string | undefined {
 }
 
 const url = withLockTimeout(process.env.DATABASE_URL);
-export const prisma = url ? new PrismaClient({ datasources: { db: { url } } }) : new PrismaClient();
+const baseClient = url ? new PrismaClient({ datasources: { db: { url } } }) : new PrismaClient();
+
+// REGISTRO DE REMARCACAO E DE CONCLUSAO, em UM lugar so. O horario de um agendamento muda por varios caminhos (Alice, painel, API externa, importacao e conferencia do Clinica
+// Experts); a conclusao tambem. Cada um deles precisava lembrar de anotar "quando mudou" - e quem esquecia deixava a remarcacao sem cobertura de confirmacao e o pos sem
+// evidencia de quando o atendimento foi dado como concluido. Aqui o banco anota sozinho, SEM escrita extra (o carimbo vai na MESMA gravacao):
+//   - scheduleChangedAt: o horario realmente mudou (regravar o mesmo horario nao conta);
+//   - completedAt: o status passou a "completed" agora (regravar "completed" nao muda a data).
+// A leitura do estado anterior usa a conexao base (fora de eventual transacao): nunca grava por ela, entao nao trava a transacao em andamento.
+type Writable = Record<string, unknown>;
+const unwrap = (v: unknown): unknown => (v && typeof v === "object" && !(v instanceof Date) && "set" in (v as Writable) ? (v as Writable).set : v);
+
+async function stamp(args: { where?: unknown; data?: unknown }, mode: "one" | "many"): Promise<void> {
+  const data = args.data as Writable | undefined;
+  if (!data) return;
+  const newStart = unwrap(data.scheduledAt);
+  const newStatus = unwrap(data.status);
+  const wantsStart = newStart instanceof Date && data.scheduleChangedAt === undefined;
+  const wantsDone = newStatus === "completed" && data.completedAt === undefined;
+  if (!wantsStart && !wantsDone) return;
+  try {
+    const where = args.where as never;
+    const rows = mode === "one"
+      ? [await baseClient.appointment.findUnique({ where, select: { scheduledAt: true, status: true } })].filter((r): r is NonNullable<typeof r> => r !== null)
+      : await baseClient.appointment.findMany({ where, select: { scheduledAt: true, status: true }, take: 500 });
+    if (rows.length === 0) return;
+    if (wantsStart && rows.every((r) => r.scheduledAt.getTime() !== (newStart as Date).getTime())) data.scheduleChangedAt = new Date();
+    if (wantsDone && rows.every((r) => r.status !== "completed")) data.completedAt = new Date();
+  } catch {
+    /* o registro e auxiliar: nunca derruba a gravacao principal */
+  }
+}
+
+export const prisma = baseClient.$extends({
+  name: "registro-de-remarcacao-e-conclusao",
+  query: {
+    appointment: {
+      async create({ args, query }) {
+        const d = args.data as Writable;
+        if (d && unwrap(d.status) === "completed" && d.completedAt === undefined) d.completedAt = new Date();
+        return query(args);
+      },
+      async update({ args, query }) {
+        await stamp(args as { where?: unknown; data?: unknown }, "one");
+        return query(args);
+      },
+      async updateMany({ args, query }) {
+        await stamp(args as { where?: unknown; data?: unknown }, "many");
+        return query(args);
+      },
+    },
+  },
+}) as unknown as PrismaClient;
 
 // Modo WAL: leituras nao travam enquanto alguem grava (e vice-versa). E uma
 // propriedade do ARQUIVO do banco - basta ligar uma vez; o backup (VACUUM INTO)

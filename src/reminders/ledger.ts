@@ -1,5 +1,5 @@
 import { prisma } from "../db/client.js";
-import { classifyReminder } from "../maintenance/restoreReminders.js";
+import { reminderKindOf } from "./policy.js";
 import { isoDateInZone } from "../scheduling/time.js";
 
 // ---------------------------------------------------------------------------
@@ -41,9 +41,8 @@ export function bookingKeyOf(appt: { id: string; ceBookingUuid: string | null })
 
 // PURO: tipo do lembrete. Cobranca (regra-filha) e um pedido diferente do primeiro; os demais sao classificados pelo texto ("amanha"/"hoje").
 // Sem classificacao, o tipo e proprio da regra (duas regras diferentes e nao classificaveis nao se bloqueiam).
-export function dispatchKind(rule: { id: string; parentRuleId: string | null; message: string }): string {
-  if (rule.parentRuleId) return "cobranca";
-  return classifyReminder(rule.message) ?? `outro:${rule.id}`;
+export function dispatchKind(rule: { id: string; parentRuleId: string | null; message: string; purpose?: string | null; dayOffset?: number | null }): string {
+  return reminderKindOf(rule);
 }
 
 export function sendDayOf(now: Date, timeZone: string): string {

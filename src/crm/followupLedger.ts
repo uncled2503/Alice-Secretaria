@@ -223,6 +223,9 @@ export async function competingContact(p: { patientId: string; flow: FlowKind; n
     }),
     prisma.appointment.findFirst({ where: { patientId: p.patientId, status: "confirmed", scheduledAt: { gte: p.now } }, select: { id: true } }),
   ]);
+  // a etapa anterior do MESMO fluxo saiu (ou ficou sem confirmacao) ha pouco: nunca duas etapas coladas (resultado incerto nao deixa mensagem no chat, entao so o controle prova)
+  const recentSameFlow = await prisma.followUpDispatch.findFirst({ where: { patientId: p.patientId, flow: p.flow, state: { in: ["sent", "unconfirmed", "reserved"] }, decidedAt: { gte: since, lte: p.now } }, select: { state: true } });
+  if (recentSameFlow) return { code: "etapa_anterior_recente", detail: `a etapa anterior deste fluxo foi ${recentSameFlow.state === "sent" ? "enviada" : "tentada (sem confirmacao do resultado)"} ha menos de ${Math.round(p.minGapMs / 3_600_000)}h: etapas nao saem coladas` };
   if (upcoming) return { code: "agendamento_em_curso", detail: "a pessoa tem horario marcado: o contato de venda/retomada nao cabe" };
   if (patient?.callbackAt && patient.callbackAt.getTime() > p.now.getTime()) return { code: "retorno_combinado_futuro", detail: "a pessoa pediu para ser chamada numa data futura" };
   if (reminders) return { code: "lembrete_recente", detail: `lembrete/confirmacao (${reminders.kind}) enviado ha pouco` };

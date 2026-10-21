@@ -18,7 +18,9 @@ import { isoDateInZone, wallClockInZone, formatDateTimeInZone } from "../schedul
 export const REMINDER_AUTHOR = "Lembrete de consulta";
 export const DISAMBIGUATION_PREFIX = "Qual destes horários você está confirmando?";
 const WINDOW_MS = 72 * 3_600_000;
-const REMINDER_WINDOW_MS = 36 * 3_600_000;
+// A solicitacao de confirmacao pode ser feita DIAS antes (sabado: quarta e sexta). A resposta continua valendo para a reserva citada enquanto ela for futura e nada diferente tiver
+// sido perguntado depois (palavra fraca como "sim" ja exige que o lembrete tenha sido a ultima pergunta), entao a janela de busca acompanha a antecedencia da politica.
+const REMINDER_WINDOW_MS = 5 * 24 * 3_600_000;
 
 const fold = (s: string) => s.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "").replace(/[^\p{L}\p{N}\s:]/gu, " ").replace(/\s+/g, " ").trim();
 // palavras que dizem "vou estar la" por si so; "sim"/"ok"/"pode" sao fracas (dependem de o lembrete ter sido a ultima pergunta)
@@ -107,8 +109,10 @@ export async function resolvePresence(p: { clinicId: string; patient: { id: stri
   const evidence = chatReminder || humanAsked || persistedEvidence || answeringDisambiguation;
 
   const horizon = new Date(now.getTime() + WINDOW_MS);
+  // as reservas que um lembrete REGISTRADO citou valem mesmo alem do horizonte de 72 h (confirmacao de sabado enviada na quarta)
+  const citedIds = [...new Set([...dispatches.map((d) => d.appointmentId), ...legacy.map((l) => l.appointmentId)].filter((x): x is string => !!x))];
   const upcoming = await prisma.appointment.findMany({
-    where: { clinicId, patientId: { in: ids }, status: "confirmed", scheduledAt: { gte: now, lte: horizon } },
+    where: { clinicId, patientId: { in: ids }, status: "confirmed", OR: [{ scheduledAt: { gte: now, lte: horizon } }, ...(citedIds.length ? [{ id: { in: citedIds }, scheduledAt: { gte: now } }] : [])] },
     include: { procedure: { select: { name: true } } },
     orderBy: { scheduledAt: "asc" },
     take: 12,

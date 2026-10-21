@@ -33,6 +33,7 @@ export interface FollowUpPreview {
   conversasAvaliadas: number;
   resumo: { enviaria: number; aguardando: number; expira: number; excluidas: number };
   motivosDeExclusao: Record<string, number>;
+  exclusoesPorPessoa: Record<string, string>; // patientId -> motivo da exclusao (so para quem saiu antes de chegar a uma etapa); a recuperacao usa para explicar cada pessoa
   pessoas: PreviewRow[];
   aviso: string;
 }
@@ -60,7 +61,7 @@ export function describePolicy(hours: number | null): { descricao: string; orige
   };
 }
 
-export async function previewFollowUpRound(clinicId: string, now = new Date()): Promise<FollowUpPreview> {
+export async function previewFollowUpRound(clinicId: string, now = new Date(), opts: { maxRows?: number } = {}): Promise<FollowUpPreview> {
   const clinic = await prisma.clinic.findUniqueOrThrow({
     where: { id: clinicId },
     select: { name: true, timezone: true, workDays: true, workStartHour: true, workEndHour: true, hoursByDay: true, closedOnHolidays: true, holidayOpen: true, followupRecoveryHours: true, importStatus: true },
@@ -73,10 +74,13 @@ export async function previewFollowUpRound(clinicId: string, now = new Date()): 
   const conversations = await loadCandidates(now, clinicId);
 
   const reasons: Record<string, number> = {};
-  const skip = (code: string) => { reasons[code] = (reasons[code] ?? 0) + 1; };
+  const exclusions: Record<string, string> = {};
+  let currentRef: string | null = null;
+  const skip = (code: string) => { reasons[code] = (reasons[code] ?? 0) + 1; if (currentRef) exclusions[currentRef] = code; };
   const rows: PreviewRow[] = [];
 
   for (const conv of conversations) {
+    currentRef = conv.patientId;
     const last = conv.messages[0];
     if (!last) { skip("sem_mensagem_da_pessoa"); continue; }
     if (clinic.importStatus === "running") { skip("importando_historico"); continue; }
@@ -138,7 +142,8 @@ export async function previewFollowUpRound(clinicId: string, now = new Date()): 
     conversasAvaliadas: conversations.length,
     resumo: { enviaria: count("enviaria"), aguardando: count("aguardando"), expira: count("expira"), excluidas: count("excluida") },
     motivosDeExclusao: reasons,
-    pessoas: rows.sort((a, b) => order[a.decisao] - order[b.decisao]).slice(0, MAX_ROWS),
+    exclusoesPorPessoa: exclusions,
+    pessoas: rows.sort((a, b) => order[a.decisao] - order[b.decisao]).slice(0, opts.maxRows ?? MAX_ROWS),
     aviso: "Prévia: nada foi enviado, nenhuma etapa foi reservada, nenhum registro de controle foi gravado, o ponteiro da cascata não foi movido e o juiz de IA não foi consultado.",
   };
 }

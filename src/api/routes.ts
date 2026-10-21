@@ -71,6 +71,11 @@ import { preflightLisboa } from "../maintenance/lisboaPreflight.js";
 import { validateReviewUrl } from "../reminders/reviewLink.js";
 import { surveyTrail } from "../reminders/surveyFlow.js";
 import { conferirRecontatosLisboa } from "../maintenance/lisboaRecontatos.js";
+import { conferirConfirmacoesLisboa } from "../maintenance/lisboaConfirmacoes.js";
+import { parseWeekdays, PURPOSES } from "../reminders/policy.js";
+import { configurarPosDepoisDoFechamento, diagnosticarPosFluxo } from "../maintenance/lisboaPosFechamento.js";
+import { executeConfirmationsFor, previewConfirmationsFor } from "../reminders/controlled.js";
+import { conferirRecontatos, executarRecuperacaoRecontatos } from "../crm/followupRecovery.js";
 import { diagnoseJobs, STATE_LABEL } from "../crm/automationRuns.js";
 import { describeRule } from "../crm/followupSchedule.js";
 import { getResumeConfig, markResumeTarget, suggestNoCloseCandidates, RESUME_CANCELLED, RESUME_NOCLOSE } from "../crm/resumeFlows.js";
@@ -348,6 +353,132 @@ apiRouter.get(
     res.set("Cache-Control", "no-store");
     const [preview, trail] = await Promise.all([previewReminders(clinic.id, { appointmentId }), dispatchTrail(clinic.id, { appointmentId })]);
     res.json({ appointmentId, row: preview.rows[0] ?? null, overlaps: preview.overlaps, trail, whatsapp: preview.whatsapp });
+  })
+);
+
+// PREVIA da confirmacao de um DIA ESCOLHIDO (padrao: o proximo sabado; ?data=AAAA-MM-DD ou ?dia=0..6): data explicita, quantos agendamentos, quantos elegiveis e o motivo de cada um.
+// Somente leitura: nao envia, nao reserva e nao grava.
+apiRouter.get(
+  "/clinic/confirmations-preview",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const data = typeof req.query.data === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.data) ? req.query.data : undefined;
+    const dia = req.query.dia !== undefined && /^[0-6]$/.test(String(req.query.dia)) ? Number(req.query.dia) : undefined;
+    res.set("Cache-Control", "no-store");
+    res.json(await previewConfirmationsFor(clinic.id, { data, diaDaSemana: dia }));
+  })
+);
+
+// CONFERENCIA dos recontatos por periodo e regra (somente leitura): previstos, elegiveis, retidos (com motivo), tentados, aceitos pelo provedor, entregues (so com evidencia), falhos e
+// sem confirmacao. ?de=AAAA-MM-DD&ate=AAAA-MM-DD&regra=<id>. Nao envia nada.
+apiRouter.get(
+  "/automations/recontatos/conferencia",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const iso = (v: unknown) => (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined);
+    const de = iso(req.query.de);
+    if (!de) {
+      res.status(400).json({ error: "Informe de=AAAA-MM-DD (e, se quiser, ate=AAAA-MM-DD)." });
+      return;
+    }
+    res.set("Cache-Control", "no-store");
+    try {
+      res.json(await conferirRecontatos(clinic.id, { de, ate: iso(req.query.ate), regraIds: typeof req.query.regra === "string" ? req.query.regra.split(",") : undefined }));
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : "nao foi possivel concluir" });
+    }
+  })
+);
+
+// DIAGNOSTICO do pos-procedimento (linha do tempo real do Lavieen: inicio, fim, vencimento, conclusao registrada, envio) com a causa que os tempos comprovam. Somente leitura.
+apiRouter.get(
+  "/clinic/post-procedure-diagnostico",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    res.set("Cache-Control", "no-store");
+    res.json(await diagnosticarPosFluxo(clinic.id, { dias: Math.min(30, Math.max(1, Number(req.query.dias) || 7)) }));
+  })
+);
+
+async function lisboaClinicOr404(res: Response): Promise<string | null> {
+  const clinics = await prisma.clinic.findMany({ where: { name: "Lisboa Beauty Center" }, select: { id: true } });
+  if (clinics.length === 0) { res.status(404).json({ error: "Clínica Lisboa não encontrada." }); return null; }
+  if (clinics.length > 1) { res.status(409).json({ error: "Há mais de uma clínica com o nome da Lisboa; nada foi alterado.", clinicIds: clinics.map((c) => c.id) }); return null; }
+  return clinics[0].id;
+}
+
+// Politica de confirmacoes da Lisboa: confirmacao do dia seguinte ate as 9h do dia anterior + rotina de SABADO (quarta, sexta, lembrete no dia). dryRun (padrao) so mostra o plano, os
+// horarios que a clinica precisa decidir, os problemas/conflitos e a previa do proximo sabado. Aplicar exige aprovadoPor. So admin e SO a Lisboa. Nao envia nada.
+apiRouter.post(
+  "/clinics/lisboa-confirmacoes",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const id = await lisboaClinicOr404(res);
+    if (!id) return;
+    const b = (req.body ?? {}) as { dryRun?: boolean; aprovadoPor?: string; prazoHora?: number; ativarSabado?: boolean; janelasAprovadas?: { quarta?: string; sexta?: string }; escolhas?: Record<string, unknown> };
+    try {
+      res.json(await conferirConfirmacoesLisboa(id, { dryRun: b.dryRun !== false, aprovadoPor: b.aprovadoPor, prazoHora: b.prazoHora, ativarSabado: b.ativarSabado === true, janelasAprovadas: b.janelasAprovadas, escolhas: b.escolhas as never, actorName: req.staff?.name ?? null }));
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : "nao foi possivel concluir" });
+    }
+  })
+);
+
+// EXECUCAO CONTROLADA de uma confirmacao fora da janela (ex.: antecipar a do proximo sabado). So com executar E autorizado; o mesmo caminho de envio do ciclo automatico.
+apiRouter.post(
+  "/clinics/lisboa-confirmacoes/executar",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const id = await lisboaClinicOr404(res);
+    if (!id) return;
+    const b = (req.body ?? {}) as { data?: string; regraId?: string; executar?: boolean; autorizado?: boolean; apenas?: string[]; limite?: number };
+    if (!b.data || !/^\d{4}-\d{2}-\d{2}$/.test(b.data) || !b.regraId) {
+      res.status(400).json({ error: "Informe data (AAAA-MM-DD) e regraId." });
+      return;
+    }
+    try {
+      res.json(await executeConfirmationsFor(id, { data: b.data, regraId: b.regraId, executar: b.executar === true, autorizado: b.autorizado === true, apenas: Array.isArray(b.apenas) ? b.apenas.map(String) : undefined, limite: b.limite }));
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : "nao foi possivel concluir" });
+    }
+  })
+);
+
+// Recuperacao controlada dos recontatos da Lisboa: dryRun (padrao) = a conferencia/previa; executar exige executar E autorizado E aprovadoPor.
+apiRouter.post(
+  "/clinics/lisboa-recontatos/recuperar",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const id = await lisboaClinicOr404(res);
+    if (!id) return;
+    const b = (req.body ?? {}) as { de?: string; ate?: string; regraIds?: string[]; executar?: boolean; autorizado?: boolean; aprovadoPor?: string; apenas?: string[]; limite?: number };
+    if (!b.de || !/^\d{4}-\d{2}-\d{2}$/.test(b.de)) {
+      res.status(400).json({ error: "Informe de=AAAA-MM-DD." });
+      return;
+    }
+    try {
+      const common = { de: b.de, ate: b.ate, regraIds: Array.isArray(b.regraIds) ? b.regraIds.map(String) : undefined };
+      if (b.executar === true) res.json(await executarRecuperacaoRecontatos(id, { ...common, executar: true, autorizado: b.autorizado === true, aprovadoPor: String(b.aprovadoPor ?? ""), apenas: Array.isArray(b.apenas) ? b.apenas.map(String) : undefined, limite: b.limite }));
+      else res.json(await conferirRecontatos(id, common));
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : "nao foi possivel concluir" });
+    }
+  })
+);
+
+// Pos-procedimento do Lavieen depois do fechamento (so a regra do Lavieen, so este fluxo). dryRun (padrao) mostra o plano e as decisoes; aplicar exige aprovadoPor. So admin e SO a Lisboa.
+apiRouter.post(
+  "/clinics/lisboa-pos-fechamento",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const id = await lisboaClinicOr404(res);
+    if (!id) return;
+    const b = (req.body ?? {}) as { dryRun?: boolean; aprovadoPor?: string; ateHora?: number; regraIds?: string[]; todosProcedimentos?: boolean };
+    try {
+      res.json(await configurarPosDepoisDoFechamento(id, { dryRun: b.dryRun !== false, aprovadoPor: b.aprovadoPor, ateHora: b.ateHora, regraIds: Array.isArray(b.regraIds) ? b.regraIds.map(String) : undefined, todosProcedimentos: b.todosProcedimentos === true, actorName: req.staff?.name ?? null }));
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : "nao foi possivel concluir" });
+    }
   })
 );
 
@@ -4325,7 +4456,16 @@ apiRouter.put(
     const existing = await prisma.reminderRule.findUniqueOrThrow({ where: { id: req.params.id } });
     if (!assertClinicAccess(req, res, existing.clinicId)) return;
 
-    const { hoursBefore, message, active } = req.body as { hoursBefore?: number; message?: string; active?: boolean };
+    const { hoursBefore, message, active, weekdays, purpose, resendIfConfirmed } = req.body as { hoursBefore?: number; message?: string; active?: boolean; weekdays?: string | null; purpose?: string | null; resendIfConfirmed?: boolean };
+    // Politica por dia da semana do atendimento e finalidade da mensagem: valores invalidos nunca sao gravados (uma regra com dia invalido nao valeria em nenhum dia).
+    if (weekdays !== undefined && weekdays !== null && weekdays !== "" && !parseWeekdays(weekdays).valid) {
+      res.status(400).json({ error: "weekdays deve ser uma lista de dias 0-6 separados por virgula (0 = domingo, 6 = sabado)." });
+      return;
+    }
+    if (purpose !== undefined && purpose !== null && !(PURPOSES as readonly string[]).includes(purpose)) {
+      res.status(400).json({ error: "purpose deve ser confirmacao, cobranca ou lembrete." });
+      return;
+    }
     // O modal sempre manda hoursBefore; so trata como "mudei pra X horas antes"
     // (e solta o horario fixo) se o valor realmente mudou. Lembrete de HORARIO FIXO (dayOffset) NUNCA perde o horario por aqui:
     // em 15/10 alguem mudou o "horas antes" de tres lembretes da Lisboa e eles passaram a sair 48h antes em vez da janela do dia.
@@ -4336,6 +4476,9 @@ apiRouter.put(
         ...(hoursChanged ? { hoursBefore, dayOffset: null, sendHour: null } : {}),
         ...(message !== undefined ? { message } : {}),
         ...(active !== undefined ? { active } : {}),
+        ...(weekdays !== undefined ? { weekdays: weekdays === "" ? null : weekdays } : {}),
+        ...(purpose !== undefined ? { purpose } : {}),
+        ...(resendIfConfirmed !== undefined ? { resendIfConfirmed: resendIfConfirmed === true } : {}),
       },
     });
     res.json(rule);

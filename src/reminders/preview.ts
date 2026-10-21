@@ -8,6 +8,8 @@ import { isoDateInZone } from "../scheduling/time.js";
 import { CHILD_MIN_GAP_MS, isLateCatchUp, ruleWindow } from "./cron.js";
 import { firstOfDayIds, localDayBounds } from "./firstOfDay.js";
 import { bookingKeyOf, dispatchKind } from "./ledger.js";
+import { formatWeekdays, overridingRule, ruleAppliesOnWeekday, skipsConfirmedPatient, weekdayInZone } from "./policy.js";
+import { notYetEffectuated } from "./effectuation.js";
 
 // ---------------------------------------------------------------------------
 // PREVIA DOS LEMBRETES (somente leitura). Mostra, por reserva e por regra, o que sera enviado, quando e por que (ou por que NAO). Usa as MESMAS funcoes do envio (ruleWindow,
@@ -76,14 +78,15 @@ const hh = (d: Date, tz: string) => new Intl.DateTimeFormat("pt-BR", { timeZone:
 const dd = (d: Date, tz: string) => new Intl.DateTimeFormat("pt-BR", { timeZone: tz, day: "2-digit", month: "2-digit" }).format(d);
 
 // Descricao da regra no vocabulario do painel.
-export function describeRule(r: Pick<ReminderRule, "dayOffset" | "sendHour" | "sendMinute" | "sendEndHour" | "hoursBefore" | "parentRuleId">): string {
+export function describeRule(r: Pick<ReminderRule, "dayOffset" | "sendHour" | "sendMinute" | "sendEndHour" | "hoursBefore" | "parentRuleId"> & Partial<Pick<ReminderRule, "weekdays">>): string {
   const m = String(r.sendMinute ?? 0).padStart(2, "0");
+  const days = r.weekdays ? ` — só atendimentos de ${formatWeekdays(r.weekdays)}` : "";
   if (r.dayOffset != null && r.sendHour != null) {
     const day = r.dayOffset === 1 ? "dia anterior" : r.dayOffset === 0 ? "no dia" : `${r.dayOffset} dias antes`;
     const win = r.sendEndHour != null ? `${r.sendHour}:${m}–${r.sendEndHour}:00` : `${r.sendHour}:${m}`;
-    return `${day} ${win}${r.parentRuleId ? " (cobrança de quem não confirmou)" : ""}`;
+    return `${day} ${win}${r.parentRuleId ? " (cobrança de quem não confirmou)" : ""}${days}`;
   }
-  return `${r.hoursBefore}h antes${r.parentRuleId ? " (cobrança de quem não confirmou)" : ""}`;
+  return `${r.hoursBefore}h antes${r.parentRuleId ? " (cobrança de quem não confirmou)" : ""}${days}`;
 }
 
 const HANDLED_OK = new Set(["sent"]);
@@ -122,6 +125,7 @@ export async function previewReminders(clinicId: string, opts: { day?: "today" |
   const keys = appts.map(bookingKeyOf);
   const ledger = await prisma.reminderDispatch.findMany({ where: { clinicId, bookingKey: { in: keys } } });
   const firstIds = firstOfDayIds(appts, tz);
+  const notEffectuated = await notYetEffectuated(appts);
   const info = await getClinicTemplateInfo(clinicId);
   const ruleById = new Map(rules.map((r) => [r.id, r]));
 
@@ -133,6 +137,8 @@ export async function previewReminders(clinicId: string, opts: { day?: "today" |
     const myLedger = ledger.filter((l) => l.bookingKey === bookingKey && l.startsAt.getTime() === a.scheduledAt.getTime());
     const messages: PreviewMessage[] = [];
     for (const rule of rules) {
+      const weekday = weekdayInZone(a.scheduledAt, tz);
+      if (!ruleAppliesOnWeekday(rule, weekday)) continue; // regra de outro dia da semana: nao e desta reserva
       const win = ruleWindow(rule, a.scheduledAt, tz);
       const purpose = dispatchKind(rule);
       const out = (status: PreviewStatus, reason: string, withText = false): PreviewMessage => {
@@ -156,6 +162,10 @@ export async function previewReminders(clinicId: string, opts: { day?: "today" |
       } else if (a.reminders.some((r) => r.ruleId === rule.id)) { messages.push(out("enviado", "registro antigo de envio (anterior ao controle persistente)")); continue; }
 
       if (a.scheduledAt.getTime() <= now.getTime()) { messages.push(out("nao_se_aplica", "o atendimento já começou: nada é enviado depois do horário")); continue; }
+      const specific = overridingRule(rule, weekday, rules);
+      if (specific) { messages.push(out("nao_se_aplica", `neste dia da semana (${formatWeekdays(String(weekday))}) vale a regra específica "${describeRule(specific as ReminderRule)}", não esta: nunca as duas`)); continue; }
+      if (!rule.parentRuleId && skipsConfirmedPatient(rule) && a.patientConfirmed) { messages.push(out("nao_se_aplica", "a pessoa já confirmou a presença: não recebe nova solicitação de confirmação")); continue; }
+      if (notEffectuated.has(a.id)) { messages.push(out("bloqueado", `${notEffectuated.get(a.id)}: não é enviada como se o horário estivesse firmado`)); continue; }
       const sibling = myLedger.find((l) => l.ruleId !== rule.id && l.kind === purpose && ["reserved", "sent", "unconfirmed", "duplicate", "blocked", "vetoed"].includes(l.state));
       if (sibling) { messages.push(out("bloqueado", `outra regra do mesmo tipo (${purpose}) já tratou esta reserva (${sibling.state}): o controle de duplicidade impede o segundo envio`)); continue; }
 
@@ -183,7 +193,7 @@ export async function previewReminders(clinicId: string, opts: { day?: "today" |
         messages.push(conn.paused ? out("aguarda_conexao", "o WhatsApp da clínica está fora do ar: sai se a janela ainda valer quando voltar", true) : out("vai_enviar", `dentro da janela ${hh(win.from, tz)}–${hh(win.to, tz)}; sai na próxima rodada (a cada 15 min)`, true));
         continue;
       }
-      if (win.kind === "janela" && rule.dayOffset != null && rule.sendEndHour != null && !rule.parentRuleId && isLateCatchUp(a, { dayOffset: rule.dayOffset, sendEndHour: rule.sendEndHour }, now, tz)) {
+      if (win.kind === "janela" && rule.dayOffset != null && rule.sendEndHour != null && !rule.parentRuleId && rule.purpose !== "lembrete" && isLateCatchUp(a, { dayOffset: rule.dayOffset, sendEndHour: rule.sendEndHour }, now, tz)) {
         messages.push(conn.paused ? out("aguarda_conexao", "reposição (agendado depois que a janela fechou): sai quando o WhatsApp voltar, entre 8h e 20h", true) : out("vai_enviar", "reposição: agendado depois que a janela do dia fechou; sai entre 8h e 20h, com 2h de folga antes do atendimento", true));
         continue;
       }

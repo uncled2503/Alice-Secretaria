@@ -53,6 +53,42 @@ async function finishPostStep(id: string, state: string, note: string, now: Date
   await prisma.postProcedureSent.updateMany({ where: { id, state: { in: ["reserved", "sending"] } }, data: { state, note: note.slice(0, 200), finalAt: now } });
 }
 
+// ---------------------------------------------------------------------------
+// QUANDO O POS PODE SAIR, hora do dia. Padrao do fluxo (todas as clinicas): nada entre 21h e 7h (cuidados nao saem de noite/madrugada). Uma regra pode autorizar, POR CONFIGURACAO
+// PROPRIA (PostProcedureRule.lateSendUntilHour, 21..24), o envio DEPOIS do fechamento - sempre para quem acabou de vencer (o pos de um atendimento que terminou as 20h30 sai as
+// 21h30), nunca antes das 7h e nunca para uma mensagem antiga acumulada (essa espera a manha, como sempre). So este fluxo e so esta regra: recontatos, campanhas, lembretes,
+// pesquisa e aniversario tem as proprias janelas e NAO sao tocados.
+//
+// O QUE INICIA O PRAZO: regra em HORAS conta do FIM da reserva (ends_at do CE; sem ele, inicio + soma dos procedimentos); regra em DIAS conta do INICIO. Em ambos os casos o
+// atendimento precisa estar CONCLUIDO (onlyIfCompleted: status "completed", vindo do Clinica Experts ou da equipe): o horario ter passado NAO prova que o procedimento foi feito.
+// ---------------------------------------------------------------------------
+export const POST_FIRST_HOUR = 7;
+export const POST_DEFAULT_LAST_HOUR = 21; // exclusivo
+export const POST_LATE_FRESH_MS = 6 * 3_600_000; // depois do fechamento so sai o que venceu ha ate 6 h
+
+// PURO: quando o pos deste atendimento vence (instante).
+export function postDueAt(rule: { intervalValue: number; intervalUnit: string }, appt: { scheduledAt: Date; endsAt?: Date | null; procedure: { durationMin: number } }): Date {
+  const interval = intervalMs(rule.intervalValue, rule.intervalUnit);
+  const base = rule.intervalUnit === "hours" ? reservationEndMs(appt) : appt.scheduledAt.getTime();
+  return new Date(base + interval);
+}
+
+export function validLateUntilHour(v: unknown): v is number {
+  return typeof v === "number" && Number.isInteger(v) && v >= POST_DEFAULT_LAST_HOUR && v <= 24;
+}
+
+// PURO: neste horario local, a regra pode enviar? `afterHours` = so por causa da autorizacao propria da regra (aplica o filtro de "venceu ha pouco").
+export function postHourGate(rule: { lateSendUntilHour?: number | null }, localHour: number): { allowed: boolean; afterHours: boolean } {
+  if (localHour >= POST_FIRST_HOUR && localHour < POST_DEFAULT_LAST_HOUR) return { allowed: true, afterHours: false };
+  if (localHour >= POST_DEFAULT_LAST_HOUR && validLateUntilHour(rule.lateSendUntilHour) && localHour < rule.lateSendUntilHour) return { allowed: true, afterHours: true };
+  return { allowed: false, afterHours: false };
+}
+
+// PURO: depois do fechamento so passa o que venceu ha pouco (nada de lote antigo acumulado a noite).
+export function postFreshEnough(dueAt: Date, now: Date): boolean {
+  return dueAt.getTime() <= now.getTime() && now.getTime() - dueAt.getTime() <= POST_LATE_FRESH_MS;
+}
+
 // PURO: o atendimento (inicio + duracao) ja terminou ate `limit`?
 export function appointmentEndedBy(appt: { scheduledAt: Date; endsAt?: Date | null; procedure: { durationMin: number } }, limit: Date): boolean {
   return reservationEndMs(appt) <= limit.getTime(); // o fim da RESERVA (ends_at do CE / soma dos procedimentos), nao so a duracao do procedimento principal
@@ -99,7 +135,8 @@ export async function runPostProcedureCycle(clock: () => Date = () => new Date()
       // Cuidados pos-procedimento nao saem de noite/madrugada: espera ate as 7h (o que ficou pendente sai no 1o ciclo da manha;
       // a folga de 3 dias da regra cobre a espera).
       const localHour = wallClockInZone(now, rule.clinic.timezone || "America/Sao_Paulo").hour;
-      if (localHour >= 21 || localHour < 7) { r.add("ignorado", "fora_do_horario_de_envio_7h_21h"); continue; }
+      const gate = postHourGate(rule, localHour);
+      if (!gate.allowed) { r.add("ignorado", "fora_do_horario_de_envio_7h_21h"); continue; }
       const cutoff = new Date(now.getTime() - intervalMs(rule.intervalValue, rule.intervalUnit));
       const floor = new Date(cutoff.getTime() - MAX_OVERDUE_MS);
       const procedureFilter = rule.procedureIds.split(",").filter(Boolean);
@@ -132,6 +169,13 @@ export async function runPostProcedureCycle(clock: () => Date = () => new Date()
         for (let i = due.length - 1; i >= 0; i--) {
           if (!appointmentEndedBy(due[i], cutoff)) due.splice(i, 1);
         }
+      }
+
+      // Depois do fechamento (autorizacao propria da regra): so quem venceu ha pouco. O que ja estava acumulado espera a manha, como sempre foi.
+      if (gate.afterHours) {
+        const before = due.length;
+        for (let i = due.length - 1; i >= 0; i--) if (!postFreshEnough(postDueAt(rule, due[i]), now)) due.splice(i, 1);
+        for (let i = before - due.length; i > 0; i--) r.add("ignorado", "apos_fechamento_so_o_que_venceu_ha_pouco");
       }
 
       if (due.length === 0) continue;
@@ -170,7 +214,7 @@ export async function runPostProcedureCycle(clock: () => Date = () => new Date()
               started = true;
             },
           });
-          if (outcome === "sent") { await finishPostStep(claimed.id, "sent", "enviada", now); await recordAutomatedMessage(appt.patientId, text, rule.name || "Pós-procedimento automático"); r.add("enviado", "pos"); }
+          if (outcome === "sent") { await finishPostStep(claimed.id, "sent", gate.afterHours ? "enviada depois do fechamento (autorizado pela regra)" : "enviada", now); await recordAutomatedMessage(appt.patientId, text, rule.name || "Pós-procedimento automático"); r.add("enviado", "pos"); }
           // barrado pela revisao / plano / identica: a decisao e definitiva para este atendimento (estado final) e o resumo da rodada registra, nao como envio
           else if (outcome === "vetoed") { await finishPostStep(claimed.id, "vetoed", "revisao por IA barrou a mensagem (motivo no Diario de atividades)", now); r.add("vetado", "revisao_de_envio_barrou"); }
           else if (outcome === "blocked") { await finishPostStep(claimed.id, "blocked", "envio automatico bloqueado para esta clinica (plano)", now); r.add("ignorado", "envio_bloqueado_pelo_plano"); }

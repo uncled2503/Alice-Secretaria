@@ -8,7 +8,7 @@ import { renderMessageTemplate, getClinicTemplateInfo, type ClinicTemplateInfo }
 import { PAID_CLINIC_WHERE } from "./plan.js";
 import { isClosingMessage, isExplicitRefusal } from "./followupGuards.js";
 import { judgeConversation, JUDGE_TTL_MS, type JudgeResult } from "./recontactJudge.js";
-import { decideTiming, MIN_GAP_BETWEEN_AUTOMATED_MS, ruleThresholdMin, validRecoveryHours, type RecoveryPolicy, type SendCalendar } from "./followupSchedule.js";
+import { decideTiming, MIN_GAP_BETWEEN_AUTOMATED_MS, ruleDueAt, ruleThresholdMin, validRecoveryHours, type RecoveryPolicy, type SendCalendar } from "./followupSchedule.js";
 import { acquireFlow, competingContact, conversationFingerprint, finishFlow as finishFlowAt, MAX_VETOES, recordFlowDecision as recordFlowDecisionAt, VETO_RETRY_MS, DEFER_RETRY_MS, FAIL_GAP_MS, type DecisionMeta, type FlowKey, type FlowState } from "./followupLedger.js";
 import { pruneAutomationRuns, RunRecorder } from "./automationRuns.js";
 import { isNonCommercialHandoff, nonCommercialByContext } from "./nonCommercial.js";
@@ -33,21 +33,43 @@ const HUMAN_RECENT_MS = 2 * 3_600_000; // a equipe (pessoa) falou nesta conversa
 const MAX_JUDGE_CALLS_PER_CLINIC = 25; // teto de consultas a IA por clinica a cada execucao (controla custo)
 const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+// RECUPERACAO CONTROLADA (autorizada por uma pessoa, ver followupRecovery.ts): a MESMA rodada do recontato (mesmas exclusoes, mesma revalidacao, mesmo juiz, mesma revisao de envio, mesmo
+// controle persistente), restrita as pessoas aprovadas na previa, as regras e ao periodo de vencimento escolhidos, com teto proprio. Nao e outro agendador. Nao grava expiracao nem move
+// o ponteiro de quem nao foi aprovado, e, depois de enviar UMA etapa, as demais etapas ja vencidas da mesma pessoa sao registradas como absorvidas (nunca se acumulam).
+export interface RecoveryRun {
+  patientIds: Set<string>;
+  ruleIds?: Set<string>;
+  dueFrom?: Date;
+  dueTo?: Date;
+  maxSends: number;
+  approvedBy: string;
+}
+
 export interface FollowUpDeps {
   now?: Date;
   sleep?: (ms: number) => Promise<void>;
   clinicId?: string; // rodada dirigida a UMA clinica (diagnostico/teste); sem isso, todas as clinicas ativas
+  recovery?: RecoveryRun; // recuperacao controlada (so com clinicId)
+}
+
+// Trava de recuperacao em andamento (uma por clinica, no banco: vale entre processos e copias do servidor). Enquanto existe, a rodada automatica NAO mexe nessa clinica.
+export const RECOVERY_LOCK_PREFIX = "recontato-recuperacao:";
+export async function clinicsUnderRecovery(now: Date): Promise<Set<string>> {
+  const rows = await prisma.jobLock.findMany({ where: { name: { startsWith: RECOVERY_LOCK_PREFIX }, expiresAt: { gt: now } }, select: { name: true } });
+  return new Set(rows.map((r) => r.name.slice(RECOVERY_LOCK_PREFIX.length)));
 }
 
 // Verifica cada conversa aberta e dispara a proxima mensagem da cascata de recontato quando o paciente fica um tempo sem responder
 // (silencio contado a partir da ultima mensagem DELE).
 let followUpRunning = false;
 
-export async function runFollowUpCheck(deps: FollowUpDeps = {}): Promise<void> {
-  if (followUpRunning) return; // rodada anterior (juiz de IA + pausas) ainda em andamento
+// Devolve false quando NAO rodou porque a rodada anterior (juiz de IA + pausas) ainda esta em andamento.
+export async function runFollowUpCheck(deps: FollowUpDeps = {}): Promise<boolean> {
+  if (followUpRunning) return false;
   followUpRunning = true;
   try {
     await runFollowUpCheckInner(deps);
+    return true;
   } finally {
     followUpRunning = false;
   }
@@ -60,6 +82,9 @@ async function runFollowUpCheckInner(deps: FollowUpDeps): Promise<void> {
   const clinicCache = new Map<string, { calendar: SendCalendar; timezone: string; info: ClinicTemplateInfo; recovery: RecoveryPolicy }>();
   const rulesCache = new Map<string, RuleRow[]>();
   const recorders = new Map<string, RunRecorder>();
+  const recovery = deps.recovery;
+  const runMode = recovery ? "recuperacao" : undefined;
+  const maxSends = recovery?.maxSends ?? MAX_SENDS_PER_CLINIC;
   const sentByClinic = new Map<string, number>();
   const judgedByClinic = new Map<string, number>();
 
@@ -88,7 +113,7 @@ async function runFollowUpCheckInner(deps: FollowUpDeps): Promise<void> {
 
   // uma linha de resumo por clinica ativa, MESMO sem candidatas: e o que prova que o job rodou
   const activeClinics = await prisma.clinic.findMany({ where: { ...PAID_CLINIC_WHERE, aliceActive: true, ...(deps.clinicId ? { id: deps.clinicId } : {}) }, select: { id: true } });
-  for (const c of activeClinics) recorders.set(c.id, new RunRecorder("recontato", c.id, now));
+  for (const c of activeClinics) { const rc = new RunRecorder("recontato", c.id, now); if (runMode) rc.mode = runMode; recorders.set(c.id, rc); }
   const rec = (clinicId: string) => {
     let r = recorders.get(clinicId);
     if (!r) recorders.set(clinicId, (r = new RunRecorder("recontato", clinicId, now)));
@@ -96,19 +121,23 @@ async function runFollowUpCheckInner(deps: FollowUpDeps): Promise<void> {
   };
 
   // toda gravacao do controle leva o RELOGIO DA RODADA (rodada dirigida/teste com relogio controlado)
-  const finishFlow = (id: string, state: FlowState, meta: DecisionMeta = {}) => finishFlowAt(id, state, { ...meta, at: now });
-  const recordFlowDecision = (key: FlowKey, state: FlowState, meta: DecisionMeta = {}) => recordFlowDecisionAt(key, state, { ...meta, at: now });
+  const finishFlow = (id: string, state: FlowState, meta: DecisionMeta = {}) => finishFlowAt(id, state, { ...meta, at: now, ...(runMode ? { runMode } : {}) });
+  const recordFlowDecision = (key: FlowKey, state: FlowState, meta: DecisionMeta = {}) => recordFlowDecisionAt(key, state, { ...meta, at: now, ...(runMode ? { runMode } : {}) });
 
   let failure: unknown = null;
   try {
     const conversations = await loadCandidates(now, deps.clinicId);
+    // Recuperacao em andamento numa clinica (outra copia ou o painel): a rodada automatica nao mexe nela. A propria recuperacao so olha as pessoas aprovadas.
+    const underRecovery = recovery ? new Set<string>() : await clinicsUnderRecovery(now);
 
     for (const conversation of conversations) {
       const lastPatientMessage = conversation.messages[0];
       if (!lastPatientMessage) continue;
       const clinicId = conversation.patient.clinicId;
+      if (recovery && !recovery.patientIds.has(conversation.patientId)) continue;
       const r = rec(clinicId);
       r.candidates++;
+      if (underRecovery.has(clinicId)) { r.add("ignorado", "recuperacao_em_andamento"); continue; }
       try {
         await processConversation(conversation, lastPatientMessage, r);
       } catch (err) {
@@ -148,7 +177,7 @@ async function runFollowUpCheckInner(deps: FollowUpDeps): Promise<void> {
     // Proxima etapa = a PRIMEIRA regra ativa com ordem maior que a ultima enviada (antes era exatamente "ultima + 1": uma regra desligada no meio
     // da cascata - ex.: "4 horas" desligada e "1 dia" ligada - travava tudo e depois dava a conversa como perdida).
     const pending = rules.filter((x) => x.order > conversation.lastFollowUpOrder);
-    if (pending.length === 0) return void (await closeExhausted(conversation, lastPatientMessage, rules, now, r));
+    if (pending.length === 0) return recovery ? void r.add("ignorado", "recuperacao:cascata_esgotada") : void (await closeExhausted(conversation, lastPatientMessage, rules, now, r));
 
     // Quem ja tem horario (futuro, de hoje ou que acabou de acontecer) NAO e lead sumido: nunca recebe recontato - independente da opcao da regra.
     const active = await prisma.appointment.findFirst({
@@ -181,11 +210,19 @@ async function runFollowUpCheckInner(deps: FollowUpDeps): Promise<void> {
         const already = await prisma.followUpSent.findUnique({ where: { conversationId_ruleId: { conversationId: conversation.id, ruleId: rule.id } } });
         if (already) {
           // ja mandou esse recontato uma vez nessa conversa - so avanca o ponteiro pra cascata seguir pros proximos recontatos.
-          if (await movePointer(conversation.id, last, rule.order)) last = rule.order;
+          if (!recovery && (await movePointer(conversation.id, last, rule.order))) last = rule.order;
           continue;
         }
       }
       const timing = decideTiming(rule, lastPatientMessage.createdAt, now, clinic.calendar, clinic.recovery);
+      if (recovery) {
+        // a recuperacao so ENVIA o que a previa aprovou: espera, expiracao e avanco do ponteiro continuam sendo da rodada automatica (nada e gravado aqui)
+        if (timing.action !== "send") return void r.add("ignorado", `recuperacao:${timing.action === "wait" ? "aguardando:" + timing.code : "expirado:" + timing.code}`);
+        const inScope = (!recovery.ruleIds || recovery.ruleIds.has(rule.id)) && (!recovery.dueFrom || timing.dueAt.getTime() >= recovery.dueFrom.getTime()) && (!recovery.dueTo || timing.dueAt.getTime() < recovery.dueTo.getTime());
+        if (!inScope) return void r.add("ignorado", "recuperacao:fora_do_escopo_aprovado");
+        await attemptSend(conversation, lastPatientMessage, rule, clinic, last, timing.dueAt, r);
+        return;
+      }
       if (timing.action === "wait") return void r.add("ignorado", `aguardando:${timing.code}`);
       if (timing.action === "expire") {
         // conversa fria: nada gravado (nao reativa mensagem antiga) e a proxima etapa e avaliada. Janela perdida / sem janela: grava e avanca (nao reaparece).
@@ -215,7 +252,7 @@ async function runFollowUpCheckInner(deps: FollowUpDeps): Promise<void> {
     const clinicId = conversation.patient.clinicId;
     const key = keyOf(conversation, rule, lastPatientMessage.createdAt, dueAt);
 
-    if ((sentByClinic.get(clinicId) ?? 0) >= MAX_SENDS_PER_CLINIC) return void r.add("adiado", "limite_de_envios_por_rodada"); // o resto fica pra proxima execucao
+    if ((sentByClinic.get(clinicId) ?? 0) >= maxSends) return void r.add("adiado", "limite_de_envios_por_rodada"); // o resto fica pra proxima execucao
 
     const lastAny = await prisma.message.findFirst({
       where: { conversationId: conversation.id, role: { in: ["user", "assistant", "human"] } },
@@ -242,7 +279,7 @@ async function runFollowUpCheckInner(deps: FollowUpDeps): Promise<void> {
 
     r.eligible++;
     const fingerprint = await conversationFingerprint(conversation.id, conversation.patientId);
-    const got = await acquireFlow(key, fingerprint, now);
+    const got = await acquireFlow(key, fingerprint, now, runMode);
     if (!got.ok) {
       if (got.why === "already_handled" || got.why === "exhausted") {
         // ja tratado em outra rodada/copia (ou esgotado): so avanca o ponteiro, sem enviar
@@ -348,7 +385,8 @@ async function runFollowUpCheckInner(deps: FollowUpDeps): Promise<void> {
 
     // Saiu.
     sentByClinic.set(clinicId, (sentByClinic.get(clinicId) ?? 0) + 1);
-    await finishFlow(got.id, "sent", { layer: "envio", reason: `recontato ${rule.order} enviado` });
+    await finishFlow(got.id, "sent", { layer: "envio", reason: recovery ? `recontato ${rule.order} enviado na recuperacao controlada (aprovada por ${recovery.approvedBy.slice(0, 40)})` : `recontato ${rule.order} enviado` });
+    if (recovery) await absorbOverdueStages(conversation, lastPatientMessage, rule, clinic, now);
     r.add("enviado", `etapa_${rule.order}`);
     await prisma.message.create({ data: { conversationId: conversation.id, role: "assistant", content: text, authorName: "Recontato automático" } });
     await prisma.conversation.update({ where: { id: conversation.id }, data: { lastFollowUpOrder: rule.order } });
@@ -364,6 +402,26 @@ async function runFollowUpCheckInner(deps: FollowUpDeps): Promise<void> {
       await movePatientToStage(clinicId, conversation.patientId, recoveryStage.stageId, { note: "sem resposta no recontato" });
     }
     await sleep(3000 + Math.random() * 5000);
+  }
+}
+
+// Recuperacao: depois de enviar UMA etapa, as proximas etapas da mesma pessoa que ja venceram NAO saem em seguida (seria acumular). Ficam registradas como absorvidas.
+async function absorbOverdueStages(
+  conversation: ConvRow,
+  lastPatientMessage: { createdAt: Date },
+  sentRule: RuleRow,
+  clinic: { calendar: SendCalendar; recovery: RecoveryPolicy },
+  now: Date,
+): Promise<void> {
+  const later = await prisma.followUpRule.findMany({ where: { clinicId: conversation.patient.clinicId, active: true, order: { gt: sentRule.order } }, orderBy: { order: "asc" } });
+  for (const r2 of later) {
+    const dueAt = ruleDueAt(r2, lastPatientMessage.createdAt, clinic.calendar.timezone || "America/Sao_Paulo");
+    if (dueAt.getTime() > now.getTime()) continue; // ainda nao venceu: segue o curso normal
+    await recordFlowDecisionAt(
+      { clinicId: conversation.patient.clinicId, patientId: conversation.patientId, conversationId: conversation.id, flow: "recontato", ruleId: r2.id, step: r2.order, cycleKey: String(lastPatientMessage.createdAt.getTime()), dueAt },
+      "expired",
+      { layer: "politica", reason: "etapa vencida absorvida pela recuperacao controlada: etapas vencidas nao se acumulam", temporary: false, at: now, runMode: "recuperacao" },
+    );
   }
 }
 

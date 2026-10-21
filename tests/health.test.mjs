@@ -11,5 +11,5 @@ test("/health mostra a revisao do codigo e a ultima migracao aplicada", () => {
   // a ultima migracao do repositorio e a que o /health deve mostrar depois do deploy
   const dirs = fs.readdirSync(new URL("../prisma/migrations/", import.meta.url)).filter((d) => /^\d{14}_/.test(d)).sort();
   assert.ok(dirs.length > 80);
-  assert.equal(dirs.at(-1), "20261023110000_site_leads");
+  assert.equal(dirs.at(-1), "20261024100000_confirmacoes_sabado_pos_recontatos");
 });
