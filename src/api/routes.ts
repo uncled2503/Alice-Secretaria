@@ -1,4 +1,5 @@
 import { Router, type Request, type Response, type RequestHandler } from "express";
+import { dispatchesRouter } from "./dispatches.js";
 import { Prisma } from "@prisma/client";
 import { rateLimit } from "express-rate-limit";
 import { timingSafeEqual, randomBytes } from "crypto";
@@ -120,6 +121,7 @@ import { hashPassword, verifyPasswordAsync } from "./passwords.js";
 import { createSessionCookie, clearSessionCookie } from "./staffSession.js";
 
 export const apiRouter = Router();
+apiRouter.use("/dispatches", dispatchesRouter); // aba Disparos (escopo de clinica e autorizacao no proprio roteador)
 
 // Webhook publico da UAZAPI. Nao usa a sessao do painel: a autenticacao e
 // feita por assinatura HMAC especifica da clinica e, quando presente, pelo

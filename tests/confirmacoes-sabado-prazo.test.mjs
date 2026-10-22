@@ -291,12 +291,13 @@ test("reserva NAO efetivada no Clinica Experts nao e apresentada como agendament
   assert.equal(sel.held.find((h) => h.appointmentId === x.a.id)?.code, "reserva_nao_efetivada_no_ce");
 });
 
-test("cobertura: depois do fim da janela a equipe e avisada UMA vez, com motivo e quantidade; nada e enviado fora da janela para compensar", async () => {
+test("cobertura: com a AMPLIACAO desligada pela clinica, depois do fim da janela a equipe e avisada UMA vez, com motivo e quantidade; nada e enviado fora da janela", async () => {
   zera();
   const L = await clinica("Conf Cobertura", { sabado: false });
+  await prisma.dispatchPolicy.create({ data: { clinicId: L.c.id, kind: "confirmacao", extendEnabled: false } }); // decisao da clinica: sem ampliacao
   const x = await agenda(L.c, "Sem Mensagem", "2026-10-21T10:00");
   await rodar("2026-10-20T09:15"); // a janela (8h-9h) fechou sem nenhuma rodada: WhatsApp/servidor fora
-  assert.equal(enviados.length, 0);
+  assert.equal(para(x.p).length, 0, "ampliacao desligada nesta clinica: nada sai fora da janela (outras clinicas do banco de teste seguem as proprias politicas)");
   const logs = await prisma.activityLog.findMany({ where: { clinicId: L.c.id, type: "reminder_gap" } });
   assert.equal(logs.length, 1);
   assert.match(logs[0].description, /1 agendamento\(s\) ainda sem a solicitação/);

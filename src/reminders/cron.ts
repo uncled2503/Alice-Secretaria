@@ -17,7 +17,8 @@ import { REVISION } from "../version.js";
 import { stripProcedureLines, isPlaceholderProcedure } from "../clinicaexperts/placeholderProcedure.js";
 import { effectivePurpose, explicitPurpose, overridingRule, parseWeekdays, perRunCap, ruleAppliesOnWeekday, skipsConfirmedPatient, weekdayInZone, BASE_SENDS_PER_RUN } from "./policy.js";
 import { notYetEffectuated } from "./effectuation.js";
-import { reportConfirmationGaps } from "./coverage.js";
+import { reportConfirmationGaps, targetDateOfToday, alertCapacityRisk } from "./coverage.js";
+import { extendedDeadline, normalWindowEnd, resolveExtension, type DispatchKind, type ExtensionCtx } from "../dispatch/policy.js";
 
 // PURO: dois textos de confirmacao sao "o mesmo lembrete"? Igual sem negrito (*) nem espacos, ou do mesmo tipo (os dois "amanha" ou os dois "hoje").
 // Uma regra copiada com o nome em negrito mandava a confirmacao do dia 2x (15/10, Renata): o texto nao era identico, so o negrito.
@@ -145,13 +146,22 @@ export function sendWindowOf(
   appt: { scheduledAt: Date; createdAt: Date; scheduleChangedAt?: Date | null },
   now: Date,
   tz: string,
-): "window" | "late" | null {
+  ext?: ExtensionCtx | null,
+): "window" | "late" | "extended" | null {
   if (appt.scheduledAt.getTime() <= now.getTime()) return null;
   if (rule.dayOffset != null && rule.sendHour != null && rule.sendEndHour != null) {
     if (inReminderWindow(appt.scheduledAt, now, { dayOffset: rule.dayOffset, sendHour: rule.sendHour, sendMinute: rule.sendMinute, sendEndHour: rule.sendEndHour }, tz)) return "window";
     // reposicao pra quem foi agendado depois da janela (regra-filha nao repoe: so cobra quem recebeu a mae)
     // lembrete explicito (so informa) nao tem reposicao: quem foi agendado depois da janela recebe a CONFIRMACAO como reposicao, nao tambem o lembrete
     if (!rule.parentRuleId && rule.purpose !== "lembrete" && isLateCatchUp(appt, { dayOffset: rule.dayOffset, sendEndHour: rule.sendEndHour }, now, tz)) return "late";
+    // AMPLIACAO AUTOMATICA da janela (autorizada; ver dispatch/policy.ts): so com causa operacional comprovada, no dia local, ate o limite final e com a antecedencia minima do atendimento
+    if (ext?.allowed) {
+      const end = normalWindowEnd(rule, appt.scheduledAt, tz);
+      if (end && now.getTime() >= end.getTime()) {
+        const dl = extendedDeadline(ext.policy, { windowEnd: end, appointmentStart: appt.scheduledAt, timeZone: tz });
+        if (dl && now.getTime() < dl.getTime()) return "extended";
+      }
+    }
     return null;
   }
   const sendAt =
@@ -175,7 +185,7 @@ export async function selectReminderCandidates(
   rule: ReminderRule,
   now: Date,
   tz: string,
-  opts: { targetDate?: string; skipWindow?: boolean; clinicRules?: ReminderRule[] } = {},
+  opts: { targetDate?: string; skipWindow?: boolean; clinicRules?: ReminderRule[]; ext?: ExtensionCtx | null } = {},
 ) {
   const held: HeldReminder[] = [];
   let upper: Date;
@@ -218,9 +228,16 @@ export async function selectReminderCandidates(
     const specific = overridingRule(rule, wd, clinicRules);
     if (specific) { held.push({ appointmentId: appt.id, code: "substituida_por_regra_do_dia", detail: `neste dia da semana vale a regra específica (${specific.id}), não esta` }); return false; }
     if (opts.skipWindow) return true;
-    const w = sendWindowOf(rule, appt, now, tz);
+    const w = sendWindowOf(rule, appt, now, tz, opts.ext);
     if (w === "late") lateIds.add(appt.id);
     return w !== null;
+  });
+
+  // (a2) quem pediu para NAO receber mensagens (LGPD, Patient.optedOut) nao recebe automacao nenhuma - antes os lembretes ignoravam isto (so o aviso de agendamento e as campanhas respeitavam).
+  due = due.filter((appt) => {
+    if (!appt.patient.optedOut) return true;
+    held.push({ appointmentId: appt.id, code: "opt_out", detail: "a pessoa pediu para não receber mensagens: nenhuma automação é enviada" });
+    return false;
   });
 
   // (b) quem ja confirmou nao recebe nova SOLICITACAO de confirmacao (politica explicita: resendIfConfirmed)
@@ -347,10 +364,11 @@ const MAX_CHECKS_PER_RUN = 40; // quantas reservas uma regra examina por rodada 
 
 // Resumo da rodada por clinica (AutomationRun "lembretes"): prova que o job rodou e o que decidiu, sem dado pessoal. Preenchido pelo proprio registro das decisoes.
 let cycleRecorders: Map<string, RunRecorder> | null = null;
+let cycleNow: Date | null = null; // relogio da rodada (o resumo da rodada leva o MESMO instante da selecao; com relogio controlado nos testes tambem)
 function recordCycle(decision: string, f: Record<string, string | number | boolean | null | undefined>): void {
   if (!cycleRecorders || typeof f.clinica !== "string") return;
   let r = cycleRecorders.get(f.clinica);
-  if (!r) cycleRecorders.set(f.clinica, (r = new RunRecorder("lembretes", f.clinica)));
+  if (!r) cycleRecorders.set(f.clinica, (r = new RunRecorder("lembretes", f.clinica, cycleNow ?? new Date())));
   r.candidates++;
   const motivo = String(f.motivo ?? f.resultado ?? "-").slice(0, 60);
   if (decision === "enviar") {
@@ -401,7 +419,7 @@ export interface DeliverEnv {
 }
 export type DueAppointment = Awaited<ReturnType<typeof selectReminderCandidates>>["due"][number];
 
-export async function deliverReminder(env: DeliverEnv, rule: ReminderRule, appt: DueAppointment, opts: { ignoreWindow?: boolean; pause?: boolean; origin?: string } = {}): Promise<boolean> {
+export async function deliverReminder(env: DeliverEnv, rule: ReminderRule, appt: DueAppointment, opts: { ignoreWindow?: boolean; pause?: boolean; origin?: string; ext?: ExtensionCtx | null } = {}): Promise<boolean> {
   const { clock, tz, clinicInfo, stat, ceDown, ceFailures } = env;
   let attempted = false;
   const stamp = clock();
@@ -436,7 +454,8 @@ export async function deliverReminder(env: DeliverEnv, rule: ReminderRule, appt:
       }
     }
     // (1) A janela de envio desta regra ainda vale AGORA? (nada de lembrete vencido ou fora de hora pra compensar falha anterior)
-    if (!opts.ignoreWindow && !sendWindowOf(rule, appt, stamp, tz)) {
+    const windowKind = opts.ignoreWindow ? "window" : sendWindowOf(rule, appt, stamp, tz, opts.ext);
+    if (!windowKind) {
       logDecision("pular", { ...base, motivo: "fora da janela de envio" });
       return false;
     }
@@ -526,17 +545,35 @@ export async function deliverReminder(env: DeliverEnv, rule: ReminderRule, appt:
     }
     try {
       await prisma.reminderSent.create({ data: { appointmentId: appt.id, ruleId: rule.id } });
-    } catch {
+    } catch (err) {
+      // SO violacao de unicidade e "ja existia": qualquer outro erro (banco ocupado/indisponivel) NAO e duplicidade - a reserva e devolvida para tentar de novo (nada saiu)
+      if ((err as { code?: string } | null)?.code !== "P2002") {
+        await finishDispatch(acq.id, "deferred", `erro de banco ao registrar o lembrete: ${err instanceof Error ? err.message.slice(0, 120) : "desconhecido"}`);
+        logDecision("pular", { ...base, tipo: key.kind, tentativa: acq.attempt, motivo: "erro de banco ao registrar (nao e duplicidade): tentara de novo" });
+        return false;
+      }
       await finishDispatch(acq.id, "duplicate", "ja existia o registro de lembrete enviado para esta reserva e regra");
       logDecision("pular", { ...base, tipo: key.kind, tentativa: acq.attempt, motivo: "registro de lembrete ja existia" });
       return false;
+    }
+    // Janela ESTENDIDA: registra prazo final e motivo (horario original x proxima tentativa x prazo final x motivo da ampliacao)
+    if (windowKind === "extended" && opts.ext) {
+      const wEnd = normalWindowEnd(rule, appt.scheduledAt, tz);
+      const dl = wEnd ? extendedDeadline(opts.ext.policy, { windowEnd: wEnd, appointmentStart: appt.scheduledAt, timeZone: tz }) : null;
+      await prisma.reminderDispatch.update({ where: { id: acq.id }, data: { extendedReason: opts.ext.cause, deadlineAt: dl } }).catch(() => undefined);
     }
 
     // (5) ENVIO. O resultado e gravado como aconteceu - nao como "enviado" por padrao.
     attempted = true;
     let outcome: SendOutcome | null = null;
+    let sendReport: { destination: string; providerId: string | null } | null = null;
     try {
-      outcome = await sendText(appt.clinicId, appt.patient.phone, text, { kind: "lembrete" });
+      outcome = await sendText(appt.clinicId, appt.patient.phone, text, {
+        kind: "lembrete",
+        // IMEDIATAMENTE antes do provedor: a tentativa passa a constar (reservado SEM attemptedAt = o provedor NAO foi chamado)
+        beforeProvider: async () => { await prisma.reminderDispatch.update({ where: { id: acq.id }, data: { attemptedAt: new Date() } }).catch(() => undefined); },
+        report: (r) => { sendReport = r; },
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (isSendDeferred(err)) {
@@ -559,7 +596,7 @@ export async function deliverReminder(env: DeliverEnv, rule: ReminderRule, appt:
     }
     if (outcome) {
       if (outcome === "sent") {
-        await finishDispatch(acq.id, "sent", opts.origin);
+        await finishDispatch(acq.id, "sent", opts.origin, (() => { const r = sendReport as { destination: string; providerId: string | null } | null; return r ? { destination: r.destination, providerId: r.providerId, deliveryState: "accepted" } : undefined; })());
         await recordAutomatedMessage(appt.patientId, text, "Lembrete de consulta");
       } else {
         // blocked (plano), vetoed (revisao) e duplicate (mesmo texto ja saiu) NAO sao envio: ficam registrados assim.
@@ -586,6 +623,7 @@ export async function runReminderCycle(opts: { now?: Date } = {}): Promise<void>
     const ceFailures = new Map<string, number>(); // clinica -> falhas de sistema seguidas
     const clock = () => opts.now ?? new Date();
     cycleRecorders = new Map();
+    cycleNow = opts.now ?? null;
     try {
     const loaded = await prisma.reminderRule.findMany({ where: { active: true, clinic: PAID_CLINIC_WHERE } });
     const rules: typeof loaded = [];
@@ -604,7 +642,13 @@ export async function runReminderCycle(opts: { now?: Date } = {}): Promise<void>
     }
     const clinicInfoCache = new Map<string, Awaited<ReturnType<typeof getClinicTemplateInfo>>>();
 
-    for (const rule of rules) {
+    // uma linha de resumo por clinica com regra ativa, MESMO sem decisoes: e o que prova que o job rodou (a ampliacao da janela e a conferencia de cobertura dependem desta prova)
+    for (const r of rules) if (!cycleRecorders.has(r.clinicId)) cycleRecorders.set(r.clinicId, new RunRecorder("lembretes", r.clinicId, clock()));
+    const byClinic = new Map<string, typeof rules>();
+    for (const r of rules) byClinic.set(r.clinicId, [...(byClinic.get(r.clinicId) ?? []), r]);
+    // Cada clinica anda em SEQUENCIA (pausas e teto proprios), mas as clinicas andam em PARALELO: uma clinica lenta/com falha nao atrasa as outras (antes uma fila unica).
+    await Promise.all([...byClinic.values()].map(async (clinicRules0) => {
+    for (const rule of clinicRules0) {
       try {
       const now = clock();
       // Janela estreita (um pouco maior que o intervalo do cron, pra nao
@@ -620,7 +664,13 @@ export async function runReminderCycle(opts: { now?: Date } = {}): Promise<void>
       const tz = clinicRow?.timezone || "America/Sao_Paulo";
 
       const clinicRules = rules.filter((r) => r.clinicId === rule.clinicId);
-      const selection = await selectReminderCandidates(rule, now, tz, { clinicRules });
+      const dkind: DispatchKind = rule.parentRuleId ? "cobranca" : effectivePurpose(rule) === "lembrete" ? "lembrete" : "confirmacao";
+      let ext: ExtensionCtx | null = null;
+      if (rule.dayOffset != null && rule.sendHour != null && rule.sendEndHour != null) {
+        const td = targetDateOfToday(rule, now, tz);
+        if (td) { const [ty, tm, tdd] = td.split("-").map(Number); ext = await resolveExtension(rule, dkind, tz, new Date(Date.UTC(ty, tm - 1, tdd, 15)), now).catch(() => null); }
+      }
+      const selection = await selectReminderCandidates(rule, now, tz, { clinicRules, ext });
       const due = selection.due;
       // Nada some em silencio: o que foi retido (com o motivo) entra no resumo da rodada e no log.
       for (const h of selection.held.slice(0, 100)) logDecision("reter", { clinica: rule.clinicId, regra: rule.id, agendamento: h.appointmentId, motivo: h.code });
@@ -644,23 +694,39 @@ export async function runReminderCycle(opts: { now?: Date } = {}): Promise<void>
       const stat = stats.get(rule.clinicId) ?? { deferred: 0, exhausted: 0, reasons: new Set<string>() };
       stats.set(rule.clinicId, stat);
 
+      // FILA SEM STARVATION: quem ja tem controle persistente que impede nova tentativa AGORA (esperando o intervalo, esgotado, ja tratado) e pulado ANTES de gastar o orcamento de
+      // verificacoes da rodada; quem nunca foi tentado vem primeiro, e quem falhou/adiou depois (por horario do atendimento). Antes um grupo de candidatos problematicos ocupava sempre o inicio.
+      const ledgerRows = await prisma.reminderDispatch.findMany({ where: { clinicId: rule.clinicId, ruleId: rule.id, bookingKey: { in: due.map(bookingKeyOf) } }, select: { bookingKey: true, startsAt: true, attempt: true } });
+      const ready: { appt: (typeof due)[number]; attempts: number }[] = [];
+      for (const a of due) {
+        const row = ledgerRows.find((r) => r.bookingKey === bookingKeyOf(a) && r.startsAt.getTime() === a.scheduledAt.getTime());
+        if (row) {
+          const pre = await precheckDispatch({ clinicId: rule.clinicId, bookingKey: bookingKeyOf(a), appointmentId: a.id, patientId: a.patientId, ruleId: rule.id, kind: dispatchKind(rule), startsAt: a.scheduledAt, sendDay: sendDayOf(clock(), tz) }, clock());
+          if (pre) { logDecision("pular", { clinica: rule.clinicId, agendamento: a.id, regra: rule.id, motivo: pre }); continue; }
+        }
+        ready.push({ appt: a, attempts: row?.attempt ?? 0 });
+      }
+      ready.sort((x, y) => x.attempts - y.attempts || x.appt.scheduledAt.getTime() - y.appt.scheduledAt.getTime());
       let sends = 0;
       let checked = 0;
       // Teto da rodada: o padrao (12) so sobe, ate 30, quando a janela e curta e a fila nao caberia nas rodadas que restam (confirmacao do dia seguinte ate as 9h).
       const windowEndsAt = rule.dayOffset != null && rule.sendHour != null && rule.sendEndHour != null ? ruleWindow(rule, due[0].scheduledAt, tz).to : null; // (so conta se a janela ainda esta aberta: reposicao nao aumenta o teto)
-      const sendCap = perRunCap(due.length, windowEndsAt && windowEndsAt.getTime() > now.getTime() ? windowEndsAt : null, now);
+      const sendCap = Math.min(perRunCap(ready.length, windowEndsAt && windowEndsAt.getTime() > now.getTime() ? windowEndsAt : null, now), ext?.allowed ? ext.policy.maxPerRun : 30);
+      // CAPACIDADE: avisa a equipe ANTES de perder o prazo se o que falta nao cabe nas rodadas que restam (janela normal ou, se ampliada, ate o prazo final)
+      void alertCapacityRisk(rule, ready.length, sendCap, ext, windowEndsAt, ready[0]?.appt.scheduledAt ?? null, now, tz).catch(() => undefined);
       const checkCap = Math.max(MAX_CHECKS_PER_RUN, sendCap * 3);
-      for (const appt of due) {
+      for (const { appt } of ready) {
         // Teto de ENVIOS por rodada (protege o numero de bloqueio por rajada); o que foi pulado ou adiado nao conta, entao nao trava os demais.
         if (rule.sendEndHour != null && (sends >= sendCap || checked >= checkCap)) break;
         checked++;
-        const attempted = await deliverReminder({ clock, tz, clinicInfo, stat, ceDown, ceFailures }, rule, appt);
+        const attempted = await deliverReminder({ clock, tz, clinicInfo, stat, ceDown, ceFailures }, rule, appt, { ext });
         if (attempted) sends++;
       }
       } catch (err) {
         console.error(`[lembrete] erro na regra ${rule.id}; as demais regras seguem:`, err instanceof Error ? err.message : err);
       }
     }
+    }));
     await alertDeferrals(stats);
     } finally {
       const recs = cycleRecorders;

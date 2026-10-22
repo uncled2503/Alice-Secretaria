@@ -63,9 +63,9 @@ test("o bloco visual novo (fim do styles.css) usa so variaveis, sem cor fixa", (
 const ids = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));
 const attr = (a) => [...html.matchAll(new RegExp(`\\b${a}="([^"]*)"`, "g"))].map((m) => m[1]);
 
-test("os 7 menus e as 26 sub-areas continuam apontando para o painel certo", () => {
+test("os 8 menus e as 26 sub-areas continuam apontando para o painel certo", () => {
   const tabs = attr("data-tab");
-  assert.equal(tabs.length, 7);
+  assert.equal(tabs.length, 8); // 7 originais + Disparos (22/10)
   for (const t of tabs) assert.ok(ids.has(`tab-${t}`), `painel tab-${t} sumiu`);
   const subs = attr("data-sub");
   assert.equal(subs.length, 26);

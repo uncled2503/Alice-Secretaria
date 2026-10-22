@@ -270,6 +270,8 @@ test("CE com timeout / 401 / 500 / payload insuficiente: ADIA (nao envia, nao ca
 test("recuperacao DENTRO da janela envia; FORA da janela nao dispara lembrete atrasado; e nunca duas vezes", async () => {
   resetNet();
   const c = await mkClinic(`Clinica Recupera ${uniq()}`, { withCe: true });
+  // a AMPLIACAO automatica da janela (autorizada em 22/10, testada em disparos-envio) fica desligada aqui: este teste e sobre a janela NORMAL
+  for (const kind of ["confirmacao", "lembrete", "cobranca"]) await prisma.dispatchPolicy.create({ data: { clinicId: c.clinic.id, kind, extendEnabled: false } });
   const a = await mkAppt(c, { when: T(10, 0), uuid: "r-1", name: "Rosa Recupera" });
   const b = await mkAppt(c, { when: T(10, 0), uuid: "r-2", name: "Bete Tardia" });
   // 9h: CE fora do ar para as duas

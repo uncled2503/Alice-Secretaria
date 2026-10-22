@@ -79,6 +79,7 @@ const birthdayOf = () => { const w = today(); return new Date(Date.UTC(1990, w.m
 // ===================================================================== ANIVERSARIOS
 test("ANIVERSARIO: o dia e o da clinica; a mensagem espera a hora cadastrada e o fim do dia; sem nome a saudacao e neutra; nao repete", async () => {
   const c = await mkClinic("Clinica Aniversario");
+  await prisma.dispatchPolicy.create({ data: { clinicId: c.id, kind: "aniversario", extendEnabled: false } }); // decisao da clinica: sem ampliacao (a ampliacao tem teste proprio)
   const regra = await prisma.birthdayRule.create({ data: { clinicId: c.id, name: "Parabéns", sendHour: 10, active: true, message: "Feliz aniversário, {primeiro_nome}! 🎀 A equipe te deseja um dia especial." } });
   const semNome = await mkPatient(c, { name: null, birthDate: birthdayOf() });
   const naoFaz = await mkPatient(c, { name: "Outra Pessoa", birthDate: new Date(Date.UTC(1990, (today().month % 12), 1)) }); // outro mes
@@ -110,7 +111,7 @@ test("ANIVERSARIO: barrado, adiado ou com falha NAO e gravado como enviado e ten
   const c = await mkClinic("Clinica Aniversario Estados");
   const regra = await prisma.birthdayRule.create({ data: { clinicId: c.id, name: "Parabéns", sendHour: 10, active: true, message: "Feliz aniversário, {primeiro_nome}! 🎀" } });
   const p = await mkPatient(c, { name: "Bianca Souza", birthDate: birthdayOf() });
-  const sent = () => prisma.birthdaySent.count({ where: { patientId: p.id, ruleId: regra.id } });
+  const sent = () => prisma.birthdaySent.count({ where: { patientId: p.id, ruleId: regra.id, state: { in: ["sent", "unconfirmed", "duplicate"] } } }); // adiado/barrado/falha ficam REGISTRADOS (visiveis na aba Disparos) mas nao contam como enviado
   posts.length = 0;
 
   // 1) a equipe estava conversando com ela (pausa humana de relacionamento): ADIADO, nao consumido

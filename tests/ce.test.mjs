@@ -25,7 +25,8 @@ test("acha o campo de nascimento do paciente do CE, qualquer que seja o nome", (
 });
 
 test("telefone com e sem o 9o digito e com/sem DDI e a mesma pessoa", () => {
-  assert.equal(phoneKey("5511949494707"), phoneKey("551149494707"));
+  assert.equal(phoneKey("5511994944707"), phoneKey("551194944707")); // celular antigo (8 digitos comecando por 9) = o mesmo numero com o 9
+  assert.notEqual(phoneKey("5511949494707"), phoneKey("551149494707"), "fixo (4xxx) e celular com os mesmos 8 digitos finais NAO se fundem");
   assert.equal(phoneKey("+55 11 94949-4707"), phoneKey("11949494707"));
   assert.notEqual(phoneKey("5511949494707"), phoneKey("5511949494708"));
   assert.notEqual(phoneKey("5511949494707"), phoneKey("5521949494707")); // outro DDD

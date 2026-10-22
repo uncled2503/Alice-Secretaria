@@ -1,3 +1,4 @@
+import { parsePhone } from "../uazapi/phone.js";
 import { prisma } from "../db/client.js";
 import { ceRequest, isUncertain, type CeErrorKind } from "./client.js";
 
@@ -24,16 +25,10 @@ export function namesCompatible(a: string | null | undefined, b: string | null |
 
 // PURO: telefone brasileiro -> { ddd, local } canonico (celular sempre com o 9o digito: DDD + 9 + 8 digitos). Sem DDD valido = null.
 export function canonicalBrPhone(raw: string | null | undefined): { ddd: string; local: string } | null {
-  let d = (raw ?? "").replace(/\D/g, "");
-  if (d.startsWith("55") && d.length >= 12) d = d.slice(2);
-  d = d.replace(/^0+/, "");
-  if (d.length < 10 || d.length > 11) return null;
-  const ddd = d.slice(0, 2);
-  if (ddd[0] === "0") return null;
-  let local = d.slice(2);
-  if (local.length === 8 && /^[6-9]/.test(local)) local = `9${local}`; // celular antigo, sem o 9
-  if (local.length === 9 && local[0] !== "9") return null;
-  return { ddd, local };
+  // a leitura de telefone vive em UM lugar (uazapi/phone.ts); aqui so a forma {ddd, local} que o CE usa (celular sempre com o 9)
+  const p = parsePhone(raw);
+  if (!p.valid || (p.kind !== "br_mobile" && p.kind !== "br_landline")) return null;
+  return { ddd: p.ddd!, local: p.kind === "br_mobile" && p.local!.length === 8 ? `9${p.local}` : p.local! };
 }
 
 // PURO: duas formas do MESMO numero (com/sem DDI, com/sem o 9o digito). Nunca por "ultimos 8 digitos": o DDD tambem precisa bater.

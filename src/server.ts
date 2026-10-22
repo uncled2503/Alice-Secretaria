@@ -15,6 +15,7 @@ import { startAdsJobs } from "./ads/jobs.js";
 import { startPrescriptionReminderJob } from "./reminders/prescription.js";
 import { startRenewalJob } from "./reminders/renewal.js";
 import { startBirthdayJob } from "./reminders/birthday.js";
+import { startDispatchRunJob } from "./dispatch/actions.js";
 import { startNpsJob } from "./reminders/nps.js";
 import { startPlanExpiryJob } from "./reminders/planExpiry.js";
 import { startProfessionalBackfillJob } from "./scheduling/professionalBackfillJob.js";
@@ -369,6 +370,7 @@ const httpServer = app.listen(port, () => {
   startPrescriptionReminderJob();
   startRenewalJob();
   startBirthdayJob();
+  startDispatchRunJob(); // fila persistida de recuperacao de disparos (aba Disparos)
   startFollowUpJob();
   startResumeFlowsJob(); // retomada de avaliacao cancelada / sem fechamento: nascem DESLIGADAS (ResumeFlowConfig)
   startBriefingJob(); // memoria do lead: atualiza quem teve conversa nova

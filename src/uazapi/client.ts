@@ -1,9 +1,12 @@
 import crypto, { timingSafeEqual } from "crypto";
+import { ingestDeliveryStatus } from "../dispatch/delivery.js";
 import dns from "dns/promises";
 import net from "net";
 import OpenAI from "openai";
 import { toFile } from "openai";
 import { prisma } from "../db/client.js";
+import { parsePhone } from "./phone.js";
+import { resolvedDestinationFor, saveResolution } from "./phoneRegistry.js";
 import { recordIncomingMessage, generateReply, recordOutgoingFromDevice, executeHandoff } from "../ai/alice.js";
 import { isFreePlan } from "../crm/plan.js";
 import { isOptOutRequest, applyOptOut, OPTOUT_CONFIRMATION } from "../crm/optout.js";
@@ -396,7 +399,7 @@ async function configureWebhook(clinicId: string, credentials: UazapiCredentials
     body: JSON.stringify({
       enabled: true,
       url,
-      events: ["messages", "connection", "presence"],
+      events: ["messages", "messages_update", "connection", "presence"],
       // "fromMeYes" NAO entra aqui de proposito: precisamos receber o que sai
       // deste WhatsApp pelo celular/WhatsApp Web direto, pra sincronizar no
       // painel (ver fromMe em parseWebhookPayload). O eco da propria API
@@ -527,6 +530,7 @@ function splitMessage(text: string, maxParts: number): string[] {
 // Falha que nao adianta repetir: o numero nao tem WhatsApp. Sem isto a automacao tentava de novo
 // (e avisava a equipe) a cada 15 minutos para sempre.
 export function isPermanentSendError(err: unknown): boolean {
+  if (err instanceof InvalidPhoneError) return true; // cadastro com telefone que nao fecha: permanente ate corrigir o cadastro
   return /not on whatsapp|n[aã]o (est[aá]|tem) no whatsapp/i.test(err instanceof Error ? err.message : String(err));
 }
 
@@ -574,7 +578,26 @@ const placeholderAlerted = new Map<string, number>();
 // "vetoed" = a revisao por IA barrou (nao faz sentido enviar agora): nada saiu, o motivo fica no Diario de atividades.
 export type SendOutcome = "sent" | "blocked" | "duplicate" | "vetoed";
 
-export async function sendText(clinicId: string, phone: string, text: string, opts: { manual?: boolean; alice?: boolean; kind?: OutboundKind; flow?: GuardedFlow; beforeProvider?: () => Promise<void> } = {}): Promise<SendOutcome> {
+// O que o envio FEZ (para o controle persistente e a aba Disparos): destino efetivamente usado, id da mensagem no provedor e se foi usada a forma alternativa do numero.
+export interface SendReport { destination: string; providerId: string | null; usedAlternate: boolean; original: string }
+
+// Numero que nao fecha como telefone (curto/longo demais, JID, DDD inexistente...): nada e enviado e nada e "corrigido" por adivinhacao. Permanente ATE o cadastro ser corrigido.
+export class InvalidPhoneError extends Error {
+  readonly code = "invalid_phone";
+  constructor(readonly reason: string) {
+    super(`Telefone invalido para envio (${reason}): nada foi enviado`);
+    this.name = "InvalidPhoneError";
+  }
+}
+
+// Rejeicao EXPLICITA do destino pelo provedor ("numero nao esta no WhatsApp"): resposta HTTP estruturada do provedor. Timeout, 429, desconexao, 5xx e erro generico NAO contam.
+export function isExplicitNumberRejection(err: unknown): boolean {
+  if (!(err instanceof UazapiHttpError)) return false;
+  if (err.status === 429) return false; // limite de taxa nao diz nada sobre o numero (a mensagem EXPLICITA do provedor e o que vale, qualquer que seja o status)
+  return /not on whatsapp|n[aã]o (est[aá]|tem) no whatsapp|is not a whatsapp|numero nao encontrado no whatsapp/i.test(`${err.providerMessage ?? ""} ${err.providerCode ?? ""} ${err.message}`);
+}
+
+export async function sendText(clinicId: string, phone: string, text: string, opts: { manual?: boolean; alice?: boolean; kind?: OutboundKind; flow?: GuardedFlow; beforeProvider?: () => Promise<void>; report?: (r: SendReport) => void } = {}): Promise<SendOutcome> {
   if (await automatedSendBlocked(clinicId, opts.manual === true)) return "blocked";
   // WhatsApp comprovadamente fora: nao ha o que tentar. Lanca (os chamadores ja tratam erro de envio) SEM bater no provedor e SEM gastar tentativa do chamador que souber distinguir.
   if (opts.manual !== true) {
@@ -592,6 +615,7 @@ export async function sendText(clinicId: string, phone: string, text: string, op
     }
   }
   let reservedDuplicateKey = false;
+  let sendReport: SendReport | null = null;
   if (opts.manual !== true) {
     const missing = hasUnresolvedPlaceholder(text);
     if (missing) {
@@ -653,22 +677,42 @@ export async function sendText(clinicId: string, phone: string, text: string, op
 
     // IMEDIATAMENTE antes de o provedor ser chamado (depois do plano, do duplicado e da revisao por IA): quem chamou grava "tentativa iniciada". Se isto falhar, nada e enviado.
     if (opts.beforeProvider) await opts.beforeProvider();
-    let target = phone.replace(/\D/g, "");
+    // DESTINO: (1) resolucao ja VALIDADA para este telefone (o provedor aceitou aquela forma antes); (2) a leitura central (uazapi/phone.ts): DDI 55 presente ou ausente, sem pontuacao,
+    // respeitando a forma cadastrada do celular (com/sem o 9). Numero que nao fecha como telefone NAO e enviado nas automacoes (a pessoa nao fica "sem WhatsApp": o cadastro esta errado).
+    const info = parsePhone(phone);
+    const registered = await resolvedDestinationFor(clinicId, phone);
+    if (!info.valid && !registered && opts.manual !== true) throw new InvalidPhoneError(info.invalid ?? "invalido");
+    let target = registered ?? info.destination ?? phone.replace(/\D/g, "");
+    let usedAlternate = false;
+    let providerId: string | null = null;
     for (let index = 0; index < parts.length; index++) {
       const delay = Math.min(3500, 500 + parts[index].length * 25);
-      const post = (number: string) =>
-        request(credentials, "/send/text", { method: "POST", body: JSON.stringify({ number, text: parts[index], delay, async: false }) });
+      const post = async (number: string): Promise<void> => {
+        const body = await request<unknown>(credentials, "/send/text", { method: "POST", body: JSON.stringify({ number, text: parts[index], delay, async: false }) });
+        // o contrato do provedor preserva o campo id (e messageid): guarda o primeiro para conciliar entrega depois. Sem ele, o envio continua valendo (aceito != entregue).
+        const rec = record(body);
+        const id = textValue(rec?.id, rec?.messageid, rec?.messageId, record(rec?.message)?.id) || null;
+        // ERRO FUNCIONAL com HTTP 200: o provedor responde 200 com um corpo de erro e SEM id de mensagem. Isso NAO e envio aceito: vira falha tipada (a mensagem do provedor decide se e
+        // rejeicao explicita do numero). Com id presente, o envio foi aceito e um campo "error" solto nao o desfaz.
+        if (!id && rec && (rec.success === false || (typeof rec.error === "string" && rec.error.trim()) || rec.error === true || /^(error|failed|fail)$/i.test(textValue(rec.status) ?? ""))) throw uazapiError(200, rec);
+        providerId ??= id;
+      };
       try {
         await post(target);
       } catch (err) {
-        // "Nao esta no WhatsApp": antes de desistir, tenta a outra forma do numero (com/sem o 9o digito).
-        const alt = index === 0 && isPermanentSendError(err) ? alternateBrazilianMobile(target) : null;
+        // So REJEICAO EXPLICITA do primeiro destino abre a alternativa (a outra forma, com/sem o 9, estruturalmente valida e unica). Nunca depois de timeout, 429, desconexao, 5xx ou
+        // erro generico (o primeiro pode ter saido) e nunca para os dois: aceito um, nao se tenta o outro.
+        const alt = index === 0 && !usedAlternate && info.valid && target === (info.destination ?? target) && isExplicitNumberRejection(err) ? info.alternate : null;
         if (!alt) throw err;
         await post(alt);
         target = alt;
+        usedAlternate = true;
+        // a resolucao validada e gravada ANTES de devolver (nao fica em segundo plano): a proxima mensagem ja vai direto ao destino que o provedor aceitou
+        await saveResolution(clinicId, phone, alt, "fallback_rejeicao_explicita", "o provedor rejeitou explicitamente o primeiro destino e aceitou a outra forma do numero").catch(() => undefined);
       }
       if (index < parts.length - 1) await new Promise((resolve) => setTimeout(resolve, 1000 + Math.random() * 2000));
     }
+    sendReport = { destination: target, providerId, usedAlternate, original: phone };
 
   } catch (err) {
     if (reservedDuplicateKey) forgetSend(clinicId, phone, text); // nao saiu: a proxima tentativa nao e duplicata
@@ -682,6 +726,7 @@ export async function sendText(clinicId: string, phone: string, text: string, op
     throw err;
   }
   void clearConnectionDown(clinicId, "envio").catch(() => undefined); // um envio que o provedor aceitou prova que a conexao voltou
+  try { if (sendReport) opts.report?.(sendReport); } catch { /* o relatorio nunca derruba um envio ja aceito */ }
   return "sent";
 }
 
@@ -1728,7 +1773,7 @@ function typingPhoneFromPresence(body: unknown): string | null {
   return phoneFromJid(p.id, true) ?? phoneFromJid(p.chatid) ?? phoneFromJid(p.from) ?? phoneFromJid(p.participant);
 }
 
-export async function enqueueWebhook(clinicId: string, body: unknown): Promise<"queued" | "duplicate" | "presence"> {
+export async function enqueueWebhook(clinicId: string, body: unknown): Promise<"queued" | "duplicate" | "presence" | "status"> {
   const clinic = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { id: true, uazapiToken: true } });
   if (!clinic?.uazapiToken) throw new Error("Clinica sem conexao de WhatsApp configurada");
 
@@ -1746,6 +1791,9 @@ export async function enqueueWebhook(clinicId: string, body: unknown): Promise<"
     bumpTypingWait(clinicId, typingPhone, 12_000);
     return "presence";
   }
+
+  // Status de entrega (Delivered/Read/Failed) de mensagem que a Alice/painel enviou: atualiza o registro do disparo pelo id do provedor e NAO entra na fila de conversa.
+  if ((await ingestDeliveryStatus(clinicId, body)) !== "not_status") return "status";
 
   try {
     await prisma.uazapiWebhookEvent.create({

@@ -510,6 +510,7 @@ document.querySelectorAll(".nav-item").forEach((btn) => {
       stopChannelPolling();
     }
     if (btn.dataset.tab === "reports") loadReports();
+    if (btn.dataset.tab === "dispatches" && typeof window.loadDispatches === "function") window.loadDispatches();
     if (btn.dataset.tab === "agenda") loadAgenda();
   });
 });

@@ -112,8 +112,8 @@ export async function precheckDispatch(key: DispatchKey, now = new Date()): Prom
   return other ? `controle de envio: outra regra do mesmo tipo (${key.kind}) ja tratou esta reserva hoje (${other.state})` : null;
 }
 
-export async function finishDispatch(id: string, state: DispatchState, detail?: string): Promise<void> {
-  await prisma.reminderDispatch.update({ where: { id }, data: { state, ...(detail !== undefined ? { detail: detail.slice(0, 300) } : {}) } }).catch((err) => {
+export async function finishDispatch(id: string, state: DispatchState, detail?: string, extra?: { destination?: string | null; providerId?: string | null; deliveryState?: string | null }): Promise<void> {
+  await prisma.reminderDispatch.update({ where: { id }, data: { state, ...(detail !== undefined ? { detail: detail.slice(0, 300) } : {}), ...(extra ?? {}) } }).catch((err) => {
     console.error(`[lembrete] nao consegui gravar o estado "${state}" do controle ${id}:`, err instanceof Error ? err.message : err);
   });
 }

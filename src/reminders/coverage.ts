@@ -6,6 +6,7 @@ import { isoDateInZone, formatDayInZone } from "../scheduling/time.js";
 import { fixedReminderTime, selectReminderCandidates, type HeldReminder } from "./cron.js";
 import { effectivePurpose, ruleAppliesOnWeekday, weekdayInZone } from "./policy.js";
 import { bookingKeyOf } from "./ledger.js";
+import { extendedDeadline, normalWindowEnd, type ExtensionCtx } from "../dispatch/policy.js";
 import { localDayBounds } from "./firstOfDay.js";
 
 // ---------------------------------------------------------------------------
@@ -103,4 +104,27 @@ export async function reportConfirmationGaps(rule: ReminderRule, now: Date, tz: 
   await logActivity({ clinicId: rule.clinicId, type: "reminder_gap", area: "automacoes", title: "Confirmações sem a solicitação depois da janela", description: `${text.replace(/^⚠️ /, "")} ${marker}`, actorName: null });
   if (hard.length) await notifyStaff(rule.clinicId, "automation_failed", text).catch(() => undefined);
   return report;
+}
+
+// ALERTA DE CAPACIDADE: o que ainda esta pendente cabe nas rodadas que restam? (cron de 15 em 15 min, `perRun` envios por rodada.) Se nao cabe, a equipe e avisada UMA vez por regra e por dia
+// (Diario + aviso), antes de o prazo acabar: ampliar a janela NAO acelera o envio, entao o aviso e o que permite agir a tempo (aumentar o teto, chamar a recuperacao, confirmar por outro meio).
+export async function alertCapacityRisk(rule: ReminderRule, pending: number, perRun: number, ext: ExtensionCtx | null, windowEnd: Date | null, sampleStart: Date | null, now: Date, tz: string): Promise<void> {
+  if (pending <= 0 || perRun <= 0) return;
+  const normalEnd = windowEnd && windowEnd.getTime() > now.getTime() ? windowEnd : null;
+  const wEnd0 = sampleStart ? normalWindowEnd(rule, sampleStart, tz) : null;
+  const finalDeadline = ext?.allowed && wEnd0 && sampleStart ? extendedDeadline(ext.policy, { windowEnd: wEnd0, appointmentStart: sampleStart, timeZone: tz }) : null;
+  const deadline = finalDeadline ?? normalEnd;
+  if (!deadline || deadline.getTime() <= now.getTime()) return;
+  const runsLeft = Math.max(1, Math.floor((deadline.getTime() - now.getTime()) / (15 * 60_000)));
+  const capacity = runsLeft * perRun;
+  if (pending <= capacity) return;
+  const day = isoDateInZone(now, tz);
+  const marker = `[capacidade:${rule.id}:${day}:${finalDeadline ? "final" : "normal"}]`;
+  const already = await prisma.activityLog.findFirst({ where: { clinicId: rule.clinicId, type: "dispatch_capacity_risk", description: { contains: marker } }, select: { id: true } });
+  if (already) return;
+  const text = finalDeadline
+    ? `⚠️ ${pending} mensagem(ns) elegível(is) ainda pendente(s) e só cabem ${capacity} até o prazo final (${deadline.toISOString()}). Abra a aba Disparos para recuperar/priorizar ou confirme por outro meio.`
+    : `⚠️ ${pending} mensagem(ns) elegível(is) pendente(s): a janela normal comporta ${capacity}. O restante será ampliado só se houver causa operacional e a política permitir; confira a aba Disparos.`;
+  await logActivity({ clinicId: rule.clinicId, type: "dispatch_capacity_risk", area: "automacoes", title: "Capacidade de envio em risco", description: `${text.replace(/^⚠️ /, "")} ${marker}`, actorName: null });
+  await notifyStaff(rule.clinicId, "automation_failed", text).catch(() => undefined);
 }

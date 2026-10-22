@@ -13,6 +13,7 @@
   <meta name="apple-mobile-web-app-title" content="Alice" />
   <meta name="theme-color" content="#ea580c" />
   <link rel="stylesheet" href="/admin/styles.css" />
+  <link rel="stylesheet" href="/admin/disparos.css" />
 </head>
 <body>
   <div id="auth-gate" class="auth-gate" style="display:none">
@@ -86,6 +87,9 @@
           </button>
           <button data-tab="reports" class="nav-item">
             <span class="nav-icon" data-icon="chart"></span> <span class="nav-label">Resultados</span>
+          </button>
+          <button data-tab="dispatches" class="nav-item">
+            <span class="nav-icon" data-icon="send"></span> <span class="nav-label">Disparos</span>
           </button>
         </div>
 
@@ -586,6 +590,17 @@
             </div>
           </aside>
         </div>
+      </section>
+
+      <section id="tab-dispatches" class="tab-panel">
+        <div class="page-header">
+          <div>
+            <span class="page-eyebrow">Organização</span>
+            <h1>Disparos</h1>
+            <p class="page-subtitle">Confirmações, lembretes, cobranças e aniversários: o que era esperado, o que saiu e por que o resto não saiu.</p>
+          </div>
+        </div>
+        <div id="dp-root"><p class="hint">Carregando…</p></div>
       </section>
 
       <section id="tab-reports" class="tab-panel">
@@ -2756,5 +2771,6 @@
   </div>
 
   <script src="/admin/app.js"></script>
+  <script src="/admin/disparos.js"></script>
 </body>
 </html>

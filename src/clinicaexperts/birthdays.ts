@@ -3,6 +3,7 @@ import { scheduleLocked } from "../jobs/lock.js";
 import { ceListAll } from "./client.js";
 import { samePhone } from "./identity.js";
 import { namesCompatible } from "./match.js";
+import { canonicalKey, maskDigits } from "../uazapi/phone.js";
 
 // ---------------------------------------------------------------------------
 // ANIVERSARIO dos pacientes/leads vindo do Clinica Experts (pedido da Lisboa, 14/10/2026): a Alice so dispara parabens para quem tem
@@ -41,10 +42,8 @@ export function birthFieldOf(obj: unknown): { key: string | null; raw: unknown }
 
 // PURO: a mesma pessoa com o telefone com e sem o 9o digito cai na mesma chave (DDD + ultimos 8 digitos).
 export function phoneKey(phone: string | null | undefined): string | null {
-  let d = (phone ?? "").replace(/\D/g, "");
-  if (d.startsWith("55") && d.length >= 12) d = d.slice(2);
-  if (d.length < 10) return null;
-  return d.slice(0, 2) + d.slice(-8);
+  // leitura central: so celular ganha o 9; fixo e celular com os mesmos 8 digitos NAO se fundem; numero invalido nao tem chave
+  return canonicalKey(phone);
 }
 
 interface CePatient {
@@ -67,6 +66,7 @@ export interface BirthdaySyncResult {
   incomplete: boolean; // a listagem do CE nao fechou o total: so preencheu o que leu
   fieldsSeen: string[]; // campos que o CE devolveu (para achar o nome certo se nada casar)
   birthKey: string | null;
+  notInAliceSample: { name: string; phone: string }[]; // ate 15 do CE que ainda nao sao contatos da Alice (telefone mascarado): previa para decidir a importacao
   error?: string;
 }
 
@@ -78,7 +78,7 @@ async function fetchCePatients(clinicId: string): Promise<{ items: CePatient[]; 
 
 // Le os pacientes do CE e preenche a data de nascimento dos contatos da Alice que ainda nao tem. dryRun so conta.
 export async function syncBirthdaysFromCe(clinicId: string, opts: { dryRun: boolean }): Promise<BirthdaySyncResult> {
-  const result: BirthdaySyncResult = { dryRun: opts.dryRun, read: 0, withBirth: 0, invalidBirth: 0, matched: 0, toFill: 0, alreadyHad: 0, notInAlice: 0, ambiguous: 0, incomplete: false, fieldsSeen: [], birthKey: null };
+  const result: BirthdaySyncResult = { dryRun: opts.dryRun, read: 0, withBirth: 0, invalidBirth: 0, matched: 0, toFill: 0, alreadyHad: 0, notInAlice: 0, ambiguous: 0, incomplete: false, fieldsSeen: [], birthKey: null, notInAliceSample: [] };
   const fetched = await fetchCePatients(clinicId);
   if (!fetched) return { ...result, error: "Nao consegui ler os pacientes do Clinica Experts (veja o erro na tela)." };
   const cePatients = fetched.items;
@@ -131,6 +131,7 @@ export async function syncBirthdaysFromCe(clinicId: string, opts: { dryRun: bool
     }
     if (!mineP) {
       result.notInAlice++;
+      if (result.notInAliceSample.length < 15) result.notInAliceSample.push({ name: (cp.name ?? "").toString().trim().split(/\s+/)[0] || "(sem nome)", phone: maskDigits(cp.phone ?? "") });
       continue;
     }
     if (done.has(mineP.id)) continue;

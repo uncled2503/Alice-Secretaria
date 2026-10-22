@@ -1,6 +1,7 @@
 import { prisma } from "../db/client.js";
 import { isConfirmationReply } from "./confirmation.js";
 import { isoDateInZone, wallClockInZone, formatDateTimeInZone } from "../scheduling/time.js";
+import { canonicalKey } from "../uazapi/phone.js";
 
 // ---------------------------------------------------------------------------
 // CONFIRMACAO DE PRESENCA ("Confirmado" ao lembrete) - erro de producao da Lisboa, 19/10/2026: a cliente respondeu "Confirmado" ao lembrete da reserva de 20/10 09:00 e a Alice
@@ -28,8 +29,7 @@ const STRONG_RE = /\b(confirm(o|ado|ada)|presenca confirmada|estarei|estaremos|v
 
 // PURO: mesma pessoa com o telefone com e sem o 9o digito cai na mesma chave (DDD + ultimos 8 digitos). Outros formatos: o proprio numero.
 export function phoneKey(phone: string): string {
-  const d = phone.replace(/\D/g, "");
-  return d.startsWith("55") && (d.length === 12 || d.length === 13) ? d.slice(0, 4) + d.slice(-8) : d;
+  return canonicalKey(phone) ?? phone.replace(/\D/g, ""); // leitura central: fixo e celular nao se fundem
 }
 
 export interface PresenceOption {

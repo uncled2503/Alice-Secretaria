@@ -59,6 +59,7 @@ const BLOCKED_WRITE_ONLY = [
   "/learning", // aprovar/rejeitar aprendizado da Alice
   "/teach-alice", // ensinar a Alice (gera regra/FAQ/roteiro - a Alice nao atende no plano gratis)
   "/api-keys",
+  "/dispatches", // aba Disparos: recuperar/alterar politica sao automacoes (a leitura fica liberada)
 ];
 
 function matchesPrefix(path: string, prefix: string): boolean {

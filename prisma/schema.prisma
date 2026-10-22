@@ -1228,6 +1228,16 @@ model BirthdaySent {
   rule      BirthdayRule @relation(fields: [ruleId], references: [id])
   year      Int
   sentAt    DateTime     @default(now())
+  // ---- rastreio do envio (aba Disparos) ----
+  attemptedAt   DateTime? // chamada ao provedor INICIADA; "reserved" sem isto = nada foi enviado (pode ser liberado com seguranca)
+  destination   String?   // numero efetivamente usado
+  providerId    String?
+  detail        String?   // motivo/evidencia (ex.: id da mensagem identica ja registrada no chat)
+  deliveryState String?
+  deliveryAt    DateTime?
+  attempts      Int          @default(0) // 0 = registro anterior ao controle por tentativa (reserva sem desfecho = incerta); >= 1 = esta versao: reserva SEM attemptedAt prova que nada foi enviado
+  nextAttemptAt DateTime?
+  updatedAt     DateTime     @default(now()) @updatedAt
 
   @@unique([patientId, ruleId, year])
 }
@@ -1370,10 +1380,20 @@ model ReminderDispatch {
   detail        String?  // motivo da decisao (sem dados pessoais)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+  // ---- rastreio do envio (aba Disparos) ----
+  destination   String?   // numero EFETIVAMENTE usado no envio (DDI+DDD+numero); o telefone original fica no cadastro
+  providerId    String?   // id da mensagem devolvido pelo provedor (UAZAPI) quando existe; sem ele nao ha como conciliar entrega
+  attemptedAt   DateTime? // quando a chamada ao provedor foi INICIADA (reservado sem isto = o provedor NAO foi chamado)
+  deliveryState String?   // accepted | delivered | read | failed (so o que o provedor/webhook comprovou; aceito != entregue)
+  deliveryAt    DateTime?
+  nextAttemptAt DateTime? // proxima tentativa planejada (adiado/falha recuperavel)
+  deadlineAt    DateTime? // prazo final desta mensagem (fim da janela estendida / antecedencia minima)
+  extendedReason String?  // por que saiu/ficou na janela ESTENDIDA (falha operacional, capacidade...)
 
   @@unique([bookingKey, ruleId, startsAt])
   @@unique([bookingKey, kind, startsAt, sendDay])
   @@index([clinicId, patientId, sendDay])
+  @@index([providerId])
 }
 
 // Controle PERSISTENTE dos recontatos e retomadas (17/10/2026, Lisboa: "os recontatos nao foram feitos" sem nenhum rastro do motivo). Uma linha por
@@ -1556,4 +1576,85 @@ model SiteLead {
 
   @@index([createdAt])
   @@index([ipHash, createdAt])
+}
+
+// Numero RESOLVIDO e VALIDADO para um telefone cadastrado (ex.: o provedor rejeitou explicitamente a forma sem o 9 e aceitou a com o 9). Guarda o original, o destino usado, a origem e quando foi validado,
+// para que a sincronizacao posterior nao desfaca a resolucao e para o painel mostrar "original x usado". Nunca prova identidade.
+model PhoneResolution {
+  id             String   @id @default(cuid())
+  clinicId       String
+  originalDigits String   // telefone como cadastrado (so digitos)
+  destination    String   // destino que o provedor ACEITOU
+  source         String   // fallback_rejeicao_explicita | painel | manual
+  reason         String
+  patientId      String?
+  validatedAt    DateTime @default(now())
+  createdAt      DateTime @default(now())
+
+  @@unique([clinicId, originalDigits])
+  @@index([clinicId, validatedAt])
+}
+
+// POLITICA DE JANELA POR CLINICA E TIPO (aba Disparos). Sem linha = padrao do codigo (src/dispatch/policy.ts). A extensao automatica so vale para envios ELEGIVEIS que ficaram pendentes
+// (falha operacional, fila maior que a capacidade...), sempre no dia local, dentro do prazo e com a antecedencia minima do atendimento.
+model DispatchPolicy {
+  id             String   @id @default(cuid())
+  clinicId       String
+  kind           String   // confirmacao | cobranca | lembrete | aniversario
+  extendEnabled  Boolean  @default(true)
+  extendUntil    String?  // "HH:MM" local: limite final de recuperacao (null = padrao do tipo)
+  maxExtendMin   Int?     // extensao maxima depois do fim da janela normal
+  minLeadMin     Int?     // antecedencia minima em relacao ao atendimento
+  maxAttempts    Int?
+  retryGapMin    Int?
+  maxPerRun      Int?     // teto por rodada (capacidade)
+  updatedBy      String?
+  updatedAt      DateTime @updatedAt
+  createdAt      DateTime @default(now())
+
+  @@unique([clinicId, kind])
+}
+
+// EXECUCAO DE RECUPERACAO EM LOTE (aba Disparos): persistida e processada em fila por um job (nunca dentro da requisicao do botao). Cada item e revalidado na execucao.
+model DispatchRun {
+  id          String    @id @default(cuid())
+  clinicId    String
+  createdBy   String?
+  note        String?
+  state       String    @default("queued") // queued | running | paused | completed | cancelled
+  requested   Int       @default(0)
+  allowed     Int       @default(0)
+  leaseHolder String?   // instancia que esta processando (concessao com dono e validade)
+  leaseUntil  DateTime?
+  createdAt   DateTime  @default(now())
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  items       DispatchRunItem[]
+
+  @@index([clinicId, createdAt])
+  @@index([state, leaseUntil])
+}
+
+model DispatchRunItem {
+  id         String    @id @default(cuid())
+  runId      String
+  run        DispatchRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  clinicId   String
+  kind       String    // confirmacao | cobranca | lembrete | aniversario
+  ref        String    // appointmentId (confirmacao/cobranca/lembrete) ou patientId (aniversario)
+  ruleId     String?
+  startsAt   DateTime? // horario do atendimento a que a mensagem se refere (versao do horario)
+  refKey     String    // clinica|tipo|ref|horario|regra: idempotencia por evento, versao do horario e etapa
+  activeKey  String?   @unique // = refKey enquanto pendente/em andamento; null quando termina (uma so execucao ativa por evento)
+  state      String    @default("pending") // pending | running | done | skipped | failed | cancelled
+  result     String?   // sent | unconfirmed | failed | deferred | skipped...
+  reason     String?
+  attempts   Int       @default(0)
+  nextAt     DateTime?
+  startedAt  DateTime?
+  finishedAt DateTime?
+
+  @@unique([runId, refKey])
+  @@index([runId, state])
+  @@index([clinicId, state])
 }
