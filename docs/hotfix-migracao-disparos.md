@@ -112,3 +112,11 @@ Pré-requisito: o hotfix está no repositório e sincronizado (o push/webhook s�
 2. O revisor de envio removendo convites comerciais porque a cliente não pediu agendamento.
 3. Veto de aviso de agendamento pelo motivo de a pessoa já ter horário.
 4. Clínica Experts devolvendo criação **sem o código da reserva**: exige reconciliação antes de concluir falha ou repetir a criação (nunca recriar às cegas).
+
+## 8. Sem console (EasyPanel: "Nenhum contêiner em execução encontrado")
+
+Se o console do serviço não abrir, o próprio container faz a recuperação e escreve no **LOG** (testado: `tests/migracao-disparos.test.mjs`, "MODO DE RECUPERACAO SEM CONSOLE").
+
+1. Ambiente: `ALICE_MODO_RECUPERACAO=1` → **Implantar** → abra os **Logs**: aparece `[recuperacao] diagnostico (somente leitura)` e o `Estado: ...` (nada é escrito). Se for `falhada_parcial`, siga; se for outro estado, pare e envie o log.
+2. Ambiente: adicione também `ALICE_RECUPERACAO_APLICAR=1` → **Implantar**. O container: faz o backup verificado em `/app/data/backups-hotfix` (recusa se não for volume persistente), completa o schema numa transação, valida e **só então** roda `prisma migrate resolve --applied 20261025100000_disparos` e `migrate status`. Procure `VALIDACAO OK` e `[recuperacao] CONCLUIDO` no log. Se aparecer `VALIDACAO FALHOU`, `nada foi marcado como aplicado` ou `ERRO`, **não** remova o modo de recuperação e envie o log.
+3. Remova `ALICE_RECUPERACAO_APLICAR` **e** `ALICE_MODO_RECUPERACAO` → **Implantar** → confira o `/health` (§5).

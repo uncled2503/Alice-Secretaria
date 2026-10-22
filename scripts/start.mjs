@@ -28,6 +28,25 @@ if (process.env.ALICE_MODO_RECUPERACAO === "1") {
   srv.listen(Number(process.env.PORT ?? 3000), () => console.log(`[start] modo de recuperacao ouvindo na porta ${srv.address().port} (so /health)`));
   process.on("SIGTERM", () => process.exit(0));
   process.on("SIGINT", () => process.exit(0));
+  // SEM CONSOLE (o EasyPanel as vezes mostra "Nenhum conteiner em execucao"): o proprio container roda o DIAGNOSTICO (somente leitura) e imprime no LOG.
+  // So com ALICE_RECUPERACAO_APLICAR=1 (decisao explicita do operador) ele tambem aplica o reparo - com backup verificado, transacao unica e validacao - e SO ENTAO marca a migracao
+  // como aplicada. Qualquer estado inesperado interrompe sem escrever (ver docs/hotfix-migracao-disparos.md).
+  try {
+    const { run, MIGRATION } = await import("./recuperar-migracao-disparos.mjs");
+    const aplicar = process.env.ALICE_RECUPERACAO_APLICAR === "1";
+    const argv = aplicar ? ["--apply", ...(process.env.ALICE_RECUPERACAO_ACEITA_ARMAZENAMENTO_DESCONHECIDO === "1" ? ["--aceito-armazenamento-desconhecido"] : [])] : [];
+    console.log(`[recuperacao] ${aplicar ? "APLICANDO (ALICE_RECUPERACAO_APLICAR=1)" : "diagnostico (somente leitura); para aplicar defina ALICE_RECUPERACAO_APLICAR=1"}`);
+    const r = await run(argv);
+    if (aplicar && ["falhada_parcial", "falhada_completa"].includes(r.state) && r.validation?.ok) {
+      console.log(`[recuperacao] validacao OK: marcando ${MIGRATION} como aplicada`);
+      const sh = process.platform === "win32";
+      const res = spawnSync("npx", ["prisma", "migrate", "resolve", "--applied", MIGRATION], { stdio: "inherit", shell: sh });
+      if (res.status === 0) spawnSync("npx", ["prisma", "migrate", "status"], { stdio: "inherit", shell: sh });
+      console.log(res.status === 0 ? "[recuperacao] CONCLUIDO. Remova ALICE_RECUPERACAO_APLICAR e ALICE_MODO_RECUPERACAO e implante de novo." : "[recuperacao] o 'migrate resolve' falhou: NAO remova o modo de recuperacao; envie este log.");
+    } else if (aplicar) console.log("[recuperacao] nada foi marcado como aplicado (estado/validacao nao permitem). Veja as mensagens acima.");
+  } catch (err) {
+    console.error(`[recuperacao] ERRO: ${err instanceof Error ? err.message : err}`);
+  }
   await new Promise(() => {});
 }
 

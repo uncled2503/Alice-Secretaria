@@ -350,16 +350,43 @@ test("BOOT: migracao falhada = encerra NA HORA (sem retry de 15x e sem iniciar o
   let buf = "";
   child.stdout.on("data", (d) => (buf += d));
   child.stderr.on("data", (d) => (buf += d));
-  for (let i = 0; i < 60 && !/ouvindo na porta/.test(buf) && child.exitCode === null; i++) await new Promise((r) => setTimeout(r, 250)); // espera o servidor de /health abrir
+  for (let i = 0; i < 160 && !/ouvindo na porta/.test(buf) && child.exitCode === null; i++) await new Promise((r) => setTimeout(r, 250)); // espera o servidor de /health abrir
   await new Promise((r) => setTimeout(r, 1500)); // e confirma que NAO saiu logo depois
   const alive = child.exitCode === null;
-  const porta = /ouvindo na porta (d+)/.exec(buf)?.[1];
+  const porta = /ouvindo na porta ([0-9]+)/.exec(buf)?.[1];
   let health = null;
   if (porta) { try { health = await (await fetch("http://127.0.0.1:" + porta + "/health")).json(); } catch { /* abaixo */ } }
   child.kill();
   assert.ok(alive, "container em modo de recuperacao deve continuar vivo");
-  assert.ok(porta && (health === null || health.modo === "recuperacao"), "o HEALTHCHECK do container passa (200) e diz que e o modo de recuperacao: o Swarm nao reinicia o container no meio do reparo");
+  assert.equal(health?.modo, "recuperacao", "o HEALTHCHECK do container passa (200) e diz que e o modo de recuperacao: o Swarm nao reinicia o container no meio do reparo");
   assert.match(buf, /ALICE_MODO_RECUPERACAO=1/);
   assert.ok(!/Alice rodando na porta/.test(buf));
   assert.ok(!/migrate deploy/.test(buf.replace(/Repetir 'migrate deploy'[^\n]*/g, "")), "nao tentou migrar");
+});
+
+test("MODO DE RECUPERACAO SEM CONSOLE: o container imprime o diagnostico no log; com ALICE_RECUPERACAO_APLICAR=1 aplica, valida e so entao marca a migracao como aplicada", { skip: !canBackup }, async () => {
+  const { file } = makePartial("semconsole");
+  const before = await snapshot(file);
+  const run1 = spawn(process.execPath, ["scripts/start.mjs"], { cwd: root, env: { ...process.env, DATABASE_URL: urlOf(file), ALICE_MODO_RECUPERACAO: "1", PORT: "0" }, stdio: ["ignore", "pipe", "pipe"] });
+  let b1 = "";
+  run1.stdout.on("data", (d) => (b1 += d)); run1.stderr.on("data", (d) => (b1 += d));
+  for (let i = 0; i < 80 && !/Plano|falhada_parcial/.test(b1); i++) await new Promise((r) => setTimeout(r, 250));
+  await new Promise((r) => setTimeout(r, 1500));
+  run1.kill();
+  assert.match(b1, /Estado: falhada_parcial/);
+  assert.ok(b1.includes("diagnostico (somente leitura)"), b1.slice(-400));
+  assert.deepEqual(await snapshot(file), before, "sem ALICE_RECUPERACAO_APLICAR nada e escrito");
+
+  const run2 = spawn(process.execPath, ["scripts/start.mjs"], { cwd: root, env: { ...process.env, DATABASE_URL: urlOf(file), ALICE_MODO_RECUPERACAO: "1", ALICE_RECUPERACAO_APLICAR: "1", ALICE_RECUPERACAO_ACEITA_ARMAZENAMENTO_DESCONHECIDO: "1", PORT: "0" }, stdio: ["ignore", "pipe", "pipe"] });
+  let b2 = "";
+  run2.stdout.on("data", (d) => (b2 += d)); run2.stderr.on("data", (d) => (b2 += d));
+  for (let i = 0; i < 480 && !/CONCLUIDO|NAO remova|nada foi marcado|ERRO:/.test(b2); i++) await new Promise((r) => setTimeout(r, 250));
+  run2.kill();
+  assert.match(b2, /VALIDACAO OK/, b2.slice(-1500));
+  assert.match(b2, /CONCLUIDO/, b2.slice(-1500));
+  const st = cli(["migrate", "status"], file);
+  assert.equal(st.status, 0, st.out);
+  assert.match(st.out, /up to date/i);
+  const back = fs.readdirSync(path.join(path.dirname(file), "backups-hotfix"));
+  assert.ok(back.some((n) => /^prod-antes-.*.db$/.test(n)), "backup criado antes de escrever");
 });
