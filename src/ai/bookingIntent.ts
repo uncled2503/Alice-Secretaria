@@ -34,7 +34,7 @@ export interface CatalogProc {
 }
 
 export type Wanted =
-  | { kind: "specific"; procedure: string } // ela pediu (ou deixou claro) um procedimento so
+  | { kind: "specific"; procedure: string; mentioned?: string[] } // ela pediu (ou deixou claro) um procedimento so; `mentioned` = outros procedimentos que ela CITOU sem escolher (pergunta, comparacao)
   | { kind: "options"; options: string[] } // falou de uma area/familia: 2 a 4 procedimentos servem
   | { kind: "need"; options: string[] } // contou so uma QUEIXA/necessidade ("gordura localizada"): nao escolheu procedimento, a Alice nao escolhe por ela
   | { kind: "none" }; // nao sabe / nao disse: avaliacao
@@ -59,15 +59,40 @@ export function identifyWanted(catalog: CatalogProc[], texts: string[], rawFirst
   // ("Clareamento Corporal" numa mensagem + "Limpeza de Pele" noutra batiam, juntas, no apelido "Clareamento de pele corporal"). Sem nenhuma
   // mensagem que nomeie sozinha, vale a leitura do conjunto (comportamento anterior).
   for (let i = recent.length - 1; i >= 0; i--) {
-    const w = identifyFrom(catalog, [recent[i]]);
-    if (w.kind === "specific" || w.kind === "options") return w;
+    const { wanted: w, strong } = identifyFromS(catalog, [recent[i]]);
+    if (w.kind !== "specific" && w.kind !== "options") continue;
+    if (process.env.ALICE_TURN_READING === "off") return w;
+    // PROCEDIMENTO JA EM DISCUSSAO (ancora): o mais recente, ANTERIOR a esta mensagem, que a pessoa (ou o anuncio) citou pelo NOME. Citar outro procedimento NAO o troca por si so:
+    // so uma ESCOLHA ("quero fazer X", "prefiro X", "mudei de ideia: X") troca; pergunta ("o que e X?"), comparacao ("qual a diferenca entre X e Y?") e correspondencia parcial
+    // (so uma regiao ou uma palavra do apelido) mantem o assunto e ficam registradas em `mentioned`. Memoria antiga e fala da Alice nunca entram aqui (so texto da pessoa e do anuncio).
+    let anchor: string | null = null;
+    for (let j = i - 1; j >= 0 && !anchor; j--) {
+      const a = identifyFromS(catalog, [recent[j]]);
+      if (a.wanted.kind === "specific" && a.strong) anchor = a.wanted.procedure;
+    }
+    if (!anchor) return w;
+    const names = w.kind === "specific" ? [w.procedure] : w.options;
+    if (names.includes(anchor) && w.kind === "specific") return w; // continua o mesmo
+    if (w.kind === "options" && names.includes(anchor)) return { kind: "specific", procedure: anchor }; // a familia citada inclui o que ja estava em discussao
+    const explicitChoice = CHOICE_CUE_RE.test(fold(recent[i])) && !COMPARISON_RE.test(fold(recent[i]));
+    if (w.kind === "specific" && strong && explicitChoice) return w; // trocou de proposito
+    return { kind: "specific", procedure: anchor, mentioned: names.slice(0, 4) };
   }
   return identifyFrom(catalog, recent);
 }
 
+// Sinal de ESCOLHA ("quero fazer X", "prefiro X", "vou de X", "mudei de ideia") x sinal de COMPARACAO/pergunta ("qual a diferenca entre X e Y", "X ou Y", "o que e X?").
+const CHOICE_CUE_RE = /\b(quero|queria|gostaria de|prefiro|vou (fazer|querer|de)|vamos (de|fazer)|mudei de ideia|na verdade|em vez|ao inves|trocar (por|para)|melhor (o|a|fazer)|pode ser (o|a)|fechado|bora (de|fazer)|marcar (o|a|um|uma)?)\b/;
+const COMPARISON_RE = /\b(diferenca|diferencas|compar\w+|versus|vs\b|qual (e )?(o |a )?melhor|qual (voce|vcs|voces) (indica|recomenda)|o que (e|eh)\b|como funciona|serve para|funciona)\b/;
+
 function identifyFrom(catalog: CatalogProc[], recent: string[]): Wanted {
+  return identifyFromS(catalog, recent).wanted;
+}
+
+// `strong` = o NOME (ou um apelido) inteiro foi dito; correspondencia parcial/por palavra de queixa nao e forte.
+function identifyFromS(catalog: CatalogProc[], recent: string[]): { wanted: Wanted; strong: boolean } {
   const said = new Set(recent.flatMap(wordsOf));
-  if (!said.size) return { kind: "none" };
+  if (!said.size) return { wanted: { kind: "none" }, strong: false };
 
   const rows = catalog
     .filter((p) => !isEvaluation(p.name))
@@ -90,25 +115,25 @@ function identifyFrom(catalog: CatalogProc[], recent: string[]): Wanted {
       return { name: p.name, ...best };
     })
     .filter((r) => r.cover > 0);
-  if (!rows.length) return { kind: "none" };
+  if (!rows.length) return { wanted: { kind: "none" }, strong: false };
 
   // 0) tudo o que bateu foi so queixa/necessidade (via apelido): ela contou o que quer resolver, nao escolheu o procedimento.
-  if (rows.every((r) => r.needOnly)) return { kind: "need", options: rows.slice(0, 4).map((r) => r.name) };
+  if (rows.every((r) => r.needOnly)) return { wanted: { kind: "need", options: rows.slice(0, 4).map((r) => r.name) }, strong: false };
 
   // 1) o nome inteiro (ou um apelido inteiro) foi dito: o mais especifico (mais palavras) ganha.
   const full = rows.filter((r) => r.cover === 1);
   if (full.length) {
     const top = Math.max(...full.map((r) => r.size));
     const best = full.filter((r) => r.size === top);
-    if (best.length === 1) return { kind: "specific", procedure: best[0].name };
-    return { kind: "options", options: best.slice(0, 4).map((r) => r.name) };
+    if (best.length === 1) return { wanted: { kind: "specific", procedure: best[0].name }, strong: true };
+    return { wanted: { kind: "options", options: best.slice(0, 4).map((r) => r.name) }, strong: false };
   }
 
   // 2) disse so parte do nome ("drenagem", "peeling"): varios procedimentos da mesma familia -> pergunta qual. Um so -> e esse.
   const partial = rows.filter((r) => r.cover >= 0.5).sort((a, b) => b.cover - a.cover || a.size - b.size);
-  if (partial.length === 1) return { kind: "specific", procedure: partial[0].name };
-  if (partial.length > 1) return { kind: "options", options: partial.slice(0, 4).map((r) => r.name) };
-  return { kind: "none" };
+  if (partial.length === 1) return { wanted: { kind: "specific", procedure: partial[0].name }, strong: false };
+  if (partial.length > 1) return { wanted: { kind: "options", options: partial.slice(0, 4).map((r) => r.name) }, strong: false };
+  return { wanted: { kind: "none" }, strong: false };
 }
 
 // ---------------------------------------------------------------------------

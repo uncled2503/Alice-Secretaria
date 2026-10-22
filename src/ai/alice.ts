@@ -36,11 +36,13 @@ import { tagNewLead } from "../crm/leadTag.js";
 import { recordIntentSignals } from "../crm/intent.js";
 import { handoffCard } from "../crm/handoffCard.js";
 import { findRepetitions, removeSentences, askedAgain, conversationMemory, splitSentences } from "./repetition.js";
-import { announcesAction, brokenPromise, CLAIM_NUDGE, PROMISE_NUDGE } from "./promises.js";
+import { announcesAction, brokenPromise, CLAIM_NUDGE, PROMISE_NUDGE, promisesTeamFollowUp } from "./promises.js";
+import { unsupportedProductClaims, clarifyProductTerm, approvedProductFamilies } from "./productClaims.js";
+import { durationBriefing } from "./durationFact.js";
 import { decideTurn, turnDecisionLog, type TurnDecision } from "./turnDecision.js";
 import { claimIsSupported, conclusionClaims, GROUP_BOOKING_DIRECTIVE, mentionsCompanion, priceValues, stripGenericFarewell, stripRedundantGreeting, unitNumbers, weekdayLabel, type ExistingSlot } from "./replyFacts.js";
 import { analyzeFlow, askedForName, complainsAboutBot, turnObligations, wantsSchedule, type SalesFlow } from "./salesFlow.js";
-import { understandConversation, planConduct, gateDecision, parseNotOffered, notOfferedIn, stripNotOffered, NOT_OFFERED_REPLY, type ConductGate, type ConductPlan, type Understanding } from "./conduct.js";
+import { understandConversation, planConduct, gateDecision, parseNotOffered, notOfferedIn, stripNotOffered, NOT_OFFERED_REPLY, evaluationWordingViolation, EVAL_WORDING_NUDGE, type ConductGate, type ConductPlan, type Understanding } from "./conduct.js";
 import { REVISION } from "../version.js";
 import { confirmationThanks, isConfirmationReply } from "./confirmation.js";
 import { closingReply, feedbackThanks, isCourtesyOnly, isPositiveFeedback } from "./courtesy.js";
@@ -1396,7 +1398,7 @@ function personaInstruction(clinic: { name: string; assistantName: string; assis
   return `Voce se apresenta apenas como parte da equipe ${prepLugar(clinic.name)}, sem citar cargo. Ex: "Oi! Aqui e a ${a}, da equipe ${prepLugar(clinic.name)}".${grammar}`;
 }
 
-export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: string; flow?: SalesFlow; focusTexts?: string[]; recentUserTexts?: string[]; firstContact?: boolean } = {}): Promise<string> {
+export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: string; flow?: SalesFlow; focusTexts?: string[]; recentUserTexts?: string[]; firstContact?: boolean; pinnedProcedures?: string[] } = {}): Promise<string> {
   const clinic = await prisma.clinic.findUniqueOrThrow({
     where: { id: clinicId },
     include: {
@@ -1412,7 +1414,7 @@ export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: str
   const procedureListCompact = clinic.procedures.map((p) => describeProcedureCompact(p, clinic.quotePrices)).join("\n");
   // Procedimentos em foco: os que a conversa (e o anuncio de origem) tocam. So eles levam descricao completa no prompt.
   const adOrigin = ctx.patientId ? await prisma.patient.findUnique({ where: { id: ctx.patientId }, select: { adName: true, adCampaignName: true } }) : null;
-  const focusProcs = selectFocusProcedures(clinic.procedures, [...(ctx.focusTexts ?? []), adOrigin?.adName ?? "", adOrigin?.adCampaignName ?? ""], 6);
+  const focusProcs = selectFocusProcedures(clinic.procedures, [...(ctx.focusTexts ?? []), adOrigin?.adName ?? "", adOrigin?.adCampaignName ?? ""], 6, ctx.pinnedProcedures ?? []);
   const focusIds = new Set(focusProcs.map((p) => p.id));
   const focusBlock = focusProcs.length
     ? `\n\nDETALHES DOS PROCEDIMENTOS EM FOCO NESTA CONVERSA (explique SO com estes dados):\n${focusProcs.map((p) => describeProcedureForPrompt(p, clinic.quotePrices)).join("\n\n")}`
@@ -1827,6 +1829,7 @@ Seu trabalho:
 4. Confirmar o horario escolhido com o paciente e so entao usar book_appointment.
 5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${locationLine}${explainLine}${teamBooksLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${handoffLine}${silentLine}${humanLine}${noRepeatLine}
 6. FATOS QUE NAO SE DEDUZ: (a) FORMACAO PROFISSIONAL so existe se constar em [formacao: ...] ao lado do nome; o tratamento 'Dr./Dra.' NAO indica que a pessoa e medica (pode ser biomedica, esteticista...). Sem formacao cadastrada nao afirme nem negue e nunca invente outra profissional; se exigirem 'medica' e nao houver informacao confirmada, transfer_to_human. (b) QUANTIDADE (UI, unidades, sessoes) so a cadastrada: 'Quantidade INCLUIDA na oferta' vale para ESSA oferta (nunca invente faixa, nem quantidade por regiao, nem converta entre marcas); duvida de dose individual e da responsavel tecnica na avaliacao. (c) A duracao entre parenteses e o tempo de RESERVA na agenda, nao necessariamente o tempo de aplicacao: so diga quanto o procedimento dura se estiver na descricao. (d) Se a memoria do lead ou uma fala antiga da conversa divergir do cadastro (formacao, quantidade, tecnologia), vale o CADASTRO.
+SERVICO QUE NAO APARECE NO CADASTRO: ha TRES situacoes diferentes - (1) DISPONIVEL: esta na lista de procedimentos; (2) EXPLICITAMENTE NAO REALIZADO: a clinica disse que nao faz (a ordem do turno avisa; ai diga com clareza que nao e realizado, sem cotar valor, sem prometer consulta de preco e sem trocar por outro tratamento); (3) NAO LOCALIZADO/INCERTO: nao esta na lista e ninguem disse que nao faz. Em (3) NAO afirme que a clinica faz (conhecimento geral sobre o tratamento NAO prova disponibilidade aqui) e NAO afirme que nao faz (a ausencia na lista nao prova isso): diga que vai confirmar com a equipe e chame transfer_to_human.
 
 Procedimentos oferecidos pela clinica (lista resumida: nome, duracao e valor; a descricao completa so vem, no fim do contexto, para os procedimentos em foco na conversa):
 ${procedureListCompact || "(nenhum procedimento cadastrado ainda)"}
@@ -2749,7 +2752,7 @@ async function generateReplyUnlocked(
 
   // QUAL PROCEDIMENTO ela quer (o catalogo inteiro, sem as descricoes) e QUAL HORARIO ela ja escolheu: a Alice agenda o procedimento pedido; a
   // avaliacao e pra quem nao sabe o que quer (15/10/2026).
-  const bookingCatalog = await prisma.procedure.findMany({ where: { clinicId, internalOnly: false }, select: { name: true, aliases: true, goals: true, benefits: true, description: true, bookingMode: true, includedQuantity: true, price: true, offerInstallments: true, maxInstallments: true } });
+  const bookingCatalog = await prisma.procedure.findMany({ where: { clinicId, internalOnly: false }, select: { name: true, aliases: true, goals: true, benefits: true, description: true, bookingMode: true, includedQuantity: true, price: true, offerInstallments: true, maxInstallments: true, durationMin: true, ceId: true, resultTimeline: true } });
   const adForWanted = (await prisma.patient.findUnique({ where: { id: patient.id }, select: { adName: true } }))?.adName ?? "";
   const wanted = identifyWanted(bookingCatalog, [adForWanted, ...history.filter((m) => m.role === "user").map((m) => m.content), ...trailingNow].filter(Boolean), adForWanted ? 1 : 0);
   const flowTz = (await prisma.clinic.findUnique({ where: { id: clinicId }, select: { timezone: true } }))?.timezone || "America/Sao_Paulo";
@@ -2905,11 +2908,18 @@ async function generateReplyUnlocked(
       console.error("[fotos] nao consegui conferir as fotos do procedimento:", err instanceof Error ? err.message : err);
     }
   }
+  // DURACAO / QUAL PROCEDIMENTO: o fato vem do cadastro do procedimento EM DISCUSSAO (nunca de outro), separando avaliacao e sessao; sem fonte confiavel o modelo e mandado confirmar com a equipe.
+  if (usageClinic?.businessType !== "geral" && (flow.reading.asksDuration || flow.reading.asksWhichProcedure) && !situation.closeWith) {
+    const clinicUsesCe = bookingCatalog.some((pc) => pc.ceId != null);
+    const subject = understanding?.chosen ? bookingCatalog.find((pc) => pc.name === understanding.chosen!.name) ?? null : null;
+    const evalProc = bookingCatalog.find((pc) => /avalia/i.test(pc.name)) ?? null;
+    flow.nextMove += "\n" + durationBriefing(subject, evalProc, { clinicUsesCe, evaluationFirst: understanding?.chosen?.mode === "evaluation" });
+  }
   const focusTexts = [
     ...history.filter((m) => m.role !== "user").slice(-3).map((m) => m.content),
     ...history.filter((m) => m.role === "user").slice(-8).map((m) => m.content),
   ];
-  const system = await buildSystemPrompt(clinicId, { patientId: patient.id, flow, focusTexts, recentUserTexts: history.filter((m) => m.role === "user").map((m) => m.content).slice(-4), firstContact: !history.some((m) => m.role === "assistant") });
+  const system = await buildSystemPrompt(clinicId, { patientId: patient.id, flow, focusTexts, pinnedProcedures: [understanding?.chosen?.name, ...(understanding?.alsoMentioned ?? [])].filter((x): x is string => !!x), recentUserTexts: history.filter((m) => m.role === "user").map((m) => m.content).slice(-4), firstContact: !history.some((m) => m.role === "assistant") });
 
   const messages: ChatCompletionMessageParam[] = [
     { role: "system", content: system },
@@ -2996,6 +3006,7 @@ async function generateReplyUnlocked(
   let promiseNudged = false;
   let requestNudged = false;
   let noOfferNudged = false;
+  let evalWordingNudged = false;
   const toolDatesQueried = new Set<string>(); // dias que o modelo consultou nas ferramentas de agenda nesta rodada
   pendingPreProcedure.delete(conversation.id); // sobra de uma tentativa anterior que falhou
   // TRAVA DE DIA E HORA: o que a resposta pode citar (ver slotGuard.ts)
@@ -3053,6 +3064,15 @@ async function generateReplyUnlocked(
         messages.push(choice);
         messages.push({ role: "system", content: NO_OFFER_NUDGE });
         callReason = "correction:oferta_nao_pedida";
+        continue;
+      }
+      // Procedimento que EXIGE avaliacao previa: o convite/horario e da AVALIACAO; dizer "agendar o horario para a remocao" sugere que a sessao ja sera feita (caso Kelly).
+      if (!evalWordingNudged && !didTransfer && turn < 5 && finalText.trim() && plan?.gate.blocked && understanding?.chosen?.mode === "evaluation" && evaluationWordingViolation(finalText, understanding.chosen.name)) {
+        evalWordingNudged = true;
+        console.warn(`[avaliacao-x-sessao] resposta agenda o procedimento sem dizer que e a AVALIACAO - refazendo (conv ${conversation.id}): ${finalText.slice(0, 100)}`);
+        messages.push(choice);
+        messages.push({ role: "system", content: EVAL_WORDING_NUDGE });
+        callReason = "correction:avaliacao_x_sessao";
         continue;
       }
       // O que ela pediu de dia/hora (so aos sabados, antes das 18:40, terca...) tem que mandar na oferta: nada de 'horarios mais proximos' por cima.
@@ -3177,6 +3197,47 @@ async function generateReplyUnlocked(
     if (stripped !== null) {
       console.warn(`[nao-oferecido] resposta citou servico que a clinica nao tem - removido (conv ${conversation.id}): ${finalText.slice(0, 100)}`);
       finalText = stripped.length >= 12 ? stripped : NOT_OFFERED_REPLY;
+    }
+  }
+
+  // Servico que a clinica NAO faz: nao ha o que "confirmar com a equipe" nem valor a enviar - essas promessas saem (ficam so a informacao honesta e os outros interesses dela).
+  if (understanding?.notOfferedAsked && !didTransfer && !fixedReply && finalText.trim()) {
+    const promised = splitSentences(finalText).filter((s) => promisesTeamFollowUp(s) || /\b(vou|irei|posso) (te )?(enviar|passar|mandar|informar|confirmar)\b.{0,30}\b(valor|valores|preco|precos|orcamento|investimento)\b/.test(normalizeReply(s)));
+    if (promised.length) {
+      const rest = removeSentences(finalText, promised).trim();
+      console.warn(`[nao-oferecido] promessa de confirmar/enviar valor de servico que a clinica nao faz - removida (conv ${conversation.id})`);
+      finalText = rest.length >= 12 ? rest : NOT_OFFERED_REPLY;
+    }
+  }
+
+  // AFIRMACAO SOBRE PRODUTO/COMPOSICAO sem fonte no cadastro (refrescancia, perfume, mentol, acidos...): a fala da cliente e o texto anterior da Alice nao sao fonte. Tira a frase e, se ela citou
+  // um termo ambiguo como criterio, faz UMA pergunta curta para entender (sem corrigi-la).
+  if (usageClinic?.businessType !== "geral" && !didTransfer && !fixedReply && finalText.trim()) {
+    try {
+      const [faqP, ruleP, tmplP] = await Promise.all([
+        prisma.clinicFaq.findMany({ where: { clinicId }, select: { answer: true, question: true } }),
+        prisma.customRule.findMany({ where: { clinicId }, select: { instruction: true } }),
+        prisma.messageTemplate.findMany({ where: { clinicId }, select: { body: true } }),
+      ]);
+      const approvedText = [...bookingCatalog.flatMap((pc) => [pc.description, pc.benefits, pc.goals]), ...faqP.flatMap((f) => [f.answer, f.question]), ...ruleP.map((r) => r.instruction), ...tmplP.map((t) => t.body)].filter(Boolean).join("\n");
+      const bad = unsupportedProductClaims(finalText, approvedText, splitSentences);
+      const concern = flow.reading.productConcern;
+      if (bad.length) {
+        console.warn(`[produto-sem-fonte] afirmacao sobre produto sem respaldo no cadastro - removida (conv ${conversation.id}): ${bad[0].sentence.slice(0, 100)}`);
+        const rest = removeSentences(finalText, bad.map((b) => b.sentence)).trim();
+        finalText = rest.length >= 12 ? rest : "";
+      }
+      const askedBack = /\?\s*[\p{Extended_Pictographic}\uFE0F\s]*$/u.test(finalText.trim()) && /(refresc|frescor|gelad|perfume|cheiro|fragranc|sensacao)/.test(normalizeReply(finalText));
+      if (concern && (concern.ambiguous || (bad.length && concern.restriction)) && !askedBack) {
+        finalText = finalText.trim() ? `${finalText.trim()}\n\n${clarifyProductTerm(concern.term)}` : clarifyProductTerm(concern.term);
+      } else if (!finalText.trim() && bad.length) {
+        finalText = "Vou confirmar essa informação do produto com a equipe para não te passar nada errado. 💗";
+        if (!didTransfer) {
+          try { await runTool(clinicId, patient.id, conversation.id, "transfer_to_human", { reason: "Dúvida sobre produto/composição sem fonte cadastrada", summary: `A pessoa perguntou/comentou sobre o produto ("${String(trailingNow.at(-1) ?? "").slice(0, 200)}") e o cadastro não traz a informação. A Alice não afirmou nada sobre o produto.` }); didTransfer = true; } catch (err) { console.error("[produto-sem-fonte] falha ao encaminhar pra equipe:", err); }
+        }
+      }
+    } catch (err) {
+      console.error("[produto-sem-fonte] falha na conferencia:", err instanceof Error ? err.message : err);
     }
   }
 
@@ -3365,6 +3426,20 @@ async function generateReplyUnlocked(
     finalText = usageClinic?.silentHandoff ? "" : c?.handoffPhrase?.trim() || "Vou pedir pra uma pessoa da equipe continuar com voce por aqui.";
   }
 
+  // "Vou confirmar com a equipe e te retorno" sem chamar a ferramenta = promessa sem acao (ninguem foi acionado). Cria a pendencia REAL (transfer_to_human) com o que ela perguntou.
+  if (!didTransfer && !fixedReply && finalText.trim() && usageClinic?.businessType !== "geral" && promisesTeamFollowUp(finalText) && !usageClinic?.silentHandoff) {
+    try {
+      await runTool(clinicId, patient.id, conversation.id, "transfer_to_human", {
+        reason: "Alice prometeu confirmar com a equipe",
+        summary: `A Alice disse que ia confirmar/verificar com a equipe e retornar. Ultima mensagem da pessoa: "${String(trailingNow.at(-1) ?? history.filter((m) => m.role === "user").at(-1)?.content ?? "").slice(0, 300)}". Responda a duvida dela.`,
+      });
+      didTransfer = true;
+      console.warn(`[promessa-equipe] promessa de retorno da equipe sem ferramenta - pendencia criada (conv ${conversation.id})`);
+    } catch (err) {
+      console.error("[promessa-equipe] falha ao criar a pendencia:", err);
+    }
+  }
+
   // Se a Alice transferiu pra equipe nesta rodada e nao produziu texto de
   // encerramento, usa a frase de handoff da clinica (ou uma padrao).
   if (didTransfer && !finalText.trim() && !usageClinic?.silentHandoff) {
@@ -3419,7 +3494,7 @@ async function generateReplyUnlocked(
 
   if (finalText.trim() && !fixedReply && !didTransfer && usageClinic?.businessType !== "geral" && process.env.ALICE_REPLY_FACTS !== "off") {
     // ACABAMENTO deterministico (sem IA), ANTES das validacoes finais: o texto validado e o que sai.
-    const lastOut = history.filter((m) => m.role !== "user").at(-1);
+    const lastOut = history.filter((m) => m.role !== "user" && !m.content.startsWith("📷")).at(-1);
     if (lastOut && Date.now() - lastOut.createdAt.getTime() < 12 * 3_600_000) finalText = stripRedundantGreeting(finalText); // novo "Oi" no meio da conversa
     const stage = turnDec?.stage;
     const interested =
@@ -3487,6 +3562,8 @@ async function generateReplyUnlocked(
           objective: understanding ? { concerns: understanding.objective.concerns, regions: understanding.objective.regions } : undefined,
           allowedProcedures: [...(understanding?.chosen ? [understanding.chosen.name] : []), ...(understanding?.options ?? []), ...apptRows.map((a) => a.procedure.name)],
           notOffered,
+          approvedProductFamilies: approvedProductFamilies([...bookingCatalog.flatMap((pc) => [pc.description, pc.benefits, pc.goals]), ...faqRows.map((f) => f.answer), ...ruleRows.map((r) => r.instruction), ...tmplRows.map((t) => t.body)].filter(Boolean).join("\n")),
+          evaluationOnly: plan?.gate.blocked && understanding?.chosen?.mode === "evaluation" && !understanding.evaluationRequested ? understanding.chosen.name : undefined,
           companion: companionContext,
           professionals: approvedPros,
           approvedUnits,

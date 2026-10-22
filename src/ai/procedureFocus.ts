@@ -31,7 +31,7 @@ export interface FocusProc {
 }
 
 // PURO: ids dos procedimentos que a conversa toca (os mais relevantes primeiro). `texts` em ordem cronologica; os ultimos pesam mais.
-export function selectFocusProcedures<P extends FocusProc>(procs: P[], texts: string[], max = 6): P[] {
+export function selectFocusProcedures<P extends FocusProc>(procs: P[], texts: string[], max = 6, pinned: string[] = []): P[] {
   const clean = texts.map((t) => t.trim()).filter(Boolean);
   if (!clean.length || !procs.length) return procs.filter((p) => /avalia/i.test(p.name)).slice(0, 1);
 
@@ -76,6 +76,14 @@ export function selectFocusProcedures<P extends FocusProc>(procs: P[], texts: st
     .sort((a, b) => b.s - a.s)
     .slice(0, max)
     .map((x) => x.p);
+  // O ASSUNTO EM DISCUSSAO (procedimento escolhido/ancorado) entra SEMPRE e na frente: sem os detalhes dele (duracao, descricao) o modelo preenchia o buraco com o procedimento que a pontuacao por
+  // regiao trouxe (caso Nathalia: Lavieen em discussao, detalhes da Carboxiterapia no contexto).
+  if (pinned.length) {
+    const want = pinned.map((n) => fold(n).trim());
+    const pins = procs.filter((p) => want.includes(fold(p.name).trim()));
+    for (const p of [...pins].reverse()) { const i = ranked.findIndex((r) => r.id === p.id); if (i >= 0) ranked.splice(i, 1); ranked.unshift(p); }
+    while (ranked.length > max) ranked.pop();
+  }
   // a avaliacao entra sempre (a conversa quase sempre chega nela)
   const evalProc = procs.find((p) => /avalia/i.test(p.name));
   if (evalProc && !ranked.some((p) => p.id === evalProc.id)) ranked.push(evalProc);

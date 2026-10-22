@@ -110,7 +110,7 @@ export function decideTurn(i: { flow: SalesFlow; situation: Situation; understan
     procedure: {
       chosen: u?.chosen?.name ?? null,
       mode: u?.chosen ? `${u.chosen.mode}/${u.chosen.source}` : null,
-      mentioned: u?.options ?? (i.wanted.kind === "options" ? i.wanted.options : []),
+      mentioned: u?.alsoMentioned?.length ? u.alsoMentioned : u?.options ?? (i.wanted.kind === "options" ? i.wanted.options : []),
       unmappedOffer: u?.unmappedAsked ?? null,
       notOffered: u?.notOfferedAsked ?? null,
     },

@@ -141,6 +141,16 @@ export function parseSlotRequest(texts: string[], todayIso: string): SlotRequest
       if (t) req.notAfter = t;
     }
 
+    // "saio do trabalho as 18h30", "so consigo depois das 18:30", "so posso a partir das 19h": ela so esta livre a PARTIR dai (caso Nathalia: ofereceram 13h30 a quem sai as 18h30)
+    for (const m of f.matchAll(new RegExp(`\\bsaio\\b[^.!?\\n]{0,40}?\\b(?:as?|a partir d[aeo]s?)\\s*${T}`, "g"))) {
+      const t = hhmm(m[1], m[2]);
+      if (t) req.notBefore = t;
+    }
+    for (const m of f.matchAll(new RegExp(`\\b(?:so|somente|apenas)\\s+(?:consigo|posso|da pra|tenho como|estou livre)\\b[^.!?\\n]{0,25}?\\b(?:as?|depois d[aeo]s?|a partir d[aeo]s?|apos as?)\\s*${T}`, "g"))) {
+      const t = hhmm(m[1], m[2]);
+      if (t) req.notBefore = t;
+    }
+
     // turno
     if (/\b(de manha|pela manha|manha|cedo)\b/.test(f)) req.period = "manha";
     else if (/\b(a tarde|de tarde|pela tarde|tarde)\b/.test(f) && !/\bboa tarde\b/.test(f)) req.period = "tarde";

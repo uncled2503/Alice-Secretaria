@@ -232,6 +232,23 @@ export async function selectReminderCandidates(
     });
   }
 
+  // (b2) COBRANCA ("ainda nao recebemos sua confirmacao") so existe com EVIDENCIA do PEDIDO INICIAL para ESTE agendamento e ESTE horario: o controle persistente (ReminderDispatch) da regra-mae
+  // precisa estar "sent" (o provedor aceitou). Pedido que falhou, foi barrado, bloqueado, ficou incerto ("unconfirmed": pode nao ter chegado) ou esta so reservado NAO e pedido enviado: nada de
+  // cobrar algo que a pessoa pode nunca ter recebido. Registro antigo (anterior ao controle persistente: so ReminderSent, sem nenhuma linha de controle) continua valendo como era.
+  if (rule.parentRuleId && due.length) {
+    const parentRows = await prisma.reminderDispatch.findMany({ where: { clinicId: rule.clinicId, ruleId: rule.parentRuleId, bookingKey: { in: due.map(bookingKeyOf) } }, select: { bookingKey: true, startsAt: true, state: true } });
+    due = due.filter((appt) => {
+      const row = parentRows.find((r) => r.bookingKey === bookingKeyOf(appt) && r.startsAt.getTime() === appt.scheduledAt.getTime());
+      if (!row || row.state === "sent") return true;
+      held.push({
+        appointmentId: appt.id,
+        code: row.state === "unconfirmed" ? "pedido_inicial_incerto" : "pedido_inicial_nao_enviado",
+        detail: `o pedido inicial de confirmacao deste horario esta "${row.state}": nao ha evidencia de que a pessoa o recebeu, entao nao ha o que cobrar`,
+      });
+      return false;
+    });
+  }
+
   // (c) reserva ainda nao efetivada no CE nao e apresentada como agendamento confirmado
   if (due.length) {
     const pending = await notYetEffectuated(due);
@@ -547,6 +564,7 @@ export async function deliverReminder(env: DeliverEnv, rule: ReminderRule, appt:
       } else {
         // blocked (plano), vetoed (revisao) e duplicate (mesmo texto ja saiu) NAO sao envio: ficam registrados assim.
         await finishDispatch(acq.id, outcome, `sendText=${outcome}`);
+        if (outcome === "vetoed" || outcome === "blocked") await prisma.reminderSent.deleteMany({ where: { appointmentId: appt.id, ruleId: rule.id } }); // nada saiu: nao conta como pedido enviado
       }
       logDecision("enviar", { ...base, tipo: key.kind, tentativa: acq.attempt, ce: ceResult, resultado: outcome });
     }

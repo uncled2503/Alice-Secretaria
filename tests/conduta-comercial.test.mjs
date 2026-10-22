@@ -614,7 +614,7 @@ test("ajuste de conduta da Lisboa: a previa nao grava nada; aplicar e idempotent
   assert.equal(r1.aplicado.ofertasSemCadastro, true, "Protocolo do Olhar entra como oferta sem cadastro (nao como servico recusado)");
   assert.equal((await prisma.clinic.findUnique({ where: { id: k.id } })).unmappedOffers, "Protocolo do Olhar");
   assert.deepEqual(r2.aplicado, { naoOferecidos: false, ofertasSemCadastro: false, apelidosLimpos: 0, marcados: 1, modoEstrito: false, regrasPadraoTrocadas: 0 }, "idempotente: nada novo alem da mesma marcacao");
-  assert.equal((await prisma.clinic.findUnique({ where: { id: k.id } })).notOfferedServices, "luz pulsada, luz intensa pulsada, IPL");
+  assert.equal((await prisma.clinic.findUnique({ where: { id: k.id } })).notOfferedServices, "luz pulsada, luz intensa pulsada, IPL, Endolaser, Endo laser");
 
   const estritoLigado = await ajustarCondutaLisboa(k.id, { dryRun: false, ativarModoEstrito: true });
   assert.equal(estritoLigado.aplicado.modoEstrito, true);

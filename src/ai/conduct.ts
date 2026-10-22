@@ -68,6 +68,15 @@ export function parseNotOffered(raw: string | null | undefined): string[] {
   return (raw ?? "").split(/[,\n;]+/).map((s) => s.trim()).filter((s) => s.length >= 3);
 }
 
+// PURO: tira da fala os TRECHOS que falam de um servico que a clinica nao oferece ("queria endolaser no abdomen" em "queria endolaser no abdomen e tambem tenho olheiras"): o que sobra e o OUTRO
+// interesse dela, que continua valendo sem herdar a regiao do servico que nao existe. So recorta quando ha termo; sem termo devolve o texto como esta.
+export function withoutNotOffered(text: string, terms: string[]): string {
+  if (!terms.length || !notOfferedIn(text, terms)) return text;
+  const parts = text.split(/(?<=[,;.!?])\s+|\s+(?:e tambem|e ainda|alem disso|tambem|mas|e)\s+/i);
+  const keep = parts.filter((p) => !notOfferedIn(p, terms));
+  return keep.join(". ").trim();
+}
+
 export function notOfferedIn(text: string, terms: string[]): string | null {
   const t = fold(text);
   for (const term of terms) {
@@ -104,6 +113,7 @@ export interface Understanding {
   objective: Objective;
   chosen: { name: string; mode: BookingMode; source: ModeSource } | null;
   options: string[]; // citou uma familia (varios procedimentos servem)
+  alsoMentioned: string[]; // outros procedimentos CITADOS sem escolher (pergunta/comparacao): mencionar nao e escolher
   eligible: string[]; // procedimentos aprovados no cadastro para o objetivo
   uninformedCount: number; // sem queixa declarada no cadastro
   families: string[]; // eligible agrupados por nome-base (para falar de forma geral)
@@ -145,7 +155,7 @@ function familiesOf(names: string[]): string[] {
 
 export function understandConversation(i: UnderstandInput): Understanding {
   const userMsgs = i.history.filter((m) => m.role === "user");
-  const objective = readObjective(userMsgs.map((m) => ({ text: m.content, createdAt: m.createdAt })), i.now);
+  const objective = readObjective(userMsgs.map((m) => ({ text: withoutNotOffered(m.content, i.notOffered), createdAt: m.createdAt })), i.now);
   const last3 = userMsgs.slice(-3).map((m) => fold(m.content)).join(" \n ");
   const evaluationRequested = /\bavalia(cao|coes)\b/.test(last3) && !/\bnao (quero|preciso) (de )?(uma )?avalia/.test(last3);
 
@@ -171,6 +181,7 @@ export function understandConversation(i: UnderstandInput): Understanding {
     objective,
     chosen,
     options,
+    alsoMentioned: i.wanted.kind === "specific" ? i.wanted.mentioned ?? [] : [],
     eligible: el.eligible,
     uninformedCount: el.uninformed.length,
     families,
@@ -233,7 +244,7 @@ export function planConduct(u: Understanding, ctx: { flow: SalesFlow; situation:
   // 1) servico que a clinica NAO oferece (honestidade; nada de substituicao automatica)
   if (u.notOfferedAsked) {
     safety = (
-      `SERVICO QUE A CLINICA NAO OFERECE: ela citou "${u.notOfferedAsked}", que a clinica NAO realiza. Diga isso com honestidade e naturalidade, em 1 frase. NAO ofereca outro procedimento como se fosse equivalente (nem troque por outra tecnologia por conta propria). So fale de uma alternativa se ELA perguntar por ela e o cadastro aprovado confirmar; se ela quiser entender as opcoes, chame transfer_to_human para a equipe orientar. NUNCA diga que a clinica faz "${u.notOfferedAsked}".`
+      `SERVICO QUE A CLINICA NAO OFERECE: ela citou "${u.notOfferedAsked}", que a clinica NAO realiza. Diga isso com honestidade e naturalidade, em 1 frase. NAO ofereca outro procedimento como se fosse equivalente (nem troque por outra tecnologia por conta propria). So fale de uma alternativa se ELA perguntar por ela e o cadastro aprovado confirmar; se ela quiser entender as opcoes, chame transfer_to_human para a equipe orientar. Os OUTROS interesses dela na mesma conversa (ex.: olheiras) continuam valendo: nao os misture com a regiao do servico que a clinica nao faz. NUNCA diga que a clinica faz "${u.notOfferedAsked}".`
     );
     trace.nao_oferecido = u.notOfferedAsked;
   }
@@ -265,7 +276,8 @@ export function planConduct(u: Understanding, ctx: { flow: SalesFlow; situation:
   // 3) escolha explicita de procedimento
   let lockedProcedure: string | null = null;
   let evaluationAllowed = true;
-  if (u.chosen && !ctx.clinicIsStore) {
+  // (quem ja tem horario e so esta perguntando algo NAO recebe de novo a ordem de "ofereca a avaliacao": a venda terminou; a jogada "booked" do fluxo manda)
+  if (u.chosen && !ctx.clinicIsStore && flow.intent !== "booked") {
     const c = u.chosen;
     if (u.evaluationRequested) {
       evaluationAllowed = true; // ela mesma pediu a avaliacao
@@ -290,6 +302,12 @@ export function planConduct(u: Understanding, ctx: { flow: SalesFlow; situation:
       );
     }
     trace.modo = `${c.mode}/${c.source}`;
+  }
+
+  // 3b) citou OUTRO procedimento sem escolher (pergunta/comparacao): o escolhido continua; so uma escolha explicita troca
+  if (u.chosen && u.alsoMentioned.length) {
+    trace.citou_tambem = u.alsoMentioned.join("+");
+    parts.push(`ELA CITOU TAMBEM ${u.alsoMentioned.map((m) => `"${m}"`).join(", ")}, mas MENCIONAR NAO E ESCOLHER: o procedimento em discussao continua sendo "${u.chosen.name}". Responda o que ela perguntou sobre o outro (so com o cadastro aprovado) SEM trocar o assunto; se ela estiver comparando ou nao der para saber qual quer fazer, pergunte UMA vez, de forma curta, qual deles ela quer. So troque se ela disser claramente que quer o outro.`);
   }
 
   // 4) so a regiao: esclarecer
@@ -347,6 +365,24 @@ export function planConduct(u: Understanding, ctx: { flow: SalesFlow; situation:
     (u.regionOnly && !u.evaluationRequested) ||
     unmappedHandoff ||
     (!!handoff && !u.evaluationRequested);
+
+  // 7) CONTINUIDADE COMERCIAL. O convite depende da ETAPA e do MODO CADASTRADO do procedimento (nao ha regra universal "sempre convide para avaliacao"): so quando ela GOSTOU do que viu ou
+  // deu uma expectativa de resultado, ainda nao tem horario, nao recusou/pensa, nao e servico que a clinica nao faz e a conducao nao esta encaminhando para a equipe. O convite e uma
+  // PERGUNTA simples, sem presumir aceite; avaliacao e sessao nunca se confundem.
+  const rd = flow.reading;
+  const canInvite = !thinking && !refused && flow.intent !== "booked" && flow.intent !== "returning" && !ctx.hasBooking && !handoff && !u.notOfferedAsked && !u.unmappedAsked && !situation.directive && situation.closeWith == null && !u.regionOnly;
+  if (canInvite && (rd.positiveReaction || rd.resultExpectation)) {
+    const direct = !!u.chosen && u.chosen.mode === "direct";
+    const evalOk = !forbidEvaluationOffer || u.evaluationRequested;
+    if (direct) {
+      parts.push(`CONTINUIDADE: ela demonstrou interesse em "${u.chosen!.name}" (${rd.positiveReaction ? "gostou dos resultados" : "falou do que espera"}). O proximo passo e VER UM HORARIO para esse procedimento: convide com UMA pergunta simples ("quer que eu veja um horario?"), sem presumir aceite e sem listar horarios antes de ela dizer que quer.`);
+      trace.continuidade = "convite_horario_direto";
+    } else if (evalOk) {
+      const mode = u.chosen ? (u.chosen.mode === "evaluation" ? "exige avaliacao previa (cadastro)" : "ainda sem regra de agendamento cadastrada") : "ela ainda nao escolheu procedimento";
+      parts.push(`CONTINUIDADE: ela demonstrou interesse (${rd.positiveReaction ? "gostou dos resultados" : "falou do que espera"}) e o proximo passo adequado e a AVALIACAO${evalName ? ` ("${evalName}")` : ""} (${mode}). Diga em UMA frase para que serve: a profissional avalia o caso dela e orienta o plano e a previsao do tratamento. Escreva a palavra AVALIACAO (o horario que voce vai oferecer e da avaliacao, NAO da sessao do procedimento) e feche com UMA pergunta simples para avancar (ex.: "quer que eu veja um horario para a sua avaliacao?"), sem presumir aceite.`);
+      trace.continuidade = "convite_avaliacao";
+    }
+  }
 
   return {
     gate: {
@@ -409,3 +445,14 @@ export { areasIn, procedureConcerns };
 
 // Resposta curta quando a resposta inteira era so a oferta de um servico que a clinica nao tem.
 export const NOT_OFFERED_REPLY = "Esse serviço não faz parte do que a gente oferece por aqui. Me conta o que você gostaria de tratar que eu vejo as opções que temos? 💗";
+
+// PURO: a resposta oferece/agenda um horario PARA O PROCEDIMENTO escolhido (ex.: "vamos agendar um horario para a remocao da sua tatuagem") sem a palavra AVALIACAO, quando o cadastro diz que
+// o procedimento exige avaliacao previa? Isso faz parecer que a SESSAO sera feita (caso Kelly). So olha frases que convidam/agendam e citam o procedimento.
+export function evaluationWordingViolation(text: string, procedureName: string): boolean {
+  const f = fold(text);
+  if (/avalia(cao|coes)\b/.test(f)) return false;
+  const words = fold(procedureName).split(/[^a-z0-9]+/).filter((w) => w.length >= 5);
+  if (!words.length) return false;
+  return f.split(/(?<=[.!?])\s+|\n+/).some((s) => /\b(agend\w*|marc\w*|horario|vamos (ver|marcar|agendar))\b/.test(s) && words.some((w) => s.includes(w)));
+}
+export const EVAL_WORDING_NUDGE = "ATENCAO: este procedimento EXIGE avaliacao previa (cadastro da clinica). O horario que voce esta oferecendo/agendando e da AVALIACAO com a profissional, NAO da sessao do procedimento. Reescreva deixando isso explicito com a palavra AVALIACAO (ex.: 'agendar a sua avaliacao'), sem dar a entender que a sessao ja sera feita, sem validar expectativa de numero de sessoes e terminando com UMA pergunta simples para avancar.";

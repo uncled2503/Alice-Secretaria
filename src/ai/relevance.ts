@@ -103,9 +103,12 @@ export function findRelevanceMismatch(params: {
   for (const t of params.complaintTexts) for (const a of areasIn(t)) complaint.add(a);
   if (complaint.size === 0) return null;
   const replyFolded = fold(params.reply);
+  // O procedimento que a PESSOA escolheu (ou ja tem agendado) nao e "indicacao" da Alice: citar o nome dele e responder o que ela pediu. Sem esta excecao a trava apagava a frase com o
+  // procedimento escolhido (ex.: Lavieen, com queixa so de regiao 'costas') e a reescrita indicava outro (Carboxiterapia) como se fosse o "mais indicado" - caso Nathalia.
+  const allowedByName = new Set((params.allowed ?? []).map((n) => fold(n).trim()));
   for (const p of params.procedures) {
     const name = fold(p.name).trim();
-    if (name.length < 6 || !replyFolded.includes(name)) continue;
+    if (name.length < 6 || !replyFolded.includes(name) || allowedByName.has(name)) continue;
     const procAreas = areasIn(`${p.name} ${p.aliases ?? ""}`);
     if (!procedureFitsComplaint(procAreas, complaint)) {
       // regiao "principal" da queixa: a mais especifica (nao rosto/corpo)

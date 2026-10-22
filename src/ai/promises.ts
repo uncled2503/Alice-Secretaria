@@ -51,3 +51,10 @@ export const CLAIM_NUDGE =
 
 export const PROMISE_NUDGE =
   "ATENCAO: voce escreveu que ia agendar/verificar/confirmar ('um instante', 'vou verificar', 'ja volto') ou disse que o horario esta agendado, mas NAO executou a acao nesta rodada. Voce NAO consegue 'voltar depois': tudo o que precisa fazer tem que ser feito AGORA, chamando a ferramenta (check_specific_time, check_availability, book_appointment, manage_my_appointment com action cancel ou reschedule). So diga que cancelou/remarcou se manage_my_appointment devolveu ok:true nesta rodada. Chame a ferramenta que falta e responda com o RESULTADO REAL ja nesta mensagem, sem anunciar nada. So diga que esta agendado se book_appointment devolveu 'agendado: true'; se o horario nao esta livre, diga isso com clareza e ofereca as alternativas. Se for marcar mais de um procedimento na mesma visita, agende um apos o outro (o segundo comeca quando o primeiro termina) e confirme cada horario.";
+
+// "Vou confirmar com a equipe e te retorno", "a equipe vai verificar e te avisa": promessa de ACOMPANHAMENTO que so existe se uma pendencia real for criada (transfer_to_human). O anuncio "equipe" nao
+// e promessa quebrada por si so (announcesAction o exclui: e o fluxo de handoff) - mas SO quando a ferramenta foi chamada. Sem ela, a pessoa fica esperando alguem que ninguem acionou.
+const TEAM_FOLLOWUP_RE = /\b((vou|irei|vamos|iremos|posso|preciso)\s+(\w+\s+){0,2}(confirmar|verificar|checar|consultar|perguntar|ver|alinhar|checar)\s+(isso\s+)?(com|junto (a|com))\s+(a|o|as|os)?\s*(equipe|profissional|responsavel|atendente|time|colega|financeiro|recepcao)|(a|o)\s+(equipe|profissional|responsavel|time|atendente)\s+(vai|ira|vao|podera)\s+(\w+\s+){0,3}(confirmar|verificar|retornar|responder|entrar em contato|te (ajudar|avisar|chamar))|vou pedir (para|pra) (a|o) (equipe|profissional|responsavel))\b/;
+export function promisesTeamFollowUp(text: string): boolean {
+  return TEAM_FOLLOWUP_RE.test(fold(text));
+}

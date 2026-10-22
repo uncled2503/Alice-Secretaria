@@ -16,7 +16,8 @@ import { substituirRegrasPadraoAntigas, type SubstituicaoRegras } from "../ai/ru
 // sem regra de agendamento e sem queixa declarada no cadastro.
 // ---------------------------------------------------------------------------
 
-export const LISBOA_NAO_OFERECIDOS = ["luz pulsada", "luz intensa pulsada", "IPL"];
+// Endolaser: informado EXPRESSAMENTE pela clinica em 21/10/2026 ("a Lisboa nao realiza Endolaser"). Fica na configuracao DA LISBOA (campo da clinica), nao no codigo global.
+export const LISBOA_NAO_OFERECIDOS = ["luz pulsada", "luz intensa pulsada", "IPL", "Endolaser", "Endo laser"];
 // Ofertas que a Lisboa ANUNCIA mas que nao tem cadastro correspondente (nem no sistema nem no Clinica Experts): informadas pela clinica em 18/10/2026.
 // Enquanto nao houver cadastro/mapeamento AUTORIZADO, a Alice nao as associa a outro procedimento nem as troca por avaliacao: encaminha para a equipe.
 export const LISBOA_OFERTAS_SEM_CADASTRO = ["Protocolo do Olhar"];

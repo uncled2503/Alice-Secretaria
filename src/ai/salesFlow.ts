@@ -8,7 +8,7 @@
 
 import { chosenSlotDirective, wantedDirective, type ChosenSlot, type Wanted } from "./bookingIntent.js";
 import { asksOpeningHours } from "./replyFacts.js";
-import { asksDiscount, detectObjection, extractQuestions, interpretAnswer, isGoalCorrection, type AnswerMeaning, type ObjectionKind } from "./turnReading.js";
+import { asksDiscount, asksDuration, asksWhichProcedure, detectObjection, detectPositiveReaction, detectProductConcern, detectResultExpectation, extractQuestions, interpretAnswer, isGoalCorrection, type AnswerMeaning, type ObjectionKind, type ProductConcern } from "./turnReading.js";
 
 function fold(s: string): string {
   return s.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "");
@@ -43,6 +43,12 @@ export interface TurnReading {
   questions: string[]; // perguntas feitas nas mensagens novas: todas precisam de resposta
   asksHours: boolean; // perguntou o EXPEDIENTE da clinica (dias/horarios de atendimento): nao e pedido de vagas
   infoQuestionOnly: boolean; // pergunta INFORMATIVA (sessoes, duracao, o que inclui...): responde, nao muda para a agenda
+  positiveReaction: boolean; // gostou do que a Alice mostrou (fotos/resultados): e interesse, nao cortesia
+  resultExpectation: boolean; // expectativa de resultado/tempo ("acho que nao demora muitas sessoes"): a Alice nao valida
+  askedPrice: boolean; // perguntou valor nestas mensagens
+  asksDuration: boolean; // perguntou quanto tempo dura/demora
+  asksWhichProcedure: boolean; // perguntou QUAL procedimento (indicacao)
+  productConcern: ProductConcern | null; // citou um termo de produto (refrescancia, perfume...) como criterio
 }
 
 const SCHEDULE_RE =
@@ -126,13 +132,14 @@ export function analyzeFlow(input: {
   const slotsOffered = OFFERED_SLOT_RE.test(fold(lastAssistant)) && /\?/.test(lastAssistant);
   const evalOffered = assistant.some((m) => /avalia/i.test(fold(m)));
   const scheduleAsked = !hasBooking && userAll.some((m) => wantsSchedule(m));
-  const statedGoal = statesGoal(userAll);
+  // Citar um procedimento do cadastro tambem e dizer o que quer (antes "Botox" sem palavra de queixa nao contava e a conversa voltava a "descubra o que ela quer")
+  const statedGoal = statesGoal(userAll) || (input.wanted !== undefined && input.wanted.kind !== "none");
   // "Nao posso hoje, pode ser amanha as 15h?" recusou E propos outro horario: segue o agendamento (nao e recusa).
   const proposesTime = /\b\d{1,2}\s?(h\b|horas|:\d\d)|\b(amanha|hoje|segunda|terca|quarta|quinta|sexta|sabado|domingo)\b/.test(fold(trailText));
   // ALICE_TURN_READING=off desliga a leitura do turno (volta a jogada generica anterior); padrao: ligada
   const readingOn = process.env.ALICE_TURN_READING !== "off";
   const reading: TurnReading = !readingOn
-    ? { meaning: null, prevQuestion: "", goalCorrection: false, objection: null, discountAsk: false, questions: [], asksHours: false, infoQuestionOnly: false }
+    ? { meaning: null, prevQuestion: "", goalCorrection: false, objection: null, discountAsk: false, questions: [], asksHours: false, infoQuestionOnly: false, positiveReaction: false, resultExpectation: false, askedPrice: priceAsked, asksDuration: false, asksWhichProcedure: false, productConcern: null }
     : {
     ...(() => { const r = interpretAnswer(lastAssistant, trailing); return { meaning: r.meaning, prevQuestion: r.prev.text }; })(),
     goalCorrection: isGoalCorrection(trailText),
@@ -141,6 +148,12 @@ export function analyzeFlow(input: {
     questions: extractQuestions(trailing),
     asksHours: asksOpeningHours(trailText),
     infoQuestionOnly: false, // calculado abaixo (depende de ter pedido/aceito horario)
+    positiveReaction: detectPositiveReaction(trailText),
+    resultExpectation: detectResultExpectation(trailText),
+    askedPrice: priceAsked,
+    asksDuration: asksDuration(trailText),
+    asksWhichProcedure: asksWhichProcedure(trailText),
+    productConcern: detectProductConcern(trailText),
   };
   const declined = declinesOptions(trailText) && !proposesTime && !reading.goalCorrection && (slotsOffered || evalOffered || scheduleAsked);
 
@@ -325,6 +338,21 @@ export function turnObligations(r: TurnReading, intent: Intent, objectionHandled
   if (r.discountAsk)
     return "Ela pediu DESCONTO/negociacao. NAO prometa, invente nem insinue desconto, promocao ou condicao. Responda em UMA frase que condicoes e negociacao sao tratadas pela equipe e chame transfer_to_human com o pedido dela (nao deixe a conversa sem resposta).";
   const parts: string[] = [];
+  // O que ela perguntou/disse que NAO depende da jogada: valor, expectativa de resultado, duracao, termo de produto. Nenhuma delas e "pergunta de venda": sao fatos a responder com o cadastro.
+  if (r.askedPrice && !["booked", "hesitate", "refuse"].includes(intent))
+    parts.push("ELA PERGUNTOU O VALOR: responda o valor PRIMEIRO, de forma direta, usando SO o valor do cadastro/regra de valores desta clinica (valor que aparece em anuncio, print ou conversa de outra pessoa NAO e tabela e nao autoriza preco). Nao esconda o preco para forcar agendamento. Depois, se ainda nao convidou nesta conversa, diga em UMA frase para que serve a avaliacao e convide com uma pergunta simples (qual dia/periodo fica melhor), sem repetir o que ja informou.");
+  if (r.resultExpectation)
+    parts.push("ELA DEU UMA EXPECTATIVA DE RESULTADO/TEMPO ('acho que nao demora muitas sessoes'): NAO valide nem contradiga ('sim, sao poucas sessoes' e promessa). Diga com naturalidade que o numero de sessoes e o resultado dependem do caso e que a PROFISSIONAL define isso na AVALIACAO, quando examina o caso e orienta a previsao do tratamento. Se o agendamento for da avaliacao, escreva a palavra AVALIACAO (nunca 'agendar a remocao/o procedimento'): a avaliacao nao e a sessao do procedimento.");
+  if (r.asksDuration || r.asksWhichProcedure)
+    parts.push("DURACAO/QUAL PROCEDIMENTO: responda AS DUAS coisas que ela perguntou, sobre o procedimento que esta em discussao nesta conversa (nao troque por outro). Duracao: so a do CADASTRO desse procedimento (veja 'FATO DE DURACAO' na ficha, quando houver), distinguindo avaliacao e sessao; sem duracao confiavel, diga que confirma com a equipe - NUNCA use a duracao de outro procedimento. 'Qual procedimento': diga o que esta cadastrado para o interesse dela, sem declarar 'o mais indicado para voce' (indicacao individual e da profissional na avaliacao).");
+  if (r.productConcern && (r.productConcern.ambiguous || r.productConcern.restriction))
+    parts.push(
+      'ELA CITOU UM CRITERIO DE PRODUTO ("' + r.productConcern.term + '"' + (r.productConcern.restriction ? ", e disse que NAO usa/nao tolera" : "") + "). NAO afirme marca, composicao, presenca ou ausencia de perfume, mentol, frescor ou qualquer componente: so existe o que esta no cadastro aprovado, e uma marca pode ter varios produtos (nao conclua a linha inteira). Fala dela NAO e fato sobre o produto da clinica. " +
+        (r.productConcern.ambiguous ? "O termo e AMBIGUO (pode ser sensacao refrescante/gelada ou fragrancia/cheiro): faca UMA pergunta curta e gentil para entender o que ela quer dizer, sem corrigi-la. " : "") +
+        "Trate como RESTRICAO relevante (nao presuma alergia, nao minimize) e NAO garanta adaptacao, seguranca ou alternativa antes da verificacao profissional: o que o cadastro nao diz, a equipe confirma - chame transfer_to_human com o criterio dela (a pendencia tem que existir de verdade; nao escreva 'vou verificar e retorno' sem chamar a ferramenta).",
+    );
+  if (r.positiveReaction && !["booked", "hesitate", "refuse"].includes(intent))
+    parts.push("ELA GOSTOU do que voce mostrou (resultados/fotos): isso e INTERESSE, nao cortesia. Reconheca em meia frase, SEM prometer resultado igual ao das fotos (cada caso e individual), conecte com o objetivo que ela contou e avance para o PROXIMO PASSO da jornada com UMA pergunta simples (sem presumir aceite). Nao termine em 'estou a disposicao'.");
   if (r.objection && !objectionHandled) parts.push("ELA LEVANTOU UMA OBJECAO neste turno: responda ao impedimento real com informacao aprovada ANTES de qualquer outra pergunta ou oferta. " + OBJECTION_MOVE[r.objection]);
   const must = ["hesitate", "refuse", "decline", "booked", "returning", "manage", "staff"].includes(intent) || r.questions.length >= 2 || r.infoQuestionOnly;
   if (r.questions.length && must) {

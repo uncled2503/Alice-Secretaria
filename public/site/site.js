@@ -465,28 +465,25 @@
         name: fields.name.value.trim(), phone: fields.phone.value.trim(), company: fields.company.value.trim(), segment: fields.segment.value,
         volume: ($("#f-vol") || {}).value || "", website: (form.elements.website || {}).value || "", elapsedMs: startedAt ? Date.now() - startedAt : 0, attribution: attribution,
       };
-      busy(true);
-      var ctl = window.AbortController ? new AbortController() : null;
-      var timer = setTimeout(function () { if (ctl) ctl.abort(); }, 15000);
-      fetch("/site/lead", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: ctl ? ctl.signal : undefined })
-        .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { status: r.status, body: j }; }); })
-        .then(function (res) {
-          clearTimeout(timer); busy(false);
-          if (res.status === 200 && res.body && res.body.ok === true) {
-            say("ok", "Recebemos seus dados. Vamos chamar você no WhatsApp para combinar a demonstração.");
-            trackOnce("lead_submitted", { segment: payload.segment });
-            form.reset(); segTouchedByUser = false;
-          } else if (res.status === 422 && res.body && res.body.fields) {
-            Object.keys(res.body.fields).forEach(function (k) { if (fields[k]) { fields[k].setAttribute("aria-invalid", "true"); errs[k].textContent = res.body.fields[k]; } });
-            say("fail", "Confira os campos destacados e tente novamente.");
-            var f = Object.keys(res.body.fields)[0]; if (fields[f]) fields[f].focus();
-          } else if (res.status === 429) {
-            say("fail", "Muitas tentativas em pouco tempo. Aguarde um instante e tente novamente, ou chame pelo WhatsApp.");
-          } else {
-            say("fail", "Não foi possível enviar agora. Seus dados continuam aqui: tente de novo ou chame pelo WhatsApp.");
-          }
-        })
-        .catch(function () { clearTimeout(timer); busy(false); say("fail", "Não foi possível enviar agora. Seus dados continuam aqui: tente de novo ou chame pelo WhatsApp."); });
+      // O botao leva os dados para o WHATSAPP da Alice, com a mensagem ja preenchida. Abre ANTES de qualquer chamada assincrona (o navegador so permite abrir a janela no clique);
+      // o registro do contato no servidor segue em segundo plano (melhor esforco) e nunca atrapalha o WhatsApp.
+      var segLabel = fields.segment.options[fields.segment.selectedIndex] ? fields.segment.options[fields.segment.selectedIndex].text : payload.segment;
+      var volEl = $("#f-vol"), volLabel = volEl && volEl.value && volEl.options[volEl.selectedIndex] ? volEl.options[volEl.selectedIndex].text : "";
+      var lines = ["Oi! Vim pelo site da Alice e quero conhecer (7 dias grátis).", "", "Nome: " + payload.name, "Empresa: " + payload.company, "Segmento: " + segLabel, "WhatsApp: " + payload.phone];
+      if (volLabel) lines.push("Contatos novos por mês: " + volLabel);
+      // o numero vem do botao de WhatsApp do HTML (um so lugar); a mensagem preenchida substitui o texto padrao
+      var waBtnEl = $("#waBtn"), waUrl = "";
+      try { var wu = new URL(waBtnEl.href); waUrl = wu.origin + wu.pathname + "?text=" + encodeURIComponent(lines.join("\n")); } catch (err) { waUrl = waBtnEl ? waBtnEl.href : ""; }
+      var win = null;
+      try { win = window.open(waUrl, "_blank"); if (win) win.opener = null; } catch (err) { win = null; } // (com "noopener" o navegador devolve null mesmo abrindo: por isso o opener e zerado depois)
+      try { fetch("/site/lead", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), keepalive: true }).catch(function () { /* melhor esforco */ }); } catch (err) { /* melhor esforco */ }
+      trackOnce("lead_submitted", { segment: payload.segment });
+      status.hidden = false; status.className = "form-status ok"; status.textContent = "";
+      status.appendChild(doc.createTextNode(win ? "Abrimos o WhatsApp com os seus dados já preenchidos. É só enviar a mensagem. " : "Não conseguimos abrir o WhatsApp sozinhos. Seus dados continuam aqui: toque no botão para abrir a conversa já preenchida. "));
+      var again = doc.createElement("a"); again.href = waUrl; again.target = "_blank"; again.rel = "noopener"; again.textContent = "Abrir o WhatsApp";
+      again.addEventListener("click", function () { track("whatsapp_click", { cta_id: "formulario_wa" }); });
+      status.appendChild(again);
+      if (!win) { try { window.location.href = waUrl; } catch (err) { /* o link acima resolve */ } }
     });
   }
 })();

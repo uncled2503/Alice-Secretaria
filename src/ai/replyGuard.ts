@@ -6,7 +6,8 @@ import { requestViolation, type SlotRequest } from "./slotRequest.js";
 import { findRelevanceMismatch } from "./relevance.js";
 import { removeSentences, splitSentences } from "./repetition.js";
 import { stripSlotOffers } from "./slotText.js";
-import { notOfferedIn, NOT_OFFERED_REPLY } from "./conduct.js";
+import { notOfferedIn, NOT_OFFERED_REPLY, evaluationWordingViolation } from "./conduct.js";
+import { claimsOutsideFamilies } from "./productClaims.js";
 import type { ConcernId, ProcedureInfo } from "./concerns.js";
 import { claimIsSupported, claimsPhotosSent, conclusionClaims, GROUP_RE, qualificationProblems, unprovenPriceSentences, unprovenUnitSentences, type ExistingSlot, type ProRef } from "./replyFacts.js";
 import { fixRelativeDateLabels, fixRelativeDayLabels, fixWeekdayDatePairs } from "./relativeDays.js";
@@ -46,6 +47,8 @@ export interface ReplyContext {
   objective?: { concerns: ConcernId[]; regions: string[] };
   allowedProcedures?: string[];
   notOffered?: string[];
+  approvedProductFamilies?: string[]; // familias de composicao/sensacao (frescor, fragrancia, mentol, ativos) que o cadastro aprovado sustenta; undefined = nao conferir
+  evaluationOnly?: string; // procedimento que EXIGE avaliacao previa e que ela nao pediu avaliacao: convite/horario precisa dizer AVALIACAO
   // FATOS APROVADOS (cadastro): so o que esta aqui pode ser afirmado sobre formacao e quantidade
   companion?: boolean; // a conversa e sobre agendar MAIS DE UMA pessoa (ela + acompanhante)
   professionals?: ProRef[]; // equipe ativa com a formacao cadastrada (null = nao informada)
@@ -54,7 +57,7 @@ export interface ReplyContext {
   approvedPrices?: number[]; // valores (R$) que o cadastro/regras da clinica sustentam; qualquer outro valor citado e inventado
 }
 
-export type ProblemCode = "price_unproven" | "claims_group" | "claims_photos" | "unit_unproven" | "qualification" | "group_offer" | "claims_booking" | "claims_cancel" | "claims_reschedule" | "claims_handoff" | "eval_offer" | "slot_offer_forbidden" | "slot_unproven" | "slot_request" | "relevance" | "not_offered";
+export type ProblemCode = "price_unproven" | "claims_group" | "claims_photos" | "unit_unproven" | "qualification" | "group_offer" | "claims_booking" | "claims_cancel" | "claims_reschedule" | "claims_handoff" | "eval_offer" | "slot_offer_forbidden" | "slot_unproven" | "slot_request" | "relevance" | "not_offered" | "product_unproven" | "eval_wording";
 export interface ReplyProblem { code: ProblemCode; detail: string }
 
 function fold(s: string): string {
@@ -160,6 +163,13 @@ export function checkFinalReply(text: string, ctx: ReplyContext, opts: { strict:
     if (sentence) add("not_offered", `oferece servico que a clinica nao tem: "${notOfferedIn(sentence, ctx.notOffered)}"`);
   }
 
+  // afirmacao sobre produto/composicao/sensacao sem fonte no cadastro (a fala da cliente e o texto anterior da Alice nao sao fonte)
+  if (process.env.ALICE_REPLY_FACTS !== "off" && ctx.approvedProductFamilies) {
+    for (const c of claimsOutsideFamilies(text, ctx.approvedProductFamilies, splitSentences)) add("product_unproven", c.sentence);
+  }
+  // procedimento que exige avaliacao previa: o horario/convite e da AVALIACAO, nao da sessao
+  if (ctx.evaluationOnly && evaluationWordingViolation(text, ctx.evaluationOnly)) add("eval_wording", `agenda "${ctx.evaluationOnly}" sem dizer que e a avaliacao`);
+
   if (opts.catalog && ctx.complaintTexts.length) {
     const mismatch = findRelevanceMismatch({ complaintTexts: ctx.complaintTexts, reply: text, procedures: opts.catalog, objective: ctx.objective, allowed: ctx.allowedProcedures });
     if (mismatch) add("relevance", `indica "${mismatch.procedure}" para queixa de ${mismatch.complaintLabel}`);
@@ -190,6 +200,7 @@ export function sanitizeReply(text: string, problems: ReplyProblem[]): string | 
       if (term) drop.push(...splitSentences(out).filter((s) => notOfferedIn(s, [term]) && !NEGATES_OFFER_RE.test(fold(s))));
     }
   }
+  for (const p of problems) if (p.code === "product_unproven") drop.push(p.detail);
   for (const p of problems) if (p.code === "unit_unproven" || p.code === "price_unproven" || p.code === "qualification" || p.code === "group_offer" || p.code === "claims_group") drop.push(p.detail);
   if (problems.some((p) => p.code === "claims_booking")) {
     for (const p of problems) if (p.code === "claims_booking") { const s = /: "(.*)"$/.exec(p.detail)?.[1]; if (s) drop.push(...splitSentences(out).filter((x) => x.startsWith(s.slice(0, 40)))); }
@@ -198,7 +209,7 @@ export function sanitizeReply(text: string, problems: ReplyProblem[]): string | 
   if (drop.length) out = removeSentences(out, [...new Set(drop)]);
   out = out.trim();
   // Tirar uma afirmacao falsa nao pode deixar um 'Perfeito, Maria!' que soa como aceite: o que sobra precisa ter conteudo proprio (senao sai a resposta segura)
-  const factual = problems.some((p) => ["claims_booking", "claims_group", "group_offer", "claims_photos", "unit_unproven", "price_unproven", "qualification"].includes(p.code));
+  const factual = problems.some((p) => ["claims_booking", "claims_group", "group_offer", "claims_photos", "unit_unproven", "price_unproven", "qualification", "product_unproven"].includes(p.code));
   const minLen = factual && drop.length ? 45 : 12;
   return out && out !== text.trim() && out.length >= minLen ? out : null;
 }
@@ -219,6 +230,8 @@ export function safeReplyFor(ctx: ReplyContext | null, problems: ReplyProblem[])
   if (codes.has("claims_group") || codes.has("group_offer")) return "Pra duas pessoas eu organizo cada atendimento separado, um de cada vez. Me passa o nome completo e um telefone de contato de cada uma? Só confirmo o que estiver realmente reservado na agenda. 💗";
   if (codes.has("claims_photos")) return "Não consegui enviar as fotos agora, mas posso te explicar direitinho como funciona e o que esperar. O que você gostaria de saber? 💗";
   if (codes.has("unit_unproven") || codes.has("price_unproven") || codes.has("qualification")) return "Esse detalhe eu prefiro confirmar com a equipe antes de te passar, pra não te informar nada errado. Já deixo registrado pra pessoa certa te responder. 💗";
+  if (codes.has("product_unproven")) return "Sobre a composição desse produto eu prefiro confirmar com a equipe antes de te passar, pra não te informar nada errado. Pode me contar o que você quer evitar nele? 💗";
+  if (codes.has("eval_wording")) return "Posso agendar a sua *avaliação*: nela a profissional examina o seu caso e orienta o tratamento e a previsão de sessões. Qual dia e período ficam melhores pra você? 💗";
   if (codes.has("claims_booking")) return "Pra eu te ajudar certinho: qual dia e turno (manhã, tarde ou noite) ficam melhores pra você? Só confirmo o horário depois que ele estiver reservado na agenda.";
   if (codes.has("slot_unproven") || codes.has("slot_request")) return "Pra eu te passar os horários certinhos: você prefere manhã, tarde ou noite? E algum dia da semana fica melhor pra você?";
   if (codes.has("not_offered")) return "Esse serviço não faz parte do que a gente oferece por aqui. Me conta o que você gostaria de tratar que eu vejo as opções que temos? 💗";
@@ -269,7 +282,7 @@ export function serializeReplyContext(ctx: ReplyContext, complaintCount: number)
       toolDates: ctx.slots.toolDates.slice(0, CAP),
     },
     upcoming: ctx.upcoming.slice(0, 50), complaintCount: Math.max(0, Math.min(complaintCount, 10)), silentHandoff: ctx.silentHandoff, confirmationGuard: !!ctx.confirmationGuard,
-    objective: ctx.objective, allowedProcedures: ctx.allowedProcedures?.slice(0, 50), notOffered: ctx.notOffered?.slice(0, 50),
+    objective: ctx.objective, allowedProcedures: ctx.allowedProcedures?.slice(0, 50), notOffered: ctx.notOffered?.slice(0, 50), approvedProductFamilies: ctx.approvedProductFamilies, evaluationOnly: ctx.evaluationOnly,
     companion: !!ctx.companion, professionals: ctx.professionals?.slice(0, 40), approvedUnits: ctx.approvedUnits?.slice(0, 40), unitsKnown: ctx.unitsKnown, approvedPrices: ctx.approvedPrices?.slice(0, 200),
   });
 }
@@ -290,7 +303,7 @@ export function deserializeReplyContext(json: string | null | undefined, convers
         toolUsed: !!p.slots.toolUsed, strict: known(p.slots.strict), loose: known(p.slots.loose), toolDates: p.slots.toolDates ?? [],
       },
       upcoming: p.upcoming ?? [], complaintTexts, silentHandoff: !!p.silentHandoff, confirmationGuard: !!p.confirmationGuard,
-      ...(p.objective ? { objective: p.objective } : {}), ...(p.allowedProcedures ? { allowedProcedures: p.allowedProcedures } : {}), ...(p.notOffered ? { notOffered: p.notOffered } : {}),
+      ...(p.objective ? { objective: p.objective } : {}), ...(p.allowedProcedures ? { allowedProcedures: p.allowedProcedures } : {}), ...(p.notOffered ? { notOffered: p.notOffered } : {}), ...(Array.isArray(p.approvedProductFamilies) ? { approvedProductFamilies: p.approvedProductFamilies } : {}), ...(typeof p.evaluationOnly === "string" ? { evaluationOnly: p.evaluationOnly } : {}),
       ...(p.companion ? { companion: true } : {}), ...(p.professionals ? { professionals: p.professionals } : {}), ...(p.approvedUnits ? { approvedUnits: p.approvedUnits } : {}), ...(p.unitsKnown !== undefined ? { unitsKnown: p.unitsKnown } : {}), ...(p.approvedPrices ? { approvedPrices: p.approvedPrices } : {}),
     };
   } catch {

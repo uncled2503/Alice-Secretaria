@@ -29,7 +29,7 @@ export function renderMessageTemplate(template: string, ctx: TemplateContext): s
     /\[(nome|primeiro_nome|nome_completo|telefone|endere[cç]o|unidade|procedimento|profissional|data|data_hora|hora|aniversario)\]/gi,
     (_m, k: string) => `{${k.toLowerCase().replace("ç", "c")}}`,
   );
-  return tidyGreetingText(normalized
+  const rendered = tidyGreetingText(normalized
     .replace(/\{nome\}/gi, firstName)
     .replace(/\{primeiro_nome\}/gi, firstName)
     .replace(/\{nome_completo\}/gi, fullName)
@@ -43,6 +43,16 @@ export function renderMessageTemplate(template: string, ctx: TemplateContext): s
     .replace(/\{hora\}/gi, when.toLocaleTimeString("pt-BR", { timeZone: tz, hour: "2-digit", minute: "2-digit" }))
     .replace(/\{aniversario\}/gi, ctx.birthDate ? `${String(ctx.birthDate.getUTCDate()).padStart(2, "0")}/${String(ctx.birthDate.getUTCMonth() + 1).padStart(2, "0")}` : ""))
     .trim();
+  return collapseDuplicatedProcedureWord(rendered, ctx.procedureName);
+}
+
+// "AvaliacaoAvaliacao": o texto cadastrado ja traz a palavra colada a {procedimento} (ou o nome vem repetido). Remove SO a repeticao imediata, sem espaco, da primeira palavra do nome do
+// procedimento inserido (nunca mexe em nomes legitimos nem em repeticao com espaco/pontuacao).
+export function collapseDuplicatedProcedureWord(text: string, procedureName: string | null | undefined): string {
+  const w = (procedureName ?? "").trim().split(/\s+/)[0] ?? "";
+  if (w.length < 5) return text;
+  const esc = w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return text.replace(new RegExp(`(${esc})\\1`, "giu"), "$1");
 }
 
 export interface ClinicTemplateInfo {

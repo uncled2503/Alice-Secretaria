@@ -160,3 +160,56 @@ export function stripNonChoiceSegments(text: string): string {
   });
   return keep.join(" ").trim();
 }
+
+// ---------- reacao positiva aos resultados, expectativa de resultado, duracao, produto ----------
+// (21/10/2026, casos Anara/Kelly/Nathalia/Taise da Lisboa.) Tudo PURO e conservador: sem sinal claro = false/null.
+
+// "Sim, gostei dos resultados", "amei as fotos", "ficou lindo", "achei otimo o resultado": a pessoa gostou do que a Alice mostrou. Nao e so cortesia: e interesse. Negacao
+// ("nao gostei") e queixa de procedimento ja feito ("amei, mas esta doendo") nao contam.
+const LIKE_RE = /\b(gostei|amei|adorei|curti|achei (lindo|linda|otimo|otima|incrivel|maravilhos[oa]|bonito|bonita|top|muito bom)|ficou (muito )?(lindo|linda|otimo|otima|bom|bonito|bonita|perfeito|perfeita|incrivel)|resultados? (lindo|linda|otimo|otima|incrivel|maravilhos[oa]|perfeito|top)|que (lindo|linda|incrivel|maravilh\w+)|(lindo|linda|incrivel|maravilhos[oa]|perfeito|perfeita))\b/;
+const DISLIKE_RE = /\b(nao (gostei|curti|achei)|nao (ficou|e) (muito )?(bom|bonito|natural)|exagerado|artificial|assustou|medo)\b/;
+export function detectPositiveReaction(text: string): boolean {
+  const t = norm(text);
+  if (!t || t.split(" ").length > 25) return false;
+  if (DISLIKE_RE.test(t)) return false;
+  if (PROBLEM_AFTER_RE.test(t)) return false;
+  return LIKE_RE.test(t);
+}
+const PROBLEM_AFTER_RE = /\b(mas|porem)\b.{0,40}\b(dor|doi|doendo|incha\w*|roxo|vermelh\w*|problema|nao (consigo|posso|tenho))\b/;
+
+// "Eu acredito que a minha nao demore muitas sessoes", "acho que resolve em uma sessao", "espero que seja rapido": EXPECTATIVA de resultado/tempo que a Alice nao pode validar.
+const EXPECTATION_RE = /\b(acredito|acho|espero|imagino|creio|penso|torco|tenho certeza|deve ser|deve levar|com certeza)\b.{0,50}\b(nao demor\w*|poucas? sess\w*|uma (so )?sessao|duas sessoes|rapid\w*|facil|resolv\w* (logo|rapido)|sem (muita )?demora|nao (precisa|vai precisar|vai levar)\b.{0,15}\b(muitas?|varias?)|nao (leva|levara) (muito|muitas?))\b/;
+const EXPECTATION2_RE = /\b(minha|meu)\b.{0,25}\b(nao (demor\w*|leva\w*|precis\w*)|e (pequen\w*|pouc\w*|clar\w*|fin\w*|simples))\b.{0,30}\b(sess\w*|resolv\w*|tempo)\b/;
+export function detectResultExpectation(text: string): boolean {
+  const t = norm(text);
+  return EXPECTATION_RE.test(t) || EXPECTATION2_RE.test(t);
+}
+
+// "Demora quanto tempo?", "qual a duracao?", "quantos minutos dura?": pergunta pela DURACAO (da sessao ou da avaliacao).
+const DURATION_RE = /\b(demora(r)?( quanto| muito)?|quanto tempo (dura|demora|leva|fica)|dura quanto|duracao|quantos? (minutos|horas)|(leva|dura) (quanto|muito)|tempo (de|do|da) (procedimento|sessao|atendimento|avaliacao))\b/;
+export function asksDuration(text: string): boolean {
+  return DURATION_RE.test(norm(text));
+}
+
+// "E qual seria o procedimento?": quer saber QUAL procedimento (pergunta de indicacao, nao escolha).
+export function asksWhichProcedure(text: string): boolean {
+  return /\b(qual|que) (seria )?(o |um )?(procedimento|tratamento)|qual (voce|vcs|voces) (indica|recomenda)|o que (voce|vcs|voces) (indica|recomenda)|qual (e )?(o )?indicado/.test(norm(text));
+}
+
+// Termos de PRODUTO que a pessoa cita como criterio ("refrescancia", "perfume", "mentol", "acido", "alcool", "cheiro"): a clinica so afirma composicao com fonte cadastrada, e alguns termos
+// sao AMBIGUOS (refrescancia = sensacao de frescor/gelado ou fragrancia?). `restriction` = a pessoa diz que nao usa/nao gosta/nao tolera (restricao relevante; nao e alergia presumida).
+const PRODUCT_TERMS: { re: RegExp; label: string; ambiguous: boolean }[] = [
+  { re: /\b(refrescan\w+|refrescante|refresc\w+)\b/, label: "refrescância", ambiguous: true },
+  { re: /\b(gelad[oa]|geladinho|sensacao de frio|frescor)\b/, label: "sensação gelada", ambiguous: true },
+  { re: /\b(perfume\w*|fragranc\w+|cheiro\w*|aroma\w*|essencia\w*)\b/, label: "fragrância", ambiguous: false },
+  { re: /\b(mentol|hortela|menta|cânfora|canfora|eucalipto)\b/, label: "mentol", ambiguous: false },
+  { re: /\b(acido\w*|alcool|parabeno\w*|silicone|sulfato|vitamina c|retinol|ativo\w*)\b/, label: "componente", ambiguous: false },
+];
+export interface ProductConcern { term: string; ambiguous: boolean; restriction: boolean }
+export function detectProductConcern(text: string): ProductConcern | null {
+  const t = norm(text);
+  const hit = PRODUCT_TERMS.find((p) => p.re.test(t));
+  if (!hit) return null;
+  const restriction = /\b(nao (uso|gosto|tolero|posso usar|quero|aceito|suporto|me dou)|evito|sou sensivel|tenho (alergia|sensibilidade|intolerancia)|irrita|alergi\w*|nao combina)\b/.test(t);
+  return { term: hit.label, ambiguous: hit.ambiguous, restriction };
+}
