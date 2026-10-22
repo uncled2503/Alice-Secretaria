@@ -70,6 +70,19 @@ export async function applyDeliveryUpdate(clinicId: string, u: DeliveryUpdate): 
     await prisma.birthdaySent.update({ where: { id: b.id }, data: { deliveryState: u.state, deliveryAt: u.at } });
     n++;
   }
+  // renovacao, retorno combinado e campanha (mesmo id de mensagem do provedor)
+  const more: { find: () => Promise<{ id: string; providerId: string | null; deliveryState: string | null }[]>; update: (id: string) => Promise<unknown> }[] = [
+    { find: () => prisma.renewalSent.findMany({ where: { appointment: { clinicId }, providerId: { contains: key } }, select: { id: true, providerId: true, deliveryState: true } }), update: (id) => prisma.renewalSent.update({ where: { id }, data: { deliveryState: u.state, deliveryAt: u.at } }) },
+    { find: () => prisma.callbackDispatch.findMany({ where: { clinicId, providerId: { contains: key } }, select: { id: true, providerId: true, deliveryState: true } }), update: (id) => prisma.callbackDispatch.update({ where: { id }, data: { deliveryState: u.state, deliveryAt: u.at } }) },
+    { find: () => prisma.broadcastRecipient.findMany({ where: { campaign: { clinicId }, providerId: { contains: key } }, select: { id: true, providerId: true, deliveryState: true } }), update: (id) => prisma.broadcastRecipient.update({ where: { id }, data: { deliveryState: u.state, deliveryAt: u.at } }) },
+  ];
+  for (const m of more) {
+    for (const row of await m.find()) {
+      if (!row.providerId || tail(row.providerId) !== key || !advance(row.deliveryState)) continue;
+      await m.update(row.id);
+      n++;
+    }
+  }
   return n;
 }
 

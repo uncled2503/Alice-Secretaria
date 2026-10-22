@@ -1,6 +1,6 @@
 import { scheduleLocked } from "../jobs/lock.js";
 import { prisma } from "../db/client.js";
-import { sendText, isSendDeferred } from "../uazapi/client.js";
+import { sendText, isSendDeferred, deferralInfo, isPermanentSendError, isAmbiguousSendError, type SendReport } from "../uazapi/client.js";
 import { PAID_CLINIC_WHERE } from "./plan.js";
 import { isWithinClinicHours } from "./openHours.js";
 import { wallClockInZone } from "../scheduling/time.js";
@@ -14,6 +14,14 @@ import type { Clinic } from "@prisma/client";
 // Envia aos poucos pra nao estourar limite de taxa do WhatsApp e nao
 // disparar centenas de mensagens de uma vez so (risco real de banimento).
 const BATCH_SIZE = 20;
+export const BROADCAST_MAX_ATTEMPTS = 3;
+export const BROADCAST_RETRY_GAP_MS = 15 * 60_000;
+export const BROADCAST_STALE_MS = 30 * 60_000;
+// Estados do DESTINATARIO (22/10/2026). `sentAt` so existe quando o PROVEDOR ACEITOU a mensagem (antes era gravado tambem para "skipped"/vetado/bloqueado, e a atribuicao de resposta a campanha
+// usava esse horario como prova de envio).
+//   pending -> sending (reserva atomica) -> sent (aceito pelo provedor) | vetoed (revisao barrou) | blocked (plano/politica) | skipped (nao se aplica: opt-out, sem interesse, ja agendou, duplicada)
+//   | deferred (WhatsApp/revisao fora do ar: nada saiu, tenta de novo) | failed (falha recuperavel, ate 3 tentativas) | failed_permanent (numero sem WhatsApp) | unconfirmed (timeout: pode ter saido; NUNCA reenvia)
+export const BROADCAST_OPEN = ["pending", "sending", "deferred", "failed"];
 
 type BroadcastClinicInfo = {
   name: string;
@@ -153,6 +161,7 @@ async function activateDueCampaigns(): Promise<void> {
             clinicId: campaign.clinicId,
             optedOut: false, // quem pediu pra parar nao recebe campanha
             contactKind: "paciente", // nem contato classificado como nao-paciente
+            promoOptOut: false, // nem quem pediu para nao receber PROMOCOES (continua recebendo as operacionais)
             noInterest: false, // nem quem disse que nao tem interesse
             ...(campaign.targetStage ? { funnelStage: campaign.targetStage } : {}),
           },
@@ -174,19 +183,33 @@ async function activateDueCampaigns(): Promise<void> {
   }
 }
 
+async function settleStaleRecipients(now: Date): Promise<void> {
+  const cutoff = new Date(now.getTime() - BROADCAST_STALE_MS);
+  // reservado e abandonado ANTES de chamar o provedor: nada saiu, volta a pendente; COM tentativa iniciada: incerto, nunca reenvia
+  await prisma.broadcastRecipient.updateMany({ where: { status: "sending", attemptedAt: null, updatedAt: { lt: cutoff } }, data: { status: "pending", detail: "reserva abandonada antes de chamar o provedor: liberada", updatedAt: now } });
+  await prisma.broadcastRecipient.updateMany({ where: { status: "sending", attemptedAt: { not: null }, updatedAt: { lt: cutoff } }, data: { status: "unconfirmed", detail: "o processo parou durante o envio: pode ter saido; NAO reenviado", updatedAt: now } });
+}
+
 async function sendNextBatch(): Promise<void> {
+  await settleStaleRecipients(new Date());
   const sendingCampaigns = await prisma.broadcastCampaign.findMany({ where: { status: "sending", clinic: PAID_CLINIC_WHERE } });
 
   for (const campaign of sendingCampaigns) {
     const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: campaign.clinicId } });
     if (!isSendingAllowed(clinic)) continue;
 
+    const nowBatch = new Date();
     const pending = await prisma.broadcastRecipient.findMany({
-      where: { campaignId: campaign.id, status: "pending" },
+      where: { campaignId: campaign.id, OR: [{ status: "pending" }, { status: { in: ["deferred", "failed"] }, attempts: { lt: BROADCAST_MAX_ATTEMPTS }, OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: nowBatch } }] }] },
       include: { patient: true },
       take: BATCH_SIZE,
     });
-    if (pending.length === 0) continue;
+    if (pending.length === 0) {
+      // nada a enviar agora: se tambem nao ha mais nada em aberto (inclusive retentativas), a campanha termina
+      const open = await prisma.broadcastRecipient.count({ where: { campaignId: campaign.id, OR: [{ status: { in: ["pending", "sending", "deferred"] } }, { status: "failed", attempts: { lt: BROADCAST_MAX_ATTEMPTS } }] } });
+      if (open === 0) await prisma.broadcastCampaign.update({ where: { id: campaign.id }, data: { status: "completed" } });
+      continue;
+    }
 
     const clinicInfo = await getBroadcastClinicInfo(clinic.id);
     const needsInterest = /\{procedimento\}/i.test(campaign.message);
@@ -194,14 +217,19 @@ async function sendNextBatch(): Promise<void> {
       campaign.targetMode === MONTH_LEADS_MODE ? (await getFunnelStages(clinic.id)).filter((st) => st.kind === "ganho").map((st) => st.stageId) : [];
     for (let i = 0; i < pending.length; i++) {
       const recipient = pending[i];
+      // RESERVA ATOMICA do destinatario (dois ciclos/processos nunca enviam o mesmo): so quem trocar pending/deferred/failed -> sending segue.
+      const claim = await prisma.broadcastRecipient.updateMany({ where: { id: recipient.id, status: recipient.status, updatedAt: recipient.updatedAt }, data: { status: "sending", attempts: { increment: 1 }, attemptedAt: null, updatedAt: new Date() } });
+      if (claim.count !== 1) continue;
+      const attempt = recipient.attempts + 1;
+      const skipRecipient = (detail: string) => prisma.broadcastRecipient.updateMany({ where: { id: recipient.id, status: "sending" }, data: { status: "skipped", detail, attempts: { decrement: 1 }, updatedAt: new Date() } });
       // Pediu pra parar (ou foi marcado assim depois da campanha ser montada): pula sem enviar.
-      if (recipient.patient.optedOut || recipient.patient.noInterest) {
-        await prisma.broadcastRecipient.update({ where: { id: recipient.id }, data: { status: "skipped" } });
+      if (recipient.patient.optedOut || recipient.patient.noInterest || recipient.patient.contactKind !== "paciente" || recipient.patient.promoOptOut) {
+        await skipRecipient(recipient.patient.contactKind !== "paciente" ? "contato classificado como nao-paciente" : recipient.patient.promoOptOut ? "pediu para nao receber promocoes" : "pediu para nao receber / sem interesse");
         continue;
       }
       // Texto com {procedimento} e sem interesse conhecido: nao faz sentido, pula.
       if (needsInterest && !firstInterest(recipient.patient.interestNote)) {
-        await prisma.broadcastRecipient.update({ where: { id: recipient.id }, data: { status: "skipped" } });
+        await skipRecipient("texto com {procedimento} e sem interesse conhecido");
         continue;
       }
       // Campanha mensal de leads: a campanha leva horas; quem agendou/comprou nesse meio tempo, ou pediu pra ser chamada
@@ -210,37 +238,53 @@ async function sendNextBatch(): Promise<void> {
         const booked = await prisma.appointment.count({ where: { patientId: recipient.patientId, status: { in: ["confirmed", "completed", "no_show"] } } });
         const waiting = recipient.patient.callbackAt && recipient.patient.callbackAt.getTime() > Date.now();
         if (booked > 0 || waiting || wonStageIds.includes(recipient.patient.funnelStage)) {
-          await prisma.broadcastRecipient.update({ where: { id: recipient.id }, data: { status: "skipped" } });
+          await skipRecipient("ja agendou/comprou ou pediu retorno mais tarde");
           continue;
         }
       }
       const text = renderTemplate(campaign.message, recipient.patient.name, recipient.patient.phone, clinicInfo, recipient.patient.interestNote);
+      const retryAt = new Date(Date.now() + BROADCAST_RETRY_GAP_MS);
+      const exhaust = attempt >= BROADCAST_MAX_ATTEMPTS;
+      const settle = (data: Record<string, unknown>) => prisma.broadcastRecipient.updateMany({ where: { id: recipient.id, status: "sending" }, data: { ...data, updatedAt: new Date() } });
+      let report: SendReport | null = null;
       try {
-        const outcome = await sendText(clinic.id, recipient.patient.phone, text, { kind: "campanha" });
-        await prisma.broadcastRecipient.update({
-          where: { id: recipient.id },
-          data: { status: outcome === "sent" ? "sent" : "skipped", sentAt: new Date() },
+        const outcome = await sendText(clinic.id, recipient.patient.phone, text, {
+          kind: "campanha",
+          // IMEDIATAMENTE antes do provedor: a tentativa passa a constar (reservado SEM isto = o provedor NAO foi chamado) e o texto exato fica guardado
+          beforeProvider: async () => { await prisma.broadcastRecipient.update({ where: { id: recipient.id }, data: { attemptedAt: new Date(), messageText: text } }); },
+          report: (r) => { report = r; },
         });
-        // Reativacao: registra a mensagem na conversa do paciente pra Alice ter
-        // contexto quando ele responder (as outras campanhas nao precisam disso).
-        if (outcome === "sent" && (campaign.targetMode === "reactivation" || campaign.targetMode === MONTH_LEADS_MODE)) {
-          await recordAutomatedMessage(recipient.patientId, text, "Reativação de base");
-        }
+        const rep = report as SendReport | null;
+        if (outcome === "sent") {
+          await settle({ status: "sent", sentAt: new Date(), detail: "aceito pelo provedor", destination: rep?.destination ?? null, providerId: rep?.providerId ?? null });
+          // Reativacao: registra a mensagem na conversa do paciente pra Alice ter contexto quando ele responder (as outras campanhas nao precisam disso).
+          if (campaign.targetMode === "reactivation" || campaign.targetMode === MONTH_LEADS_MODE) {
+            await recordAutomatedMessage(recipient.patientId, text, "Reativação de base").catch((err) => console.error("[campanha] aceito, mas o registro no chat falhou (NAO reenvia):", err instanceof Error ? err.message : err));
+          }
+        } else if (outcome === "vetoed") await settle({ status: "vetoed", detail: "a revisao por IA barrou a mensagem (motivo no Diario)" });
+        else if (outcome === "blocked") await settle({ status: "blocked", detail: "envio automatico bloqueado (plano/politica/nao-paciente)" });
+        else await settle({ status: "skipped", detail: "mensagem identica ja enviada (duplicada)" });
       } catch (err) {
+        const started = await prisma.broadcastRecipient.findUnique({ where: { id: recipient.id }, select: { attemptedAt: true } });
         if (isSendDeferred(err)) {
-          // WhatsApp desconectado ou revisao por IA fora do ar: NADA saiu e nao e falha desta pessoa. Ela continua pendente (a campanha segue quando o servico voltar) e esta clinica para aqui.
+          // WhatsApp desconectado ou revisao por IA fora do ar: NADA saiu e nao e falha desta pessoa. Fica pendente (deferred) e esta clinica para aqui.
+          await settle({ status: "deferred", detail: deferralInfo(err).reason, nextAttemptAt: null, ...(started?.attemptedAt ? {} : { attempts: { decrement: 1 } }) });
           console.warn(`[campanha] clinica=${clinic.id} campanha=${campaign.id}: envio adiado (${err instanceof Error ? err.message : "indisponivel"}); destinatarios seguem pendentes`);
           break;
         }
-        console.error(`Falha ao enviar broadcast para ${recipient.patient.phone}:`, err);
-        await prisma.broadcastRecipient.update({ where: { id: recipient.id }, data: { status: "failed" } });
+        if (isPermanentSendError(err)) await settle({ status: "failed_permanent", detail: "numero invalido/sem WhatsApp" });
+        else if (isAmbiguousSendError(err)) await settle({ status: "unconfirmed", detail: "tempo esgotado no provedor: pode ter chegado; NAO reenviado" });
+        else {
+          console.error(`Falha ao enviar broadcast para ...${recipient.patient.phone.slice(-4)}:`, err instanceof Error ? err.message : err);
+          await settle({ status: exhaust ? "failed_permanent" : "failed", detail: `falha do provedor antes de aceitar: ${(err instanceof Error ? err.message : String(err)).slice(0, 120)}`, nextAttemptAt: exhaust ? null : retryAt });
+        }
       }
       // Pausa aleatoria entre um envio e outro (rajada de dezenas de mensagens iguais e o padrao que o WhatsApp bloqueia).
       if (i < pending.length - 1) await sleep(4000 + Math.random() * 6000);
     }
 
     const stillPending = await prisma.broadcastRecipient.count({
-      where: { campaignId: campaign.id, status: "pending" },
+      where: { campaignId: campaign.id, OR: [{ status: { in: ["pending", "sending", "deferred"] } }, { status: "failed", attempts: { lt: BROADCAST_MAX_ATTEMPTS } }] },
     });
     if (stillPending === 0) {
       await prisma.broadcastCampaign.update({ where: { id: campaign.id }, data: { status: "completed" } });

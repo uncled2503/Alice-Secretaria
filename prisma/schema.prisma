@@ -531,6 +531,19 @@ model Patient {
   contactKindSource   String?
   contactKindAt       DateTime?
   contactKindEvidence String?   // trecho da mensagem que motivou (para a equipe revisar); nunca uma palavra isolada
+  // PREFERENCIAS (22/10): promocional separado do operacional. `optedOut` continua sendo o bloqueio TOTAL; `promoOptOut` bloqueia so mensagens promocionais/relacionamento (campanha, aniversario com cortesia,
+  // renovacao, indicacao, retomada) e preserva as operacionais (lembrete, confirmacao, pre/pos, retorno combinado pedido pela pessoa).
+  promoOptOut         Boolean   @default(false)
+  promoOptOutAt       DateTime?
+  // AUTORIZACAO de uso de imagem/depoimento: so existe quando REGISTRADA (null = nao pediu/nao sabe: nada e usado). Procedencia obrigatoria.
+  imageConsent        String?   // concedido | negado
+  imageConsentScope   String?   // antes_depois | depoimento | ambos
+  imageConsentSource  String?   // de onde veio (ex.: termo assinado, WhatsApp <data>, painel por <equipe>)
+  imageConsentAt      DateTime?
+  // MOTIVO ESTRUTURADO de perda do lead (lista fechada em crm/lossReasons.ts)
+  lossReasonCode      String?
+  lossReasonNote      String?
+  lossReasonAt        DateTime?
   active          Boolean @default(true)  // paciente ainda em acompanhamento com a clinica ou nao
   hasPrescription Boolean @default(false) // controla se os lembretes de renovacao de receita aparecem/valem
   phoneContactName String? // nome com que o paciente foi salvo na agenda do celular da clinica (null = ainda nao salvo)
@@ -753,6 +766,17 @@ model BroadcastRecipient {
   status     String            @default("pending") // pending | sent | failed
   sentAt     DateTime?
   repliedAt  DateTime?         // primeira resposta ligada a esta campanha (evidencia da atribuicao)
+  // ---- tentativa (22/10): sentAt SO quando o provedor aceitou. status: pending | sending | sent | skipped | blocked | vetoed | deferred | failed | failed_permanent | unconfirmed
+  attempts      Int       @default(0)
+  attemptedAt   DateTime?
+  providerId    String?
+  destination   String?
+  detail        String?
+  messageText   String?
+  nextAttemptAt DateTime?
+  deliveryState String?
+  deliveryAt    DateTime?
+  updatedAt     DateTime?
 
   @@unique([campaignId, patientId])
 }
@@ -927,6 +951,7 @@ model Appointment {
   cePresenceState String?      // null | pending (paciente confirmou; falta o PATCH /confirm no CE) | synced | skipped (sem vinculo)
   cePresenceAt   DateTime?     // quando a confirmacao de presenca foi sincronizada com o CE
   scheduleChangedAt DateTime?  // quando o HORARIO mudou pela ultima vez (remarcacao). Preenchido pela camada do banco (db/client.ts), em qualquer caminho. null = nunca remarcado
+  cancelReasonCode String?     // motivo ESTRUTURADO do cancelamento/falta (lista fechada em crm/lossReasons.ts); null = nao informado
   completedAt    DateTime?     // quando o atendimento passou a "concluido" AQUI (registro de conclusao). null = nao concluido ou concluido antes deste registro existir
   attendeeId     String?       // quem E ATENDIDO quando nao e a pessoa do WhatsApp (ex.: marido): null = a propria pessoa do contato
   attendee       Attendee?     @relation(fields: [attendeeId], references: [id])
@@ -1053,6 +1078,13 @@ model WaitlistEntry {
   professionalId String?
   professional   Professional? @relation(fields: [professionalId], references: [id], onDelete: SetNull)
   preferredNote  String        @default("") // "quinta de manha" - texto livre do paciente
+  // CRITERIOS ESTRUTURADOS (22/10): so valem quando preenchidos (null = qualquer). Compatibilidade real em scheduling/waitlistMatch.ts.
+  days           String?       // dias da semana aceitos (0=dom..6=sab), separados por virgula
+  shifts         String?       // manha,tarde,noite
+  minLeadHours   Int           @default(0) // antecedencia minima (horas) entre o aviso e a vaga
+  priority       Int           @default(0) // maior = antes (decisao da equipe)
+  validUntil     DateTime?     // depois disto a entrada expira
+  offeredSlotAt  DateTime?     // vaga oferecida (oferta NAO reserva a vaga)
   status         String        @default("waiting") // waiting | notified | converted | cancelled
   createdAt      DateTime      @default(now())
   notifiedAt     DateTime?
@@ -1209,7 +1241,21 @@ model RenewalSent {
   appointment   Appointment @relation(fields: [appointmentId], references: [id])
   ruleId        String
   rule          RenewalRule @relation(fields: [ruleId], references: [id])
-  sentAt        DateTime    @default(now())
+  sentAt        DateTime    @default(now()) // (legado) = quando o REGISTRO foi criado; so `acceptedAt` prova envio aceito pelo provedor
+  // ---- controle persistente da renovacao (22/10): reservado ANTES da tentativa; veto/bloqueio/falha NAO consomem a renovacao ----
+  // state: legacy (anterior ao controle: contava como consumida) | reserved | sent | unconfirmed | deferred | failed | vetoed | blocked | failed_permanent | exhausted
+  state         String      @default("legacy")
+  attempts      Int         @default(0)
+  attemptedAt   DateTime?
+  acceptedAt    DateTime?
+  providerId    String?
+  destination   String?
+  detail        String?
+  messageText   String?
+  nextAttemptAt DateTime?
+  deliveryState String?   // accepted | delivered | read | failed | staff_confirmed (so o que o provedor/webhook ou a equipe comprovou)
+  deliveryAt    DateTime?
+  updatedAt     DateTime?
 
   @@unique([appointmentId, ruleId])
 }
@@ -1246,6 +1292,7 @@ model BirthdaySent {
   detail        String?   // motivo/evidencia (ex.: id da mensagem identica ja registrada no chat)
   deliveryState String?
   deliveryAt    DateTime?
+  messageText   String?   // texto EXATO renderizado da tentativa
   attempts      Int          @default(0) // 0 = registro anterior ao controle por tentativa (reserva sem desfecho = incerta); >= 1 = esta versao: reserva SEM attemptedAt prova que nada foi enviado
   nextAttemptAt DateTime?
   updatedAt     DateTime     @default(now()) @updatedAt
@@ -1400,6 +1447,7 @@ model ReminderDispatch {
   nextAttemptAt DateTime? // proxima tentativa planejada (adiado/falha recuperavel)
   deadlineAt    DateTime? // prazo final desta mensagem (fim da janela estendida / antecedencia minima)
   extendedReason String?  // por que saiu/ficou na janela ESTENDIDA (falha operacional, capacidade...)
+  messageText   String?   // texto EXATO renderizado da tentativa (nao o template de hoje): prova do que foi enviado
 
   @@unique([bookingKey, ruleId, startsAt])
   @@unique([bookingKey, kind, startsAt, sendDay])
@@ -1689,4 +1737,102 @@ model SpecialDate {
 
   @@unique([clinicId, kind, name, startsOn])
   @@index([clinicId, startsOn])
+}
+
+// RETORNO COMBINADO (callbackAt do paciente) com controle persistente (22/10): a promessa so e limpa depois de um desfecho FINAL registrado aqui.
+// state: pending | running | sent | unconfirmed | forwarded (equipe avisada; NAO e mensagem enviada) | closed | deferred | failed
+model CallbackDispatch {
+  id            String    @id @default(cuid())
+  clinicId      String
+  patientId     String
+  dueAt         DateTime  // o callbackAt prometido (identidade do compromisso)
+  note          String?
+  state         String    @default("pending")
+  attempts      Int       @default(0)
+  attemptedAt   DateTime?
+  providerId    String?
+  destination   String?
+  detail        String?
+  messageText   String?
+  nextAttemptAt DateTime?
+  deliveryState String?
+  deliveryAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime?
+
+  @@unique([patientId, dueAt])
+  @@index([clinicId, state])
+}
+
+// PROPOSTA ABERTA (22/10): o que foi apresentado, valor, validade e estado. "Dinheiro parado" = propostas abertas e vigentes somadas, sem prometer fechamento.
+// status: aberta | aceita | recusada | expirada | cancelada. itemsJson: [{ "name": "...", "procedureId": "...", "qty": 1, "unitValue": 100 }].
+model Proposal {
+  id          String    @id @default(cuid())
+  clinicId    String
+  patientId   String
+  title       String
+  itemsJson   String    @default("[]")
+  totalValue  Float?    // null = valor nao informado (nunca estimado)
+  validUntil  DateTime? // null = sem validade informada
+  status      String    @default("aberta")
+  objectionCode String?
+  note        String?
+  createdBy   String?
+  openedAt    DateTime  @default(now())
+  closedAt    DateTime?
+  updatedAt   DateTime  @default(now()) @updatedAt
+
+  @@index([clinicId, status])
+  @@index([patientId, status])
+}
+
+// PACOTE DE SESSOES - FONTE INTERNA EXPLICITA (22/10). O Clinica Experts NAO oferece saldo/consumo de sessoes em nenhum endpoint do cliente existente (src/clinicaexperts); nada aqui e inventado
+// a partir dele: o saldo e o que a equipe registrou (total contratado) menos as sessoes REGISTRADAS em PackageUsage.
+model PatientPackage {
+  id            String    @id @default(cuid())
+  clinicId      String
+  patientId     String
+  procedureId   String?
+  name          String
+  totalSessions Int
+  startsAt      DateTime  @default(now())
+  expiresAt     DateTime?
+  status        String    @default("ativo") // ativo | concluido | cancelado
+  source        String    @default("interno")
+  createdBy     String?
+  notes         String?
+  createdAt     DateTime  @default(now())
+  usages        PackageUsage[]
+
+  @@index([clinicId, status])
+  @@index([patientId, status])
+}
+
+model PackageUsage {
+  id            String         @id @default(cuid())
+  packageId     String
+  package       PatientPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  usedAt        DateTime       @default(now())
+  appointmentId String?
+  recordedBy    String?
+  note          String?
+
+  @@index([packageId, usedAt])
+}
+
+// COMPROVANTE DE PAGAMENTO: imagem recebida NAO e pagamento confirmado. recebido -> pendente_conferencia -> conferido | recusado (so a equipe/financeiro confere).
+model PaymentProof {
+  id            String    @id @default(cuid())
+  clinicId      String
+  patientId     String
+  appointmentId String?
+  messageId     String?   // mensagem da conversa que trouxe a imagem/PDF
+  status        String    @default("recebido")
+  amountClaimed Float?    // valor que a pessoa disse ter pago (nao e valor confirmado)
+  checkedBy     String?
+  checkedAt     DateTime?
+  note          String?
+  createdAt     DateTime  @default(now())
+
+  @@index([clinicId, status])
 }

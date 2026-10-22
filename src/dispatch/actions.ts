@@ -12,6 +12,7 @@ import { parsePhone, canonicalKey } from "../uazapi/phone.js";
 import { saveResolution } from "../uazapi/phoneRegistry.js";
 import { buildDispatchView, listFilteredIds, REASONS, type DispatchFilters, type DispatchItem } from "./model.js";
 import { loadPolicy, HARD_LAST_HOUR, type DispatchKind } from "./policy.js";
+import { adapterRowDay } from "./adapters.js";
 import { scheduleLocked } from "../jobs/lock.js";
 
 // ---------------------------------------------------------------------------
@@ -34,32 +35,45 @@ function audit(clinicId: string, actor: Actor, title: string, description: strin
   return logActivity({ clinicId, type: "dispatch_action", area: "automacoes", title, description, actorName: actor.name, patientId: patientId ?? null });
 }
 
-interface Parsed { src: "rd" | "bd" | "exr" | "exb"; a: string; b?: string; startsAt?: number; day?: string }
+interface Parsed { src: "rd" | "bd" | "exr" | "exb" | "ad"; a: string; b?: string; startsAt?: number; day?: string }
 export function parseItemId(id: string): Parsed | null {
   const p = id.split(":");
   if (p[0] === "rd" && p[1]) return { src: "rd", a: p[1] };
   if (p[0] === "bd" && p[1]) return { src: "bd", a: p[1] };
+  if (["rn", "cb", "bc", "ps", "pr", "fu"].includes(p[0]) && p[1]) return { src: "ad", a: p[1] }; // adaptadores: o proprio fluxo controla
   if (p[0] === "ex" && p[1] === "r" && p.length >= 6) return { src: "exr", a: p[2], b: p[3], startsAt: Number(p[4]), day: p.slice(5).join(":") };
   if (p[0] === "ex" && p[1] === "b" && p.length >= 4) return { src: "exb", a: p[2], day: p.slice(3).join(":") };
   return null;
 }
 
-// Garante que o item pertence a clinica (isolamento no servidor) e devolve a linha atual do painel.
+// Busca UM item pela identidade, sempre dentro da clinica (isolamento no servidor) e SEM depender de pagina nem do limite de 200 da listagem: o filtro `itemId` e aplicado sobre a lista
+// completa do periodo antes de paginar. Item de outra clinica / inexistente = null (nunca revela que existe).
 export async function loadItem(clinicId: string, id: string, now = new Date()): Promise<DispatchItem | null> {
   const p = parseItemId(id);
   if (!p) return null;
   let day: string | undefined = p.day;
+  if (p.src === "ad") {
+    const clinic = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { timezone: true } });
+    day = (await adapterRowDay(clinicId, id, clinic?.timezone || "America/Sao_Paulo")) ?? undefined;
+    if (!day) return null;
+  }
   if (p.src === "rd") { const r = await prisma.reminderDispatch.findFirst({ where: { id: p.a, clinicId }, select: { sendDay: true } }); if (!r) return null; day = r.sendDay; }
   if (p.src === "bd") {
     const b = await prisma.birthdaySent.findFirst({ where: { id: p.a, rule: { clinicId } }, include: { patient: { select: { birthDate: true } } } });
     if (!b?.patient.birthDate) return null;
     const bd = b.patient.birthDate;
-    day = `${b.year}-${String(bd.getUTCMonth() + 1).padStart(2, "0")}-${String(bd.getUTCDate()).padStart(2, "0")}`;
-    if (bd.getUTCMonth() === 1 && bd.getUTCDate() === 29) { const alt = `${b.year}-02-28`; const v0 = await buildDispatchView(clinicId, { from: day, to: day, pageSize: 200 }, now).catch(() => null); if (!v0?.items.some((i) => i.id === id)) day = alt; }
+    const mmdd = `${String(bd.getUTCMonth() + 1).padStart(2, "0")}-${String(bd.getUTCDate()).padStart(2, "0")}`;
+    // 29/02 comemora em 28/02 nos anos nao bissextos: tenta os dois dias do ano do registro
+    const days = mmdd === "02-29" ? [`${b.year}-02-29`, `${b.year}-02-28`] : [`${b.year}-${mmdd}`];
+    for (const d of days) {
+      const v = await buildDispatchView(clinicId, { from: d, to: d, itemId: id, pageSize: 1 }, now);
+      if (v.items[0]) return v.items[0];
+    }
+    return null;
   }
   if (!day) return null;
-  const v = await buildDispatchView(clinicId, { from: day, to: day, pageSize: 200 }, now);
-  return v.items.find((i) => i.id === id) ?? null;
+  const v = await buildDispatchView(clinicId, { from: day, to: day, itemId: id, pageSize: 1 }, now);
+  return v.items[0] ?? null;
 }
 
 // ------------------------------------------------------------------ detalhe
@@ -68,8 +82,7 @@ export async function dispatchDetail(clinicId: string, id: string, now = new Dat
   if (!item) return null;
   const p = parseItemId(id)!;
   const timeline: { at: string; what: string }[] = [];
-  let text: string | null = null;
-  let who: string | null = null;
+  let origin: string | null = null;
   if (p.src === "rd") {
     const r = await prisma.reminderDispatch.findUnique({ where: { id: p.a } });
     if (r) {
@@ -77,21 +90,23 @@ export async function dispatchDetail(clinicId: string, id: string, now = new Dat
       if (r.attemptedAt) timeline.push({ at: r.attemptedAt.toISOString(), what: "Chamada ao WhatsApp iniciada" });
       if (r.deliveryAt) timeline.push({ at: r.deliveryAt.toISOString(), what: `Provedor informou: ${r.deliveryState}` });
       timeline.push({ at: r.updatedAt.toISOString(), what: `Estado: ${r.state}${r.detail ? ` — ${r.detail}` : ""}` });
-      const near = r.attemptedAt ?? r.updatedAt;
-      const msg = await prisma.message.findFirst({ where: { role: "assistant", conversation: { patientId: r.patientId }, createdAt: { gte: new Date(near.getTime() - 15 * 60_000), lte: new Date(near.getTime() + 15 * 60_000) } }, orderBy: { createdAt: "asc" }, select: { content: true } });
-      text = msg?.content ?? null;
-      who = /painel|autorizad|recuper/i.test(r.detail ?? "") ? "equipe (painel)" : "automático";
+      // origem REGISTRADA (o ciclo grava o motivo/origem em detail); sem registro, nao se afirma
+      origin = r.detail === "recuperacao pelo painel" ? "equipe (recuperação pelo painel)" : r.state === "sent" || r.state === "unconfirmed" ? "ciclo automático" : null;
     }
   } else if (p.src === "bd") {
-    const b = await prisma.birthdaySent.findUnique({ where: { id: p.a }, include: { rule: { select: { message: true } } } });
+    const b = await prisma.birthdaySent.findUnique({ where: { id: p.a } });
     if (b) {
       timeline.push({ at: b.sentAt.toISOString(), what: `Reservado (tentativa ${b.attempts})` });
       if (b.attemptedAt) timeline.push({ at: b.attemptedAt.toISOString(), what: "Chamada ao WhatsApp iniciada" });
       if (b.deliveryAt) timeline.push({ at: b.deliveryAt.toISOString(), what: `Provedor informou: ${b.deliveryState}` });
       timeline.push({ at: b.updatedAt.toISOString(), what: `Estado: ${b.state}${b.detail ? ` — ${b.detail}` : ""}` });
-      text = b.rule.message;
-      who = "automático";
+      origin = /recuperacao_manual|janela estendida/.test(b.detail ?? "") ? "ciclo automático (janela estendida)" : b.state === "sent" || b.state === "unconfirmed" ? "ciclo automático" : null;
     }
+  }
+  if (p.src === "ad") {
+    if (item.attemptedAt) timeline.push({ at: item.attemptedAt, what: "Chamada ao WhatsApp iniciada" });
+    timeline.push({ at: now.toISOString(), what: `Estado atual: ${item.statusLabel}${item.detail ? ` — ${item.detail}` : ""}` });
+    origin = "controle próprio do fluxo";
   }
   const acts = await prisma.activityLog.findMany({ where: { clinicId, type: { in: ["dispatch_action", "dispatch_capacity_risk"] }, patientId: item.patientId }, orderBy: { createdAt: "desc" }, take: 8, select: { createdAt: true, title: true, description: true, actorName: true } });
   for (const a of acts) timeline.push({ at: a.createdAt.toISOString(), what: `${a.title}${a.actorName ? ` (${a.actorName})` : ""}` });
@@ -99,59 +114,96 @@ export async function dispatchDetail(clinicId: string, id: string, now = new Dat
   const pat = await prisma.patient.findFirst({ where: { id: item.patientId, clinicId }, select: { phone: true } });
   const pi = pat ? parsePhone(pat.phone) : null;
   return {
-    item, text, who, timeline,
+    item,
+    // TEXTO EXATO da tentativa, gravado no momento do envio. Nunca o template de hoje e nunca "a mensagem mais proxima no horario": sem registro, diz que nao ha.
+    text: item.messageText,
+    textNote: item.messageText ? "Texto exato gravado na tentativa." : item.attempts > 0 || item.attemptedAt ? "Texto não registrado: a tentativa é anterior ao registro do texto exato. O texto atual do modelo NÃO prova o que foi enviado." : null,
+    providerMessageId: item.providerIdFull,
+    who: origin, timeline,
     telefone: pi ? { tipo: pi.kind, valido: pi.valid, motivos: pi.reasons, destinoOriginal: item.phone, destinoUsado: item.destination, alternativaEstrutural: !!pi.alternate } : null,
     motivoTexto: REASONS[item.reason] ?? item.reason,
   };
 }
 
 // ------------------------------------------------------------------ acoes individuais
-export async function reconcileItem(clinicId: string, id: string, actor: Actor, decision: "enviado" | "nao_enviado", note: string, now = new Date()): Promise<{ ok: boolean; message: string }> {
+type ActionResult = { ok: boolean; message: string };
+const STALE_ACTIVE_MS = 30 * 60_000; // reserva mais nova que isto pode estar com um worker ATIVO: nao se concilia
+
+// Conciliacao de resultado INCERTO. A equipe atesta; isso e confirmacao MANUAL e fica separada de evidencia do provedor (deliveryState "staff_confirmed", nunca "accepted").
+// Reserva ainda recente pertence a um worker ativo: recusa. Toda transicao e atomica (so troca se o estado continua o mesmo) e o sucesso so e informado se UMA linha mudou.
+export async function reconcileItem(clinicId: string, id: string, actor: Actor, decision: "enviado" | "nao_enviado", note: string, now = new Date()): Promise<ActionResult> {
   const p = parseItemId(id);
+  if (p?.src === "ad") return { ok: false, message: "A conciliação deste tipo de disparo é feita no próprio fluxo (ainda não há ação da Central para ele). O estado exibido vem do controle do fluxo." };
   if (!p || (p.src !== "rd" && p.src !== "bd")) return { ok: false, message: "Só dá para conciliar um envio que já tem registro." };
-  const detail = `conciliado por ${actor.name}: ${decision === "enviado" ? "confirmou que chegou" : "confirmou que NÃO saiu"}${note ? ` (${note.slice(0, 120)})` : ""}`;
+  const detail = `conciliado por ${actor.name}: ${decision === "enviado" ? "a equipe confirmou que chegou (sem evidência do provedor)" : "a equipe confirmou que NÃO saiu"}${note ? ` (${note.slice(0, 120)})` : ""}`;
+  const stale = new Date(now.getTime() - STALE_ACTIVE_MS);
+  let changed = 0;
+  let patientId: string | null = null;
   if (p.src === "rd") {
     const r = await prisma.reminderDispatch.findFirst({ where: { id: p.a, clinicId } });
     if (!r) return { ok: false, message: "Registro não encontrado." };
+    patientId = r.patientId;
     if (!["unconfirmed", "reserved"].includes(r.state)) return { ok: false, message: "Só se concilia um resultado incerto." };
-    if (decision === "enviado") await prisma.reminderDispatch.update({ where: { id: r.id }, data: { state: "sent", detail, deliveryState: r.deliveryState ?? "accepted" } });
-    else await prisma.reminderDispatch.update({ where: { id: r.id }, data: { state: "failed", attempt: Math.min(r.attempt, MAX_SEND_ATTEMPTS - 1), detail, updatedAt: new Date(now.getTime() - 3_600_000) } });
-    await audit(clinicId, actor, "Envio conciliado", `${id}: ${detail}`, r.patientId);
+    if (r.state === "reserved" && r.updatedAt.getTime() > stale.getTime()) return { ok: false, message: "Esta reserva é recente: pode haver um envio em andamento. Aguarde alguns minutos (ela vira 'resultado incerto' sozinha se travar) antes de conciliar." };
+    const where = { id: r.id, clinicId, state: r.state, updatedAt: r.updatedAt };
+    changed = decision === "enviado"
+      ? (await prisma.reminderDispatch.updateMany({ where, data: { state: "sent", detail, deliveryState: "staff_confirmed" } })).count
+      : (await prisma.reminderDispatch.updateMany({ where, data: { state: "failed", attempt: Math.min(r.attempt, MAX_SEND_ATTEMPTS - 1), detail, nextAttemptAt: null } })).count;
   } else {
     const b = await prisma.birthdaySent.findFirst({ where: { id: p.a, rule: { clinicId } } });
     if (!b) return { ok: false, message: "Registro não encontrado." };
+    patientId = b.patientId;
     if (!["unconfirmed", "reserved", "legacy"].includes(b.state)) return { ok: false, message: "Só se concilia um resultado incerto." };
-    if (decision === "enviado") await prisma.birthdaySent.update({ where: { id: b.id }, data: { state: "sent", detail, deliveryState: b.deliveryState ?? "accepted" } });
-    else await prisma.birthdaySent.update({ where: { id: b.id }, data: { state: "failed", attempts: Math.min(b.attempts, 2), nextAttemptAt: null, detail } });
-    await audit(clinicId, actor, "Envio conciliado", `${id}: ${detail}`, b.patientId);
+    if (b.state === "reserved" && b.sentAt.getTime() > stale.getTime()) return { ok: false, message: "Esta reserva é recente: pode haver um envio em andamento. Aguarde alguns minutos antes de conciliar." };
+    const where = { id: b.id, state: b.state, updatedAt: b.updatedAt };
+    changed = decision === "enviado"
+      ? (await prisma.birthdaySent.updateMany({ where, data: { state: "sent", detail, deliveryState: "staff_confirmed" } })).count
+      : (await prisma.birthdaySent.updateMany({ where, data: { state: "failed", attempts: Math.min(b.attempts, 2), nextAttemptAt: null, detail } })).count;
   }
-  return { ok: true, message: decision === "enviado" ? "Registrado como enviado (por conferência da equipe)." : "Registrado como NÃO enviado: pode ser recuperado hoje." };
+  if (changed !== 1) return { ok: false, message: "O registro mudou enquanto você conciliava (outra pessoa ou o sistema agiu). Atualize e confira o estado atual." };
+  await audit(clinicId, actor, "Envio conciliado", `${id}: ${detail}`, patientId);
+  return { ok: true, message: decision === "enviado" ? "Registrado como CONFIRMADO PELA EQUIPE (não há evidência do provedor)." : "Registrado como NÃO enviado: pode ser recuperado hoje." };
 }
 
-export async function cancelPending(clinicId: string, id: string, actor: Actor): Promise<{ ok: boolean; message: string }> {
+export async function cancelPending(clinicId: string, id: string, actor: Actor): Promise<ActionResult> {
   const item = await loadItem(clinicId, id);
   if (!item) return { ok: false, message: "Item não encontrado nesta clínica." };
-  if (["aceito", "entregue", "lido", "incerto", "coberto"].includes(item.status)) return { ok: false, message: "Esse envio já saiu (ou é incerto): não dá para cancelar." };
+  if (["aceito", "entregue", "lido", "incerto", "coberto", "confirmado_equipe", "em_andamento"].includes(item.status)) return { ok: false, message: "Esse envio já saiu, está em andamento ou é incerto: não dá para cancelar." };
   const p = parseItemId(id)!;
+  if (p.src === "ad") return { ok: false, message: "Cancelar este tipo de disparo é feito no próprio fluxo (campanha, renovação, retorno...): a Central ainda não cancela por fora." };
   const detail = `cancelado pela equipe (${actor.name})`;
-  if (p.src === "rd") await prisma.reminderDispatch.updateMany({ where: { id: p.a, clinicId, state: { in: ["deferred", "failed", "vetoed"] } }, data: { state: "blocked", detail } });
-  else if (p.src === "bd") await prisma.birthdaySent.updateMany({ where: { id: p.a, rule: { clinicId }, state: { in: ["deferred", "failed", "vetoed"] } }, data: { state: "failed_permanent", detail, nextAttemptAt: null } });
+  let changed = 0;
+  if (p.src === "rd") changed = (await prisma.reminderDispatch.updateMany({ where: { id: p.a, clinicId, state: { in: ["deferred", "failed", "vetoed"] } }, data: { state: "blocked", detail } })).count;
+  else if (p.src === "bd") changed = (await prisma.birthdaySent.updateMany({ where: { id: p.a, rule: { clinicId }, state: { in: ["deferred", "failed", "vetoed"] } }, data: { state: "failed_permanent", detail, nextAttemptAt: null } })).count;
   else if (p.src === "exr") {
     const appt = await prisma.appointment.findFirst({ where: { id: p.b!, clinicId } });
     if (!appt) return { ok: false, message: "Agendamento não encontrado." };
     const rule = await prisma.reminderRule.findFirst({ where: { id: p.a, clinicId } });
     if (!rule) return { ok: false, message: "Regra não encontrada." };
-    await prisma.reminderDispatch.create({ data: { clinicId, bookingKey: bookingKeyOf(appt), appointmentId: appt.id, patientId: appt.patientId, ruleId: rule.id, kind: item.kind === "cobranca" ? "cobranca" : item.kind === "lembrete" ? "do_dia" : "dia_seguinte", startsAt: appt.scheduledAt, sendDay: p.day!, state: "blocked", detail } }).catch(() => undefined);
+    try {
+      await prisma.reminderDispatch.create({ data: { clinicId, bookingKey: bookingKeyOf(appt), appointmentId: appt.id, patientId: appt.patientId, ruleId: rule.id, kind: item.kind === "cobranca" ? "cobranca" : item.kind === "lembrete" ? "do_dia" : "dia_seguinte", startsAt: appt.scheduledAt, sendDay: p.day!, state: "blocked", detail } });
+      changed = 1;
+    } catch (e) {
+      if ((e as { code?: string })?.code === "P2002") return { ok: false, message: "Já existe um registro para este envio (o ciclo acabou de tratá-lo). Atualize a tela." };
+      throw e; // erro de banco NUNCA vira "cancelado": sobe como falha
+    }
   } else if (p.src === "exb") {
     const rule = await prisma.birthdayRule.findFirst({ where: { clinicId, active: true } });
     if (!rule) return { ok: false, message: "Não há regra de aniversário ativa." };
-    await prisma.birthdaySent.create({ data: { patientId: p.a, ruleId: rule.id, year: Number(p.day!.slice(0, 4)), state: "failed_permanent", detail, attempts: 0 } }).catch(() => undefined);
+    try {
+      await prisma.birthdaySent.create({ data: { patientId: p.a, ruleId: rule.id, year: Number(p.day!.slice(0, 4)), state: "failed_permanent", detail, attempts: 0 } });
+      changed = 1;
+    } catch (e) {
+      if ((e as { code?: string })?.code === "P2002") return { ok: false, message: "Já existe um registro para este aniversário (o ciclo acabou de tratá-lo). Atualize a tela." };
+      throw e;
+    }
   }
+  if (changed !== 1) return { ok: false, message: "O envio mudou de estado enquanto você cancelava (já saiu ou foi tratado). Atualize a tela: nada foi cancelado." };
   await audit(clinicId, actor, "Envio pendente cancelado", `${id}: ${detail}`, item.patientId);
   return { ok: true, message: "Cancelado: a Alice não vai enviar esta mensagem." };
 }
 
-export async function scheduleLater(clinicId: string, id: string, minutes: number, actor: Actor, now = new Date()): Promise<{ ok: boolean; message: string }> {
+export async function scheduleLater(clinicId: string, id: string, minutes: number, actor: Actor, now = new Date()): Promise<ActionResult> {
   const item = await loadItem(clinicId, id, now);
   if (!item) return { ok: false, message: "Item não encontrado nesta clínica." };
   const clinic = await prisma.clinic.findUniqueOrThrow({ where: { id: clinicId }, select: { timezone: true } });
@@ -162,22 +214,31 @@ export async function scheduleLater(clinicId: string, id: string, minutes: numbe
   if (at.getTime() >= hard.getTime()) return { ok: false, message: "Esse horário passa do limite do dia (21h): não agendado." };
   if (item.sendDay !== isoDateInZone(now, tz)) return { ok: false, message: "Só dá para reprogramar dentro do mesmo dia do envio." };
   const p = parseItemId(id)!;
-  if (p.src === "rd") await prisma.reminderDispatch.updateMany({ where: { id: p.a, clinicId, state: { in: ["deferred", "failed"] } }, data: { nextAttemptAt: at, updatedAt: new Date(now.getTime() - 0) } });
-  else if (p.src === "bd") await prisma.birthdaySent.updateMany({ where: { id: p.a, rule: { clinicId }, state: { in: ["deferred", "failed", "vetoed"] } }, data: { nextAttemptAt: at } });
+  if (p.src === "ad") return { ok: false, message: "Reprogramar este tipo de disparo não está disponível na Central: o próprio fluxo controla as tentativas." };
+  let changed = 0;
+  // o ciclo respeita nextAttemptAt (ledger.acquireDispatch/precheckDispatch e birthdayVerdict): a reprogramacao tem efeito real
+  if (p.src === "rd") changed = (await prisma.reminderDispatch.updateMany({ where: { id: p.a, clinicId, state: { in: ["deferred", "failed"] } }, data: { nextAttemptAt: at } })).count;
+  else if (p.src === "bd") changed = (await prisma.birthdaySent.updateMany({ where: { id: p.a, rule: { clinicId }, state: { in: ["deferred", "failed", "vetoed"] } }, data: { nextAttemptAt: at } })).count;
   else return { ok: false, message: "Item ainda sem registro de tentativa: use Recuperar." };
+  if (changed !== 1) return { ok: false, message: "O envio mudou de estado (já saiu ou foi tratado): nada foi reprogramado. Atualize a tela." };
   await audit(clinicId, actor, "Envio reprogramado", `${id}: próxima tentativa ${at.toISOString()}`, item.patientId);
   return { ok: true, message: `Reprogramado para ${at.toISOString()}.` };
 }
 
-export async function handoffToHuman(clinicId: string, id: string, actor: Actor, note: string): Promise<{ ok: boolean; message: string }> {
+// "Avisar a equipe" so diz que avisou quando o provedor ACEITOU o aviso (notifyStaff === "sent"); do contrario informa o que realmente aconteceu e NAO registra como encaminhado.
+export async function handoffToHuman(clinicId: string, id: string, actor: Actor, note: string): Promise<ActionResult> {
   const item = await loadItem(clinicId, id);
   if (!item) return { ok: false, message: "Item não encontrado nesta clínica." };
-  await notifyStaff(clinicId, "human_handoff", `📌 Disparo para a equipe: ${item.patientName} (${item.phone}) — ${item.statusLabel}: ${item.reasonLabel}${note ? `. ${note.slice(0, 160)}` : ""}`).catch(() => undefined);
-  await audit(clinicId, actor, "Disparo encaminhado para a equipe", `${id}: ${item.statusLabel} / ${item.reasonLabel}`, item.patientId);
-  return { ok: true, message: "A equipe foi avisada." };
+  const result = await notifyStaff(clinicId, "human_handoff", `📌 Disparo para a equipe: ${item.patientName} (${item.phone}) — ${item.statusLabel}: ${item.reasonLabel}${note ? `. ${note.slice(0, 160)}` : ""}`);
+  if (result !== "sent") {
+    const why: Record<string, string> = { not_configured: "a clínica não tem um telefone de avisos válido configurado", event_disabled: "o aviso de transferência está desligado nas configurações de avisos", not_sent: "o WhatsApp não aceitou o aviso agora (bloqueado/retido)", failed: "falha ao enviar o aviso" };
+    await audit(clinicId, actor, "Aviso à equipe NÃO enviado", `${id}: ${why[result] ?? result}`, item.patientId);
+    return { ok: false, message: `A equipe NÃO foi avisada: ${why[result] ?? result}.` };
+  }
+  await audit(clinicId, actor, "Disparo encaminhado para a equipe", `${id}: ${item.statusLabel} / ${item.reasonLabel} (aviso aceito pelo WhatsApp)`, item.patientId);
+  return { ok: true, message: "Aviso enviado à equipe (aceito pelo WhatsApp)." };
 }
 
-// Corrige o telefone do cadastro (validado). Reavalia o item sem reenvio imediato: o proximo ciclo/recuperacao decide, e o historico nao e apagado.
 export async function correctRegistration(clinicId: string, patientId: string, rawPhone: string, actor: Actor): Promise<{ ok: boolean; message: string }> {
   const info = parsePhone(rawPhone);
   if (!info.valid || !info.destination) return { ok: false, message: `Telefone inválido (${info.invalid ?? "formato"}): nada foi alterado.` };
@@ -405,7 +466,8 @@ async function executeItem(item: { kind: string; ref: string; ruleId: string | n
   if (row && ["failed_permanent", "exhausted", "vetoed", "deferred", "failed"].includes(row.state)) {
     // numero que deu "sem WhatsApp" so tenta de novo se o cadastro mudou
     if (row.state === "failed_permanent" && row.destination && canonicalKey(row.destination) === canonicalKey(due.patient.phone)) return { result: "skipped", reason: "falha definitiva com este mesmo telefone: corrija o cadastro" };
-    await prisma.reminderDispatch.update({ where: { id: row.id }, data: { state: "failed", attempt: Math.min(row.attempt, MAX_SEND_ATTEMPTS - 1), detail: "liberado para nova tentativa pela equipe (painel)", updatedAt: new Date(now.getTime() - 3_600_000) } });
+    const freed = await prisma.reminderDispatch.updateMany({ where: { id: row.id, state: row.state, updatedAt: row.updatedAt }, data: { state: "failed", attempt: Math.min(row.attempt, MAX_SEND_ATTEMPTS - 1), detail: "liberado para nova tentativa pela equipe (painel)", nextAttemptAt: null, updatedAt: new Date(now.getTime() - 3_600_000) } });
+    if (freed.count !== 1) return { result: "skipped", reason: "o controle mudou de estado enquanto a recuperacao era preparada (o ciclo ou outra pessoa agiu)" };
   }
   const attempted = await deliverReminder(env, rule, due, { ignoreWindow: true, pause: false, origin: "recuperacao pelo painel" });
   const after = await prisma.reminderDispatch.findFirst({ where: { bookingKey: key, ruleId: rule.id, startsAt: appt.scheduledAt }, select: { state: true, detail: true } });

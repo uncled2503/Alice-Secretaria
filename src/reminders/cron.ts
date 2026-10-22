@@ -571,7 +571,7 @@ export async function deliverReminder(env: DeliverEnv, rule: ReminderRule, appt:
       outcome = await sendText(appt.clinicId, appt.patient.phone, text, {
         kind: "lembrete",
         // IMEDIATAMENTE antes do provedor: a tentativa passa a constar (reservado SEM attemptedAt = o provedor NAO foi chamado)
-        beforeProvider: async () => { await prisma.reminderDispatch.update({ where: { id: acq.id }, data: { attemptedAt: new Date() } }).catch(() => undefined); },
+        beforeProvider: async () => { await prisma.reminderDispatch.update({ where: { id: acq.id }, data: { attemptedAt: new Date(), messageText: text } }); }, // (sem catch: se a tentativa nao puder ser registrada, NADA e enviado)
         report: (r) => { sendReport = r; },
       });
     } catch (err) {

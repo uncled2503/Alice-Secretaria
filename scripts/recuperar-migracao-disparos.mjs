@@ -36,6 +36,7 @@ const BS_FULL = {
   detail: col("TEXT"), deliveryState: col("TEXT"), deliveryAt: col("DATETIME"), attempts: col("INTEGER", { notnull: true, dflt: "0" }), nextAttemptAt: col("DATETIME"),
   updatedAt: col("DATETIME", { notnull: true, dflt: "CURRENT_TIMESTAMP" }),
 };
+const LATER_BS_COLUMNS = ["messageText"];
 const NEW_TABLES = ["PhoneResolution", "DispatchPolicy", "DispatchRun", "DispatchRunItem"];
 const EXPECTED_INDEXES = {
   ReminderDispatch_providerId_idx: { table: "ReminderDispatch", unique: false, cols: ["providerId"] },
@@ -124,7 +125,8 @@ export function compareToExpected(s) {
   if (!bs) missing.push("tabela BirthdaySent inexistente (banco inesperado)");
   else {
     for (const [c, spec] of Object.entries(BS_FULL)) { if (!bs[c]) missing.push(`BirthdaySent.${c}: coluna ausente`); else if (!same(bs[c], spec)) missing.push(`BirthdaySent.${c}: definicao diferente (esperado ${JSON.stringify(spec)}, atual ${JSON.stringify(bs[c])})`); }
-    for (const c of Object.keys(bs)) if (!BS_FULL[c]) missing.push(`BirthdaySent.${c}: coluna inesperada`);
+    // colunas acrescentadas por migracoes POSTERIORES (20261027: messageText) nao sao "inesperadas": a recuperacao tambem pode ser conferida depois do deploy seguinte
+    for (const c of Object.keys(bs)) if (!BS_FULL[c] && !LATER_BS_COLUMNS.includes(c)) missing.push(`BirthdaySent.${c}: coluna inesperada`);
   }
   for (const t of NEW_TABLES) if (!s.tables[t]) missing.push(`tabela ${t}: ausente`);
   for (const [t, fks] of Object.entries(EXPECTED_FKS)) {

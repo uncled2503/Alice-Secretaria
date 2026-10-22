@@ -19,11 +19,12 @@ import { loadAllPolicies, normalWindowEnd, extendedDeadline, resolveExtension, H
 // ---------------------------------------------------------------------------
 
 export type DispatchStatus =
-  | "lido" | "entregue" | "aceito" | "entrega_falhou"
+  | "programado" | "cancelado" | "encaminhado"
+  | "lido" | "entregue" | "aceito" | "confirmado_equipe" | "entrega_falhou"
   | "incerto" | "falhou" | "adiado" | "barrado" | "bloqueado" | "expirado" | "nao_tentado" | "excluido" | "em_andamento" | "coberto";
 
 export const STATUS_LABEL: Record<DispatchStatus, string> = {
-  lido: "Lido", entregue: "Entregue", aceito: "Aceito pelo WhatsApp", entrega_falhou: "Entrega falhou", incerto: "Resultado incerto", falhou: "Falhou", adiado: "Adiado",
+  lido: "Lido", entregue: "Entregue", programado: "Programado", cancelado: "Cancelado", encaminhado: "Encaminhado à equipe (não é mensagem enviada)", aceito: "Aceito pelo WhatsApp", confirmado_equipe: "Confirmado pela equipe (sem evidência do provedor)", entrega_falhou: "Entrega falhou", incerto: "Resultado incerto", falhou: "Falhou", adiado: "Adiado",
   barrado: "Barrado pela revisão", bloqueado: "Bloqueado", expirado: "Expirado", nao_tentado: "Não tentado", excluido: "Fora (motivo legítimo)", em_andamento: "Em andamento", coberto: "Já coberto",
 };
 
@@ -60,10 +61,17 @@ export const REASONS: Record<string, string> = {
   outro: "Outro motivo (veja o detalhe)",
 };
 
+// Tipos da Central: os 4 originais (com politica de janela) + os que entram por ADAPTADOR sobre o controle proprio de cada fluxo (adapters.ts).
+export type ItemKind = DispatchKind | "renovacao" | "retorno_combinado" | "campanha" | "pos" | "pre" | "recontato" | "retomada";
+export const ITEM_KINDS: readonly ItemKind[] = ["confirmacao", "cobranca", "lembrete", "aniversario", "pos", "pre", "renovacao", "recontato", "retorno_combinado", "retomada", "campanha"];
+
 export interface DispatchItem {
   id: string;
-  source: "reminder" | "birthday" | "expected_reminder" | "expected_birthday";
-  kind: DispatchKind;
+  source: "reminder" | "birthday" | "expected_reminder" | "expected_birthday" | "adapter";
+  kind: ItemKind;
+  campaignId?: string | null;
+  campaignTitle?: string | null;
+  origin?: string | null; // origem do cadastro/da reserva (ex.: Clinica Experts, painel, WhatsApp)
   ruleId: string | null;
   ruleName: string | null;
   patientId: string;
@@ -85,7 +93,9 @@ export interface DispatchItem {
   extendedReason: string | null;
   extended: boolean;
   destination: string | null; // mascarado
-  providerId: string | null; // truncado
+  providerId: string | null; // truncado (lista)
+  providerIdFull: string | null; // identificador COMPLETO da mensagem no provedor (detalhe)
+  messageText: string | null; // texto EXATO renderizado da tentativa (null = tentativa anterior ao registro do texto: nunca se reconstroi pelo template de hoje)
   deliveryState: string | null;
   recoverable: boolean; // pode ser tentado de novo HOJE (a revalidacao final acontece no envio)
   recoverableWhy: string;
@@ -125,6 +135,7 @@ export function statusOfReminderRow(r: { state: string; deliveryState: string | 
     case "sent":
       if (r.deliveryState === "read") return { status: "lido", reason: "ja_enviado" };
       if (r.deliveryState === "delivered") return { status: "entregue", reason: "ja_enviado" };
+      if (r.deliveryState === "staff_confirmed") return { status: "confirmado_equipe", reason: "ja_enviado" };
       if (r.deliveryState === "failed") return { status: "entrega_falhou", reason: "falha_provedor" };
       return { status: "aceito", reason: "ja_enviado" };
     case "unconfirmed": return { status: "incerto", reason: "incerto" };
@@ -134,7 +145,7 @@ export function statusOfReminderRow(r: { state: string; deliveryState: string | 
     case "failed": return { status: "falhou", reason: reason === "outro" ? "falha_provedor" : reason };
     case "failed_permanent": return { status: "falhou", reason: reason === "outro" ? "numero_sem_whatsapp" : reason };
     case "vetoed": return { status: "barrado", reason: "revisao_barrou" };
-    case "blocked": return { status: "bloqueado", reason: reason === "outro" ? "plano_ou_opt_out" : reason };
+    case "blocked": return /cancelado pela equipe/i.test(r.detail ?? "") ? { status: "cancelado", reason: "cancelado_pela_equipe" } : { status: "bloqueado", reason: reason === "outro" ? "plano_ou_opt_out" : reason };
     case "exhausted": return { status: "expirado", reason: "tentativas_esgotadas" };
     case "duplicate": return { status: "coberto", reason: "ja_enviado" };
     default: return { status: "incerto", reason: "sem_evidencia" };
@@ -147,6 +158,7 @@ export function statusOfBirthdayRow(r: { state: string; deliveryState: string | 
     case "sent":
       if (r.deliveryState === "read") return { status: "lido", reason: "ja_enviado" };
       if (r.deliveryState === "delivered") return { status: "entregue", reason: "ja_enviado" };
+      if (r.deliveryState === "staff_confirmed") return { status: "confirmado_equipe", reason: "ja_enviado" };
       if (r.deliveryState === "failed") return { status: "entrega_falhou", reason: "falha_provedor" };
       return { status: "aceito", reason: "ja_enviado" };
     case "legacy": return { status: "incerto", reason: "sem_evidencia" }; // registro anterior ao controle: so prova a reserva
@@ -154,7 +166,7 @@ export function statusOfBirthdayRow(r: { state: string; deliveryState: string | 
     case "reserved": return now.getTime() - r.sentAt.getTime() > 30 * 60_000 ? { status: r.attemptedAt || r.attempts === 0 ? "incerto" : "adiado", reason: r.attemptedAt || r.attempts === 0 ? "incerto" : "falha_provedor" } : { status: "em_andamento", reason: "trava_ocupada" };
     case "deferred": return { status: "adiado", reason: reason === "outro" ? "equipe_conversando" : reason };
     case "failed": return { status: "falhou", reason: reason === "outro" ? "falha_provedor" : reason };
-    case "failed_permanent": return { status: "falhou", reason: "numero_sem_whatsapp" };
+    case "failed_permanent": return /cancelado pela equipe/i.test(r.detail ?? "") ? { status: "cancelado", reason: "cancelado_pela_equipe" } : { status: "falhou", reason: "numero_sem_whatsapp" };
     case "vetoed": return { status: "barrado", reason: "revisao_barrou" };
     case "duplicate": return { status: "coberto", reason: "ja_enviado" };
     default: return { status: "incerto", reason: "sem_evidencia" };
@@ -166,7 +178,8 @@ export interface DispatchFilters {
   view?: View;
   from?: string; // AAAA-MM-DD local
   to?: string;
-  kinds?: DispatchKind[];
+  kinds?: ItemKind[];
+  campaignId?: string;
   status?: DispatchStatus[];
   reason?: string;
   ruleId?: string;
@@ -175,6 +188,7 @@ export interface DispatchFilters {
   recoverableToday?: boolean;
   extended?: boolean;
   page?: number;
+  itemId?: string; // busca UM item pela identidade (sem depender de pagina/limite da listagem)
   pageSize?: number;
 }
 
@@ -185,9 +199,13 @@ export interface Counters {
   nao_tentados: number;
   em_andamento: number;
   aceitos: number; // aceito pelo provedor e ainda SEM confirmacao de entrega
+  confirmados_equipe: number; // a EQUIPE atestou que chegou (sem evidencia do provedor): nunca somado a aceito/entregue
   entregues: number;
   lidos: number;
   entrega_falhou: number;
+  programados: number;
+  cancelados: number;
+  encaminhados: number;
   adiados: number;
   barrados: number;
   falhos: number;
@@ -197,7 +215,7 @@ export interface Counters {
   cobertos: number;
   recuperaveis_hoje: number;
 }
-const zeroCounters = (): Counters => ({ esperados: 0, excluidos: 0, elegiveis: 0, nao_tentados: 0, em_andamento: 0, aceitos: 0, entregues: 0, lidos: 0, entrega_falhou: 0, adiados: 0, barrados: 0, falhos: 0, incertos: 0, expirados: 0, bloqueados: 0, cobertos: 0, recuperaveis_hoje: 0 });
+const zeroCounters = (): Counters => ({ esperados: 0, excluidos: 0, elegiveis: 0, nao_tentados: 0, em_andamento: 0, programados: 0, cancelados: 0, encaminhados: 0, aceitos: 0, confirmados_equipe: 0, entregues: 0, lidos: 0, entrega_falhou: 0, adiados: 0, barrados: 0, falhos: 0, incertos: 0, expirados: 0, bloqueados: 0, cobertos: 0, recuperaveis_hoje: 0 });
 
 export function countItems(items: DispatchItem[]): Counters {
   const c = zeroCounters();
@@ -209,7 +227,11 @@ export function countItems(items: DispatchItem[]): Counters {
     switch (i.status) {
       case "nao_tentado": c.nao_tentados++; break;
       case "em_andamento": c.em_andamento++; break;
+      case "programado": c.programados++; break;
+      case "cancelado": c.cancelados++; break;
+      case "encaminhado": c.encaminhados++; break;
       case "aceito": c.aceitos++; break;
+      case "confirmado_equipe": c.confirmados_equipe++; break;
       case "entregue": c.entregues++; break;
       case "lido": c.lidos++; break;
       case "entrega_falhou": c.entrega_falhou++; break;
@@ -226,7 +248,7 @@ export function countItems(items: DispatchItem[]): Counters {
 }
 
 export interface CoverageKind {
-  kind: DispatchKind;
+  kind: ItemKind;
   counters: Counters;
   fonteCompleta: boolean;
   fonteNota: string;
@@ -333,10 +355,10 @@ export async function buildDispatchView(clinicId: string, f: DispatchFilters = {
     seenDispatchKey.add(`${r.bookingKey}|${r.ruleId}|${r.startsAt.getTime()}`);
     const pat = r.patientId;
     items.push({
-      id: `rd:${r.id}`, source: "reminder", kind, ruleId: r.ruleId, ruleName: rule ? ruleLabel(rule) : null, patientId: pat, patientName: "", phone: "", professional: appt?.professional?.name ?? null, procedure: appt?.procedure?.name ?? null,
+      id: `rd:${r.id}`, source: "reminder", origin: appt ? (appt.ceBookingUuid ? "Clínica Experts" : appt.source ? `agenda (${appt.source})` : "agenda da Alice") : null, kind, ruleId: r.ruleId, ruleName: rule ? ruleLabel(rule) : null, patientId: pat, patientName: "", phone: "", professional: appt?.professional?.name ?? null, procedure: appt?.procedure?.name ?? null,
       referenceAt: r.startsAt.toISOString(), sendDay: r.sendDay, status, statusLabel: STATUS_LABEL[status], reason, reasonLabel: REASONS[reason] ?? reason, detail: r.detail ? mask(r.detail) : null,
       attempts: r.attempt, attemptedAt: iso(r.attemptedAt), nextAttemptAt: iso(r.nextAttemptAt), deadlineAt: iso(r.deadlineAt), extendedReason: r.extendedReason, extended: !!r.extendedReason,
-      destination: r.destination ? maskDigits(r.destination) : null, providerId: shortId(r.providerId), deliveryState: r.deliveryState, recoverable: rec.ok, recoverableWhy: rec.why, actions: actionsFor(status, rec.ok, r.state),
+      destination: r.destination ? maskDigits(r.destination) : null, providerId: shortId(r.providerId), providerIdFull: r.providerId ?? null, messageText: r.messageText ?? null, deliveryState: r.deliveryState, recoverable: rec.ok, recoverableWhy: rec.why, actions: actionsFor(status, rec.ok, r.state),
     });
   }
 
@@ -401,7 +423,7 @@ export async function buildDispatchView(clinicId: string, f: DispatchFilters = {
         items.push({
           id: `ex:r:${rule.id}:${a.id}:${a.scheduledAt.getTime()}:${sendDay}`, source: "expected_reminder", kind, ruleId: rule.id, ruleName: ruleLabel(rule), patientId: a.patientId, patientName: displayName(a.patient.name), phone: maskPhone(a.patient.phone),
           professional: a.professional?.name ?? null, procedure: a.procedure?.name ?? null, referenceAt: a.scheduledAt.toISOString(), sendDay, status, statusLabel: STATUS_LABEL[status], reason, reasonLabel: REASONS[reason] ?? reason, detail: detail ? mask(detail) : null,
-          attempts: 0, attemptedAt: null, nextAttemptAt: null, deadlineAt: null, extendedReason: null, extended: false, destination: null, providerId: null, deliveryState: null,
+          attempts: 0, attemptedAt: null, nextAttemptAt: null, deadlineAt: null, extendedReason: null, extended: false, destination: null, providerId: null, providerIdFull: null, messageText: null, deliveryState: null,
           recoverable: eligibleNow, recoverableWhy: eligibleNow ? "elegível para recuperação hoje (será revalidado no envio)" : rec.why, actions: actionsFor(status, eligibleNow, "none"),
         });
       }
@@ -446,21 +468,29 @@ export async function buildDispatchView(clinicId: string, f: DispatchFilters = {
         id: best ? `bd:${best.id}` : `ex:b:${pt.id}:${day}`, source: best ? "birthday" : "expected_birthday", kind: "aniversario", ruleId: bdayRule?.id ?? null, ruleName: bdayRule?.name ?? null, patientId: pt.id, patientName: displayName(pt.name), phone: maskPhone(pt.phone),
         professional: null, procedure: null, referenceAt: new Date(Date.UTC(p.year, p.month - 1, p.day, 12)).toISOString(), sendDay: day, status, statusLabel: STATUS_LABEL[status], reason, reasonLabel: REASONS[reason] ?? reason, detail,
         attempts: best?.attempts ?? 0, attemptedAt: iso(best?.attemptedAt), nextAttemptAt: iso(best?.nextAttemptAt), deadlineAt: null, extendedReason: null, extended: false,
-        destination: best?.destination ? maskDigits(best.destination) : null, providerId: shortId(best?.providerId), deliveryState: best?.deliveryState ?? null, recoverable: rec.ok, recoverableWhy: rec.why, actions: actionsFor(status, rec.ok, best?.state ?? "none"),
+        destination: best?.destination ? maskDigits(best.destination) : null, providerId: shortId(best?.providerId), providerIdFull: best?.providerId ?? null, messageText: best?.messageText ?? null, deliveryState: best?.deliveryState ?? null, recoverable: rec.ok, recoverableWhy: rec.why, actions: actionsFor(status, rec.ok, best?.state ?? "none"),
       });
     }
   }
+
+  // ADAPTADORES: renovacao, retorno combinado, campanha, pos, pre, recontato e retomadas (cada um le o SEU controle persistente; nada e duplicado)
+  const { adapterItems } = await import("./adapters.js");
+  for (const it of await adapterItems(clinicId, period, tz, now)) { if (!items.some((x) => x.id === it.id)) items.push(it); }
 
   // nomes e telefones (uma consulta so)
   const pats = patientIds.size ? await prisma.patient.findMany({ where: { id: { in: [...patientIds] } }, select: { id: true, name: true, phone: true } }) : [];
   const pmap = new Map(pats.map((p) => [p.id, p]));
   for (const it of items) if (!it.patientName) { const p = pmap.get(it.patientId); it.patientName = displayName(p?.name); it.phone = maskPhone(p?.phone); }
 
+  for (const it of items) if (it.status === "nao_tentado" && it.reason === "ainda_nao_e_hora") { it.status = "programado"; it.statusLabel = STATUS_LABEL.programado; }
+
   // ---------------- FILTROS ----------------
   const view = f.view ?? "hoje";
   let list = items;
+  if (f.itemId) list = list.filter((i) => i.id === f.itemId); // identidade exata: nao depende de pagina nem do limite de 200
   if (view === "atencao" && !f.status) list = list.filter((i) => ["falhou", "incerto", "expirado", "adiado", "nao_tentado", "entrega_falhou", "barrado"].includes(i.status) && !(i.status === "nao_tentado" && i.reason === "ainda_nao_e_hora"));
   if (f.kinds?.length) list = list.filter((i) => f.kinds!.includes(i.kind));
+  if (f.campaignId) list = list.filter((i) => i.campaignId === f.campaignId);
   if (f.status?.length) list = list.filter((i) => f.status!.includes(i.status));
   if (f.reason) list = list.filter((i) => i.reason === f.reason);
   if (f.ruleId) list = list.filter((i) => i.ruleId === f.ruleId);
@@ -471,18 +501,19 @@ export async function buildDispatchView(clinicId: string, f: DispatchFilters = {
     const q = f.q.trim().toLowerCase(), qd = q.replace(/\D/g, "");
     list = list.filter((i) => i.patientName.toLowerCase().includes(q) || (qd.length >= 3 && i.phone.replace(/\D/g, "").includes(qd)));
   }
-  const prio: Record<DispatchStatus, number> = { falhou: 0, incerto: 1, entrega_falhou: 1, expirado: 2, adiado: 3, nao_tentado: 4, barrado: 5, em_andamento: 6, bloqueado: 7, aceito: 8, entregue: 9, lido: 10, coberto: 11, excluido: 12 };
+  const prio: Record<DispatchStatus, number> = { programado: 9, cancelado: 11, encaminhado: 6, falhou: 0, incerto: 1, entrega_falhou: 1, expirado: 2, adiado: 3, nao_tentado: 4, barrado: 5, em_andamento: 6, bloqueado: 7, aceito: 8, confirmado_equipe: 8, entregue: 9, lido: 10, coberto: 11, excluido: 12 };
   list = [...list].sort((a, b) => (view === "atencao" || view === "hoje" ? prio[a.status] - prio[b.status] : 0) || a.sendDay.localeCompare(b.sendDay) * (view === "historico" ? -1 : 1) || a.referenceAt.localeCompare(b.referenceAt) || a.id.localeCompare(b.id));
   const counters = countItems(list);
 
   // cobertura por tipo (sobre o periodo, SEM os filtros de status: a auditoria nao muda com o filtro da lista)
-  const cobertura: CoverageKind[] = (["confirmacao", "cobranca", "lembrete", "aniversario"] as DispatchKind[]).map((kind) => {
+  const cobertura: CoverageKind[] = (ITEM_KINDS as ItemKind[]).filter((k) => ["confirmacao", "cobranca", "lembrete", "aniversario"].includes(k) || items.some((i) => i.kind === k)).map((kind) => {
     const k = items.filter((i) => i.kind === kind);
     const c = countItems(k);
     const porMotivo: Record<string, number> = {};
     for (const i of k) if (!["aceito", "entregue", "lido", "coberto"].includes(i.status)) porMotivo[i.reason] = (porMotivo[i.reason] ?? 0) + 1;
     let fonteCompleta = true, nota = "Fonte: agendamentos importados para a Alice.";
     if (kind === "aniversario") { fonteCompleta = false; nota = `Só conhecemos aniversariantes com a data cadastrada na Alice (${noBirthCount} pessoa(s) ativa(s) sem data de nascimento). Quem existe só no sistema de agenda e não foi importado não aparece: cobertura não calculável.`; }
+    else if (!["confirmacao", "cobranca", "lembrete", "aniversario"].includes(kind)) { fonteCompleta = false; nota = "Fonte: o controle próprio deste fluxo (só existe linha depois que o fluxo reservou/tentou). A Central não reconstrói o 'esperado' deste tipo: sem percentual de cobertura."; }
     else if (kind === "cobranca") { fonteCompleta = false; nota = "A cobrança depende de pedido inicial sem resposta: só aparece depois que a primeira solicitação foi tentada."; }
     else if (hasCe) { fonteCompleta = false; nota = "A agenda vem do Clínica Experts: reservas que ainda não foram importadas para a Alice não aparecem aqui. Cobertura não calculável como 100%."; }
     else nota = "Fonte: agenda da própria Alice (completa para esta clínica).";

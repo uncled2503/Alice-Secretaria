@@ -16,6 +16,7 @@ import { startPrescriptionReminderJob } from "./reminders/prescription.js";
 import { startRenewalJob } from "./reminders/renewal.js";
 import { startBirthdayJob } from "./reminders/birthday.js";
 import { startDispatchRunJob } from "./dispatch/actions.js";
+import { startPackageAlertJob } from "./crm/packages.js";
 import { startNpsJob } from "./reminders/nps.js";
 import { startPlanExpiryJob } from "./reminders/planExpiry.js";
 import { startProfessionalBackfillJob } from "./scheduling/professionalBackfillJob.js";
@@ -124,21 +125,34 @@ function refreshDbHealth(): void {
     console.error("Health check do banco falhou:", error);
   });
 }
-// Ultima migracao do banco aplicada (prova de que o deploy rodou as migracoes). Consulta no maximo 1x por minuto.
+// Ultima migracao do banco REALMENTE aplicada (concluida e nao revertida) + falhadas + pendentes. Antes: `ORDER BY migration_name DESC LIMIT 1` sem filtro: uma migracao FALHADA (P3009) aparecia
+// como "ultima aplicada", confundindo falha com sucesso. Consulta no maximo 1x por minuto.
 let lastMigration: string | null = null;
+let migrationStatus: { failed: string[]; pending: number } = { failed: [], pending: 0 };
 let migrationCheckedAt = 0;
 function refreshMigration(): void {
   if (Date.now() - migrationCheckedAt < 60_000) return;
   migrationCheckedAt = Date.now();
-  void prisma.$queryRaw<{ migration_name: string }[]>`SELECT migration_name FROM _prisma_migrations ORDER BY migration_name DESC LIMIT 1`
-    .then((rows) => (lastMigration = rows[0]?.migration_name ?? null))
+  void prisma.$queryRaw<{ migration_name: string; finished_at: string | null; rolled_back_at: string | null }[]>`SELECT migration_name, finished_at, rolled_back_at FROM _prisma_migrations ORDER BY migration_name`
+    .then((rows) => {
+      const applied = rows.filter((r) => r.finished_at != null && r.rolled_back_at == null).map((r) => r.migration_name);
+      lastMigration = applied.at(-1) ?? null;
+      const failed = rows.filter((r) => r.finished_at == null && r.rolled_back_at == null).map((r) => r.migration_name);
+      let pending = 0;
+      try {
+        const dirs = fs.readdirSync(path.join(process.cwd(), "prisma", "migrations"), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+        const done = new Set(applied);
+        pending = dirs.filter((d) => !done.has(d) && !failed.includes(d)).length;
+      } catch { /* sem a pasta (build sem prisma/): nao afirma */ }
+      migrationStatus = { failed, pending };
+    })
     .catch(() => undefined);
 }
 app.get("/health", (_req, res) => {
   res.set("Cache-Control", "no-store");
   refreshDbHealth();
   refreshMigration();
-  res.json({ ok: true, database: dbHealthy ? "ok" : "unavailable", uptimeSeconds: Math.floor(process.uptime()), commit: buildInfo.commit, builtAt: buildInfo.builtAt, revision: REVISION, lastMigration, openai: openAiHealth().state });
+  res.json({ ok: true, database: dbHealthy ? "ok" : "unavailable", uptimeSeconds: Math.floor(process.uptime()), commit: buildInfo.commit, builtAt: buildInfo.builtAt, revision: REVISION, lastMigration, migrationsFailed: migrationStatus.failed, migrationsPending: migrationStatus.pending, openai: openAiHealth().state });
 });
 
 // Painel administrativo: so a "casca" HTML/CSS/JS, sem dado nenhum - fica
@@ -370,6 +384,7 @@ const httpServer = app.listen(port, () => {
   startPrescriptionReminderJob();
   startRenewalJob();
   startBirthdayJob();
+  startPackageAlertJob(); // avisos de pacote (fonte interna) para a equipe
   startDispatchRunJob(); // fila persistida de recuperacao de disparos (aba Disparos)
   startFollowUpJob();
   startResumeFlowsJob(); // retomada de avaliacao cancelada / sem fechamento: nascem DESLIGADAS (ResumeFlowConfig)

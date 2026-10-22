@@ -16,23 +16,28 @@ const ALWAYS_ON_EVENTS: NotifyEvent[] = ["automation_failed"];
 // O numero de avisos PODE ser o proprio numero conectado: o WhatsApp entrega
 // a mensagem na conversa "Mensagem pra mim" e o eco (fromMe/wasSentByApi) e
 // descartado no webhook (ver parseWebhookPayload), entao nao gera loop.
-export async function notifyStaff(clinicId: string, event: NotifyEvent, message: string): Promise<void> {
+// Resultado REAL do aviso: so "sent" prova que o provedor aceitou a mensagem para a equipe. Quem afirma "a equipe foi avisada" precisa conferir isto.
+export type NotifyResult = "sent" | "not_configured" | "event_disabled" | "not_sent" | "failed";
+
+export async function notifyStaff(clinicId: string, event: NotifyEvent, message: string): Promise<NotifyResult> {
   const clinic = await prisma.clinic.findUnique({
     where: { id: clinicId },
     select: { notifyPhone: true, notifyEvents: true },
   });
-  if (!clinic?.notifyPhone) return;
+  if (!clinic?.notifyPhone) return "not_configured";
   // Numero claramente invalido (so zeros, curto demais): nao tenta - antes gerava um erro a cada
   // 5 minutos ("is not on WhatsApp"). A clinica precisa corrigir o numero de avisos.
   const digits = clinic.notifyPhone.replace(/\D/g, "");
-  if (digits.length < 10 || /^0+$/.test(digits)) return;
+  if (digits.length < 10 || /^0+$/.test(digits)) return "not_configured";
 
   const events = clinic.notifyEvents.split(",").map((e) => e.trim());
-  if (!events.includes(event) && !ALWAYS_ON_EVENTS.includes(event)) return;
+  if (!events.includes(event) && !ALWAYS_ON_EVENTS.includes(event)) return "event_disabled";
 
   try {
-    await sendText(clinicId, clinic.notifyPhone, message, { kind: "interna" });
+    const outcome = await sendText(clinicId, clinic.notifyPhone, message, { kind: "interna" });
+    return outcome === "sent" ? "sent" : "not_sent";
   } catch (err) {
     console.error(`Falha ao notificar equipe da clinica ${clinicId}:`, err);
+    return "failed";
   }
 }

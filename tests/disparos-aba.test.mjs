@@ -295,13 +295,15 @@ test("ACOES: conciliar resultado incerto (so com decisao da equipe), cancelar pe
   const gabi = (await viewAt(S.c, "2026-10-20T10:30")).items.find((i) => i.patientName === "Gabi Cadastrada Tarde");
   assert.equal((await actions.cancelPending(S.c.id, gabi.id, actor)).ok, true);
   const gabi2 = (await viewAt(S.c, "2026-10-20T10:30")).items.find((i) => i.patientName === "Gabi Cadastrada Tarde");
-  assert.equal(gabi2.status, "bloqueado");
+  assert.equal(gabi2.status, "cancelado");
   assert.equal(gabi2.reason, "cancelado_pela_equipe");
   assert.equal(gabi2.recoverable, false);
   // envio ja feito nao pode ser cancelado
   const ana = (await viewAt(S.c, "2026-10-20T10:30")).items.find((i) => i.patientName === "Ana Enviada");
   assert.equal((await actions.cancelPending(S.c.id, ana.id, actor)).ok, false);
-  // encaminhar para a equipe
+  // encaminhar para a equipe: so afirma com aviso ACEITO pelo provedor (a clinica precisa ter o telefone de avisos)
+  assert.equal((await actions.handoffToHuman(S.c.id, depois.id, actor, "ligar")).ok, false, "sem telefone de avisos: NAO foi avisada");
+  await prisma.clinic.update({ where: { id: S.c.id }, data: { notifyPhone: "5511977112233", notifyEvents: "human_handoff" } });
   assert.equal((await actions.handoffToHuman(S.c.id, depois.id, actor, "ligar")).ok, true);
   // detalhe: linha do tempo, destino mascarado e id do provedor encurtado
   const det = await actions.dispatchDetail(S.c.id, ana.id, now);

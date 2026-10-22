@@ -706,7 +706,8 @@ export async function sendText(clinicId: string, phone: string, text: string, op
       } catch (err) {
         // So REJEICAO EXPLICITA do primeiro destino abre a alternativa (a outra forma, com/sem o 9, estruturalmente valida e unica). Nunca depois de timeout, 429, desconexao, 5xx ou
         // erro generico (o primeiro pode ter saido) e nunca para os dois: aceito um, nao se tenta o outro.
-        const alt = index === 0 && !usedAlternate && info.valid && target === (info.destination ?? target) && isExplicitNumberRejection(err) ? info.alternate : null;
+        // DESLIGADO POR PADRAO (instrucao de 22/10: "nao testar variantes enviando mensagens"; existir no WhatsApp nao prova a identidade da pessoa). Quem liga (ALICE_PHONE_FALLBACK=on) assume o risco; o caminho recomendado e a equipe conferir o cadastro (Central: "Usar a outra forma do numero").
+        const alt = process.env.ALICE_PHONE_FALLBACK === "on" && index === 0 && !usedAlternate && info.valid && target === (info.destination ?? target) && isExplicitNumberRejection(err) ? info.alternate : null;
         if (!alt) throw err;
         await post(alt);
         target = alt;

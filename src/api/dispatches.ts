@@ -1,6 +1,6 @@
 import { Router, type Request, type Response, type RequestHandler } from "express";
 import { prisma } from "../db/client.js";
-import { buildDispatchView, REASONS, STATUS_LABEL, type DispatchFilters, type DispatchStatus, type View } from "../dispatch/model.js";
+import { buildDispatchView, REASONS, STATUS_LABEL, ITEM_KINDS, type DispatchFilters, type DispatchStatus, type ItemKind, type View } from "../dispatch/model.js";
 import { DISPATCH_KINDS, POLICY_DEFAULTS, effectivePolicy, loadAllPolicies, validHHMM, type DispatchKind } from "../dispatch/policy.js";
 import {
   cancelPending, correctRegistration, createRecoveryRun, dispatchDetail, handoffToHuman, jobsHealth, listRuns, previewRecovery, reconcileItem, resolvePhone, runControl, scheduleLater, loadItem, type Actor,
@@ -45,12 +45,12 @@ function filtersFrom(src: Record<string, unknown>): DispatchFilters {
   const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
   const list = (v: unknown) => (typeof v === "string" ? v.split(",").map((x) => x.trim()).filter(Boolean) : Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
   const view = str(src.view);
-  const kinds = list(src.kinds).filter((k): k is DispatchKind => (DISPATCH_KINDS as readonly string[]).includes(k));
+  const kinds = list(src.kinds).filter((k): k is ItemKind => (ITEM_KINDS as readonly string[]).includes(k));
   const status = list(src.status).filter((s): s is DispatchStatus => s in STATUS_LABEL);
   return {
     view: view && ["hoje", "proximos", "atencao", "historico"].includes(view) ? (view as View) : undefined,
     from: str(src.from), to: str(src.to), kinds: kinds.length ? kinds : undefined, status: status.length ? status : undefined,
-    reason: str(src.reason) && str(src.reason)! in REASONS ? str(src.reason) : undefined, ruleId: str(src.ruleId), q: str(src.q), professionalId: str(src.professionalId),
+    reason: str(src.reason) && str(src.reason)! in REASONS ? str(src.reason) : undefined, ruleId: str(src.ruleId), campaignId: str(src.campaignId), q: str(src.q), professionalId: str(src.professionalId),
     recoverableToday: src.recoverableToday === true || src.recoverableToday === "1" || src.recoverableToday === "true",
     extended: src.extended === true || src.extended === "1" || src.extended === "true",
     page: Number(src.page) > 0 ? Number(src.page) : undefined, pageSize: Number(src.pageSize) > 0 ? Number(src.pageSize) : undefined,
@@ -60,12 +60,13 @@ function filtersFrom(src: Record<string, unknown>): DispatchFilters {
 dispatchesRouter.get("/", asyncRoute(async (req, res) => {
   const sc = await scope(req, res); if (!sc) return;
   const view = await buildDispatchView(sc.clinicId, filtersFrom(req.query as Record<string, unknown>));
+  const campaigns = await prisma.broadcastCampaign.findMany({ where: { clinicId: sc.clinicId }, orderBy: { scheduledFor: "desc" }, take: 30, select: { id: true, title: true } });
   const [runs, jobs, rules, professionals] = await Promise.all([
     listRuns(sc.clinicId, 5), jobsHealth(sc.clinicId),
     prisma.reminderRule.findMany({ where: { clinicId: sc.clinicId }, select: { id: true, dayOffset: true, hoursBefore: true, parentRuleId: true, purpose: true, message: true, weekdays: true, active: true }, orderBy: { createdAt: "asc" } }),
     prisma.professional.findMany({ where: { clinicId: sc.clinicId }, select: { id: true, name: true }, orderBy: { name: "asc" } }),
   ]);
-  res.json({ ...view, runs, jobs, regras: rules.map((r) => ({ id: r.id, ativa: r.active, rotulo: `${r.parentRuleId ? "Cobrança" : r.purpose === "lembrete" ? "Lembrete" : "Confirmação"} · ${r.dayOffset != null ? (r.dayOffset === 0 ? "no dia" : `${r.dayOffset} dia(s) antes`) : `${r.hoursBefore}h antes`}` })), profissionais: professionals, statusLabels: STATUS_LABEL });
+  res.json({ ...view, runs, jobs, regras: rules.map((r) => ({ id: r.id, ativa: r.active, rotulo: `${r.parentRuleId ? "Cobrança" : r.purpose === "lembrete" ? "Lembrete" : "Confirmação"} · ${r.dayOffset != null ? (r.dayOffset === 0 ? "no dia" : `${r.dayOffset} dia(s) antes`) : `${r.hoursBefore}h antes`}` })), profissionais: professionals, campanhas: campaigns, tipos: ITEM_KINDS, statusLabels: STATUS_LABEL });
 }));
 
 dispatchesRouter.get("/export.csv", asyncRoute(async (req, res) => {
@@ -75,8 +76,8 @@ dispatchesRouter.get("/export.csv", asyncRoute(async (req, res) => {
   const rows = [...v.items];
   for (let p = 2; p <= Math.min(10, Math.ceil(v.total / 200)); p++) rows.push(...(await buildDispatchView(sc.clinicId, { ...filtersFrom(req.query as Record<string, unknown>), page: p, pageSize: 200 })).items);
   const esc = (s: unknown) => { let t = String(s ?? ""); if (/^[=+\-@]/.test(t)) t = `'${t}`; return /[",\n;]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
-  const head = ["dia", "tipo", "pessoa", "telefone", "referencia", "estado", "motivo", "detalhe", "tentativas", "ultima_tentativa", "proxima_tentativa", "entrega", "recuperavel_hoje"];
-  const lines = [head.join(";"), ...rows.map((i) => [i.sendDay, i.kind, i.patientName, i.phone, i.referenceAt, i.statusLabel, i.reasonLabel, i.detail, i.attempts, i.attemptedAt, i.nextAttemptAt, i.deliveryState, i.recoverable ? "sim" : "nao"].map(esc).join(";"))];
+  const head = ["dia", "tipo", "pessoa", "telefone", "origem", "referencia", "estado", "motivo", "detalhe", "tentativas", "ultima_tentativa", "proxima_tentativa", "entrega", "recuperavel_hoje"];
+  const lines = [head.join(";"), ...rows.map((i) => [i.sendDay, i.kind, i.patientName, i.phone, i.origin, i.referenceAt, i.statusLabel, i.reasonLabel, i.detail, i.attempts, i.attemptedAt, i.nextAttemptAt, i.deliveryState, i.recoverable ? "sim" : "nao"].map(esc).join(";"))];
   await logActivity({ clinicId: sc.clinicId, type: "dispatch_action", area: "automacoes", title: "Disparos exportados", description: `${rows.length} linha(s) (telefones mascarados)`, actorName: sc.actor.name });
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.setHeader("Content-Disposition", `attachment; filename="disparos-${v.periodo.from}_${v.periodo.to}.csv"`);

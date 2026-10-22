@@ -3,7 +3,7 @@
 (function () {
   "use strict";
 
-  const KIND_LABEL = { confirmacao: "Confirmação", cobranca: "Cobrança", lembrete: "Lembrete", aniversario: "Aniversário" };
+  const KIND_LABEL = { confirmacao: "Confirmação", cobranca: "Cobrança", lembrete: "Lembrete", aniversario: "Aniversário", pos: "Pós-procedimento", pre: "Pré-procedimento", renovacao: "Renovação", recontato: "Recontato", retorno_combinado: "Retorno combinado", retomada: "Retomada", campanha: "Campanha" };
   const VIEWS = [
     { id: "hoje", label: "Hoje" },
     { id: "proximos", label: "Próximos" },
@@ -11,14 +11,18 @@
     { id: "historico", label: "Histórico" },
   ];
   const STATUS_TONE = {
-    lido: "ok", entregue: "ok", aceito: "ok", coberto: "ok",
+    lido: "ok", entregue: "ok", aceito: "ok", coberto: "ok", confirmado_equipe: "info", programado: "neutral", cancelado: "neutral", encaminhado: "info",
     entrega_falhou: "bad", falhou: "bad", incerto: "warn", adiado: "warn", barrado: "warn", bloqueado: "neutral", expirado: "bad",
     nao_tentado: "warn", excluido: "neutral", em_andamento: "info",
   };
   const COUNTERS = [
+    { key: "programados", label: "Programados", hint: "Ainda não é a hora de enviar.", status: "programado" },
+    { key: "cancelados", label: "Cancelados", hint: "Cancelados pela equipe ou não mais devidos.", status: "cancelado" },
+    { key: "encaminhados", label: "Encaminhados à equipe", hint: "A equipe foi avisada; não é mensagem enviada.", status: "encaminhado" },
     { key: "esperados", label: "Esperados", hint: "Tudo o que a Alice devia enviar neste período (inclui os que saem por motivo legítimo)." },
     { key: "excluidos", label: "Fora (motivo legítimo)", hint: "Cancelou, confirmou, pediu para não receber…", status: "excluido" },
     { key: "aceitos", label: "Aceitos pelo WhatsApp", hint: "O provedor aceitou o envio. Ainda sem confirmação de entrega.", status: "aceito" },
+    { key: "confirmados_equipe", label: "Confirmados pela equipe", hint: "A equipe atestou que chegou; não há evidência do provedor. Nunca somado a aceitos/entregues.", status: "confirmado_equipe" },
     { key: "entregues", label: "Entregues", hint: "O provedor informou entrega no aparelho.", status: "entregue" },
     { key: "lidos", label: "Lidos", hint: "O provedor informou leitura.", status: "lido" },
     { key: "adiados", label: "Adiados", hint: "Retidos (WhatsApp, Clínica Experts, equipe conversando…). Tentam de novo.", status: "adiado" },
@@ -30,7 +34,7 @@
   ];
 
   const S = {
-    view: "hoje", from: "", to: "", kinds: "", status: "", reason: "", ruleId: "", professionalId: "", q: "", recoverableToday: false, extended: false,
+    view: "hoje", from: "", to: "", kinds: "", status: "", reason: "", ruleId: "", campaignId: "", professionalId: "", q: "", recoverableToday: false, extended: false,
     page: 1, pageSize: 50, data: null, selected: new Set(), allFiltered: false, timer: null, loading: false, detailId: null,
   };
 
@@ -70,6 +74,7 @@
     if (S.status) p.set("status", S.status);
     if (S.reason) p.set("reason", S.reason);
     if (S.ruleId) p.set("ruleId", S.ruleId);
+    if (S.campaignId) p.set("campaignId", S.campaignId);
     if (S.professionalId) p.set("professionalId", S.professionalId);
     if (S.q) p.set("q", S.q);
     if (S.recoverableToday) p.set("recoverableToday", "1");
@@ -81,7 +86,7 @@
     const o = { view: S.view };
     if (S.from) o.from = S.from;
     if (S.to) o.to = S.to;
-    for (const k of ["kinds", "status", "reason", "ruleId", "professionalId", "q"]) if (S[k]) o[k] = S[k];
+    for (const k of ["kinds", "status", "reason", "ruleId", "campaignId", "professionalId", "q"]) if (S[k]) o[k] = S[k];
     if (S.recoverableToday) o.recoverableToday = true;
     if (S.extended) o.extended = true;
     return o;
@@ -208,6 +213,7 @@
     const reasons = [["", "Todos os motivos"], ...Object.entries(d.motivos).map(([k, v]) => [k, v])];
     const kinds = [["", "Todos os tipos"], ...Object.entries(KIND_LABEL)];
     const rules = [["", "Todas as regras"], ...(d.regras || []).map((r) => [r.id, `${r.rotulo}${r.ativa ? "" : " (desligada)"}`])];
+    const camps = [["", "Todas as campanhas"], ...(d.campanhas || []).map((c) => [c.id, c.title])];
     const pros = [["", "Todos os profissionais"], ...(d.profissionais || []).map((p) => [p.id, p.name])];
     const apply = (k) => (v) => { S[k] = v; S.page = 1; load(); };
     let t;
@@ -218,6 +224,7 @@
       select("Estado", S.status, statuses, apply("status")),
       select("Motivo", S.reason, reasons, apply("reason")),
       select("Regra", S.ruleId, rules, apply("ruleId")),
+      select("Campanha", S.campaignId, camps, apply("campaignId")),
       select("Profissional", S.professionalId, pros, apply("professionalId")),
       h("label", { class: "dp-check" }, h("input", { type: "checkbox", checked: S.recoverableToday, onchange: (e) => { S.recoverableToday = e.target.checked; S.page = 1; load(); } }), " Recuperável hoje"),
       h("label", { class: "dp-check" }, h("input", { type: "checkbox", checked: S.extended, onchange: (e) => { S.extended = e.target.checked; S.page = 1; load(); } }), " Janela ampliada"),
@@ -371,12 +378,13 @@
         h("dt", { text: "Tentativas" }), h("dd", { text: `${it.attempts}${it.attemptedAt ? ` (última ${fmtDT(it.attemptedAt, S.data.fuso)})` : ""}` }),
         h("dt", { text: "Telefone cadastrado" }), h("dd", { text: it.phone }),
         h("dt", { text: "Destino usado" }), h("dd", { text: it.destination || "—" }),
-        h("dt", { text: "Id do provedor" }), h("dd", { text: it.providerId || "— (sem id: entrega não rastreável)" }),
+        h("dt", { text: "Id da mensagem (provedor)" }), h("dd", { text: det.providerMessageId || "— (sem id: entrega não rastreável)" }),
         h("dt", { text: "Entrega" }), h("dd", { text: it.deliveryState ? ({ accepted: "aceito pelo WhatsApp (sem confirmação de entrega)", delivered: "entregue", read: "lido", failed: "o provedor informou falha" }[it.deliveryState] || it.deliveryState) : "—" }),
         it.extendedReason ? [h("dt", { text: "Janela ampliada" }), h("dd", { text: `${it.extendedReason}${it.deadlineAt ? ` · prazo final ${fmtDT(it.deadlineAt, S.data.fuso)}` : ""}` })] : null,
       ),
       tel ? h("p", { class: "dp-muted", text: `Telefone: ${tel.valido ? "válido" : "inválido"} (${tel.tipo})${tel.alternativaEstrutural ? " · existe uma forma alternativa (com/sem o 9), usada só se o WhatsApp recusar explicitamente" : ""}` }) : null,
-      det.text ? h("div", {}, h("h4", { text: "Mensagem" }), h("pre", { class: "dp-pre", text: det.text })) : null,
+      det.text ? h("div", {}, h("h4", { text: "Texto exato desta tentativa" }), h("pre", { class: "dp-pre", text: det.text })) : null,
+      det.textNote && !det.text ? h("p", { class: "hint", text: det.textNote }) : null,
       h("h4", { text: "Linha do tempo" }),
       h("ul", { class: "dp-ul" }, det.timeline.map((t) => h("li", { text: `${fmtDT(t.at, S.data.fuso)} — ${t.what}` }))),
       it.recoverableWhy ? h("p", { class: "hint", text: it.recoverableWhy }) : null,

@@ -144,7 +144,10 @@ export async function runPostProcedureCycle(clock: () => Date = () => new Date()
       const due = await prisma.appointment.findMany({
         where: {
           clinicId: rule.clinicId,
-          ...(rule.onlyIfCompleted ? { status: "completed" } : { status: { notIn: ["cancelled", "no_show"] } }),
+          // EVIDENCIA DE REALIZACAO (22/10): so atendimento com status "completed" (conclusao registrada no painel/pelo CE). "Nao cancelou nem faltou" NAO prova que o procedimento aconteceu, e o pos
+          // diz/pressupoe que aconteceu ("como foi o seu procedimento?"). Regra com onlyIfCompleted=false nao abre excecao: os agendamentos que ela alcancaria sem conclusao sao CONTADOS no resumo da rodada
+          // ("sem_evidencia_de_realizacao") para a equipe marcar o atendimento como concluido - nunca enviados por suposicao.
+          status: "completed",
           scheduledAt: { lte: cutoff, gte: floor },
           // reserva com varios procedimentos: vale se QUALQUER um deles esta no filtro da regra
           ...(procedureFilter.length ? { OR: [{ procedureId: { in: procedureFilter } }, { procedures: { some: { procedureId: { in: procedureFilter } } } }] } : {}),
@@ -159,6 +162,12 @@ export async function runPostProcedureCycle(clock: () => Date = () => new Date()
         include: { patient: true, attendee: true, procedure: true, procedures: true, professional: true },
         take: MAX_PER_TICK * 4, // margem: as avaliacoes saem no filtro abaixo e nao podem esgotar o teto
       });
+      if (!rule.onlyIfCompleted) {
+        const noEvidence = await prisma.appointment.count({
+          where: { clinicId: rule.clinicId, status: "confirmed", scheduledAt: { lte: cutoff, gte: floor }, ...(procedureFilter.length ? { OR: [{ procedureId: { in: procedureFilter } }, { procedures: { some: { procedureId: { in: procedureFilter } } } }] } : {}), postProcedureSent: { none: { ruleId: rule.id, state: { in: POST_FINAL_STATES } } } },
+        });
+        for (let i = 0; i < noEvidence; i++) r.add("ignorado", "sem_evidencia_de_realizacao");
+      }
       for (let i = due.length - 1; i >= 0; i--) {
         if (skipsPostForEvaluation(due[i], procedureFilter)) due.splice(i, 1);
       }

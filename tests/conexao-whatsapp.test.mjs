@@ -156,7 +156,7 @@ test("nada se perde: campanha e retorno combinado ESPERAM a conexao voltar (dest
   const antes = calls["tok-a"].send;
   await runBroadcastTick();
   const rec = await prisma.broadcastRecipient.findMany({ where: { campaignId: camp.id } });
-  assert.deepEqual(rec.map((r) => r.status), ["pending", "pending"], "ninguem virou 'failed': a campanha espera");
+  assert.ok(rec.every((r) => ["pending", "deferred"].includes(r.status)), `ninguem virou failed/sent: a campanha espera (visivel como adiado): ${rec.map((r) => r.status)}`);
   assert.equal((await prisma.broadcastCampaign.findUnique({ where: { id: camp.id } })).status, "sending");
   assert.equal(calls["tok-a"].send, antes, "o provedor nao foi chamado");
 

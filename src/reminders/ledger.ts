@@ -81,10 +81,11 @@ export async function acquireDispatch(key: DispatchKey, now = new Date()): Promi
     const max = same.state === "deferred" ? MAX_DEFERRALS : MAX_SEND_ATTEMPTS;
     if (same.attempt >= max) return { ok: false, why: "exhausted", state: same.state };
     if (now.getTime() - same.updatedAt.getTime() < gap) return { ok: false, why: "too_soon", state: same.state };
+    if (same.nextAttemptAt && same.nextAttemptAt.getTime() > now.getTime()) return { ok: false, why: "too_soon", state: same.state }; // reprogramado (painel/politica): so depois deste instante
     // So uma rodada vence a disputa: a que troca deferred/failed -> reserved.
     const claimed = await prisma.reminderDispatch.updateMany({
       where: { id: same.id, state: same.state, updatedAt: same.updatedAt },
-      data: { state: "reserved", attempt: { increment: 1 }, sendDay: key.sendDay },
+      data: { state: "reserved", attempt: { increment: 1 }, sendDay: key.sendDay, nextAttemptAt: null },
     });
     return claimed.count === 1 ? { ok: true, id: same.id, attempt: same.attempt + 1 } : { ok: false, why: "in_progress", state: same.state };
   }
@@ -103,6 +104,7 @@ export async function precheckDispatch(key: DispatchKey, now = new Date()): Prom
     const max = same.state === "deferred" ? MAX_DEFERRALS : MAX_SEND_ATTEMPTS;
     if (same.attempt >= max) return `controle de envio: tentativas esgotadas (${same.state})`;
     if (now.getTime() - same.updatedAt.getTime() < gap) return `controle de envio: aguardando o intervalo entre tentativas (${same.state}, tentativa ${same.attempt})`;
+    if (same.nextAttemptAt && same.nextAttemptAt.getTime() > now.getTime()) return `controle de envio: reprogramado para ${same.nextAttemptAt.toISOString()}`;
     return null;
   }
   const other = await prisma.reminderDispatch.findFirst({

@@ -19,6 +19,10 @@ export const DETAIL_LABEL: Record<NonPatientDetail, string> = {
 // Tipos de envio AUTOMATICO que NAO podem ir a um nao-paciente (prospeccao/relacionamento). Lembrete/confirmacao/pos/preparo/agendamento ficam de fora: dependem de agendamento real.
 export const NON_PATIENT_BLOCKED_KINDS: readonly OutboundKind[] = ["recontato", "retomada", "indicacao", "pesquisa", "aniversario", "renovacao", "campanha"];
 
+// Tipos PROMOCIONAIS / de relacionamento: valem para a preferencia "nao quero promocoes" (Patient.promoOptOut). Operacionais (lembrete, confirmacao, pre, pos, retorno combinado, aviso de agendamento,
+// lista de espera pedida pela pessoa) NAO entram: ela continua recebendo o que precisa para o atendimento. O bloqueio TOTAL continua sendo Patient.optedOut (vale para tudo automatico).
+export const PROMO_KINDS: readonly OutboundKind[] = ["campanha", "aniversario", "renovacao", "indicacao", "retomada"];
+
 export const isNonPatientKind = (k: string | null | undefined): boolean => k === "nao_paciente";
 
 export function validDetail(d: unknown): d is NonPatientDetail {
@@ -57,7 +61,7 @@ export async function revertByClinicalContext(patientId: string, clinicalAsk: bo
 
 // Gate dos envios automaticos: true = NAO enviar (contato classificado como nao-paciente e o tipo e comercial/relacionamento).
 export async function blocksAutomatedSend(clinicId: string, phone: string, kind: OutboundKind | undefined): Promise<boolean> {
-  if (!kind || !NON_PATIENT_BLOCKED_KINDS.includes(kind)) return false;
-  const p = await prisma.patient.findFirst({ where: { clinicId, phone }, select: { contactKind: true } });
-  return isNonPatientKind(p?.contactKind);
+  if (!kind || (!NON_PATIENT_BLOCKED_KINDS.includes(kind) && !PROMO_KINDS.includes(kind))) return false;
+  const p = await prisma.patient.findFirst({ where: { clinicId, phone }, select: { contactKind: true, promoOptOut: true } });
+  return isNonPatientKind(p?.contactKind) || p?.promoOptOut === true;
 }

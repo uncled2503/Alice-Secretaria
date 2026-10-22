@@ -104,8 +104,19 @@ test("TELEFONES: leitura central (DDI com/sem, 9o digito, fixo, internacional, J
 });
 
 // ============================================================ FALLBACK DO 9 / ERRO FUNCIONAL
-test("FALLBACK: so apos REJEICAO EXPLICITA do provedor, uma alternativa estrutural, nunca os dois; guarda origem/destino; nunca apos timeout/429/queda", async () => {
+test("FALLBACK DESLIGADO POR PADRAO: rejeicao explicita nao testa a outra forma do numero (so uma chamada); a equipe confere o cadastro", async () => {
   zera();
+  delete process.env.ALICE_PHONE_FALLBACK;
+  const c0 = await clinica("Sem Fallback");
+  behavior = (r) => (r.number === "5511988887777" ? { status: 400, body: { error: "number is not on WhatsApp" } } : null);
+  await assert.rejects(() => client.sendText(c0.id, "5511988887777", "Mensagem de teste sem fallback para validar o envio com tamanho suficiente.", { kind: "lembrete" }));
+  assert.deepEqual(posts.map((p) => p.number), ["5511988887777"], "NAO tentou a outra forma");
+  assert.equal(await prisma.phoneResolution.count({ where: { clinicId: c0.id } }), 0, "nada foi resolvido sozinho");
+});
+
+test("FALLBACK (opt-in ALICE_PHONE_FALLBACK=on): so apos REJEICAO EXPLICITA do provedor, uma alternativa estrutural, nunca os dois; guarda origem/destino; nunca apos timeout/429/queda", async () => {
+  zera();
+  process.env.ALICE_PHONE_FALLBACK = "on";
   const c = await clinica("Fallback");
   const original = "5511988887777"; // com 9; alternativa sem 9 (miolo comeca com 8)
   const alt = "551188887777";

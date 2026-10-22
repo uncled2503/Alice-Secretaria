@@ -77,6 +77,11 @@ import { parseWeekdays, PURPOSES } from "../reminders/policy.js";
 import { configurarPosDepoisDoFechamento, diagnosticarPosFluxo } from "../maintenance/lisboaPosFechamento.js";
 import { setByStaff as setContactKindByStaff } from "../crm/contactKind.js";
 import { prepararDatasEspeciais } from "../crm/specialDates.js";
+import { conferirRegrasLisboa } from "../maintenance/lisboaConfigDiff.js";
+import { setLossReason, setCancelReason, LOSS_REASONS, LOSS_LABEL } from "../crm/lossReasons.js";
+import { createProposal, closeProposal, openProposalsReport } from "../crm/proposals.js";
+import { createPackage, registerUsage, clinicPackageAlerts, balanceOf } from "../crm/packages.js";
+import { managementReport } from "../crm/managementReports.js";
 import { executeConfirmationsFor, previewConfirmationsFor } from "../reminders/controlled.js";
 import { conferirRecontatos, executarRecuperacaoRecontatos } from "../crm/followupRecovery.js";
 import { diagnoseJobs, STATE_LABEL } from "../crm/automationRuns.js";
@@ -1798,6 +1803,17 @@ apiRouter.post(
   })
 );
 
+// Previa SOMENTE LEITURA: configuracao atual x desejada da Lisboa (checklist mestre). So admin; nao altera nada.
+apiRouter.get(
+  "/clinics/lisboa-regras-diff",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await prisma.clinic.findFirst({ where: { name: "Lisboa Beauty Center" } });
+    if (!clinic) { res.status(404).json({ error: "Clínica Lisboa não encontrada." }); return; }
+    res.json(await conferirRegrasLisboa(clinic.id));
+  })
+);
+
 // Vinculo dos procedimentos da Alice com os do Clinica Experts (so nome igual; o resto vai pra revisao). dryRun (padrao) so mostra. So admin.
 apiRouter.post(
   "/clinics/lisboa-vincular-procedimentos",
@@ -3380,7 +3396,13 @@ apiRouter.put(
     const patient = await prisma.patient.findUniqueOrThrow({ where: { id: req.params.id } });
     if (!assertClinicAccess(req, res, patient.clinicId)) return;
 
-    const { name, birthDate, email, cpf, notes, tagIds, estimatedValue, leadTemperature, assignedToId, nextActionAt, nextActionNote, active, hasPrescription, optedOut, noInterest, callbackAt, callbackNote, contactKind, contactKindDetail } = req.body as {
+    const { name, birthDate, email, cpf, notes, tagIds, estimatedValue, leadTemperature, assignedToId, nextActionAt, nextActionNote, active, hasPrescription, optedOut, noInterest, callbackAt, callbackNote, contactKind, contactKindDetail, promoOptOut, imageConsent, imageConsentScope, imageConsentSource, lossReasonCode, lossReasonNote } = req.body as {
+      promoOptOut?: boolean;
+      imageConsent?: string | null;
+      imageConsentScope?: string | null;
+      imageConsentSource?: string | null;
+      lossReasonCode?: string | null;
+      lossReasonNote?: string | null;
       name?: string;
       birthDate?: string | null;
       email?: string | null;
@@ -3487,6 +3509,21 @@ apiRouter.put(
     if (contactKind !== undefined) {
       if (contactKind !== "paciente" && contactKind !== "nao_paciente") { res.status(400).json({ error: "contactKind invalido, use paciente ou nao_paciente" }); return; }
       if (contactKind !== patient.contactKind || (contactKind === "nao_paciente" && (contactKindDetail ?? null) !== patient.contactKindDetail)) await setContactKindByStaff(patient.id, contactKind, contactKindDetail ?? null, req.staff?.name ?? null);
+    }
+    if (promoOptOut !== undefined && !!promoOptOut !== patient.promoOptOut) {
+      await prisma.patient.update({ where: { id: patient.id }, data: { promoOptOut: !!promoOptOut, promoOptOutAt: promoOptOut ? new Date() : null } });
+      await logActivity({ clinicId: patient.clinicId, patientId: patient.id, type: promoOptOut ? "patient_promo_opted_out" : "patient_promo_opted_in", area: "atendimento", title: promoOptOut ? "Promoções desligadas para este contato (operacionais continuam)" : "Promoções religadas para este contato", actorName: req.staff?.name ?? null });
+    }
+    if (imageConsent !== undefined) {
+      if (imageConsent !== null && imageConsent !== "concedido" && imageConsent !== "negado") { res.status(400).json({ error: "imageConsent invalido (concedido, negado ou null)" }); return; }
+      if (imageConsent !== null && !(imageConsentSource ?? "").trim()) { res.status(400).json({ error: "Informe a procedência da autorização (imageConsentSource): termo, conversa, data..." }); return; }
+      if (imageConsent === "concedido" && !["antes_depois", "depoimento", "ambos"].includes(imageConsentScope ?? "")) { res.status(400).json({ error: "imageConsentScope deve ser antes_depois, depoimento ou ambos" }); return; }
+      await prisma.patient.update({ where: { id: patient.id }, data: { imageConsent, imageConsentScope: imageConsent === "concedido" ? imageConsentScope! : null, imageConsentSource: imageConsent ? imageConsentSource!.trim().slice(0, 200) : null, imageConsentAt: imageConsent ? new Date() : null } });
+      await logActivity({ clinicId: patient.clinicId, patientId: patient.id, type: "image_consent", area: "atendimento", title: imageConsent === "concedido" ? `Autorização de imagem/depoimento registrada (${imageConsentScope})` : imageConsent === "negado" ? "Recusa de uso de imagem/depoimento registrada" : "Autorização de imagem removida", description: imageConsentSource ?? null, actorName: req.staff?.name ?? null });
+    }
+    if (lossReasonCode !== undefined) {
+      const lr = await setLossReason(patient.clinicId, patient.id, lossReasonCode, lossReasonNote ?? null, req.staff?.name ?? null);
+      if (!lr.ok) { res.status(400).json({ error: lr.message }); return; }
     }
     if (optedOut !== undefined && !!optedOut !== patient.optedOut) {
       void logActivity({
@@ -4272,7 +4309,12 @@ apiRouter.get(
 apiRouter.post(
   "/waitlist",
   asyncRoute(async (req, res) => {
-    const { patientPhone, patientName, procedureId, professionalId, preferredNote } = req.body as {
+    const { patientPhone, patientName, procedureId, professionalId, preferredNote, days, shifts, minLeadHours, priority, validUntil } = req.body as {
+      days?: string | number[] | null;
+      shifts?: string | string[] | null;
+      minLeadHours?: number;
+      priority?: number;
+      validUntil?: string | null;
       patientPhone?: string;
       patientName?: string;
       procedureId?: string | null;
@@ -4303,6 +4345,11 @@ apiRouter.post(
         procedureId: ownProcedure ?? null,
         professionalId: ownProfessional ?? null,
         preferredNote: (preferredNote || "").slice(0, 200),
+        days: Array.isArray(days) ? days.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6).join(",") || null : typeof days === "string" ? (days.split(",").map((x) => x.trim()).filter((x) => /^[0-6]$/.test(x)).join(",") || null) : null,
+        shifts: (Array.isArray(shifts) ? shifts : typeof shifts === "string" ? shifts.split(",") : []).map((x) => String(x).trim().toLowerCase()).filter((x) => ["manha", "tarde", "noite"].includes(x)).join(",") || null,
+        minLeadHours: Math.min(Math.max(Math.round(Number(minLeadHours)) || 0, 0), 168),
+        priority: Math.min(Math.max(Math.round(Number(priority)) || 0, -10), 10),
+        validUntil: validUntil && !Number.isNaN(new Date(validUntil).getTime()) ? new Date(validUntil) : null,
       },
       include: {
         patient: { select: { id: true, name: true, phone: true } },
@@ -4958,6 +5005,69 @@ apiRouter.post(
     res.json(campaign);
   })
 );
+
+// ---- Fases 2/3: motivos, propostas, pacotes, comprovantes e relatorios de gestao (todas as rotas isoladas por clinica no servidor) ----
+apiRouter.get("/loss-reasons", asyncRoute(async (_req, res) => { res.json(LOSS_REASONS.map((c) => ({ code: c, label: LOSS_LABEL[c] }))); }));
+apiRouter.post("/appointments/:id/cancel-reason", asyncRoute(async (req, res) => {
+  const ap = await prisma.appointment.findUnique({ where: { id: req.params.id }, select: { clinicId: true } });
+  if (!ap) { res.status(404).json({ error: "Agendamento nao encontrado" }); return; }
+  if (!assertClinicAccess(req, res, ap.clinicId)) return;
+  const r = await setCancelReason(ap.clinicId, req.params.id, (req.body?.code ?? null) as string | null, req.staff?.name ?? null);
+  res.status(r.ok ? 200 : 400).json(r);
+}));
+apiRouter.get("/proposals/report", asyncRoute(async (req, res) => { const clinic = await getClinic(req); res.json(await openProposalsReport(clinic.id)); }));
+apiRouter.post("/proposals", asyncRoute(async (req, res) => {
+  const clinic = await getClinic(req);
+  const b = (req.body ?? {}) as { patientId?: string; title?: string; items?: unknown; validUntil?: string | null; objectionCode?: string | null; note?: string | null };
+  const r = await createProposal(clinic.id, { patientId: String(b.patientId ?? ""), title: String(b.title ?? ""), items: b.items, validUntil: b.validUntil ?? null, objectionCode: b.objectionCode ?? null, note: b.note ?? null }, req.staff?.name ?? null);
+  res.status(r.ok ? 201 : 400).json(r);
+}));
+apiRouter.post("/proposals/:id/close", asyncRoute(async (req, res) => {
+  const clinic = await getClinic(req);
+  const st = String(req.body?.status ?? "");
+  if (!["aceita", "recusada", "cancelada"].includes(st)) { res.status(400).json({ error: "status invalido (aceita, recusada, cancelada)" }); return; }
+  const r = await closeProposal(clinic.id, req.params.id, st as "aceita" | "recusada" | "cancelada", (req.body?.objectionCode ?? null) as string | null, req.staff?.name ?? null);
+  res.status(r.ok ? 200 : 409).json(r);
+}));
+apiRouter.get("/packages", asyncRoute(async (req, res) => {
+  const clinic = await getClinic(req);
+  const rows = await prisma.patientPackage.findMany({ where: { clinicId: clinic.id }, include: { usages: { select: { usedAt: true } }, }, orderBy: { createdAt: "desc" }, take: 200 });
+  res.json({ fonte: "interna (o Clínica Experts não fornece saldo de sessões)", pacotes: rows.map((p) => ({ id: p.id, patientId: p.patientId, nome: p.name, total: p.totalSessions, status: p.status, expiraEm: p.expiresAt, ...balanceOf(p) })), alertas: await clinicPackageAlerts(clinic.id) });
+}));
+apiRouter.post("/packages", asyncRoute(async (req, res) => {
+  const clinic = await getClinic(req);
+  const b = (req.body ?? {}) as { patientId?: string; name?: string; totalSessions?: number; procedureId?: string | null; expiresAt?: string | null; notes?: string | null };
+  const r = await createPackage(clinic.id, { patientId: String(b.patientId ?? ""), name: String(b.name ?? ""), totalSessions: Number(b.totalSessions), procedureId: b.procedureId ?? null, expiresAt: b.expiresAt ?? null, notes: b.notes ?? null }, req.staff?.name ?? null);
+  res.status(r.ok ? 201 : 400).json(r);
+}));
+apiRouter.post("/packages/:id/usage", asyncRoute(async (req, res) => {
+  const clinic = await getClinic(req);
+  const r = await registerUsage(clinic.id, req.params.id, { appointmentId: (req.body?.appointmentId ?? null) as string | null, note: (req.body?.note ?? null) as string | null }, req.staff?.name ?? null);
+  res.status(r.ok ? 200 : 400).json(r);
+}));
+// Comprovante: imagem/PDF recebido NAO e pagamento confirmado. recebido -> pendente_conferencia -> conferido | recusado.
+apiRouter.get("/payment-proofs", asyncRoute(async (req, res) => { const clinic = await getClinic(req); res.json(await prisma.paymentProof.findMany({ where: { clinicId: clinic.id }, orderBy: { createdAt: "desc" }, take: 200 })); }));
+apiRouter.post("/payment-proofs", asyncRoute(async (req, res) => {
+  const clinic = await getClinic(req);
+  const b = (req.body ?? {}) as { patientId?: string; appointmentId?: string | null; messageId?: string | null; amountClaimed?: number | null };
+  const pat = await prisma.patient.findFirst({ where: { id: String(b.patientId ?? ""), clinicId: clinic.id }, select: { id: true } });
+  if (!pat) { res.status(400).json({ error: "Contato nao encontrado nesta clinica" }); return; }
+  const row = await prisma.paymentProof.create({ data: { clinicId: clinic.id, patientId: pat.id, appointmentId: b.appointmentId ?? null, messageId: b.messageId ?? null, amountClaimed: b.amountClaimed == null ? null : Number(b.amountClaimed), status: "pendente_conferencia" } });
+  res.status(201).json(row);
+}));
+apiRouter.post("/payment-proofs/:id/check", asyncRoute(async (req, res) => {
+  const clinic = await getClinic(req);
+  const st = String(req.body?.status ?? "");
+  if (!["conferido", "recusado"].includes(st)) { res.status(400).json({ error: "status invalido (conferido ou recusado)" }); return; }
+  const r = await prisma.paymentProof.updateMany({ where: { id: req.params.id, clinicId: clinic.id, status: { in: ["recebido", "pendente_conferencia"] } }, data: { status: st, checkedBy: req.staff?.name ?? "equipe", checkedAt: new Date(), note: typeof req.body?.note === "string" ? req.body.note.slice(0, 200) : null } });
+  if (r.count !== 1) { res.status(409).json({ error: "Comprovante ja conferido ou inexistente nesta clinica" }); return; }
+  res.json({ ok: true });
+}));
+apiRouter.get("/reports/management", asyncRoute(async (req, res) => {
+  const clinic = await getClinic(req);
+  const preset = ["diario", "semanal", "mensal"].includes(String(req.query.preset)) ? (String(req.query.preset) as "diario" | "semanal" | "mensal") : "semanal";
+  res.json(await managementReport(clinic.id, preset));
+}));
 
 // Datas especiais / campanhas / recesso (checklist 22/10, secao 14). Rascunho com dependencias explicitas; so datas APROVADAS e vigentes chegam a Alice.
 apiRouter.get(

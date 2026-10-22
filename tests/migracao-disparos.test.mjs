@@ -17,13 +17,14 @@ const MIG = "20261025100000_disparos";
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "alice-mig-disparos-"));
 const urlOf = (f) => `file:${f.replace(/\\/g, "/")}`;
 const repoSchema = path.join(root, "prisma", "schema.prisma");
+const { cachedPreDb } = await import(pathToFileURL(path.join(root, "tests", "helpers-migracao.mjs")).href);
 const { classifyMigrateFailure } = await import(pathToFileURL(path.join(root, "scripts", "migracao-erros.mjs")).href);
 const rec = await import(pathToFileURL(path.join(root, "scripts", "recuperar-migracao-disparos.mjs")).href);
 
 test.after(() => { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* temporario */ } });
 
 function cli(args, dbFile, schema = repoSchema) {
-  const r = spawnSync(process.execPath, [prismaCli, ...args, "--schema", schema], { cwd: root, env: { ...process.env, DATABASE_URL: urlOf(dbFile) }, encoding: "utf8", timeout: 240_000 });
+  const r = spawnSync(process.execPath, [prismaCli, ...args, "--schema", schema], { cwd: root, env: { ...process.env, DATABASE_URL: urlOf(dbFile) }, encoding: "utf8", timeout: 900_000 });
   return { status: r.status, out: `${r.stdout ?? ""}\n${r.stderr ?? ""}` };
 }
 
@@ -68,8 +69,7 @@ const templateDb = path.join(tmp, "template-pre.db");
 const emptyDb = path.join(tmp, "template-vazio.db"); // sequencia completa SEM a do Disparos e SEM dados (base do teste de banco novo)
 const SENT = ["2026-09-01 10:05:00", "2026-10-02 11:00:00", "2026-10-20 10:07:30"];
 test("preparo: banco no estado imediatamente anterior, populado", async () => {
-  const r = cli(["migrate", "deploy"], templateDb, preSchema);
-  assert.equal(r.status, 0, r.out.slice(-600));
+  fs.copyFileSync(await cachedPreDb(MIG), templateDb); // migracoes REAIS anteriores a esta, aplicadas uma vez por maquina (cache invalidado se mudarem)
   fs.copyFileSync(templateDb, emptyDb);
   const db = open(templateDb);
   try {
