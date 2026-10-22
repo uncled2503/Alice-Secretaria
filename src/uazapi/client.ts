@@ -1,5 +1,7 @@
 import crypto, { timingSafeEqual } from "crypto";
 import { ingestDeliveryStatus } from "../dispatch/delivery.js";
+import { blocksAutomatedSend } from "../crm/contactKind.js";
+import { applyCampaignHumanReply } from "../crm/campaignReply.js";
 import dns from "dns/promises";
 import net from "net";
 import OpenAI from "openai";
@@ -599,6 +601,8 @@ export function isExplicitNumberRejection(err: unknown): boolean {
 
 export async function sendText(clinicId: string, phone: string, text: string, opts: { manual?: boolean; alice?: boolean; kind?: OutboundKind; flow?: GuardedFlow; beforeProvider?: () => Promise<void>; report?: (r: SendReport) => void } = {}): Promise<SendOutcome> {
   if (await automatedSendBlocked(clinicId, opts.manual === true)) return "blocked";
+  // contato classificado como NAO-PACIENTE (parceria, curriculo, fornecedor...) nao recebe automacao comercial/de relacionamento (classificacao persistente e compartilhada)
+  if (opts.manual !== true && opts.alice !== true && (await blocksAutomatedSend(clinicId, phone, opts.kind))) return "blocked";
   // WhatsApp comprovadamente fora: nao ha o que tentar. Lanca (os chamadores ja tratam erro de envio) SEM bater no provedor e SEM gastar tentativa do chamador que souber distinguir.
   if (opts.manual !== true) {
     const conn = await connectionUsable(clinicId);
@@ -1702,6 +1706,11 @@ async function handleQueuedPayload(clinicId: string, body: unknown, ageMs = 0): 
       continue;
     }
 
+    // CAMPANHA COM ATENDIMENTO HUMANO: a resposta vai para a equipe ANTES de qualquer geracao da Alice (persistido aqui, na fila do webhook; a entrega da Alice confere humanTakeover de novo)
+    if (!recorded.humanTakeover && !recorded.probableEcho && !incoming.fromMe) {
+      const camp = await applyCampaignHumanReply(clinicId, recorded.patientId, recorded.conversationId, incoming.text ?? "").catch((err) => { console.error("[campanha] falha ao conferir resposta de campanha:", err instanceof Error ? err.message : err); return null; });
+      if (camp?.took) continue;
+    }
     if (recorded.humanTakeover) {
       if (!recorded.probableEcho) await noteSurveyWhileHumanOwned(clinicId, recorded.conversationId, recorded.patientId);
       continue;

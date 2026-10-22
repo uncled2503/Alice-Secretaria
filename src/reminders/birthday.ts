@@ -93,8 +93,9 @@ export interface BirthdayDelivery { state: string; detail: string; rowId: string
 export async function deliverBirthday(rule: BirthdayRule, patient: Patient, tz: string, clock: () => Date, opts: { extendedReason?: string | null; clinicInfo?: Awaited<ReturnType<typeof getClinicTemplateInfo>> } = {}): Promise<BirthdayDelivery> {
   const { month, day, year, hour } = localParts(clock(), tz);
   // REVALIDACAO imediata: e hoje o aniversario? o dia/horario ainda valem?
-  const fresh = await prisma.patient.findUnique({ where: { id: patient.id }, select: { birthDate: true, optedOut: true, active: true, phone: true, name: true } });
+  const fresh = await prisma.patient.findUnique({ where: { id: patient.id }, select: { birthDate: true, optedOut: true, active: true, phone: true, name: true, contactKind: true } });
   if (!fresh?.birthDate || !isBirthdayToday(fresh.birthDate, { year, month, day })) return { state: "skipped", detail: "hoje nao e o aniversario (ou a data mudou)", rowId: null, attempted: false };
+  if (fresh.contactKind !== "paciente") return { state: "skipped", detail: "contato classificado como nao-paciente (parceria, curriculo, fornecedor...)", rowId: null, attempted: false };
   if (fresh.optedOut || !fresh.active) return { state: "skipped", detail: fresh.optedOut ? "pediu para nao receber mensagens" : "paciente fora de acompanhamento", rowId: null, attempted: false };
   if (hour >= HARD_LAST_HOUR) return { state: "skipped", detail: "depois do limite do dia: o parabens perdeu a pertinencia", rowId: null, attempted: false };
 
@@ -182,7 +183,7 @@ export async function birthdayCandidatesToday(clinicId: string, now: Date, tz: s
   const rule = rules[0];
   if (!rule) return { today: parts, candidates: [], rules };
   const policy = await loadPolicy(clinicId, "aniversario");
-  const patients = await prisma.patient.findMany({ where: { clinicId, birthDate: { not: null }, optedOut: false, active: true }, orderBy: { createdAt: "asc" } });
+  const patients = await prisma.patient.findMany({ where: { clinicId, birthDate: { not: null }, optedOut: false, active: true, contactKind: "paciente" }, orderBy: { createdAt: "asc" } });
   const todays = patients.filter((p) => isBirthdayToday(p.birthDate!, parts));
   const rows = todays.length ? await prisma.birthdaySent.findMany({ where: { year: parts.year, patientId: { in: todays.map((p) => p.id) } } }) : [];
   const seenPhone = new Set<string>();

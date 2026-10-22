@@ -148,6 +148,10 @@ export async function patientDossier(clinicId: string, patientId: string) {
       active: patient.active,
       hasPrescription: patient.hasPrescription,
       optedOut: patient.optedOut,
+      contactKind: patient.contactKind,
+      contactKindDetail: patient.contactKindDetail,
+      contactKindSource: patient.contactKindSource,
+      contactKindEvidence: patient.contactKindEvidence,
       // Perfil comercial (src/crm/leadSummary.ts + intent.ts)
       noInterest: patient.noInterest,
       callbackAt: patient.callbackAt,

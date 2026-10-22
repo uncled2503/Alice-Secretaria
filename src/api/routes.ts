@@ -75,6 +75,8 @@ import { conferirRecontatosLisboa } from "../maintenance/lisboaRecontatos.js";
 import { conferirConfirmacoesLisboa } from "../maintenance/lisboaConfirmacoes.js";
 import { parseWeekdays, PURPOSES } from "../reminders/policy.js";
 import { configurarPosDepoisDoFechamento, diagnosticarPosFluxo } from "../maintenance/lisboaPosFechamento.js";
+import { setByStaff as setContactKindByStaff } from "../crm/contactKind.js";
+import { prepararDatasEspeciais } from "../crm/specialDates.js";
 import { executeConfirmationsFor, previewConfirmationsFor } from "../reminders/controlled.js";
 import { conferirRecontatos, executarRecuperacaoRecontatos } from "../crm/followupRecovery.js";
 import { diagnoseJobs, STATE_LABEL } from "../crm/automationRuns.js";
@@ -3378,7 +3380,7 @@ apiRouter.put(
     const patient = await prisma.patient.findUniqueOrThrow({ where: { id: req.params.id } });
     if (!assertClinicAccess(req, res, patient.clinicId)) return;
 
-    const { name, birthDate, email, cpf, notes, tagIds, estimatedValue, leadTemperature, assignedToId, nextActionAt, nextActionNote, active, hasPrescription, optedOut, noInterest, callbackAt, callbackNote } = req.body as {
+    const { name, birthDate, email, cpf, notes, tagIds, estimatedValue, leadTemperature, assignedToId, nextActionAt, nextActionNote, active, hasPrescription, optedOut, noInterest, callbackAt, callbackNote, contactKind, contactKindDetail } = req.body as {
       name?: string;
       birthDate?: string | null;
       email?: string | null;
@@ -3396,6 +3398,8 @@ apiRouter.put(
       noInterest?: boolean;
       callbackAt?: string | null;
       callbackNote?: string | null;
+      contactKind?: string; // "paciente" | "nao_paciente": revisao da equipe (classificacao persistente)
+      contactKindDetail?: string | null;
     };
 
     const LEAD_TEMPERATURES = new Set(["frio", "morno", "quente"]);
@@ -3480,6 +3484,10 @@ apiRouter.put(
         ...(parsedCallback !== undefined ? { callbackAt: parsedCallback, callbackNote: parsedCallback ? callbackNote?.trim() || null : null } : {}),
       },
     });
+    if (contactKind !== undefined) {
+      if (contactKind !== "paciente" && contactKind !== "nao_paciente") { res.status(400).json({ error: "contactKind invalido, use paciente ou nao_paciente" }); return; }
+      if (contactKind !== patient.contactKind || (contactKind === "nao_paciente" && (contactKindDetail ?? null) !== patient.contactKindDetail)) await setContactKindByStaff(patient.id, contactKind, contactKindDetail ?? null, req.staff?.name ?? null);
+    }
     if (optedOut !== undefined && !!optedOut !== patient.optedOut) {
       void logActivity({
         clinicId: patient.clinicId,
@@ -4861,6 +4869,9 @@ apiRouter.get(
         targetMode: c.targetMode,
         scheduledFor: c.scheduledFor,
         status: c.status,
+        humanAfterReply: c.humanAfterReply,
+        humanReplyWindowHours: c.humanReplyWindowHours,
+        replied: c.recipients.filter((r) => r.repliedAt).length,
         total: c.recipients.length,
         sent: c.recipients.filter((r) => r.status === "sent").length,
         failed: c.recipients.filter((r) => r.status === "failed").length,
@@ -4872,7 +4883,9 @@ apiRouter.get(
 apiRouter.post(
   "/broadcasts",
   asyncRoute(async (req, res) => {
-    const { title, message, scheduledFor, targetStage, contactIds, reactivation } = req.body as {
+    const { title, message, scheduledFor, targetStage, contactIds, reactivation, humanAfterReply, humanReplyWindowHours } = req.body as {
+      humanAfterReply?: boolean;
+      humanReplyWindowHours?: number;
       title?: string;
       message?: string;
       scheduledFor?: string;
@@ -4931,6 +4944,8 @@ apiRouter.post(
         targetMode,
         targetConfig,
         scheduledFor: scheduledForDate,
+        humanAfterReply: humanAfterReply === true,
+        humanReplyWindowHours: Math.min(Math.max(Math.round(Number(humanReplyWindowHours)) || 72, 1), 336),
       },
     });
 
@@ -4941,6 +4956,50 @@ apiRouter.post(
     }
 
     res.json(campaign);
+  })
+);
+
+// Datas especiais / campanhas / recesso (checklist 22/10, secao 14). Rascunho com dependencias explicitas; so datas APROVADAS e vigentes chegam a Alice.
+apiRouter.get(
+  "/special-dates",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const rows = await prisma.specialDate.findMany({ where: { clinicId: clinic.id }, orderBy: { startsOn: "asc" } });
+    res.json(rows.map((d) => ({ ...d, faltando: d.kind === "recesso" ? (d.endsOn ? [] : ["data de retorno do recesso"]) : [...(d.conditionText?.trim() ? [] : ["condição/valor vigente"]), ...(d.endsOn ? [] : ["validade"])] })));
+  })
+);
+apiRouter.post(
+  "/special-dates/prepare",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const clinic = await getClinic(req);
+    const { dryRun } = (req.body ?? {}) as { dryRun?: boolean };
+    res.json(await prepararDatasEspeciais(clinic.id, { dryRun: dryRun !== false, actorName: req.staff?.name ?? null }));
+  })
+);
+apiRouter.put(
+  "/special-dates/:id",
+  asyncRoute(async (req, res) => {
+    const row = await prisma.specialDate.findUnique({ where: { id: req.params.id } });
+    if (!row) { res.status(404).json({ error: "Data não encontrada" }); return; }
+    if (!assertClinicAccess(req, res, row.clinicId)) return;
+    const b = (req.body ?? {}) as { conditionText?: string | null; endsOn?: string | null; status?: string; services?: string; notes?: string | null };
+    const isDay = (v: unknown) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
+    if (b.endsOn !== undefined && b.endsOn !== null && !isDay(b.endsOn)) { res.status(400).json({ error: "endsOn deve ser AAAA-MM-DD" }); return; }
+    if (b.status !== undefined && !["rascunho", "aprovada", "encerrada"].includes(b.status)) { res.status(400).json({ error: "status invalido" }); return; }
+    const approving = b.status === "aprovada" && row.status !== "aprovada";
+    const updated = await prisma.specialDate.update({
+      where: { id: row.id },
+      data: {
+        ...(b.conditionText !== undefined ? { conditionText: b.conditionText?.trim() || null } : {}),
+        ...(b.endsOn !== undefined ? { endsOn: b.endsOn } : {}),
+        ...(b.services !== undefined ? { services: b.services.trim() } : {}),
+        ...(b.notes !== undefined ? { notes: b.notes?.trim() || null } : {}),
+        ...(b.status !== undefined ? { status: b.status, ...(approving ? { approvedBy: req.staff?.name ?? "equipe" } : {}) } : {}),
+      },
+    });
+    await logActivity({ clinicId: row.clinicId, type: "automation_updated", area: "automacoes", title: `Data especial atualizada: ${row.name}`, description: approving ? "Aprovada: a Alice passa a conhecer a data enquanto vigente." : "Cadastro atualizado.", actorName: req.staff?.name ?? null });
+    res.json(updated);
   })
 );
 

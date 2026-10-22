@@ -7,6 +7,7 @@ import { notifyStaff } from "./notify.js";
 import { generateReply } from "../ai/alice.js";
 import { deliverAliceReply, connectionUsable } from "../uazapi/client.js";
 import { isNonCommercialHandoff } from "./nonCommercial.js";
+import { isCampaignHumanHandoff } from "./campaignReply.js";
 import { recordReplyFailure } from "../ai/replyFailure.js";
 
 // ---------------------------------------------------------------------------
@@ -101,7 +102,7 @@ export async function resumeStalledConversations(now = new Date()): Promise<numb
         humanTakeover: true,
         staffTouchedAt: { not: null },
         lastMessageAt: { gte: new Date(now.getTime() - RESUME_MAX_AGE_MS - 60_000) },
-        patient: { clinicId: clinic.id, optedOut: false },
+        patient: { clinicId: clinic.id, optedOut: false, contactKind: "paciente" }, // nao-paciente classificado nunca volta para a Alice
       },
       select: { id: true, staffTouchedAt: true, handoffReason: true, patient: { select: { id: true, name: true, phone: true, callbackAt: true } } },
       take: 200,
@@ -111,6 +112,7 @@ export async function resumeStalledConversations(now = new Date()): Promise<numb
         const since = c.staffTouchedAt!;
         // motivo da transferencia: contato nao comercial nunca volta para a Alice; retorno combinado futuro tambem nao (a data combinada manda)
         if (isNonCommercialHandoff(c.handoffReason)) continue;
+        if (isCampaignHumanHandoff(c.handoffReason)) continue; // campanha com atendimento humano: o retorno por inatividade NAO desfaz a politica
         if (c.patient.callbackAt && c.patient.callbackAt.getTime() > now.getTime()) continue;
         const after = await prisma.message.findMany({
           where: { conversationId: c.id, createdAt: { gt: since }, role: { in: ["user", "assistant", "human"] } },

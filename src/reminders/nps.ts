@@ -92,7 +92,7 @@ async function runForClinic(
         ...(doneIds.length ? { id: { notIn: doneIds } } : {}),
         status: "completed",
         scheduledAt: { lte: cutoff, gte: floor },
-        patient: { optedOut: false },
+        patient: { optedOut: false, contactKind: "paciente" },
       },
       include: { patient: true, procedure: { select: { name: true } } },
       orderBy: { scheduledAt: "asc" },

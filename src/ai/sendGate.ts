@@ -137,7 +137,7 @@ PUBLICO DAS AUTOMACOES (recontato, retomada, convite, campanha): quem recebe e j
 1. A mensagem fala de um agendamento que nao existe mais ou diverge da AGENDA da ficha (cancelado, remarcado, outro dia/hora/procedimento, "amanha" quando a data e outra).
 2. A pessoa pediu para nao receber mensagens, ou disse que nao tem interesse, e a mensagem e automatica ou promocional.
 3. Mensagem igual ou muito parecida ja foi enviada nas ultimas ~20h (ficha: mensagens automaticas ja recebidas), ou repete o que a Alice acabou de dizer.
-4. (so RESPOSTA DA ALICE e lembretes) Oferece avaliacao, horarios ou agendamento a quem JA TEM horario marcado, JA foi atendida/avaliada, ou NAO pediu agenda (resposta curta tipo "ok"/"nao", comentario, assunto de amiga/familiar). Em recontato/retomada/convite oferecer o proximo passo e a FINALIDADE da mensagem: so barre se ela JA TEM horario ou ja foi atendida.
+4. (so RESPOSTA DA ALICE e lembretes) Oferece HORARIOS ou agendamento a quem JA TEM horario marcado, JA foi atendida/avaliada, ou so respondeu "ok"/"nao"/agradeceu/comentou assunto de amiga ou familiar. IMPORTANTE: um CONVITE contextual para avaliacao (uma pergunta simples, sem listar horarios e sem criar reserva) NAO e erro quando a pessoa perguntou preco/informacao/procedimento e ainda nao tem horario nem foi atendida: pedir informacao ou preco NAO proibe o convite. Nao barre nem reescreva por isso. Em recontato/retomada/convite oferecer o proximo passo e a FINALIDADE da mensagem: so barre se ela JA TEM horario ou ja foi atendida.
 5. Contradiz o que a EQUIPE combinou/disse nas ultimas mensagens, ou a equipe esta conversando com ela agora (fala humana ha menos de 30 min) e a mensagem e automatica (recontato, campanha, pesquisa, aniversario).
 6. Momento inadequado: pesquisa ou promocao logo apos reclamacao/problema; acompanhamento pos-procedimento para quem relatou problema; recontato/convite para quem acabou de dizer que nao pode, esta doente/no hospital ou combinou retornar em data futura (retorno combinado na ficha).
 7. (resposta da Alice) inventa valor, desconto, horario, profissional ou procedimento que nao esta na ficha, ou promete algo que ela nao consegue fazer, ou ignora a pergunta da pessoa.
@@ -151,7 +151,7 @@ Responda SO um JSON: {"decisao":"enviar|reescrever","confianca":"alta|media|baix
 Use "enviar" quando a resposta serve: responde ao que a pessoa escreveu e nao contradiz a ficha. Em duvida, ENVIAR.
 Use "reescrever" so quando ha um problema CONCRETO e verificavel na ficha:
 1. Fala de agendamento que nao existe/diverge da AGENDA (cancelado, outro dia/hora/procedimento).
-2. Oferece avaliacao, horarios ou agendamento a quem JA TEM horario, JA foi atendida/avaliada, ou NAO pediu agenda (a pessoa so disse "ok", "nao", comentou ou falou de outro assunto).
+2. Oferece HORARIOS ou agendamento a quem JA TEM horario, JA foi atendida/avaliada, ou so disse "ok", "nao", agradeceu, comentou ou falou de outro assunto. Um CONVITE contextual para avaliacao (pergunta simples, sem listar horarios e sem criar reserva) NAO e problema quando a pessoa pediu preco/informacao/procedimento e ainda nao tem horario: NAO reescreva para remover esse convite.
 3. Contradiz o que a EQUIPE combinou/disse, ou repete o que a Alice acabou de dizer na mensagem anterior.
 4. Ignora a pergunta que a pessoa fez, ou inventa valor, desconto, horario livre, profissional ou procedimento que nao esta na ficha, ou promete algo que ela nao consegue fazer.
 Ao reescrever, escreva a resposta COMPLETA e melhor: natural, curta (ate 3 frases), no tom caloroso da Alice, que responde ao que a pessoa escreveu por ultimo. Use SO fatos da ficha ou da resposta original (agenda, datas, horarios, nomes que ja estao la). NAO invente preco, horario livre, desconto nem procedimento; se faltar informacao, peca o que falta ou diga que vai confirmar com a equipe. Se a pessoa so agradeceu ou fez um comentario, acolha em uma frase, sem oferta. NUNCA devolva texto vazio: a pessoa nao pode ficar sem resposta.`;
@@ -200,7 +200,7 @@ export function decide(raw: string | null | undefined, kind: OutboundKind, origi
   const category = parseCategory((data as { categoria?: unknown }).categoria) ?? undefined;
   if (data.decisao === "nao_enviar" && conf === "alta") {
     // o veto so vale com motivo REAL: se o motivo e apenas descrever o publico da automacao ("nao tem horario", "nao respondeu", "novo lead"), nao barra
-    const v = vetoStands(category ?? null, reason);
+    const v = vetoStands(category ?? null, reason, kind);
     if (!v.stands) return { send: true, reason: `veto ignorado (${v.why}): ${reason}`, confidence: conf, reviewed: true, category };
     return { send: false, reason, confidence: conf, reviewed: true, category };
   }

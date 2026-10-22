@@ -436,6 +436,7 @@ export async function loadCandidates(now: Date, clinicId?: string) {
       lastMessageAt: { gte: new Date(now.getTime() - 60 * 24 * 3_600_000) },
       patient: {
         optedOut: false,
+        contactKind: "paciente", // nao-paciente (parceria, curriculo, fornecedor...) nao entra no recontato comercial
         noInterest: false,
         OR: [{ callbackAt: null }, { callbackAt: { lte: now } }],
         clinic: { ...PAID_CLINIC_WHERE, aliceActive: true },

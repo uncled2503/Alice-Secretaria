@@ -34,7 +34,7 @@ function projectDir(name, { withOriginalBroken = false } = {}) {
   fs.copyFileSync(repoSchema, path.join(dir, "schema.prisma"));
   for (const d of fs.readdirSync(path.join(root, "prisma", "migrations"), { withFileTypes: true })) {
     if (d.isFile()) fs.copyFileSync(path.join(root, "prisma", "migrations", d.name), path.join(dir, "migrations", d.name));
-    else if (d.name !== MIG) {
+    else if (d.name < MIG) {
       // (fs.cpSync derruba o Node 24 no Windows: copia manual)
       fs.mkdirSync(path.join(dir, "migrations", d.name));
       for (const f of fs.readdirSync(path.join(root, "prisma", "migrations", d.name))) fs.copyFileSync(path.join(root, "prisma", "migrations", d.name, f), path.join(dir, "migrations", d.name, f));
@@ -259,12 +259,18 @@ test("RECUPERACAO: diagnostico NAO escreve; aplicar faz backup verificado, compl
   // ---- 5) marcar como aplicada (agora que a validacao passou) e conferir o Prisma
   const resolve = cli(["migrate", "resolve", "--applied", MIG], file);
   assert.equal(resolve.status, 0, resolve.out);
+  // (a migracao seguinte, 20261026100000, ainda nao foi aplicada neste banco: e o que o boot normal aplica depois)
   const status = cli(["migrate", "status"], file);
-  assert.equal(status.status, 0, status.out);
-  assert.match(status.out, /up to date/i);
+  assert.match(status.out, /20261026100000_nao_pacientes_campanhas_datas/, "so a migracao seguinte fica pendente");
+  assert.ok(!/20261025100000_disparos/.test(status.out.split("have not yet been applied")[1] ?? ""), "a do Disparos consta como aplicada");
   const dep = cli(["migrate", "deploy"], file);
   assert.equal(dep.status, 0, dep.out);
-  assert.match(dep.out, /No pending migrations/i);
+  const status2 = cli(["migrate", "status"], file);
+  assert.equal(status2.status, 0, status2.out);
+  assert.match(status2.out, /up to date/i);
+  const dep2 = cli(["migrate", "deploy"], file);
+  assert.equal(dep2.status, 0, dep2.out);
+  assert.match(dep2.out, /No pending migrations/i);
   const final = await rec.run([], env, () => {});
   assert.equal(final.state, "aplicada_integra");
 
@@ -385,8 +391,10 @@ test("MODO DE RECUPERACAO SEM CONSOLE: o container imprime o diagnostico no log;
   assert.match(b2, /VALIDACAO OK/, b2.slice(-1500));
   assert.match(b2, /CONCLUIDO/, b2.slice(-1500));
   const st = cli(["migrate", "status"], file);
-  assert.equal(st.status, 0, st.out);
-  assert.match(st.out, /up to date/i);
+  assert.match(st.out, /20261026100000_nao_pacientes_campanhas_datas/, "so a migracao seguinte fica pendente (o boot normal a aplica)");
+  assert.ok(!/20261025100000_disparos/.test(st.out.split("have not yet been applied")[1] ?? ""));
+  assert.equal(cli(["migrate", "deploy"], file).status, 0);
+  assert.match(cli(["migrate", "status"], file).out, /up to date/i);
   const back = fs.readdirSync(path.join(path.dirname(file), "backups-hotfix"));
   assert.ok(back.some((n) => /^prod-antes-.*.db$/.test(n)), "backup criado antes de escrever");
 });

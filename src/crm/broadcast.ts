@@ -152,6 +152,7 @@ async function activateDueCampaigns(): Promise<void> {
           where: {
             clinicId: campaign.clinicId,
             optedOut: false, // quem pediu pra parar nao recebe campanha
+            contactKind: "paciente", // nem contato classificado como nao-paciente
             noInterest: false, // nem quem disse que nao tem interesse
             ...(campaign.targetStage ? { funnelStage: campaign.targetStage } : {}),
           },

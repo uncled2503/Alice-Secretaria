@@ -418,6 +418,18 @@
               <label>Nascimento<input id="cp-f-birth" type="date" /></label>
               <label style="display:flex;align-items:center;gap:0.4rem;flex-direction:row"><input id="cp-f-active" type="checkbox" /> Paciente ativo</label>
               <label style="display:flex;align-items:center;gap:0.4rem;flex-direction:row"><input id="cp-f-opted-out" type="checkbox" /> Não quer receber mensagens automáticas</label>
+              <label>Tipo de contato
+                <select id="cp-f-contact-kind">
+                  <option value="paciente">Paciente / potencial paciente</option>
+                  <option value="nao_paciente:parceria">Não-paciente: parceria</option>
+                  <option value="nao_paciente:curriculo">Não-paciente: currículo / vaga</option>
+                  <option value="nao_paciente:fornecedor">Não-paciente: fornecedor</option>
+                  <option value="nao_paciente:influenciador">Não-paciente: influenciador</option>
+                  <option value="nao_paciente:cobranca">Não-paciente: cobrança / financeiro</option>
+                  <option value="nao_paciente:administrativo">Não-paciente: assunto administrativo</option>
+                </select>
+                <span class="hint" id="cp-f-contact-kind-hint" style="margin:0"></span>
+              </label>
               <label style="display:flex;align-items:center;gap:0.4rem;flex-direction:row"><input id="cp-f-no-interest" type="checkbox" /> Sem interesse (não retomar conversa nem incluir em envios planejados)</label>
               <p class="hint" style="margin:0 0 0.5rem">Marcado: retomada de conversa, envios planejados, aniversário, ciclo de retorno e pesquisa não são enviados. Marca sozinho quando a pessoa pede para parar.</p>
               <label>Observações<textarea id="cp-f-notes" rows="3" placeholder="Anotações úteis para a equipe"></textarea></label>
@@ -2014,6 +2026,7 @@
           <label>Quando enviar?*
             <input id="bc-when" type="datetime-local" required />
           </label>
+          <label style="display:flex;align-items:flex-start;gap:0.4rem;flex-direction:row"><input id="bc-human-after-reply" type="checkbox" style="margin-top:0.2rem" /> <span>Atendimento humano após a resposta: quando a pessoa responder, a conversa vai para a equipe e a Alice não responde (valor/condição da campanha é com a equipe).</span></label>
           <div class="modal-actions">
             <button type="button" id="broadcast-cancel-btn">Cancelar</button>
             <button type="submit">Agendar envio</button>

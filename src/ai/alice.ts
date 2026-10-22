@@ -49,6 +49,8 @@ import { closingReply, feedbackThanks, isCourtesyOnly, isPositiveFeedback } from
 import { capSlotLines, stripSlotOffers } from "./slotText.js";
 import { absorbToolResult, checkSlotMentions, extractMentions, knownFrom, newSlotState, renderBooked, renderOffer, SLOT_FALLBACK_ASK, SLOT_NUDGE } from "./slotGuard.js";
 import { isJobSeeker, nonPatientKind } from "./jobSeeker.js";
+import { classifyByAlice, revertByClinicalContext, DETAIL_LABEL, type NonPatientDetail } from "../crm/contactKind.js";
+import { specialDatesLine } from "../crm/specialDates.js";
 import { findChosenSlot, identifyWanted, offersSlots, staffConfirmedBooking } from "./bookingIntent.js";
 import { statementsNote } from "./clinicStatements.js";
 import { resolveSituation, RULE_HIERARCHY } from "./situation.js";
@@ -1420,6 +1422,9 @@ export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: str
     ? `\n\nDETALHES DOS PROCEDIMENTOS EM FOCO NESTA CONVERSA (explique SO com estes dados):\n${focusProcs.map((p) => describeProcedureForPrompt(p, clinic.quotePrices)).join("\n\n")}`
     : "";
 
+  // Datas especiais/recesso APROVADAS e vigentes hoje (nunca inventa condicao, preco ou retorno; vazio = nada vigente)
+  const specialLine = await specialDatesLine(clinicId, clinic.timezone).catch(() => "");
+
   const areaLine = clinic.activityArea?.trim()
     ? `\nArea de atuacao: ${clinic.activityArea.trim()}.`
     : "";
@@ -1827,7 +1832,7 @@ Seu trabalho:
 2. Manter a etapa do paciente no funil atualizada (update_crm_stage) conforme a conversa avanca.
 3. Checar disponibilidade real (check_specific_time / check_availability) antes de falar de qualquer data.
 4. Confirmar o horario escolhido com o paciente e so entao usar book_appointment.
-5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${locationLine}${explainLine}${teamBooksLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${handoffLine}${silentLine}${humanLine}${noRepeatLine}
+5. Nunca invente horarios ou informacoes que nao vieram das ferramentas.${depositLine}${noPricesLine}${locationLine}${explainLine}${teamBooksLine}${postureLine}${evalFirstLine}${medicalLine}${naturalnessLine}${emojiLine}${visionLine}${schedulingLinkLine}${handoffLine}${silentLine}${humanLine}${noRepeatLine}${specialLine}
 6. FATOS QUE NAO SE DEDUZ: (a) FORMACAO PROFISSIONAL so existe se constar em [formacao: ...] ao lado do nome; o tratamento 'Dr./Dra.' NAO indica que a pessoa e medica (pode ser biomedica, esteticista...). Sem formacao cadastrada nao afirme nem negue e nunca invente outra profissional; se exigirem 'medica' e nao houver informacao confirmada, transfer_to_human. (b) QUANTIDADE (UI, unidades, sessoes) so a cadastrada: 'Quantidade INCLUIDA na oferta' vale para ESSA oferta (nunca invente faixa, nem quantidade por regiao, nem converta entre marcas); duvida de dose individual e da responsavel tecnica na avaliacao. (c) A duracao entre parenteses e o tempo de RESERVA na agenda, nao necessariamente o tempo de aplicacao: so diga quanto o procedimento dura se estiver na descricao. (d) Se a memoria do lead ou uma fala antiga da conversa divergir do cadastro (formacao, quantidade, tecnologia), vale o CADASTRO.
 SERVICO QUE NAO APARECE NO CADASTRO: ha TRES situacoes diferentes - (1) DISPONIVEL: esta na lista de procedimentos; (2) EXPLICITAMENTE NAO REALIZADO: a clinica disse que nao faz (a ordem do turno avisa; ai diga com clareza que nao e realizado, sem cotar valor, sem prometer consulta de preco e sem trocar por outro tratamento); (3) NAO LOCALIZADO/INCERTO: nao esta na lista e ninguem disse que nao faz. Em (3) NAO afirme que a clinica faz (conhecimento geral sobre o tratamento NAO prova disponibilidade aqui) e NAO afirme que nao faz (a ausencia na lista nao prova isso): diga que vai confirmar com a equipe e chame transfer_to_human.
 
@@ -2675,6 +2680,18 @@ async function generateReplyUnlocked(
     const origin = await prisma.patient.findUnique({ where: { id: patient.id }, select: { adName: true, adCampaignName: true } });
     const adText = [origin?.adName, origin?.adCampaignName].filter(Boolean).join(" ");
     const userRecent = history.filter((m) => m.role === "user").slice(-12);
+    const persistedKind = await prisma.patient.findUnique({ where: { id: patient.id }, select: { contactKind: true, contactKindDetail: true } });
+    if (persistedKind?.contactKind === "nao_paciente") {
+      const clinicalNow = wantsSchedule(lastUserText) || readMessageConcerns(lastUserText).wanted.length > 0;
+      if (!(await revertByClinicalContext(patient.id, clinicalNow))) {
+        // continua nao-paciente (decisao da Alice ou da equipe): vai para a equipe em silencio, sem conversa automatica (evita laco com IAs de parceiros)
+        const label = DETAIL_LABEL[(persistedKind.contactKindDetail as NonPatientDetail) ?? "administrativo"] ?? "Assunto administrativo";
+        try {
+          await runTool(clinicId, patient.id, conversation.id, "transfer_to_human", { reason: `${label} (não é paciente)`, summary: `Contato classificado como não-paciente (${label.toLowerCase()}). Mensagem: "${String(lastUserText).slice(0, 300)}". A Alice não respondeu nem ofereceu avaliação.` });
+        } catch (err) { console.error("[nao-paciente] falha ao encaminhar pra equipe:", err); }
+        return "";
+      }
+    }
     // O curriculo chega como anexo e depois vem "obrigada": a vaga foi citada ANTES. Olha as ultimas mensagens, nao so a ultima.
     // MAS: quem ja mandou curriculo e agora pede horario/conta uma queixa (ou ja e paciente) nao fica presa no assunto da vaga - a parte clinica segue o fluxo normal.
     const lastIsJob = isJobSeeker(lastUserText, adText);
@@ -2695,6 +2712,7 @@ async function generateReplyUnlocked(
       } catch (err) {
         console.error("[vaga] falha ao encaminhar pra equipe:", err);
       }
+      if (!clinicalAsk && !knownPatient) await classifyByAlice(patient.id, "curriculo", lastUserText).catch(() => undefined); // persiste (reversivel por contexto; a equipe pode corrigir)
       return "";
     }
     // Fornecedor / proposta de parceria / cobranca de empresa: tambem nao e paciente. Equipe, em silencio, sem funil de avaliacao.
@@ -2710,6 +2728,7 @@ async function generateReplyUnlocked(
       } catch (err) {
         console.error("[nao-paciente] falha ao encaminhar pra equipe:", err);
       }
+      if (!clinicalAsk) await classifyByAlice(patient.id, /influenc/i.test(lastUserText) ? "influenciador" : otherKind, lastUserText).catch(() => undefined);
       return "";
     }
   }

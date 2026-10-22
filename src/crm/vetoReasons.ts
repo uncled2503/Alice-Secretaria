@@ -39,7 +39,12 @@ export function isEligibilityRestatement(reason: string | null | undefined): boo
 }
 
 // PURO: o veto vale? Com categoria legitima vale; sem categoria (ou "outro") vale, exceto se o motivo for so a descricao do publico.
-export function vetoStands(category: VetoCategory | null, reason: string | null | undefined): { stands: boolean; why: string } {
+// Envios que existem POR CAUSA de um horario marcado (aviso de agendamento, lembrete, confirmacao, preparo): "a pessoa ja tem horario" e a RAZAO do envio, nunca motivo para barrar
+// (log de 22/10: aviso de agendamento vetado "porque a pessoa ja tem horario"). Os demais motivos continuam valendo (cancelado/remarcado/outro horario sao divergencia, categoria propria).
+const APPOINTMENT_BOUND_KINDS: ReadonlySet<string> = new Set(["agendamento", "lembrete", "preparo"]);
+
+export function vetoStands(category: VetoCategory | null, reason: string | null | undefined, kind?: string): { stands: boolean; why: string } {
+  if (category === "ja_tem_horario" && kind && APPOINTMENT_BOUND_KINDS.has(kind)) return { stands: false, why: "o aviso e sobre o proprio horario marcado: ja ter horario e o motivo do envio, nao do veto" };
   if (category && LEGITIMATE_VETO.has(category)) return { stands: true, why: `categoria ${category}` };
   if (isEligibilityRestatement(reason)) return { stands: false, why: "o motivo apenas descreve o publico da automacao (sem horario / sem resposta / lead novo / pediu agendamento)" };
   return { stands: true, why: category ? `categoria ${category}` : "motivo sem categoria reconhecida" };
@@ -55,4 +60,7 @@ export const AUTOMATION_PURPOSE: Record<string, string> = {
   aniversario: "Parabens de aniversario: existe PARA qualquer pessoa da base que nao pediu para sair.",
   renovacao: "Convite de renovacao: existe PARA quem fez um procedimento periodico ha meses.",
   campanha: "Campanha/mensagem programada: existe PARA o publico escolhido pela clinica.",
+  agendamento: "Aviso de agendamento: existe PARA quem TEM um horario marcado (acabou de ser criado/alterado). Ter horario e a razao do envio, nunca motivo para barrar; so barre se o horario da mensagem diverge da agenda (cancelado/remarcado) ou ha opt-out/equipe falando.",
+  lembrete: "Lembrete/confirmacao: existe PARA quem TEM horario marcado. Ter horario e a razao do envio, nunca motivo para barrar.",
+  preparo: "Orientacao de preparo: existe PARA quem TEM horario marcado para o procedimento. Ter horario e a razao do envio.",
 };

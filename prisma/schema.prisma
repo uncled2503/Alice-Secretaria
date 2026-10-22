@@ -524,6 +524,13 @@ model Patient {
   funnelStage   String    @default("novo_lead") // ver src/crm/stages.ts para a lista de etapas
   optedOut      Boolean   @default(false) // paciente pediu pra nao receber mensagens (LGPD) - trava automacoes
   optedOutAt    DateTime?
+  // CLASSIFICACAO PERSISTENTE do contato (checklist 22/10): paciente | nao_paciente. Compartilhada entre o atendimento e as automacoes (lead, aniversario, recontato, pesquisa, campanha...).
+  // Detalhe: parceria | curriculo | fornecedor | influenciador | cobranca | administrativo. Fonte: alice (detectado pelo contexto da conversa, REVERSIVEL) | equipe (decisao humana, so a equipe muda).
+  contactKind         String    @default("paciente")
+  contactKindDetail   String?
+  contactKindSource   String?
+  contactKindAt       DateTime?
+  contactKindEvidence String?   // trecho da mensagem que motivou (para a equipe revisar); nunca uma palavra isolada
   active          Boolean @default(true)  // paciente ainda em acompanhamento com a clinica ou nao
   hasPrescription Boolean @default(false) // controla se os lembretes de renovacao de receita aparecem/valem
   phoneContactName String? // nome com que o paciente foi salvo na agenda do celular da clinica (null = ainda nao salvo)
@@ -727,6 +734,9 @@ model BroadcastCampaign {
   targetStage  String?  // usado so quando targetMode = "stage" - id de src/crm/stages.ts
   targetMode   String   @default("all") // all | stage | contacts | reactivation
   targetConfig String?  // JSON extra por targetMode. reactivation: {"procedureIds":[...],"monthsSince":6}
+  // Campanha que exige ATENDIMENTO HUMANO depois da resposta (checklist 22/10): ao responder, a conversa vai para a equipe ANTES de a Alice gerar qualquer resposta.
+  humanAfterReply       Boolean @default(false)
+  humanReplyWindowHours Int     @default(72) // so respostas ate N horas depois do envio sao ligadas a esta campanha
   scheduledFor DateTime
   status       String   @default("scheduled") // scheduled | sending | completed | cancelled
   createdAt    DateTime @default(now())
@@ -742,6 +752,7 @@ model BroadcastRecipient {
   patient    Patient           @relation(fields: [patientId], references: [id])
   status     String            @default("pending") // pending | sent | failed
   sentAt     DateTime?
+  repliedAt  DateTime?         // primeira resposta ligada a esta campanha (evidencia da atribuicao)
 
   @@unique([campaignId, patientId])
 }
@@ -1657,4 +1668,25 @@ model DispatchRunItem {
   @@unique([runId, refKey])
   @@index([runId, state])
   @@index([clinicId, state])
+}
+
+// DATAS ESPECIAIS / CAMPANHAS / RECESSO que a Alice precisa conhecer (checklist 22/10, secao 14). Nasce como RASCUNHO com os campos que a clinica ainda NAO informou vazios (dependencia
+// explicita): a Alice so usa uma data APROVADA e dentro da vigencia, e nunca inventa condicao, preco, desconto, vaga ou data de retorno.
+model SpecialDate {
+  id            String   @id @default(cuid())
+  clinicId      String
+  kind          String   // campanha | recesso
+  name          String
+  startsOn      String   // AAAA-MM-DD (data local da clinica)
+  endsOn        String?  // fim da vigencia / retorno do recesso; null = nao informado
+  services      String   @default("") // servicos da data (texto do checklist)
+  conditionText String?  // condicao/valor vigente informada pela clinica; null = NAO cadastrada
+  status        String   @default("rascunho") // rascunho | aprovada | encerrada
+  notes         String?
+  approvedBy    String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([clinicId, kind, name, startsOn])
+  @@index([clinicId, startsOn])
 }

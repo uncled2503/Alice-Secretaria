@@ -29,6 +29,7 @@ export const STATUS_LABEL: Record<DispatchStatus, string> = {
 
 export const REASONS: Record<string, string> = {
   nao_importado: "Cadastro não importado para a Alice",
+  nao_paciente: "Contato classificado como não-paciente",
   fonte_incompleta: "Fonte incompleta (não dá para afirmar)",
   nascimento_ausente: "Data de nascimento ausente ou inválida",
   telefone_ausente: "Telefone ausente",
@@ -409,7 +410,7 @@ export async function buildDispatchView(clinicId: string, f: DispatchFilters = {
 
   // ---------------- ANIVERSARIOS ----------------
   const bdayRule = await prisma.birthdayRule.findFirst({ where: { clinicId, active: true }, orderBy: { createdAt: "asc" } });
-  const allBdayPatients = await prisma.patient.findMany({ where: { clinicId, birthDate: { not: null } }, select: { id: true, name: true, phone: true, birthDate: true, optedOut: true, active: true } });
+  const allBdayPatients = await prisma.patient.findMany({ where: { clinicId, birthDate: { not: null } }, select: { id: true, name: true, phone: true, birthDate: true, optedOut: true, active: true, contactKind: true } });
   const noBirthCount = await prisma.patient.count({ where: { clinicId, birthDate: null, active: true } });
   const years = [...new Set(days.map((d) => parts(d).year))];
   const bRows = await prisma.birthdaySent.findMany({ where: { year: { in: years }, rule: { clinicId } } });
@@ -429,6 +430,7 @@ export async function buildDispatchView(clinicId: string, f: DispatchFilters = {
           ? { ok: true, why: "elegível para nova tentativa hoje (será revalidado no envio)" }
           : { ok: false, why: day !== today ? "o dia do aniversário já passou" : status === "incerto" ? "resultado incerto: concilie antes" : "não recuperável agora" };
         if (day !== today && ["falhou", "adiado", "barrado", "em_andamento"].includes(status) && !best.deliveryState) { status = "expirado"; reason = reason === "ja_enviado" ? "prazo_expirado" : reason; }
+      } else if (pt.contactKind !== "paciente") { status = "excluido"; reason = "nao_paciente"; detail = "classificado como não-paciente: sem automação de aniversário";
       } else if (pt.optedOut || !pt.active) { status = "excluido"; reason = "plano_ou_opt_out"; detail = pt.optedOut ? "pediu para não receber mensagens" : "paciente fora de acompanhamento"; }
       else if (!pt.phone) { status = "nao_tentado"; reason = "telefone_ausente"; }
       else if (!pi.valid) { status = "nao_tentado"; reason = "telefone_invalido"; detail = `telefone inválido (${pi.invalid ?? "formato"})`; }

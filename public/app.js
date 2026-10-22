@@ -1698,6 +1698,15 @@ async function openContactPanel(patient) {
   document.getElementById("cp-f-birth").value = dossier.patient.birthDate ? String(dossier.patient.birthDate).slice(0, 10) : "";
   document.getElementById("cp-f-active").checked = dossier.patient.active !== false;
   document.getElementById("cp-f-opted-out").checked = !!dossier.patient.optedOut;
+  {
+    const sel = document.getElementById("cp-f-contact-kind");
+    const kind = dossier.patient.contactKind === "nao_paciente" ? `nao_paciente:${dossier.patient.contactKindDetail || "administrativo"}` : "paciente";
+    if (sel) {
+      sel.value = [...sel.options].some((o) => o.value === kind) ? kind : "paciente";
+      const hint = document.getElementById("cp-f-contact-kind-hint");
+      if (hint) hint.textContent = dossier.patient.contactKind === "nao_paciente" ? `Classificado por ${dossier.patient.contactKindSource === "equipe" ? "você/equipe" : "a Alice"}${dossier.patient.contactKindEvidence ? `: "${dossier.patient.contactKindEvidence}"` : ""}. Sem recontato, aniversário, pesquisa nem campanha.` : "";
+    }
+  }
   document.getElementById("cp-f-no-interest").checked = !!dossier.patient.noInterest;
   document.getElementById("cp-f-notes").value = dossier.patient.notes ?? "";
   document.getElementById("cp-f-has-prescription").checked = !!dossier.patient.hasPrescription;
@@ -1918,6 +1927,8 @@ document.getElementById("cp-save").addEventListener("click", async () => {
       hasPrescription: document.getElementById("cp-f-has-prescription").checked,
       optedOut: document.getElementById("cp-f-opted-out").checked,
       noInterest: document.getElementById("cp-f-no-interest").checked,
+      contactKind: document.getElementById("cp-f-contact-kind").value.startsWith("nao_paciente") ? "nao_paciente" : "paciente",
+      contactKindDetail: document.getElementById("cp-f-contact-kind").value.startsWith("nao_paciente:") ? document.getElementById("cp-f-contact-kind").value.split(":")[1] : null,
     }),
   });
   status.textContent = "Salvo.";
@@ -3152,7 +3163,7 @@ function renderBroadcasts() {
   const body = document.getElementById("broadcasts-body");
   body.innerHTML = "";
   for (const c of filtered) {
-    const progress = c.total > 0 ? `${c.sent}/${c.total} enviados` : "—";
+    const progress = (c.total > 0 ? `${c.sent}/${c.total} enviados` : "—") + (c.humanAfterReply ? ` · humano após resposta (${c.replied || 0} responderam)` : "");
     const actionCell = el("td", {}, []);
     if (c.status === "scheduled") {
       const cancelBtn = el("button", { class: "btn-cancel" }, ["Cancelar"]);
@@ -3264,7 +3275,7 @@ document.getElementById("broadcast-form").addEventListener("submit", async (e) =
   const targetMode = document.getElementById("bc-target-mode").value;
   if (!title || !message || !when) return;
 
-  const payload = { title, message, scheduledFor: new Date(when).toISOString() };
+  const payload = { title, message, scheduledFor: new Date(when).toISOString(), humanAfterReply: !!document.getElementById("bc-human-after-reply")?.checked };
   if (targetMode === "stage") {
     payload.targetStage = document.getElementById("bc-target-stage").value;
   } else if (targetMode === "contacts") {
