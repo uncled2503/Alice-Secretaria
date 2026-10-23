@@ -41,7 +41,7 @@ Legenda de ambiente: U = teste unitário; S = integração simulada; R = integra
 | 4.2 | 8h–10h confirmação do dia seguinte | etapa `confirmacao_vespera` (janela 8–10; texto aprovado mantido) | cadastro atual 8–11 | aplicar política | politica-final | S | IMPLEMENTADO AGUARDANDO TESTE |
 | 4.3 | 17h só para não confirmados, com evidência do pedido inicial; inicial que falhou é recuperado | etapa `cobranca_vespera` + `selectInitialRecovery` | antes: quem não recebeu o pedido ficava sem nada | aplicar política | politica-final: recuperação, incerto não reenvia | S | IMPLEMENTADO AGUARDANDO TESTE |
 | 4.4 | Sábado: quarta 8–10, sexta 17h só não confirmados, sábado 7h com texto próprio; quarta substitui a sexta | etapas `sabado_*`; substituição por dia da semana já existente | — | aplicar política | politica-final: semana simulada | S | IMPLEMENTADO AGUARDANDO TESTE |
-| 4.5 | Sexta: lembrete a TODOS os de sábado | etapa `sabado_lembrete_sexta` | **hora não informada** | hora/janela | prévia mostra pendência | U | DEPENDE DA LISBOA |
+| 4.5 | Sexta: lembrete a TODOS os de sábado | etapa `sabado_lembrete_sexta` às 7h (informado em 23/10; sábado 7h de novo) | — | aplicar política | politica-final: semana simulada | S | IMPLEMENTADO AGUARDANDO TESTE |
 | 4.6 | Agendado/remarcado depois da janela; mesmo dia só mensagem pertinente | `isLateCatchUp` (data local) + ampliação só para quem existia na janela | 2 bugs corrigidos | — | politica-final: reposição | S | IMPLEMENTADO AGUARDANDO TESTE |
 | 4.7 | Limite noturno e "muito próximo" explícitos | `DispatchPolicy.lateStartHour/lateEndHour/minLeadMin` | valores da Lisboa não informados | limites | politica-final: limite 18h × 20h | S | DEPENDE DA LISBOA |
 | 4.8 | Intervalo mínimo entre etapas configurável | `stepMinGapMin` (qualquer regra) | — | opcional | politica-final: 180 × 30 min | S | IMPLEMENTADO AGUARDANDO TESTE |
@@ -96,10 +96,10 @@ Ver a seção "Execução" no fim deste arquivo (preenchida com a saída real da
 
 ## 6. Dependências exatas (não inventadas)
 
-1. Hora (início e fim) do **lembrete de sexta** para os atendimentos de sábado.
+1. ~~Hora do lembrete de sexta~~ — respondido em 23/10: 7h da sexta (e 7h do sábado). Mantidas a confirmação de quarta e a mensagem de sexta às 17h para quem não confirmou.
 2. **Limite noturno** e início da reposição; **antecedência mínima** ("muito próximo"); **intervalo mínimo entre etapas** (hoje: 8h–20h, 120 min, 180 min, padrões herdados).
 3. Fim das janelas das 7h e das 17h: a prévia reaproveita a duração cadastrada (1h) — confirmar.
-4. Condições incompletas: **VIP Week/Black November** (cada oferta), **Lavieen Day 16/12** (condição de dezembro), **Remoção 26/11 e 17/12** (condição vigente), **validade comercial** dos "Days" de um dia (até quando a condição pode ser fechada), período exato da Agenda Pré-Festas.
+4. Condições incompletas: **VIP Week/Black November** (cada oferta), **Lavieen Day 16/12** (condição de dezembro), **Remoção 26/11 e 17/12** (condição vigente), período exato da Agenda Pré-Festas.
 5. **Cartão-presente**: período de venda, validade do crédito, regras de uso e restrições.
 6. **Retorno do recesso**.
 7. **Link do Google** validado.
@@ -144,3 +144,9 @@ Auditoria do cliente do CE contra a documentação oficial; reativação mensal 
   - `checklist-22-10`: a mecânica genérica é testada com o calendário antigo explícito (o novo tem teste próprio).
   - `health` e `conduta-comercial`: revisão de 23/10 e última migração.
 - Corrigido depois da suíte: o tema das etapas na prévia comparativa cortava no primeiro ":" (ex.: "Sábado"). Teste da prévia reexecutado: passando.
+
+## Respostas da clínica (23/10)
+
+- Lembrete de sexta para os atendimentos de sábado: **7h da sexta**, e de novo às 7h do sábado. Confirmação de quarta e mensagem de sexta às 17h (só para quem não confirmou) mantidas.
+- HIPRO Day: **10/11** (e 08/12 continua).
+- Datas de um dia ("Days"): a condição **pode ser fechada até o próprio dia** (`validUntil` = data do evento). O cartão-presente continua sem validade definida.

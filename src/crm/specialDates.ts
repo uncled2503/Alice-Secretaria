@@ -18,6 +18,7 @@ export interface SpecialDateSeed {
   conditionText?: string | null; // orientacao de conduta (nao e preco)
   responseMode?: "alice" | "equipe";
   notes?: string | null;
+  validUntil?: string | null; // ultimo dia para FECHAR a condicao (validade comercial)
 }
 
 // Checklist de 22/10 (secao 14) - SUBSTITUIDO pelo calendario 2026 abaixo. Mantido so como dado historico (testes da mecanica generica).
@@ -41,7 +42,7 @@ const hipro = (limitPapada: number | null): OfferItem[] => [
 ];
 
 // CALENDARIO 2026 DA LISBOA (pedido de 22/10/2026; substitui o anterior). Somente o que foi informado: o que falta fica vazio e aparece como pendencia.
-export const LISBOA_CALENDARIO_2026: SpecialDateSeed[] = [
+const CALENDARIO_BASE: SpecialDateSeed[] = [
   { kind: "campanha", name: "Ritual Mãos & Pés de Seda", startsOn: "2026-10-26", endsOn: "2026-10-31", services: "Ritual Mãos & Pés de Seda (30 min)", items: [exp47("Ritual Mãos & Pés de Seda", "experiência de 30 min; agendamento direto; não parcelável")] },
   { kind: "campanha", name: "Remoção de tatuagem, micropigmentação e Black Peel", startsOn: "2026-10-27", services: "Remoção de tatuagem; micropigmentação; Black Peel", items: [
     { servico: "Black Peel", precoCentavos: 8700, pagamento: "pix", parcelavel: false, observacao: "somente Pix" },
@@ -74,13 +75,15 @@ export const LISBOA_CALENDARIO_2026: SpecialDateSeed[] = [
   { kind: "campanha", name: "Meu Projeto 2027", startsOn: "2026-12-18", endsOn: "2026-12-22", services: "Meu Projeto 2027", conditionText: "Colete nome, telefone, prioridade, procedimento de interesse e preferência de dia; registre na lista de espera. Não prometa condição para 2027." },
   { kind: "recesso", name: "Início do recesso", startsOn: "2026-12-23", services: "", notes: "retorno não informado; interessados vão para a lista de janeiro; reservas no período são alertadas, nunca canceladas sozinhas" },
 ];
+// Datas de UM dia ("Days"): a clinica informou (23/10) que a condicao pode ser fechada ate o proprio dia. O cartao-presente nao e data de um dia (periodo de venda pendente).
+export const LISBOA_CALENDARIO_2026: SpecialDateSeed[] = CALENDARIO_BASE.map((s) => (s.kind === "campanha" && !s.endsOn && s.name !== "Cartão-Presente de Natal" ? { ...s, validUntil: s.startsOn } : s));
 export const LISBOA_DATAS_2026 = LISBOA_CALENDARIO_2026;
 
 export interface SpecialDateLine { id: string | null; kind: string; name: string; startsOn: string; status: string; acao: "criar" | "manter" | "atualizar" | "substituir" | "divergente"; faltando: string[]; detalhe?: string }
 
 const seedData = (s: SpecialDateSeed) => ({
   endsOn: s.endsOn ?? null, services: s.services, items: s.items ? JSON.stringify(s.items) : null, conditionText: s.conditionText ?? null,
-  responseMode: s.responseMode ?? "alice", notes: s.notes ?? null,
+  responseMode: s.responseMode ?? "alice", notes: s.notes ?? null, validUntil: s.validUntil ?? null,
 });
 
 // Prepara (cria como RASCUNHO, idempotente) o calendario: cria o que falta; ATUALIZA rascunho que mudou (com historico); marca como SUBSTITUIDA a data em rascunho que saiu do

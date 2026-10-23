@@ -95,11 +95,11 @@ test("planejador: previa da regra final sobre o cadastro atual (nada muda), pend
   assert.doesNotMatch(by("sabado_confirmacao_quarta").para.texto, /amanh/);
   assert.equal(by("sabado_cobranca_sexta").acao, "criar");
   assert.equal(by("sabado_cobranca_sexta").para.janela, "17:00–18:00");
-  assert.equal(by("sabado_lembrete_sexta").acao, "pendencia", "hora do lembrete de sexta nao informada: nada e criado");
+  assert.equal(by("sabado_lembrete_sexta").acao, "criar", "lembrete de sexta as 7h (informado pela clinica em 23/10)");
+  assert.equal(by("sabado_lembrete_sexta").para.janela, "07:00–08:00");
   assert.equal(by("sabado_lembrete_do_dia").acao, "criar");
   assert.equal(by("sabado_lembrete_do_dia").para.janela, "07:00–08:00");
-  assert.ok(p.pendencias.some((x) => x.codigo === "hora_lembrete_sexta"));
-  assert.ok(p.pendencias.some((x) => x.codigo === "etapa_sabado_lembrete_sexta"));
+  assert.ok(!p.pendencias.some((x) => /sexta/.test(x.codigo)), "nada pendente na sexta");
   assert.equal(p.limites.pendente.length, 4, "limite noturno, inicio, antecedencia e intervalo nao informados = pendencias (vale o vigente)");
   assert.ok(cronogramaDe(LISBOA_POLITICA_CONFIRMACOES).some((l) => /quarta-feira/.test(l) && /08:00–10:00/.test(l)));
   const depois = await prisma.reminderRule.findMany({ where: { clinicId: c.id }, orderBy: { createdAt: "asc" } });
@@ -110,7 +110,7 @@ test("planejador: previa da regra final sobre o cadastro atual (nada muda), pend
   assert.equal(ap.aplicado, true);
   assert.deepEqual(ap.conflitosDepois, [], "nenhuma regra ativa se pisa depois de aplicar");
   const regras = await prisma.reminderRule.findMany({ where: { clinicId: c.id } });
-  assert.equal(regras.length, 6, "3 ajustadas + 3 criadas (lembrete de sexta pendente)");
+  assert.equal(regras.length, 7, "3 ajustadas + 4 criadas");
   const confDepois = regras.find((r) => r.id === conf.id);
   assert.equal(confDepois.sendEndHour, 10);
   assert.equal(confDepois.purpose, "confirmacao");
@@ -166,20 +166,26 @@ test("semana simulada com a regra final: 7h do dia, 8h-10h vespera, 17h so quem 
   assert.match(para(quinta.p)[2].text, /^Bom dia, Quinta! 💗 Passando para lembrar do seu atendimento hoje, às /);
   assert.doesNotMatch(para(quinta.p)[2].text, /confirmar/i, "o lembrete das 7h nao pede confirmacao");
 
+  await rodar("2026-10-30T07:00");
+  for (const s of [sabA, sabB]) {
+    assert.equal(para(s.p).length, 2, "sexta 7h: lembrete para TODOS os de sabado (inclusive quem confirmou)");
+    assert.match(para(s.p)[1].text, /Passando para lembrar que amanhã te esperamos na Lisboa, às /);
+    assert.doesNotMatch(para(s.p)[1].text, /confirmar/i);
+  }
   await rodar("2026-10-30T08:00");
-  assert.equal(para(sabA.p).length, 1, "sexta 8h: a confirmacao generica NAO vale para sabado (a de quarta substitui)");
-  assert.equal(para(sabB.p).length, 1);
+  assert.equal(para(sabA.p).length, 2, "sexta 8h: a confirmacao generica NAO vale para sabado (a de quarta substitui)");
+  assert.equal(para(sabB.p).length, 2);
   await rodar("2026-10-30T17:00");
-  assert.equal(para(sabA.p).length, 1, "quem confirmou na quarta nao e cobrado na sexta");
-  assert.equal(para(sabB.p).length, 2, "quem nao confirmou recebe a etapa das 17h de sexta");
-  assert.match(para(sabB.p)[1].text, /Ainda não conseguimos confirmar seu atendimento de amanhã/);
+  assert.equal(para(sabA.p).length, 2, "quem confirmou na quarta nao e cobrado na sexta");
+  assert.equal(para(sabB.p).length, 3, "quem nao confirmou recebe a etapa das 17h de sexta");
+  assert.match(para(sabB.p)[2].text, /Ainda não conseguimos confirmar seu atendimento de amanhã/);
 
   await rodar("2026-10-31T07:00");
   for (const s of [sabA, sabB]) {
     const last = para(s.p).at(-1).text;
     assert.match(last, /Hoje é dia do seu atendimento na Lisboa! ✨ Te esperamos às /, "sabado 7h: texto proprio de sabado (confirmados tambem recebem)");
   }
-  assert.equal(para(sabA.p).length, 2);
+  assert.equal(para(sabA.p).length, 3, "quarta + sexta 7h + sabado 7h");
   assert.ok(!enviados.some((e) => /Passando para lembrar do seu atendimento hoje/.test(e.text) && [sabA.p.phone, sabB.p.phone].includes(e.phone)), "o lembrete generico das 7h nao sai no sabado");
 });
 

@@ -107,10 +107,10 @@ test("APROVACAO: so com cadastro completo; conflito com outra condicao aprovada 
   const c = await clinica("Aprovacao", { installmentMax: 10, installmentMinCents: 10000 });
   await sd.prepararDatasEspeciais(c.id, { dryRun: false });
   const hipro = await prisma.specialDate.findFirst({ where: { clinicId: c.id, name: "HIPRO Day", startsOn: "2026-11-10" } });
-  const r1 = await of.updateOffer(hipro.id, { status: "aprovada" }, "Aline");
-  assert.equal(r1.ok, false);
-  assert.ok(r1.faltando.some((x) => /validade/.test(x)), "dia unico sem validade comercial informada: nao aprova (nada presumido)");
-  const r2 = await of.updateOffer(hipro.id, { validUntil: "2026-11-10", promoteFrom: "2026-11-01", status: "aprovada" }, "Aline");
+  assert.equal(hipro.validUntil, "2026-11-10", "data de um dia: fecha ate o proprio dia (informado pela clinica em 23/10)");
+  const cartao = await prisma.specialDate.findFirst({ where: { clinicId: c.id, name: "Cartão-Presente de Natal" } });
+  assert.equal(cartao.validUntil, null, "cartao-presente: validade continua pendente");
+  const r2 = await of.updateOffer(hipro.id, { promoteFrom: "2026-11-01", status: "aprovada" }, "Aline");
   assert.equal(r2.ok, true);
   assert.equal(r2.row.version, 1);
   const vip = await prisma.specialDate.findFirst({ where: { clinicId: c.id, name: "VIP Week / Black November" } });

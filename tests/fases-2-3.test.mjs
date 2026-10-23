@@ -330,7 +330,7 @@ test("LISBOA: previa de configuracao atual x desejada e SOMENTE LEITURA, nao inv
   // regra final de 22/10 (8h-10h) pelo planejador geral de politica
   assert.equal(by("Confirmações: Confirmação dos atendimentos do dia seguinte").estado, "diverge");
   assert.match(by("Confirmações: Confirmação dos atendimentos do dia seguinte").atual, /08:00–11:00/);
-  assert.equal(by("Confirmações: Sábado: lembrete na sexta").estado, "depende_da_clinica", "hora do lembrete de sexta nao informada");
+  assert.equal(by("Confirmações: Sábado: lembrete na sexta").estado, "depende_da_clinica", "sexta 7h informada, mas aqui nao ha lembrete das 7h cadastrado para reaproveitar o fim da janela");
   assert.equal(by("Jornada de Suelen").estado, "diverge", "cadastrada 8-21; o checklist pede 12-21");
   assert.equal(by("Jornada de Talita").estado, "diverge");
   assert.match(by("Jornada de Talita").atual, /herda o expediente/);
