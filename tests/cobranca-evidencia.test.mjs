@@ -78,13 +78,16 @@ const zera = () => { enviados.length = 0; uazapi = "ok"; revisao = "enviar"; };
 const alinha = async (S, iso) => { await prisma.reminderDispatch.updateMany({ where: { clinicId: S.c.id }, data: { updatedAt: sp(iso) } }); await prisma.reminderSent.updateMany({ where: { appointment: { clinicId: S.c.id } }, data: { sentAt: sp(iso) } }); };
 const estadoMae = async (S, x) => (await prisma.reminderDispatch.findFirst({ where: { clinicId: S.c.id, ruleId: S.mae.id, appointmentId: x.a.id } }))?.state ?? null;
 
-test("P. sem pedido inicial de confirmacao: a cobranca NAO sai (nada para cobrar)", async () => {
+// Regra de 22/10 ("se o pedido inicial falhou, recuperar o pedido inicial com o texto adequado"): na etapa da cobranca, quem NUNCA recebeu o pedido recebe o PEDIDO INICIAL - nunca a cobranca.
+test("P. sem pedido inicial de confirmacao: a cobranca NAO sai (nada para cobrar); na etapa da cobranca sai o PEDIDO INICIAL", async () => {
   zera();
   const S = await clinica("Cob P");
   const x = await agenda(S, "Sem Pedido", "2026-10-21T14:00");
   await rodar("2026-10-20T16:10"); // a janela do pedido (8h-10h) nunca rodou
-  assert.equal(para(x.p).length, 0);
-  assert.equal(await prisma.reminderSent.count({ where: { appointmentId: x.a.id } }), 0);
+  assert.equal(para(x.p).length, 1, "recebe o pedido inicial");
+  assert.doesNotMatch(para(x.p)[0].text, /Ainda não recebemos/, "nunca a cobranca");
+  assert.match(para(x.p)[0].text, /Posso confirmar a sua pre/);
+  assert.equal(await prisma.reminderSent.count({ where: { appointmentId: x.a.id, ruleId: S.filha.id } }), 0, "a cobranca nao consta como enviada");
 });
 
 test("Q. pedido inicial que NAO saiu (barrado pela revisao, falha, incerto) nao conta como enviado: nada de cobranca; pedido enviado de fato permite UMA cobranca", async () => {
@@ -112,7 +115,10 @@ test("Q. pedido inicial que NAO saiu (barrado pela revisao, falha, incerto) nao 
   await alinha(S, "2026-10-20T08:45");
   zera();
   await rodar("2026-10-20T16:10");
-  assert.equal(enviados.length, 0, "nem barrado, nem incerto, nem falho recebe 'ainda nao recebemos sua confirmacao'");
+  assert.ok(!enviados.some((e) => /Ainda não recebemos/.test(e.text)), "nem barrado, nem incerto, nem falho recebe 'ainda nao recebemos sua confirmacao'");
+  // regra de 22/10: o pedido que FALHOU (nada saiu) e recuperado com o texto do pedido inicial; o barrado pela revisao e o incerto (pode ter saido) NAO
+  assert.deepEqual(enviados.map((e) => e.phone), [falhou.p.phone], "so o que falhou recebe o pedido inicial");
+  assert.match(enviados[0].text, /Posso confirmar a sua pre/);
   const sel = await cron.selectReminderCandidates(await prisma.reminderRule.findUnique({ where: { id: S.filha.id } }), sp("2026-10-20T16:10"), TZ);
   assert.deepEqual(sel.due.map((a) => a.id), []);
   // Q5: pedido ACEITO pelo provedor: a cobranca sai, uma vez

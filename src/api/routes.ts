@@ -77,8 +77,14 @@ import { parseWeekdays, PURPOSES } from "../reminders/policy.js";
 import { configurarPosDepoisDoFechamento, diagnosticarPosFluxo } from "../maintenance/lisboaPosFechamento.js";
 import { setByStaff as setContactKindByStaff } from "../crm/contactKind.js";
 import { prepararDatasEspeciais } from "../crm/specialDates.js";
+import { giftTierFor, offerMissing, offerWindows, parseItems, recessConflicts, updateOffer } from "../crm/offers.js";
+import { ASK_INSTALLMENTS_TEXT, describeSplit, maxInstallmentsFor, overLimitText, splitInstallments } from "../commerce/installments.js";
 import { conferirRegrasLisboa } from "../maintenance/lisboaConfigDiff.js";
+import { planejarPoliticaLisboa, parcelamentoLisboa, trocasProibidasLisboa } from "../maintenance/lisboaPoliticaConfirmacoes.js";
 import { setLossReason, setCancelReason, LOSS_REASONS, LOSS_LABEL } from "../crm/lossReasons.js";
+import { confirmationStateFor } from "../reminders/confirmationStatus.js";
+import { OBJECTION_CODES, OBJECTION_LABEL, saveObjectionAnswer, approveObjectionDraft } from "../crm/objectionBank.js";
+import { agendaOccupancy, weakWindowDates } from "../crm/weakAgenda.js";
 import { createProposal, closeProposal, openProposalsReport } from "../crm/proposals.js";
 import { createPackage, registerUsage, clinicPackageAlerts, balanceOf } from "../crm/packages.js";
 import { managementReport } from "../crm/managementReports.js";
@@ -1811,6 +1817,44 @@ apiRouter.get(
     const clinic = await prisma.clinic.findFirst({ where: { name: "Lisboa Beauty Center" } });
     if (!clinic) { res.status(404).json({ error: "Clínica Lisboa não encontrada." }); return; }
     res.json(await conferirRegrasLisboa(clinic.id));
+  })
+);
+
+// Trocas proibidas da Lisboa (Lavieen > carboxiterapia; LEDterapia > luz pulsada): GET previa, POST { aprovado: true } aplica.
+apiRouter.get("/clinics/lisboa-trocas-proibidas", asyncRoute(async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try { res.json(await trocasProibidasLisboa({ dryRun: true })); } catch (err) { res.status(404).json({ error: err instanceof Error ? err.message : String(err) }); }
+}));
+apiRouter.post("/clinics/lisboa-trocas-proibidas", asyncRoute(async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try { res.json(await trocasProibidasLisboa({ dryRun: false, aprovado: req.body?.aprovado === true, actorName: req.staff?.name ?? null })); } catch (err) { res.status(400).json({ error: err instanceof Error ? err.message : String(err) }); }
+}));
+// Parcelamento da Lisboa (10x, minimo R$ 100): GET previa, POST { aprovado: true } aplica.
+apiRouter.get("/clinics/lisboa-parcelamento", asyncRoute(async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try { res.json(await parcelamentoLisboa({ dryRun: true })); } catch (err) { res.status(404).json({ error: err instanceof Error ? err.message : String(err) }); }
+}));
+apiRouter.post("/clinics/lisboa-parcelamento", asyncRoute(async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+  try { res.json(await parcelamentoLisboa({ dryRun: false, aprovado: req.body?.aprovado === true, actorName: req.staff?.name ?? null })); } catch (err) { res.status(400).json({ error: err instanceof Error ? err.message : String(err) }); }
+}));
+
+// Regra FINAL de confirmacoes da Lisboa (22/10) pelo motor geral de politica: GET = previa (nada muda); POST { aprovado: true } aplica (sem envio, sem apagar regra, sem tocar em envios).
+apiRouter.get(
+  "/clinics/lisboa-politica-confirmacoes",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    try { res.json(await planejarPoliticaLisboa({ dryRun: true })); } catch (err) { res.status(404).json({ error: err instanceof Error ? err.message : String(err) }); }
+  })
+);
+apiRouter.post(
+  "/clinics/lisboa-politica-confirmacoes",
+  asyncRoute(async (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    const b = (req.body ?? {}) as { aprovado?: boolean; desativarConflitantes?: boolean };
+    try {
+      res.json(await planejarPoliticaLisboa({ dryRun: false, aprovado: b.aprovado === true, desativarConflitantes: b.desativarConflitantes !== false, actorName: req.staff?.name ?? null }));
+    } catch (err) { res.status(400).json({ error: err instanceof Error ? err.message : String(err) }); }
   })
 );
 
@@ -5015,6 +5059,24 @@ apiRouter.post("/appointments/:id/cancel-reason", asyncRoute(async (req, res) =>
   const r = await setCancelReason(ap.clinicId, req.params.id, (req.body?.code ?? null) as string | null, req.staff?.name ?? null);
   res.status(r.ok ? 200 : 400).json(r);
 }));
+// Estado da resposta a confirmacao do horario ATUAL (confirmou / pediu remarcacao / cancelou / nao respondeu / pedido incerto / nao enviado / sem pedido).
+apiRouter.get("/appointments/:id/confirmation-state", asyncRoute(async (req, res) => {
+  const ap = await prisma.appointment.findUnique({ where: { id: req.params.id }, select: { clinicId: true } });
+  if (!ap) { res.status(404).json({ error: "Agendamento nao encontrado" }); return; }
+  if (!assertClinicAccess(req, res, ap.clinicId)) return;
+  res.json(await confirmationStateFor(ap.clinicId, req.params.id));
+}));
+// A equipe registra ou libera o "pediu para remarcar" de um horario (suspende/retoma as mensagens deste horario). Nao muda o horario nem o CE.
+apiRouter.post("/appointments/:id/reschedule-request", asyncRoute(async (req, res) => {
+  const ap = await prisma.appointment.findUnique({ where: { id: req.params.id }, select: { clinicId: true, status: true } });
+  if (!ap) { res.status(404).json({ error: "Agendamento nao encontrado" }); return; }
+  if (!assertClinicAccess(req, res, ap.clinicId)) return;
+  const pending = req.body?.pending === true;
+  if (pending && ap.status !== "confirmed") { res.status(409).json({ error: "So um agendamento ativo pode ficar com remarcacao pendente" }); return; }
+  await prisma.appointment.update({ where: { id: req.params.id }, data: { rescheduleRequestedAt: pending ? new Date() : null } });
+  await logActivity({ clinicId: ap.clinicId, type: "appointment_updated", area: "agenda", title: pending ? "Remarcação pendente registrada" : "Remarcação pendente liberada", description: pending ? "As mensagens automáticas deste horário ficam suspensas até a troca." : "As mensagens automáticas deste horário voltam a valer.", actorName: req.staff?.name ?? null });
+  res.json(await confirmationStateFor(ap.clinicId, req.params.id));
+}));
 apiRouter.get("/proposals/report", asyncRoute(async (req, res) => { const clinic = await getClinic(req); res.json(await openProposalsReport(clinic.id)); }));
 apiRouter.post("/proposals", asyncRoute(async (req, res) => {
   const clinic = await getClinic(req);
@@ -5075,7 +5137,7 @@ apiRouter.get(
   asyncRoute(async (req, res) => {
     const clinic = await getClinic(req);
     const rows = await prisma.specialDate.findMany({ where: { clinicId: clinic.id }, orderBy: { startsOn: "asc" } });
-    res.json(rows.map((d) => ({ ...d, faltando: d.kind === "recesso" ? (d.endsOn ? [] : ["data de retorno do recesso"]) : [...(d.conditionText?.trim() ? [] : ["condição/valor vigente"]), ...(d.endsOn ? [] : ["validade"])] })));
+    res.json(rows.map((d) => ({ ...d, items: parseItems(d.items), janelas: offerWindows(d), faltando: offerMissing(d) })));
   })
 );
 apiRouter.post(
@@ -5087,29 +5149,102 @@ apiRouter.post(
     res.json(await prepararDatasEspeciais(clinic.id, { dryRun: dryRun !== false, actorName: req.staff?.name ?? null }));
   })
 );
+apiRouter.get(
+  "/special-dates/recess-conflicts",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    res.json(await recessConflicts(clinic.id));
+  })
+);
+apiRouter.get(
+  "/special-dates/:id/revisions",
+  asyncRoute(async (req, res) => {
+    const row = await prisma.specialDate.findUnique({ where: { id: req.params.id } });
+    if (!row) { res.status(404).json({ error: "Data não encontrada" }); return; }
+    if (!assertClinicAccess(req, res, row.clinicId)) return;
+    res.json(await prisma.specialDateRevision.findMany({ where: { specialDateId: row.id }, orderBy: { createdAt: "asc" } }));
+  })
+);
 apiRouter.put(
   "/special-dates/:id",
   asyncRoute(async (req, res) => {
     const row = await prisma.specialDate.findUnique({ where: { id: req.params.id } });
     if (!row) { res.status(404).json({ error: "Data não encontrada" }); return; }
     if (!assertClinicAccess(req, res, row.clinicId)) return;
-    const b = (req.body ?? {}) as { conditionText?: string | null; endsOn?: string | null; status?: string; services?: string; notes?: string | null };
+    const b = (req.body ?? {}) as Record<string, unknown>;
     const isDay = (v: unknown) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
-    if (b.endsOn !== undefined && b.endsOn !== null && !isDay(b.endsOn)) { res.status(400).json({ error: "endsOn deve ser AAAA-MM-DD" }); return; }
-    if (b.status !== undefined && !["rascunho", "aprovada", "encerrada"].includes(b.status)) { res.status(400).json({ error: "status invalido" }); return; }
-    const approving = b.status === "aprovada" && row.status !== "aprovada";
-    const updated = await prisma.specialDate.update({
-      where: { id: row.id },
-      data: {
-        ...(b.conditionText !== undefined ? { conditionText: b.conditionText?.trim() || null } : {}),
-        ...(b.endsOn !== undefined ? { endsOn: b.endsOn } : {}),
-        ...(b.services !== undefined ? { services: b.services.trim() } : {}),
-        ...(b.notes !== undefined ? { notes: b.notes?.trim() || null } : {}),
-        ...(b.status !== undefined ? { status: b.status, ...(approving ? { approvedBy: req.staff?.name ?? "equipe" } : {}) } : {}),
-      },
-    });
-    await logActivity({ clinicId: row.clinicId, type: "automation_updated", area: "automacoes", title: `Data especial atualizada: ${row.name}`, description: approving ? "Aprovada: a Alice passa a conhecer a data enquanto vigente." : "Cadastro atualizado.", actorName: req.staff?.name ?? null });
-    res.json(updated);
+    for (const k of ["endsOn", "promoteFrom", "promoteUntil", "validUntil"]) if (b[k] !== undefined && b[k] !== null && !isDay(b[k])) { res.status(400).json({ error: `${k} deve ser AAAA-MM-DD` }); return; }
+    if (b.status !== undefined && !["rascunho", "aprovada", "encerrada"].includes(String(b.status))) { res.status(400).json({ error: "status invalido" }); return; }
+    if (b.origin !== undefined && !["todos", "anuncio", "organico"].includes(String(b.origin))) { res.status(400).json({ error: "origin invalida (todos, anuncio, organico)" }); return; }
+    if (b.responseMode !== undefined && !["alice", "equipe"].includes(String(b.responseMode))) { res.status(400).json({ error: "responseMode invalido (alice, equipe)" }); return; }
+    const str = (v: unknown) => (v === null ? null : typeof v === "string" ? v.trim() || null : undefined);
+    const patch: Record<string, unknown> = {};
+    for (const k of ["conditionText", "endsOn", "notes", "promoteFrom", "promoteUntil", "validUntil", "benefits", "audience", "adSourceIds"]) if (b[k] !== undefined) patch[k] = str(b[k]);
+    if (typeof b.services === "string") patch.services = b.services.trim();
+    if (b.status !== undefined) patch.status = b.status;
+    if (b.origin !== undefined) patch.origin = b.origin;
+    if (b.responseMode !== undefined) patch.responseMode = b.responseMode;
+    if (b.quantityLimit !== undefined) patch.quantityLimit = b.quantityLimit === null ? null : Math.max(0, Math.round(Number(b.quantityLimit)));
+    if (b.items !== undefined) patch.items = b.items === null ? null : JSON.stringify(b.items);
+    if (b.approvedTexts !== undefined) patch.approvedTexts = b.approvedTexts === null ? null : JSON.stringify(b.approvedTexts);
+    const r = await updateOffer(row.id, patch, req.staff?.name ?? null);
+    if (!r.ok) { res.status(r.conflitos ? 409 : 400).json(r); return; }
+    res.json(r.row);
+  })
+);
+// Ocupacao / agenda fraca por profissional (padrao: 48-72h) com janelas livres reais e o que cabe nelas (sugestao; nada e enviado).
+apiRouter.get("/reports/weak-agenda", asyncRoute(async (req, res) => {
+  const clinic = await getClinic(req);
+  const c = await prisma.clinic.findUnique({ where: { id: clinic.id }, select: { timezone: true, weakAgendaPct: true } });
+  const raw = String(req.query.dates ?? "");
+  const dates = raw ? raw.split(",").filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).slice(0, 7) : weakWindowDates(new Date(), c?.timezone || "America/Sao_Paulo");
+  res.json({ limite: c?.weakAgendaPct ?? null, alerta: c?.weakAgendaPct != null ? "ligado" : "desligado (configure weakAgendaPct)", ...(await agendaOccupancy(clinic.id, dates)) });
+}));
+// Banco de respostas a objecoes: lista (com historico), cria/versiona (rascunho ou aprovada) e aprova rascunho. A Alice so usa a aprovada.
+apiRouter.get("/objection-answers", asyncRoute(async (req, res) => {
+  const clinic = await getClinic(req);
+  res.json({ codigos: OBJECTION_CODES.map((c) => ({ code: c, label: OBJECTION_LABEL[c] })), respostas: await prisma.objectionAnswer.findMany({ where: { clinicId: clinic.id }, orderBy: [{ code: "asc" }, { version: "desc" }] }) });
+}));
+apiRouter.post("/objection-answers", asyncRoute(async (req, res) => {
+  const clinic = await getClinic(req);
+  const b = (req.body ?? {}) as { code?: string; text?: string; aprovar?: boolean };
+  const r = await saveObjectionAnswer(clinic.id, String(b.code ?? ""), String(b.text ?? ""), b.aprovar === true, req.staff?.name ?? null);
+  res.status(r.ok ? 201 : 400).json(r);
+}));
+apiRouter.post("/objection-answers/:id/approve", asyncRoute(async (req, res) => {
+  const clinic = await getClinic(req);
+  const r = await approveObjectionDraft(clinic.id, req.params.id, req.staff?.name ?? null);
+  res.status(r.ok ? 200 : 400).json(r);
+}));
+// Simulacao de parcelamento pela politica da clinica (centavos; nada e enviado)
+apiRouter.get(
+  "/installments/simulate",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const c = await prisma.clinic.findUnique({ where: { id: clinic.id }, select: { installmentMax: true, installmentMinCents: true } });
+    if (!c?.installmentMax) { res.status(409).json({ error: "A clínica não tem política de parcelamento cadastrada (installmentMax/installmentMinCents)." }); return; }
+    const policy = { maxInstallments: c.installmentMax, minInstallmentCents: c.installmentMinCents ?? 0 };
+    const item = { totalCents: Math.round(Number(req.query.totalCents)), offerMax: req.query.offerMax ? Number(req.query.offerMax) : null, pixOnly: req.query.pix === "1", notInstallable: req.query.naoParcelavel === "1" };
+    if (!Number.isFinite(item.totalCents) || item.totalCents <= 0) { res.status(400).json({ error: "totalCents inválido" }); return; }
+    const plan = maxInstallmentsFor(item, policy);
+    const n = req.query.n ? Number(req.query.n) : plan.max;
+    const sp = splitInstallments(item, policy, n);
+    res.json({ plano: plan, pedido: { ...sp, texto: describeSplit(sp) }, perguntar: ASK_INSTALLMENTS_TEXT, acimaDoLimite: sp.ok ? null : plan.installable ? overLimitText(plan.max, policy) : null });
+  })
+);
+// Cartao-presente: so com faixa CADASTRADA na oferta (pago -> credito). Validade/restricoes: so as cadastradas (sem cadastro = pendencia visivel).
+apiRouter.post(
+  "/gift-cards",
+  asyncRoute(async (req, res) => {
+    const clinic = await getClinic(req);
+    const b = (req.body ?? {}) as { specialDateId?: string; buyerName?: string; buyerPatientId?: string | null; recipientName?: string | null; paidCents?: number; paymentProofId?: string | null };
+    const offer = b.specialDateId ? await prisma.specialDate.findFirst({ where: { id: b.specialDateId, clinicId: clinic.id } }) : null;
+    if (!offer) { res.status(404).json({ error: "Oferta do cartão-presente não encontrada" }); return; }
+    if (!b.buyerName?.trim()) { res.status(400).json({ error: "Informe o comprador" }); return; }
+    const tier = giftTierFor(parseItems(offer.items), Math.round(Number(b.paidCents)));
+    if (!tier) { res.status(400).json({ error: "Valor pago não corresponde a nenhuma faixa cadastrada na oferta" }); return; }
+    const card = await prisma.giftCard.create({ data: { clinicId: clinic.id, specialDateId: offer.id, buyerName: b.buyerName.trim(), buyerPatientId: b.buyerPatientId ?? null, recipientName: b.recipientName?.trim() || null, paidCents: Math.round(Number(b.paidCents)), creditCents: tier.creditCents, validUntil: offer.validUntil ?? null, paymentProofId: b.paymentProofId ?? null, createdBy: req.staff?.name ?? null } });
+    res.status(201).json({ ...card, pendencias: [...(offer.validUntil ? [] : ["validade do crédito não cadastrada"]), ...(offer.conditionText ? [] : ["regras de uso/restrições não cadastradas"])] });
   })
 );
 

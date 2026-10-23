@@ -327,8 +327,10 @@ test("LISBOA: previa de configuracao atual x desejada e SOMENTE LEITURA, nao inv
   assert.equal(d.somenteLeitura, true);
   assert.equal(await counts(), antes, "nada foi gravado");
   const by = (t) => d.linhas.find((l) => l.tema.startsWith(t));
-  assert.equal(by("Confirmação na véspera").estado, "diverge");
-  assert.match(by("Confirmação na véspera").atual, /08:00–11:00/);
+  // regra final de 22/10 (8h-10h) pelo planejador geral de politica
+  assert.equal(by("Confirmações: Confirmação dos atendimentos do dia seguinte").estado, "diverge");
+  assert.match(by("Confirmações: Confirmação dos atendimentos do dia seguinte").atual, /08:00–11:00/);
+  assert.equal(by("Confirmações: Sábado: lembrete na sexta").estado, "depende_da_clinica", "hora do lembrete de sexta nao informada");
   assert.equal(by("Jornada de Suelen").estado, "diverge", "cadastrada 8-21; o checklist pede 12-21");
   assert.equal(by("Jornada de Talita").estado, "diverge");
   assert.match(by("Jornada de Talita").atual, /herda o expediente/);
@@ -435,7 +437,9 @@ test("MIGRACAO 20261028: aplica sobre banco COM DADOS do estado anterior, preser
     await ins("Appointment", { id: "ap1", clinicId: "c1", patientId: "p1", procedureId: "pr1", scheduledAt: "2026-06-18 14:00:00", status: "cancelled" });
     await ins("WaitlistEntry", { id: "w1", clinicId: "c1", patientId: "p1", preferredNote: "quinta de manha" });
   } finally { await db.$disconnect(); }
-  const schema = makeProject(path.join(tmp, "proj"), migrationsBefore(NEW), [NEW]);
+  // aplica a 28 e as POSTERIORES (o schema de comparacao e o atual)
+  const later = fs.readdirSync(path.join(root, "prisma", "migrations"), { withFileTypes: true }).filter((d) => d.isDirectory() && d.name > NEW).map((d) => d.name).sort();
+  const schema = makeProject(path.join(tmp, "proj"), migrationsBefore(NEW), [NEW, ...later]);
   const up = cli(["migrate", "deploy"], dbPath, schema);
   assert.equal(up.status, 0, up.out.slice(-600));
   const db2 = new PrismaClient({ datasources: { db: { url: `${url}?connection_limit=1` } } });

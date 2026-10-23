@@ -62,8 +62,8 @@ export const REASONS: Record<string, string> = {
 };
 
 // Tipos da Central: os 4 originais (com politica de janela) + os que entram por ADAPTADOR sobre o controle proprio de cada fluxo (adapters.ts).
-export type ItemKind = DispatchKind | "renovacao" | "retorno_combinado" | "campanha" | "pos" | "pre" | "recontato" | "retomada";
-export const ITEM_KINDS: readonly ItemKind[] = ["confirmacao", "cobranca", "lembrete", "aniversario", "pos", "pre", "renovacao", "recontato", "retorno_combinado", "retomada", "campanha"];
+export type ItemKind = DispatchKind | "renovacao" | "retorno_combinado" | "campanha" | "pos" | "pre" | "recontato" | "retomada" | "pesquisa" | "indicacao" | "aviso_agendamento";
+export const ITEM_KINDS: readonly ItemKind[] = ["confirmacao", "cobranca", "lembrete", "aniversario", "pos", "pre", "renovacao", "recontato", "retorno_combinado", "retomada", "pesquisa", "indicacao", "aviso_agendamento", "campanha"];
 
 export interface DispatchItem {
   id: string;

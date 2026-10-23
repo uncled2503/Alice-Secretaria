@@ -18,7 +18,7 @@ import { stripProcedureLines, isPlaceholderProcedure } from "../clinicaexperts/p
 import { effectivePurpose, explicitPurpose, overridingRule, parseWeekdays, perRunCap, ruleAppliesOnWeekday, skipsConfirmedPatient, weekdayInZone, BASE_SENDS_PER_RUN } from "./policy.js";
 import { notYetEffectuated } from "./effectuation.js";
 import { reportConfirmationGaps, targetDateOfToday, alertCapacityRisk } from "./coverage.js";
-import { extendedDeadline, normalWindowEnd, resolveExtension, type DispatchKind, type ExtensionCtx } from "../dispatch/policy.js";
+import { extendedDeadline, normalWindowEnd, resolveExtension, loadPolicy, POLICY_DEFAULTS, type DispatchKind, type ExtensionCtx } from "../dispatch/policy.js";
 
 // PURO: dois textos de confirmacao sao "o mesmo lembrete"? Igual sem negrito (*) nem espacos, ou do mesmo tipo (os dois "amanha" ou os dois "hoje").
 // Uma regra copiada com o nome em negrito mandava a confirmacao do dia 2x (15/10, Renata): o texto nao era identico, so o negrito.
@@ -69,28 +69,42 @@ export function inReminderWindow(
 
 // PURO: agendamento criado DEPOIS que a janela de confirmacao do dia dele ja tinha fechado (ex.: marcado as 15h pra
 // amanha, e a confirmacao do dia seguinte sai das 8h as 11h de hoje). Sem isto ele nunca recebia confirmacao nenhuma. Sai
-// assim que possivel, dentro de 8h-20h e com pelo menos 2h de folga antes do atendimento. So vale pra regras de "dia
-// anterior" (dayOffset >= 1): a confirmacao do proprio dia nao precisa de reposicao.
+// assim que possivel, dentro do horario permitido (padrao 8h-20h; limite noturno configuravel em DispatchPolicy) e com a folga minima
+// antes do atendimento (padrao 2h: "muito proximo" nao recebe pedido). So vale pra regras de "dia anterior" (dayOffset >= 1) e so enquanto
+// o atendimento ainda e de OUTRO dia: um pedido de "amanha" para um atendimento de hoje (agendado hoje para hoje) seria falso.
 export const LATE_CATCHUP_MIN_LEAD_MS = 2 * 3_600_000;
+export interface LateParams { startHour: number; endHour: number; minLeadMs: number }
+export const LATE_DEFAULTS: LateParams = { startHour: 8, endHour: 20, minLeadMs: LATE_CATCHUP_MIN_LEAD_MS };
 export function isLateCatchUp(
   appt: { scheduledAt: Date; createdAt: Date; scheduleChangedAt?: Date | null },
   w: { dayOffset: number; sendEndHour: number },
   now: Date,
   timeZone: string,
+  lp: LateParams = LATE_DEFAULTS,
 ): boolean {
   if (w.dayOffset < 1) return false;
+  if (isoDateInZone(appt.scheduledAt, timeZone) <= isoDateInZone(now, timeZone)) return false; // atendimento de hoje: o pedido "do dia anterior" nao cabe mais
   const windowEnd = fixedReminderTime(appt.scheduledAt, w.dayOffset, w.sendEndHour, 0, timeZone).getTime();
   // O marco e o instante em que ESTE horario passou a existir: a criacao ou a ultima remarcacao (o que for mais recente). Remarcado depois da janela = reposicao, como um agendamento novo.
   const since = Math.max(appt.createdAt.getTime(), appt.scheduleChangedAt?.getTime() ?? 0);
   if (since < windowEnd) return false; // criado/remarcado a tempo: vale so a janela normal
   if (now.getTime() < windowEnd) return false;
-  if (appt.scheduledAt.getTime() - now.getTime() < LATE_CATCHUP_MIN_LEAD_MS) return false;
+  if (appt.scheduledAt.getTime() - now.getTime() < lp.minLeadMs) return false;
   const hour = Number(new Intl.DateTimeFormat("en-US", { timeZone, hourCycle: "h23", hour: "2-digit" }).format(now));
-  return hour >= 8 && hour < 20;
+  return hour >= lp.startHour && hour < lp.endHour;
+}
+
+// Os limites da reposicao e o intervalo minimo entre etapas da clinica (DispatchPolicy; sem linha = padrao). A reposicao usa os limites do tipo "confirmacao"
+// (e o que ela repoe); o intervalo entre etapas e o do tipo da regra.
+export interface StepParams { late: LateParams; gapMs: number }
+export async function loadStepParams(rule: Pick<ReminderRule, "clinicId" | "parentRuleId" | "purpose" | "message">): Promise<StepParams> {
+  const kind: DispatchKind = rule.parentRuleId ? "cobranca" : effectivePurpose(rule) === "lembrete" ? "lembrete" : "confirmacao";
+  const [c, k] = await Promise.all([loadPolicy(rule.clinicId, "confirmacao"), loadPolicy(rule.clinicId, kind)]).catch(() => [POLICY_DEFAULTS.confirmacao, POLICY_DEFAULTS[kind]] as const);
+  return { late: { startHour: c.lateStartHour, endHour: c.lateEndHour, minLeadMs: c.minLeadMin * 60_000 }, gapMs: k.stepMinGapMin * 60_000 };
 }
 
 // Cobranca ("nao confirmou") so depois de um intervalo minimo desde a mensagem-mae: sem isto quem recebeu a confirmacao
-// de reposicao as 15h30 ja recebia a cobranca das 17h, 1h30 depois.
+// de reposicao as 15h30 ja recebia a cobranca das 17h, 1h30 depois. Este e o PADRAO: a clinica configura (DispatchPolicy.stepMinGapMin) e o intervalo vale entre QUAISQUER duas etapas da mesma reserva.
 export const CHILD_MIN_GAP_MS = 3 * 3_600_000;
 
 // Mudanca de janela/pausa AGENDADA numa regra (ex.: "a partir de amanha"):
@@ -147,17 +161,20 @@ export function sendWindowOf(
   now: Date,
   tz: string,
   ext?: ExtensionCtx | null,
+  lateP?: LateParams,
 ): "window" | "late" | "extended" | null {
   if (appt.scheduledAt.getTime() <= now.getTime()) return null;
   if (rule.dayOffset != null && rule.sendHour != null && rule.sendEndHour != null) {
     if (inReminderWindow(appt.scheduledAt, now, { dayOffset: rule.dayOffset, sendHour: rule.sendHour, sendMinute: rule.sendMinute, sendEndHour: rule.sendEndHour }, tz)) return "window";
     // reposicao pra quem foi agendado depois da janela (regra-filha nao repoe: so cobra quem recebeu a mae)
     // lembrete explicito (so informa) nao tem reposicao: quem foi agendado depois da janela recebe a CONFIRMACAO como reposicao, nao tambem o lembrete
-    if (!rule.parentRuleId && rule.purpose !== "lembrete" && isLateCatchUp(appt, { dayOffset: rule.dayOffset, sendEndHour: rule.sendEndHour }, now, tz)) return "late";
+    if (!rule.parentRuleId && rule.purpose !== "lembrete" && isLateCatchUp(appt, { dayOffset: rule.dayOffset, sendEndHour: rule.sendEndHour }, now, tz, lateP)) return "late";
     // AMPLIACAO AUTOMATICA da janela (autorizada; ver dispatch/policy.ts): so com causa operacional comprovada, no dia local, ate o limite final e com a antecedencia minima do atendimento
     if (ext?.allowed) {
       const end = normalWindowEnd(rule, appt.scheduledAt, tz);
-      if (end && now.getTime() >= end.getTime()) {
+      // a ampliacao recupera quem DEVIA ter recebido na janela normal; quem foi agendado/remarcado depois do fim da janela nunca esteve nela (ex.: agendou as 9h para hoje: o lembrete das 7h nao e pertinente)
+      const since = Math.max(appt.createdAt.getTime(), appt.scheduleChangedAt?.getTime() ?? 0);
+      if (end && now.getTime() >= end.getTime() && since < end.getTime()) {
         const dl = extendedDeadline(ext.policy, { windowEnd: end, appointmentStart: appt.scheduledAt, timeZone: tz });
         if (dl && now.getTime() < dl.getTime()) return "extended";
       }
@@ -185,9 +202,10 @@ export async function selectReminderCandidates(
   rule: ReminderRule,
   now: Date,
   tz: string,
-  opts: { targetDate?: string; skipWindow?: boolean; clinicRules?: ReminderRule[]; ext?: ExtensionCtx | null } = {},
+  opts: { targetDate?: string; skipWindow?: boolean; clinicRules?: ReminderRule[]; ext?: ExtensionCtx | null; step?: StepParams } = {},
 ) {
   const held: HeldReminder[] = [];
+  const step = opts.step ?? (await loadStepParams(rule));
   let upper: Date;
   let lower = now;
   const fixed = rule.dayOffset != null && rule.sendHour != null;
@@ -228,7 +246,7 @@ export async function selectReminderCandidates(
     const specific = overridingRule(rule, wd, clinicRules);
     if (specific) { held.push({ appointmentId: appt.id, code: "substituida_por_regra_do_dia", detail: `neste dia da semana vale a regra específica (${specific.id}), não esta` }); return false; }
     if (opts.skipWindow) return true;
-    const w = sendWindowOf(rule, appt, now, tz, opts.ext);
+    const w = sendWindowOf(rule, appt, now, tz, opts.ext, step.late);
     if (w === "late") lateIds.add(appt.id);
     return w !== null;
   });
@@ -237,6 +255,14 @@ export async function selectReminderCandidates(
   due = due.filter((appt) => {
     if (!appt.patient.optedOut) return true;
     held.push({ appointmentId: appt.id, code: "opt_out", detail: "a pessoa pediu para não receber mensagens: nenhuma automação é enviada" });
+    return false;
+  });
+
+  // (a3) a pessoa PEDIU para remarcar este horario e a troca ainda nao aconteceu: nenhuma confirmacao/cobranca/lembrete DESTE horario sai (seria incompativel com o pedido).
+  // Zera sozinho quando o horario muda (db/client.ts) ou quando a equipe libera.
+  due = due.filter((appt) => {
+    if (!appt.rescheduleRequestedAt) return true;
+    held.push({ appointmentId: appt.id, code: "pediu_remarcacao_pendente", detail: "a pessoa pediu para remarcar este horário e a troca ainda não foi feita: as mensagens deste horário ficam suspensas" });
     return false;
   });
 
@@ -332,7 +358,7 @@ export async function selectReminderCandidates(
     for (const appt of due) {
       const sentAt = appt.reminders[0]?.sentAt;
       if (!sentAt) continue;
-      if (now.getTime() - sentAt.getTime() < CHILD_MIN_GAP_MS) { held.push({ appointmentId: appt.id, code: "cobranca_aguardando_intervalo", detail: `a cobrança só sai ${CHILD_MIN_GAP_MS / 3_600_000}h depois da mensagem-mãe` }); continue; }
+      if (now.getTime() - sentAt.getTime() < step.gapMs) { held.push({ appointmentId: appt.id, code: "cobranca_aguardando_intervalo", detail: `a cobrança só sai ${Math.round(step.gapMs / 60_000)} min depois da mensagem-mãe` }); continue; }
       const replies = await prisma.message.count({ where: { role: "user", createdAt: { gt: sentAt }, conversation: { patientId: appt.patientId } } });
       if (replies === 0) silent.push(appt);
       else held.push({ appointmentId: appt.id, code: "respondeu_depois_da_confirmacao", detail: "a pessoa respondeu depois da mensagem-mãe: não é cobrada" });
@@ -340,7 +366,92 @@ export async function selectReminderCandidates(
     due = silent;
   }
 
+  // (e) INTERVALO MINIMO ENTRE ETAPAS para a mesma reserva e horario, venha de qualquer regra (reposicao as 16h59 + cobranca as 17h = duas mensagens seguidas). Conta o que pode ter saido.
+  if (step.gapMs > 0 && due.length) {
+    const recent = await prisma.reminderDispatch.findMany({
+      where: { clinicId: rule.clinicId, bookingKey: { in: due.map(bookingKeyOf) }, ruleId: { not: rule.id }, state: { in: ["sent", "unconfirmed", "reserved"] }, attemptedAt: { gt: new Date(now.getTime() - step.gapMs) } },
+      select: { bookingKey: true, startsAt: true },
+    });
+    due = due.filter((appt) => {
+      if (!recent.some((r) => r.bookingKey === bookingKeyOf(appt) && r.startsAt.getTime() === appt.scheduledAt.getTime())) return true;
+      held.push({ appointmentId: appt.id, code: "intervalo_minimo_entre_etapas", detail: `outra mensagem deste horário saiu há menos de ${Math.round(step.gapMs / 60_000)} min: esta etapa espera` });
+      return false;
+    });
+  }
+
   return { due, held, late: lateIds };
+}
+
+// RECUPERACAO DO PEDIDO INICIAL NA ETAPA DA COBRANCA. A cobranca so existe com evidencia do pedido inicial (b2); quando o pedido inicial NAO saiu (nunca tentado: job parado,
+// janela perdida; ou falha recuperavel em que nada chegou ao provedor), a etapa da cobranca envia o PEDIDO INICIAL (texto da regra-mae, ainda verdadeiro) em vez de cobrar algo
+// que a pessoa nunca recebeu. Nunca reenvia o que pode ter saido (incerto), o que a revisao barrou, o bloqueado, numero invalido nem o que esgotou as tentativas.
+// So para quem existia ANTES do fim da janela do pedido inicial (quem foi agendado depois e reposicao da propria regra-mae) e so dentro da janela da cobranca.
+const RECOVERABLE_PARENT_STATES = ["failed", "deferred"];
+const MAX_DEFERRALS_FOR_RECOVERY = 16;
+const MAX_SEND_ATTEMPTS_FOR_RECOVERY = 3;
+export async function selectInitialRecovery(
+  child: ReminderRule,
+  parent: ReminderRule,
+  now: Date,
+  tz: string,
+  opts: { clinicRules?: ReminderRule[]; step?: StepParams; skipWindow?: boolean; targetDate?: string } = {},
+) {
+  const held: HeldReminder[] = [];
+  type Row = Awaited<ReturnType<typeof selectReminderCandidates>>["due"][number];
+  if (child.parentRuleId !== parent.id || child.dayOffset == null || child.sendHour == null || parent.dayOffset == null || parent.sendHour == null || parent.sendEndHour == null) return { due: [] as Row[], held };
+  const step = opts.step ?? (await loadStepParams(child));
+  // o dia CIVIL do atendimento que a cobranca cobre (hoje + dayOffset da cobranca), no fuso da clinica
+  const [ty, tm, td] = isoDateInZone(now, tz).split("-").map(Number);
+  const target = opts.targetDate ?? (() => { const t = new Date(Date.UTC(ty, tm - 1, td + child.dayOffset!)); return t.toISOString().slice(0, 10); })();
+  const [y, m, d] = target.split("-").map(Number);
+  const dayStart = zonedWallClockToUtc(tz, y, m, d, 0, 0);
+  const nx = new Date(Date.UTC(y, m - 1, d + 1));
+  const upper = zonedWallClockToUtc(tz, nx.getUTCFullYear(), nx.getUTCMonth() + 1, nx.getUTCDate(), 0, 0);
+  const lower = dayStart.getTime() > now.getTime() ? new Date(dayStart.getTime() - 1) : now;
+  const clinicRules = opts.clinicRules ?? (await prisma.reminderRule.findMany({ where: { clinicId: child.clinicId, active: true } }));
+  const rows = await prisma.appointment.findMany({
+    where: { clinicId: child.clinicId, status: "confirmed", patientConfirmed: false, rescheduleRequestedAt: null, scheduledAt: { gt: lower, lt: upper }, reminders: { none: { ruleId: { in: [parent.id, child.id] } } } },
+    include: { patient: true, attendee: true, procedure: true, professional: true, reminders: { where: { ruleId: "-" }, select: { sentAt: true } } },
+  });
+  let due = rows.filter((appt) => {
+    if (appt.patient.optedOut) return false;
+    const wd = weekdayInZone(appt.scheduledAt, tz);
+    if (!ruleAppliesOnWeekday(child, wd) || !ruleAppliesOnWeekday(parent, wd) || overridingRule(child, wd, clinicRules) || overridingRule(parent, wd, clinicRules)) return false;
+    if (!opts.skipWindow && sendWindowOf(child, appt, now, tz) !== "window") return false;
+    const parentEnd = fixedReminderTime(appt.scheduledAt, parent.dayOffset!, parent.sendEndHour!, 0, tz).getTime();
+    const since = Math.max(appt.createdAt.getTime(), appt.scheduleChangedAt?.getTime() ?? 0);
+    return since < parentEnd && now.getTime() >= parentEnd; // existia na janela do pedido inicial e devia te-lo recebido
+  });
+  if (!due.length) return { due, held };
+  const ledger = await prisma.reminderDispatch.findMany({ where: { clinicId: child.clinicId, ruleId: parent.id, bookingKey: { in: due.map(bookingKeyOf) } }, select: { bookingKey: true, startsAt: true, state: true, attempt: true } });
+  due = due.filter((appt) => {
+    const row = ledger.find((r) => r.bookingKey === bookingKeyOf(appt) && r.startsAt.getTime() === appt.scheduledAt.getTime());
+    if (!row) return true; // nunca tentado
+    const max = row.state === "deferred" ? MAX_DEFERRALS_FOR_RECOVERY : MAX_SEND_ATTEMPTS_FOR_RECOVERY;
+    if (RECOVERABLE_PARENT_STATES.includes(row.state) && row.attempt < max) return true;
+    held.push({ appointmentId: appt.id, code: `pedido_inicial_${row.state}`, detail: `o pedido inicial deste horário está "${row.state}": não é reenviado automaticamente` });
+    return false;
+  });
+  if (due.length) {
+    const pending = await notYetEffectuated(due);
+    due = due.filter((a) => { const why = pending.get(a.id); if (why) held.push({ appointmentId: a.id, code: "reserva_nao_efetivada_no_ce", detail: why }); return !why; });
+  }
+  // uma mensagem por pessoa por dia e o intervalo entre etapas valem tambem aqui
+  const keep: typeof due = [];
+  for (const appt of due) {
+    const { start, end } = localDayBounds(appt.scheduledAt, tz);
+    const other = await prisma.appointment.findFirst({
+      where: { clinicId: child.clinicId, patientId: appt.patientId, attendeeId: appt.attendeeId, id: { not: appt.id }, scheduledAt: { gte: start, lt: end }, OR: [{ reminders: { some: { ruleId: parent.id } } }, { status: "confirmed", OR: [{ scheduledAt: { lt: appt.scheduledAt } }, { scheduledAt: appt.scheduledAt, id: { lt: appt.id } }] }] },
+      select: { id: true },
+    });
+    if (other) { held.push({ appointmentId: appt.id, code: "coberta_por_outro_horario_do_dia", detail: "outro horário do mesmo dia cobre este" }); continue; }
+    if (step.gapMs > 0) {
+      const recent = await prisma.reminderDispatch.findFirst({ where: { clinicId: child.clinicId, bookingKey: bookingKeyOf(appt), startsAt: appt.scheduledAt, state: { in: ["sent", "unconfirmed", "reserved"] }, attemptedAt: { gt: new Date(now.getTime() - step.gapMs) } }, select: { id: true } });
+      if (recent) { held.push({ appointmentId: appt.id, code: "intervalo_minimo_entre_etapas", detail: "outra mensagem deste horário saiu há pouco" }); continue; }
+    }
+    keep.push(appt);
+  }
+  return { due: keep, held };
 }
 
 export async function selectDueAppointments(rule: ReminderRule, now: Date, tz: string) {
@@ -419,7 +530,7 @@ export interface DeliverEnv {
 }
 export type DueAppointment = Awaited<ReturnType<typeof selectReminderCandidates>>["due"][number];
 
-export async function deliverReminder(env: DeliverEnv, rule: ReminderRule, appt: DueAppointment, opts: { ignoreWindow?: boolean; pause?: boolean; origin?: string; ext?: ExtensionCtx | null } = {}): Promise<boolean> {
+export async function deliverReminder(env: DeliverEnv, rule: ReminderRule, appt: DueAppointment, opts: { ignoreWindow?: boolean; pause?: boolean; origin?: string; ext?: ExtensionCtx | null; late?: LateParams } = {}): Promise<boolean> {
   const { clock, tz, clinicInfo, stat, ceDown, ceFailures } = env;
   let attempted = false;
   const stamp = clock();
@@ -434,11 +545,12 @@ export async function deliverReminder(env: DeliverEnv, rule: ReminderRule, appt:
   };
   try {
     // (0) O agendamento mudou desde a selecao (a importacao do CE roda a cada 10 min e pausas entre envios levam minutos)?
-    const fresh = await prisma.appointment.findUnique({ where: { id: appt.id }, select: { status: true, scheduledAt: true, patientConfirmed: true } });
+    const fresh = await prisma.appointment.findUnique({ where: { id: appt.id }, select: { status: true, scheduledAt: true, patientConfirmed: true, rescheduleRequestedAt: true } });
     if (!fresh || fresh.status !== "confirmed" || fresh.scheduledAt.getTime() !== appt.scheduledAt.getTime()) {
       logDecision("pular", { ...base, motivo: "o agendamento mudou depois da selecao (cancelado/atendido/outro horario)" });
       return false;
     }
+    if (fresh.rescheduleRequestedAt) { logDecision("pular", { ...base, motivo: "a pessoa pediu para remarcar este horario (troca pendente)" }); return false; }
     // Solicitacao de confirmacao: quem confirmou durante a rodada (ou entre a selecao e agora) nao recebe outro pedido. Vale a confirmacao DE AGORA.
     if (!rule.parentRuleId && skipsConfirmedPatient(rule) && fresh.patientConfirmed) {
       logDecision("pular", { ...base, tipo: key.kind, motivo: "o paciente ja confirmou: nao recebe nova solicitacao de confirmacao" });
@@ -454,7 +566,7 @@ export async function deliverReminder(env: DeliverEnv, rule: ReminderRule, appt:
       }
     }
     // (1) A janela de envio desta regra ainda vale AGORA? (nada de lembrete vencido ou fora de hora pra compensar falha anterior)
-    const windowKind = opts.ignoreWindow ? "window" : sendWindowOf(rule, appt, stamp, tz, opts.ext);
+    const windowKind = opts.ignoreWindow ? "window" : sendWindowOf(rule, appt, stamp, tz, opts.ext, opts.late);
     if (!windowKind) {
       logDecision("pular", { ...base, motivo: "fora da janela de envio" });
       return false;
@@ -544,7 +656,7 @@ export async function deliverReminder(env: DeliverEnv, rule: ReminderRule, appt:
       return false;
     }
     try {
-      await prisma.reminderSent.create({ data: { appointmentId: appt.id, ruleId: rule.id } });
+      await prisma.reminderSent.create({ data: { appointmentId: appt.id, ruleId: rule.id, sentAt: stamp } }); // relogio da rodada (o mesmo da selecao e dos intervalos entre etapas)
     } catch (err) {
       // SO violacao de unicidade e "ja existia": qualquer outro erro (banco ocupado/indisponivel) NAO e duplicidade - a reserva e devolvida para tentar de novo (nada saiu)
       if ((err as { code?: string } | null)?.code !== "P2002") {
@@ -571,7 +683,7 @@ export async function deliverReminder(env: DeliverEnv, rule: ReminderRule, appt:
       outcome = await sendText(appt.clinicId, appt.patient.phone, text, {
         kind: "lembrete",
         // IMEDIATAMENTE antes do provedor: a tentativa passa a constar (reservado SEM attemptedAt = o provedor NAO foi chamado)
-        beforeProvider: async () => { await prisma.reminderDispatch.update({ where: { id: acq.id }, data: { attemptedAt: new Date(), messageText: text } }); }, // (sem catch: se a tentativa nao puder ser registrada, NADA e enviado)
+        beforeProvider: async () => { await prisma.reminderDispatch.update({ where: { id: acq.id }, data: { attemptedAt: clock(), messageText: text } }); }, // (sem catch: se a tentativa nao puder ser registrada, NADA e enviado)
         report: (r) => { sendReport = r; },
       });
     } catch (err) {
@@ -598,6 +710,15 @@ export async function deliverReminder(env: DeliverEnv, rule: ReminderRule, appt:
       if (outcome === "sent") {
         await finishDispatch(acq.id, "sent", opts.origin, (() => { const r = sendReport as { destination: string; providerId: string | null } | null; return r ? { destination: r.destination, providerId: r.providerId, deliveryState: "accepted" } : undefined; })());
         await recordAutomatedMessage(appt.patientId, text, "Lembrete de consulta");
+        // Reserva SEM procedimento vinculado: a mensagem saiu neutra; a equipe e avisada UMA vez por reserva (marca atomica), para vincular o procedimento.
+        if (noProcedure) {
+          const marked = await prisma.appointment.updateMany({ where: { id: appt.id, missingProcedureAlertAt: null }, data: { missingProcedureAlertAt: stamp } }).catch(() => ({ count: 0 }));
+          if (marked.count === 1) {
+            const who = appt.attendee?.name ?? appt.patient.name ?? "paciente";
+            const when = new Intl.DateTimeFormat("pt-BR", { timeZone: tz, day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(appt.scheduledAt);
+            void notifyStaff(rule.clinicId, "automation_failed", `A reserva de ${who} em ${when} está SEM procedimento vinculado na agenda. A mensagem automática saiu sem citar o procedimento; vincule o procedimento para as próximas etapas (pré/pós).`).catch(() => undefined);
+          }
+        }
       } else {
         // blocked (plano), vetoed (revisao) e duplicate (mesmo texto ja saiu) NAO sao envio: ficam registrados assim.
         await finishDispatch(acq.id, outcome, `sendText=${outcome}`);
@@ -670,19 +791,28 @@ export async function runReminderCycle(opts: { now?: Date } = {}): Promise<void>
         const td = targetDateOfToday(rule, now, tz);
         if (td) { const [ty, tm, tdd] = td.split("-").map(Number); ext = await resolveExtension(rule, dkind, tz, new Date(Date.UTC(ty, tm - 1, tdd, 15)), now).catch(() => null); }
       }
-      const selection = await selectReminderCandidates(rule, now, tz, { clinicRules, ext });
+      const step = await loadStepParams(rule);
+      const selection = await selectReminderCandidates(rule, now, tz, { clinicRules, ext, step });
       const due = selection.due;
       // Nada some em silencio: o que foi retido (com o motivo) entra no resumo da rodada e no log.
       for (const h of selection.held.slice(0, 100)) logDecision("reter", { clinica: rule.clinicId, regra: rule.id, agendamento: h.appointmentId, motivo: h.code });
       // Depois que a janela de uma regra de confirmacao fecha, confere (uma vez por dia) quem ficou SEM a mensagem e avisa a equipe com o motivo.
       if (rule.sendEndHour != null) await reportConfirmationGaps(rule, now, tz, clinicRules).catch((err) => console.error("[lembrete] conferencia da cobertura falhou:", err instanceof Error ? err.message : err));
 
-      if (due.length === 0) continue;
+      // Etapa de cobranca: quem NUNCA recebeu o pedido inicial (nao tentado / falha recuperavel) recebe agora o pedido inicial, nao a cobranca.
+      let recovery: DueAppointment[] = [];
+      const parentRule = rule.parentRuleId ? clinicRules.find((r) => r.id === rule.parentRuleId) ?? null : null;
+      if (parentRule) {
+        const rec = await selectInitialRecovery(rule, parentRule, now, tz, { clinicRules, step }).catch((err) => { console.error("[lembrete] recuperacao do pedido inicial falhou:", err instanceof Error ? err.message : err); return { due: [] as DueAppointment[], held: [] as HeldReminder[] }; });
+        recovery = rec.due;
+        for (const h of rec.held.slice(0, 50)) logDecision("reter", { clinica: rule.clinicId, regra: parentRule.id, agendamento: h.appointmentId, motivo: h.code });
+      }
+      if (due.length === 0 && recovery.length === 0) continue;
       // WhatsApp desta clinica comprovadamente fora: nao reserva, nao confere no CE e NAO gasta tentativa (o teto de tentativas desistiria do lembrete em 45 min por um problema da
       // clinica inteira). A janela de envio de cada lembrete segue valendo: quando a conexao volta, so sai o que ainda esta dentro da janela, uma vez, sem lote atrasado.
       const conn = await connectionUsable(rule.clinicId).catch(() => ({ usable: true as const, since: null, reason: null }));
       if (!conn.usable) {
-        logDecision("adiar", { clinica: rule.clinicId, regra: rule.id, motivo: "whatsapp_desconectado: nenhum lembrete desta clinica e tentado ate reconectar", pendentes: due.length });
+        logDecision("adiar", { clinica: rule.clinicId, regra: rule.id, motivo: "whatsapp_desconectado: nenhum lembrete desta clinica e tentado ate reconectar", pendentes: due.length + recovery.length });
         continue;
       }
       due.sort((a, b) => a.scheduledAt.getTime() - b.scheduledAt.getTime()); // quem atende primeiro recebe primeiro
@@ -693,6 +823,12 @@ export async function runReminderCycle(opts: { now?: Date } = {}): Promise<void>
       const clinicInfo = clinicInfoCache.get(rule.clinicId)!;
       const stat = stats.get(rule.clinicId) ?? { deferred: 0, exhausted: 0, reasons: new Set<string>() };
       stats.set(rule.clinicId, stat);
+      let recSends = 0;
+      for (const appt of recovery) {
+        if (recSends >= BASE_SENDS_PER_RUN) break;
+        if (await deliverReminder({ clock, tz, clinicInfo, stat, ceDown, ceFailures }, parentRule!, appt, { ignoreWindow: true, origin: "recuperacao_do_pedido_inicial_na_etapa_de_cobranca", late: step.late })) recSends++;
+      }
+      if (due.length === 0) continue;
 
       // FILA SEM STARVATION: quem ja tem controle persistente que impede nova tentativa AGORA (esperando o intervalo, esgotado, ja tratado) e pulado ANTES de gastar o orcamento de
       // verificacoes da rodada; quem nunca foi tentado vem primeiro, e quem falhou/adiou depois (por horario do atendimento). Antes um grupo de candidatos problematicos ocupava sempre o inicio.
@@ -719,7 +855,7 @@ export async function runReminderCycle(opts: { now?: Date } = {}): Promise<void>
         // Teto de ENVIOS por rodada (protege o numero de bloqueio por rajada); o que foi pulado ou adiado nao conta, entao nao trava os demais.
         if (rule.sendEndHour != null && (sends >= sendCap || checked >= checkCap)) break;
         checked++;
-        const attempted = await deliverReminder({ clock, tz, clinicInfo, stat, ceDown, ceFailures }, rule, appt, { ext });
+        const attempted = await deliverReminder({ clock, tz, clinicInfo, stat, ceDown, ceFailures }, rule, appt, { ext, late: step.late });
         if (attempted) sends++;
       }
       } catch (err) {

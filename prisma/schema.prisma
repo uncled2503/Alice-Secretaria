@@ -15,6 +15,11 @@ model Clinic {
   name          String
   whatsappPhone String    @unique // numero do WhatsApp conectado (formato 55DDDNUMERO); atualizado sozinho ao parear
   timezone      String    @default("America/Sao_Paulo")
+  // PARCELAMENTO da empresa (commerce/installments.ts): maximo de parcelas sem juros e valor minimo da parcela, em centavos. null = sem politica (vale o cadastro do procedimento, como antes)
+  installmentMax      Int?
+  installmentMinCents Int?
+  // AGENDA FRACA (crm/weakAgenda.ts): avisa a equipe quando a ocupacao de um profissional em 48-72h fica abaixo deste percentual. null = alerta desligado (o relatorio continua disponivel)
+  weakAgendaPct       Int?
   workStartHour Int       @default(9)
   workEndHour   Int       @default(19)
   lunchStartHour Int?     // intervalo (ex.: almoço) dentro do expediente - null = sem pausa, atende direto
@@ -84,6 +89,7 @@ model Clinic {
   clinicKind           String  @default("estetica")  // estetica | medica | ambas - "medica"/"ambas" ativa as travas de seguranca medica
   evaluationFirst      Boolean @default(false) // nunca exige que o paciente saiba o procedimento; sempre oferece avaliacao
   strictBookingRules   Boolean @default(false) // true = procedimento SEM regra de agendamento cadastrada (Procedure.bookingMode / texto aprovado) NAO agenda sozinho nem vira avaliacao: vai para a equipe validar. false = comportamento anterior (agenda o procedimento escolhido)
+  forbiddenSwaps       String? // TROCAS PROIBIDAS "pedido > nao oferecer no lugar" separadas por ; (ex.: "Lavieen > carboxiterapia"): quando a pessoa fala do primeiro, a Alice nunca oferece o segundo no lugar
   notOfferedServices   String? // servicos que a clinica NAO oferece, separados por virgula (ex.: "luz pulsada"): a Alice nunca os oferece nem os trata como equivalentes a outro
   unmappedOffers       String? // ofertas que a clinica ANUNCIA mas ainda nao tem cadastro/mapeamento autorizado (ex.: "Protocolo do Olhar"), separadas por virgula: nunca viram avaliacao nem outro procedimento sozinhas
   allowEmojis          Boolean @default(true)
@@ -950,6 +956,12 @@ model Appointment {
   ceCancelState  String?       // null | pending (cancelado aqui; o CE ainda nao confirmou) | confirmed (o CE confirmou)
   cePresenceState String?      // null | pending (paciente confirmou; falta o PATCH /confirm no CE) | synced | skipped (sem vinculo)
   cePresenceAt   DateTime?     // quando a confirmacao de presenca foi sincronizada com o CE
+  rescheduleRequestedAt DateTime? // a pessoa PEDIU para remarcar ESTE horario (ainda sem novo horario): confirmacoes/lembretes deste horario ficam suspensos. Zerado quando o horario muda
+  missingProcedureAlertAt DateTime? // a equipe ja foi avisada de que esta reserva esta sem procedimento vinculado (o aviso nao se repete)
+  // CONDICAO COMERCIAL COMBINADA (oferta/campanha vigente no momento do agendamento): fica gravada na reserva e NAO muda se a oferta vencer depois (expiracao nao e retroativa)
+  offerId        String?
+  offerVersion   Int?
+  offerTerms     String?
   scheduleChangedAt DateTime?  // quando o HORARIO mudou pela ultima vez (remarcacao). Preenchido pela camada do banco (db/client.ts), em qualquer caminho. null = nunca remarcado
   cancelReasonCode String?     // motivo ESTRUTURADO do cancelamento/falta (lista fechada em crm/lossReasons.ts); null = nao informado
   completedAt    DateTime?     // quando o atendimento passou a "concluido" AQUI (registro de conclusao). null = nao concluido ou concluido antes deste registro existir
@@ -1667,6 +1679,9 @@ model DispatchPolicy {
   maxAttempts    Int?
   retryGapMin    Int?
   maxPerRun      Int?     // teto por rodada (capacidade)
+  lateStartHour  Int?     // reposicao (agendado/remarcado depois da janela): so a partir desta hora local (null = padrao 8)
+  lateEndHour    Int?     // ... e antes desta hora local: limite noturno (null = padrao 20)
+  stepMinGapMin  Int?     // intervalo minimo entre duas etapas para a MESMA reserva (ex.: reposicao as 16h59 e cobranca as 17h) (null = padrao 180)
   updatedBy      String?
   updatedAt      DateTime @updatedAt
   createdAt      DateTime @default(now())
@@ -1720,6 +1735,57 @@ model DispatchRunItem {
 
 // DATAS ESPECIAIS / CAMPANHAS / RECESSO que a Alice precisa conhecer (checklist 22/10, secao 14). Nasce como RASCUNHO com os campos que a clinica ainda NAO informou vazios (dependencia
 // explicita): a Alice so usa uma data APROVADA e dentro da vigencia, e nunca inventa condicao, preco, desconto, vaga ou data de retorno.
+// Historico de versoes de uma data especial/oferta: o que valia em cada versao (auditoria; nunca apagado).
+model SpecialDateRevision {
+  id            String   @id @default(cuid())
+  clinicId      String
+  specialDateId String
+  version       Int
+  snapshot      String   // JSON da data/oferta naquela versao
+  changedBy     String?
+  createdAt     DateTime @default(now())
+
+  @@index([specialDateId, version])
+}
+
+// Cartao-presente: comprador, presenteado, valor PAGO e CREDITO separados. Validade/uso/restricoes so com o que a clinica cadastrar (null = nao informado).
+model GiftCard {
+  id             String    @id @default(cuid())
+  clinicId       String
+  specialDateId  String?
+  buyerPatientId String?
+  buyerName      String
+  recipientName  String?
+  paidCents      Int
+  creditCents    Int
+  usedCents      Int       @default(0)
+  status         String    @default("emitido") // emitido | usado | cancelado
+  validUntil     String?   // AAAA-MM-DD; null = validade NAO informada pela clinica
+  restrictions   String?
+  paymentProofId String?
+  createdBy      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([clinicId, createdAt])
+}
+
+// Banco de respostas a objecoes (crm/objectionBank.ts): por empresa, aprovado e versionado. Mudanca = nova versao; a aprovada anterior vira "substituida" (historico).
+model ObjectionAnswer {
+  id         String   @id @default(cuid())
+  clinicId   String
+  code       String   // preco | medo | dor | tempo | indecisao | parcelamento
+  text       String
+  version    Int
+  status     String   @default("rascunho") // rascunho | aprovada | substituida
+  approvedBy String?
+  createdBy  String?
+  createdAt  DateTime @default(now())
+
+  @@unique([clinicId, code, version])
+  @@index([clinicId, code, status])
+}
+
 model SpecialDate {
   id            String   @id @default(cuid())
   clinicId      String
@@ -1729,7 +1795,21 @@ model SpecialDate {
   endsOn        String?  // fim da vigencia / retorno do recesso; null = nao informado
   services      String   @default("") // servicos da data (texto do checklist)
   conditionText String?  // condicao/valor vigente informada pela clinica; null = NAO cadastrada
-  status        String   @default("rascunho") // rascunho | aprovada | encerrada
+  status        String   @default("rascunho") // rascunho | aprovada | encerrada | substituida (calendario novo trocou a data; historico preservado)
+  // ---- motor de ofertas (22/10, lote 2): tudo opcional; campo vazio = NAO informado (nunca presumido) ----
+  version       Int      @default(1)
+  promoteFrom   String?  // AAAA-MM-DD: inicio da DIVULGACAO (null = startsOn)
+  promoteUntil  String?  // fim da divulgacao (null = fim da validade comercial)
+  validUntil    String?  // ultimo dia em que a CONDICAO pode ser fechada (validade comercial); null = endsOn ?? startsOn
+  items         String?  // JSON [{ servico, procedimento?, precoCentavos, pagamento: "normal"|"pix", parcelasMax, parcelavel, observacao? }]
+  benefits      String?  // brindes/beneficios APROVADOS (texto exato); null = nenhum
+  quantityLimit Int?     // quantidade limitada informada pela clinica; null = sem limite informado (a Alice nao fala em "ultimas vagas")
+  audience      String?  // publico (texto livre aprovado)
+  origin        String   @default("todos") // todos | anuncio | organico: de onde a pessoa precisa ter vindo para a condicao valer
+  adSourceIds   String?  // ids de anuncio (Meta) separados por virgula quando origin=anuncio restringe a anuncios especificos
+  responseMode  String   @default("alice") // alice | equipe (a equipe responde: a Alice fica em silencio e passa para a equipe)
+  approvedTexts String?  // textos/materiais aprovados (JSON array de strings)
+  replacedById  String?  // a data que substituiu esta (status substituida)
   notes         String?
   approvedBy    String?
   createdAt     DateTime @default(now())

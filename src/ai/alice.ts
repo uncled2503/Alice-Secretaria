@@ -3,6 +3,7 @@ import { safeFetch } from "./wellFormed.js";
 import type { ChatCompletion, ChatCompletionCreateParamsNonStreaming, ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
 import { prisma } from "../db/client.js";
 import { ceMirrorEnabled, enrichPatientFromCe, hasOpenCreateAttempt, markPatientConfirmed, syncAppointment } from "../clinicaexperts/sync.js";
+import { markRescheduleRequested } from "../reminders/confirmationStatus.js";
 import { applyLiveVerdict, verifyBookingLive } from "../clinicaexperts/liveCheck.js";
 import { resolveCompanionTarget } from "../scheduling/companions.js";
 import { namesCompatible } from "../clinicaexperts/match.js";
@@ -42,6 +43,7 @@ import { durationBriefing } from "./durationFact.js";
 import { decideTurn, turnDecisionLog, type TurnDecision } from "./turnDecision.js";
 import { claimIsSupported, conclusionClaims, GROUP_BOOKING_DIRECTIVE, mentionsCompanion, priceValues, stripGenericFarewell, stripRedundantGreeting, unitNumbers, weekdayLabel, type ExistingSlot } from "./replyFacts.js";
 import { analyzeFlow, askedForName, complainsAboutBot, turnObligations, wantsSchedule, type SalesFlow } from "./salesFlow.js";
+import { parseForbiddenSwaps, swapTermsFor } from "./conduct.js";
 import { understandConversation, planConduct, gateDecision, parseNotOffered, notOfferedIn, stripNotOffered, NOT_OFFERED_REPLY, evaluationWordingViolation, EVAL_WORDING_NUDGE, type ConductGate, type ConductPlan, type Understanding } from "./conduct.js";
 import { REVISION } from "../version.js";
 import { confirmationThanks, isConfirmationReply } from "./confirmation.js";
@@ -51,6 +53,9 @@ import { absorbToolResult, checkSlotMentions, extractMentions, knownFrom, newSlo
 import { isJobSeeker, nonPatientKind } from "./jobSeeker.js";
 import { classifyByAlice, revertByClinicalContext, DETAIL_LABEL, type NonPatientDetail } from "../crm/contactKind.js";
 import { specialDatesLine } from "../crm/specialDates.js";
+import { recordAgreedOffer, teamOfferFor, approvedOfferNumbers } from "../crm/offers.js";
+import { approvedObjectionAnswer, objectionCodeOf, objectionDirective } from "../crm/objectionBank.js";
+import { ASK_INSTALLMENTS_TEXT, formatBRL, installmentPromptLine, maxInstallmentsFor, overLimitText, toCents, type InstallmentPolicy } from "../commerce/installments.js";
 import { findChosenSlot, identifyWanted, offersSlots, staffConfirmedBooking } from "./bookingIntent.js";
 import { statementsNote } from "./clinicStatements.js";
 import { resolveSituation, RULE_HIERARCHY } from "./situation.js";
@@ -932,6 +937,8 @@ async function runTool(
     }
 
     const patient = await prisma.patient.findUnique({ where: { id: patientId } });
+    // condicao de oferta vigente e elegivel para este procedimento: fica GRAVADA na reserva (vencer depois nao muda o combinado)
+    const agreedTerms = await recordAgreedOffer(booking.appointmentId).catch(() => null);
     const whenLabel = formatDateTimeInZone(booking.scheduledAt, tz);
     const withPro = booking.professionalName ? ` com ${booking.professionalName}` : "";
     const whoLabel = forOther ? `${target.displayName} (pedido por ${patientLabelOf(patient)})` : patientLabelOf(patient);
@@ -951,6 +958,7 @@ async function runTool(
 
     return JSON.stringify({
       agendado: true, quando: booking.label, profissional: booking.professionalName ?? undefined,
+      ...(agreedTerms ? { condicao_combinada: agreedTerms, instrucao_condicao: "Se falar de valor, use SOMENTE esta condição combinada." } : {}),
       ...(forOther ? { pessoa: target.displayName, instrucao: "Esta reserva e de OUTRA pessoa. So diga que as DUAS (ou todas) estao agendadas depois que book_appointment devolver agendado:true para CADA uma; se alguma falhar, diga exatamente quem ficou agendado (dia, hora, profissional) e quem NAO ficou." } : {}),
     });
   }
@@ -1314,7 +1322,7 @@ const PAYMENT_METHOD_LABELS: Record<string, string> = {
 
 // So passa pro prompt o que a clinica realmente cadastrou - nunca inventa
 // indicacao, beneficio, prazo ou preco que nao veio do banco.
-function describeProcedureForPrompt(p: Procedure & { _count?: { photos: number } }, quotePrices = true): string {
+function describeProcedureForPrompt(p: Procedure & { _count?: { photos: number } }, quotePrices = true, policy: InstallmentPolicy | null = null): string {
   const lines = [`- ${p.name} (reserva de ${p.durationMin}min na agenda)`];
   if (p._count?.photos) lines.push("  Fotos de resultado (antes/depois): TEM cadastradas - quando a pessoa demonstrar interesse neste procedimento, ofereca ('Posso te enviar alguns resultados?') e, se ela aceitar ou pedir, use send_procedure_photos");
 
@@ -1322,7 +1330,10 @@ function describeProcedureForPrompt(p: Procedure & { _count?: { photos: number }
     lines.push("  Valor: apresentado pela equipe na avaliacao (NAO informar valor, parcelas nem formas de pagamento)");
   } else if (p.price != null) {
     let priceLine = `  Valor: R$ ${p.price.toFixed(2)}`;
-    if (p.offerInstallments && p.maxInstallments) {
+    if (policy) {
+      // politica de parcelamento da clinica (centavos; parcela minima; limite do procedimento so reduz)
+      priceLine += p.offerInstallments ? ` (parcelamento: ${installmentPromptLine({ totalCents: toCents(p.price), offerMax: p.maxInstallments ?? null }, policy)})` : " (sem parcelamento cadastrado)";
+    } else if (p.offerInstallments && p.maxInstallments) {
       priceLine += ` (ate ${p.maxInstallments}x de R$ ${(p.price / p.maxInstallments).toFixed(2)})`;
     }
     lines.push(priceLine);
@@ -1351,9 +1362,10 @@ function describeProcedureForPrompt(p: Procedure & { _count?: { photos: number }
 
 // Linha COMPACTA de um procedimento (nome, duracao, valor, marcador de fotos): e a lista que vai em TODA mensagem. Os detalhes (descricao,
 // beneficios...) so vao para os procedimentos em foco na conversa (ver procedureFocus.ts).
-function describeProcedureCompact(p: Procedure & { _count?: { photos: number } }, quotePrices = true): string {
+function describeProcedureCompact(p: Procedure & { _count?: { photos: number } }, quotePrices = true, policy: InstallmentPolicy | null = null): string {
   let price = "";
   if (!quotePrices) price = " | valor: equipe";
+  else if (p.price != null && policy) { const pl = maxInstallmentsFor({ totalCents: toCents(p.price), offerMax: p.maxInstallments ?? null }, policy); price = ` | R$ ${p.price.toFixed(2).replace(".", ",")}${p.offerInstallments && pl.installable ? ` (ate ${pl.max}x)` : ""}`; }
   else if (p.price != null) price = ` | R$ ${p.price.toFixed(2).replace(".", ",")}${p.offerInstallments && p.maxInstallments ? ` (ate ${p.maxInstallments}x)` : ""}`;
   else if (p.priceVariable) price = " | valor: na avaliacao";
   return `- ${p.name} (reserva ${p.durationMin}min)${price}${p.includedQuantity ? ` | oferta inclui ${p.includedQuantity}` : ""}${p._count?.photos ? " [tem fotos]" : ""}`;
@@ -1412,18 +1424,20 @@ export async function buildSystemPrompt(clinicId: string, ctx: { patientId?: str
   });
 
   const a = clinic.assistantName || "Alice";
-  const procedureList = clinic.procedures.map((p) => describeProcedureForPrompt(p, clinic.quotePrices)).join("\n\n");
-  const procedureListCompact = clinic.procedures.map((p) => describeProcedureCompact(p, clinic.quotePrices)).join("\n");
+  const instPolicy: InstallmentPolicy | null = clinic.installmentMax != null && clinic.installmentMax >= 1 ? { maxInstallments: clinic.installmentMax, minInstallmentCents: clinic.installmentMinCents ?? 0 } : null;
+  const procedureList = clinic.procedures.map((p) => describeProcedureForPrompt(p, clinic.quotePrices, instPolicy)).join("\n\n");
+  const procedureListCompact = clinic.procedures.map((p) => describeProcedureCompact(p, clinic.quotePrices, instPolicy)).join("\n");
   // Procedimentos em foco: os que a conversa (e o anuncio de origem) tocam. So eles levam descricao completa no prompt.
   const adOrigin = ctx.patientId ? await prisma.patient.findUnique({ where: { id: ctx.patientId }, select: { adName: true, adCampaignName: true } }) : null;
   const focusProcs = selectFocusProcedures(clinic.procedures, [...(ctx.focusTexts ?? []), adOrigin?.adName ?? "", adOrigin?.adCampaignName ?? ""], 6, ctx.pinnedProcedures ?? []);
   const focusIds = new Set(focusProcs.map((p) => p.id));
   const focusBlock = focusProcs.length
-    ? `\n\nDETALHES DOS PROCEDIMENTOS EM FOCO NESTA CONVERSA (explique SO com estes dados):\n${focusProcs.map((p) => describeProcedureForPrompt(p, clinic.quotePrices)).join("\n\n")}`
+    ? `\n\nDETALHES DOS PROCEDIMENTOS EM FOCO NESTA CONVERSA (explique SO com estes dados):\n${focusProcs.map((p) => describeProcedureForPrompt(p, clinic.quotePrices, instPolicy)).join("\n\n")}${instPolicy && clinic.quotePrices ? `\n\nPARCELAMENTO (regra da clinica, sem juros; nunca invente juros, desconto ou outra condicao): ate ${instPolicy.maxInstallments}x${instPolicy.minInstallmentCents ? `, parcela minima ${formatBRL(instPolicy.minInstallmentCents)}` : ""}. Use SOMENTE os limites calculados em cada item. Se a pessoa nao disse em quantas vezes, pergunte: "${ASK_INSTALLMENTS_TEXT}". Se pedir mais do que o permitido, responda: "${overLimitText(9, instPolicy).replace("9x", "[X]x")}" trocando [X] pelo maximo do item. Divisao nao exata: diga o ajuste de centavos (nunca apresente parcelas iguais que nao fecham o total).` : ""}`
     : "";
 
   // Datas especiais/recesso APROVADAS e vigentes hoje (nunca inventa condicao, preco ou retorno; vazio = nada vigente)
-  const specialLine = await specialDatesLine(clinicId, clinic.timezone).catch(() => "");
+  const specialLine = (await specialDatesLine(clinicId, clinic.timezone, new Date(), ctx.patientId).catch(() => "")) +
+    (parseForbiddenSwaps(clinic.forbiddenSwaps).length ? `\nTROCAS PROIBIDAS (regra da clinica): ${parseForbiddenSwaps(clinic.forbiddenSwaps).map((s) => `quando a pessoa falar de ${s.asked}, NUNCA ofereca ${s.forbidden} no lugar`).join("; ")}. Responda sobre o que ela pediu.` : "");
 
   const areaLine = clinic.activityArea?.trim()
     ? `\nArea de atuacao: ${clinic.activityArea.trim()}.`
@@ -2441,7 +2455,7 @@ async function generateReplyUnlocked(
   // novo - passa direto pra equipe. Conversas ja em andamento continuam.
   const usageClinic = await prisma.clinic.findUnique({
     where: { id: clinicId },
-    select: { id: true, plan: true, aiModel: true, evalNearestFirst: true, businessType: true, aliceActive: true, silentHandoff: true, handoffOnPrice: true, humanizedTone: true, softSell: true, strictBookingRules: true, notOfferedServices: true, unmappedOffers: true, conversationLimitOverride: true, usageMonth: true, usageCount: true, usageLimitNotified: true },
+    select: { id: true, plan: true, aiModel: true, evalNearestFirst: true, businessType: true, aliceActive: true, silentHandoff: true, handoffOnPrice: true, humanizedTone: true, softSell: true, strictBookingRules: true, notOfferedServices: true, forbiddenSwaps: true, unmappedOffers: true, conversationLimitOverride: true, usageMonth: true, usageCount: true, usageLimitNotified: true },
   });
   // Alice PAUSADA pela clinica (botao "Alice atendendo"): nao responde. A conversa
   // fica como "nao lida" pra equipe, sem virar atendimento humano (quando a Alice
@@ -2851,6 +2865,13 @@ async function generateReplyUnlocked(
     schedulingSignal: flow.schedulingSignal,
     resumedAfterStaffDelay: opts.resumedAfterStaffDelay,
   });
+  // PEDIDO DE REMARCACAO de um horario IDENTIFICADO (so um horario, ou o dia citado aponta um so): fica registrado no horario e suspende as confirmacoes/lembretes dele ate a troca.
+  // Ambiguo (varios horarios e nenhum apontado) = nao marca nada: a Alice pergunta qual.
+  if (situation.kind === "reschedule" && apptRows.length) {
+    const hinted = apptRows.filter((a) => situation.request.dates.includes(isoDateInZone(a.scheduledAt, tagTz)));
+    const target = apptRows.length === 1 ? apptRows[0] : hinted.length === 1 ? hinted[0] : null;
+    if (target) void markRescheduleRequested(target.id).catch(() => undefined);
+  }
   if (refIso !== todayLocalIso) situation.briefing.push(`DATA DAS MENSAGENS DELA: foram escritas em ${refIso} (${weekdayLabel(refIso)}); hoje (agora) e ${todayLocalIso}. 'Hoje/amanha/depois de amanha' na fala dela contam a partir de ${refIso}: ${refIso} = hoje DELA, ${isoPlusDays(refIso, 1)} (${weekdayLabel(isoPlusDays(refIso, 1))}) = amanha DELA. Use sempre a data absoluta (AAAA-MM-DD) nas ferramentas.`);
   const memo = await prisma.patient.findUnique({ where: { id: patient.id }, select: { briefingNotes: true } });
   if (memo?.briefingNotes?.trim()) situation.briefing.push(`MEMORIA DO LEAD (notas escritas pela IA em conversas anteriores; podem estar velhas. Se divergirem da AGENDA DELA, do resultado de uma ferramenta ou do que a pessoa disse AGORA, VALE a agenda/a ferramenta/a fala atual - use as notas so para preferencias e contexto):\n${memo.briefingNotes.trim()}`);
@@ -2866,7 +2887,13 @@ async function generateReplyUnlocked(
     console.log(`[decisao] conversa=${conversation.id} ${turnDecisionLog(turnDec)}`);
     if (flow.intent === "hesitate" || flow.intent === "refuse") void recordLeadDecision(clinicId, patient.id, flow.intent);
   }
-  const forcedTransfer = situation.forceTransfer ?? (plan?.handoffForced ? plan.handoff : null);
+  let forcedTransfer = situation.forceTransfer ?? (plan?.handoffForced ? plan.handoff : null);
+  // Campanha em modo EQUIPE (oferta aprovada, divulgacao vigente, a pessoa veio de um anuncio dela): a Alice nao responde nem negocia; a equipe assume.
+  let teamCampaign = false;
+  if (!forcedTransfer) {
+    const team = await teamOfferFor(clinicId, patient.id, tagTz).catch(() => null);
+    if (team) { teamCampaign = true; forcedTransfer = { reason: `Campanha atendida pela equipe: ${team.name}`, summary: `A pessoa veio de um anúncio da campanha "${team.name}", que a clínica configurou para ser atendida pela EQUIPE. A Alice não respondeu.` }; }
+  }
   if (usageClinic?.businessType !== "geral") {
     if (forcedTransfer) {
       console.warn(`[situacao] ${situation.kind}: passando pra equipe sem responder (conv ${conversation.id}): ${forcedTransfer.reason}`);
@@ -2875,7 +2902,7 @@ async function generateReplyUnlocked(
       } catch (err) {
         console.error("[situacao] falha ao encaminhar pra equipe:", err);
       }
-      if (usageClinic?.silentHandoff) return "";
+      if (usageClinic?.silentHandoff || teamCampaign) return "";
       const hc = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { handoffPhrase: true } });
       const phrase = hc?.handoffPhrase?.trim() || "Vou pedir pra uma pessoa da equipe continuar com você por aqui.";
       await prisma.message.create({ data: { conversationId: conversation.id, role: "assistant", content: phrase, deliveryStatus: "pending" } });
@@ -2892,6 +2919,12 @@ async function generateReplyUnlocked(
       }
       return text;
     }
+  }
+  // BANCO DE OBJECOES (aprovado pela clinica): objecao identificada neste turno + resposta aprovada = a resposta aprovada e a base (nunca rascunho, nunca inventada)
+  if (!situation.directive) {
+    const objCode = objectionCodeOf(trailingNow.join(" "), flow.reading?.objection ?? null, flow.intent);
+    const objAns = objCode ? await approvedObjectionAnswer(clinicId, objCode) : null;
+    if (objCode && objAns) { flow.nextMove = `${objectionDirective(objCode, objAns.text)} ${flow.nextMove}`; console.log(`[objecao] conversa=${conversation.id} codigo=${objCode} resposta_aprovada=v${objAns.version}`); }
   }
   if (situation.directive) {
     flow.nextMove = situation.directive;
@@ -3216,6 +3249,16 @@ async function generateReplyUnlocked(
     if (stripped !== null) {
       console.warn(`[nao-oferecido] resposta citou servico que a clinica nao tem - removido (conv ${conversation.id}): ${finalText.slice(0, 100)}`);
       finalText = stripped.length >= 12 ? stripped : NOT_OFFERED_REPLY;
+    }
+  }
+
+  // TROCA PROIBIDA (configuracao da empresa, ex.: Lisboa "Lavieen > carboxiterapia"): a pessoa falou do servico X e a resposta oferece Y no lugar -> a frase sai (a pessoa nao pediu Y).
+  const swapTerms = swapTermsFor(history.filter((m) => m.role === "user").slice(-6).map((m) => m.content), parseForbiddenSwaps(usageClinic?.forbiddenSwaps));
+  if (swapTerms.length && !didTransfer && !fixedReply && finalText.trim()) {
+    const stripped = stripNotOffered(finalText, swapTerms, splitSentences, removeSentences);
+    if (stripped !== null && stripped.length >= 12) {
+      console.warn(`[troca-proibida] resposta ofereceu ${swapTerms.join("/")} no lugar do que a pessoa pediu - removido (conv ${conversation.id})`);
+      finalText = stripped;
     }
   }
 
@@ -3562,6 +3605,7 @@ async function generateReplyUnlocked(
       const approvedPrices = [
         ...(quoting ? bookingCatalog.flatMap((pc) => (pc.price != null ? [pc.price, ...(pc.offerInstallments && pc.maxInstallments ? [Math.round((pc.price / pc.maxInstallments) * 100) / 100, Math.ceil((pc.price / pc.maxInstallments) * 100) / 100, Math.floor((pc.price / pc.maxInstallments) * 100) / 100] : [])] : [])) : []),
         ...priceValues(priceText),
+        ...(quoting ? await approvedOfferNumbers(clinicId, guardTz).catch(() => [] as number[]) : []),
       ];
       const replyCtx: ReplyContext = {
           conversationId: conversation.id, tz: guardTz, now: new Date(), todayIso: isoDateInZone(new Date(), guardTz),

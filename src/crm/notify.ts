@@ -1,13 +1,13 @@
 import { prisma } from "../db/client.js";
 import { sendText } from "../uazapi/client.js";
 
-export type NotifyEvent = "new_appointment" | "reschedule" | "cancel" | "human_handoff" | "confirmed" | "automation_failed" | "daily_report" | "daily_report_phones" | "hot_lead";
+export type NotifyEvent = "new_appointment" | "reschedule" | "cancel" | "human_handoff" | "confirmed" | "automation_failed" | "daily_report" | "daily_report_phones" | "hot_lead" | "weak_agenda";
 
 // "automation_failed" e um alerta critico de saude do sistema (falha ao
 // mandar mensagem automatica), nao um evento de negocio - manda sempre que
 // tem notifyPhone configurado, sem exigir opt-in em notifyEvents. Nenhuma
 // clinica teria como ter marcado essa opcao antes dela existir.
-const ALWAYS_ON_EVENTS: NotifyEvent[] = ["automation_failed"];
+const ALWAYS_ON_EVENTS: NotifyEvent[] = ["automation_failed", "weak_agenda"]; // weak_agenda: so existe com limite configurado pela clinica (Clinic.weakAgendaPct) - o limite e o consentimento
 
 // Avisa a equipe (notifyPhone da clinica) sobre um evento, pelo proprio
 // WhatsApp da clinica - so manda se a clinica tiver um numero configurado E

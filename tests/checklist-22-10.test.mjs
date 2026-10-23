@@ -164,14 +164,14 @@ test("CAMPANHA COM HUMANO: resposta dentro da janela vai para a equipe ANTES da 
 
 test("DATAS ESPECIAIS: previa nao grava; rascunho idempotente com dependencias explicitas; so aprovada e vigente chega a Alice; sem condicao nao inventa; vencida some; recesso sem retorno nao inventa", async () => {
   const c = await clinica("Datas Especiais");
-  const prev = await sd.prepararDatasEspeciais(c.id, { dryRun: true });
+  const prev = await sd.prepararDatasEspeciais(c.id, { dryRun: true, seeds: sd.LISBOA_DATAS_2026_ANTIGO }); // mecanica generica com o calendario ANTIGO (o novo tem teste proprio em ofertas-parcelamento)
   assert.equal(prev.somentePrevia, true);
   assert.equal(prev.linhas.length, 9, "as 9 datas da secao 14");
   assert.equal(await prisma.specialDate.count({ where: { clinicId: c.id } }), 0);
   assert.ok(prev.linhas.every((l) => l.acao === "criar" && l.faltando.length > 0), "tudo depende da clinica");
-  const real = await sd.prepararDatasEspeciais(c.id, { dryRun: false });
+  const real = await sd.prepararDatasEspeciais(c.id, { dryRun: false, seeds: sd.LISBOA_DATAS_2026_ANTIGO });
   assert.equal(await prisma.specialDate.count({ where: { clinicId: c.id } }), 9);
-  const again = await sd.prepararDatasEspeciais(c.id, { dryRun: false });
+  const again = await sd.prepararDatasEspeciais(c.id, { dryRun: false, seeds: sd.LISBOA_DATAS_2026_ANTIGO });
   assert.ok(again.linhas.every((l) => l.acao === "manter"));
   assert.equal(await prisma.specialDate.count({ where: { clinicId: c.id } }), 9, "idempotente");
   const rows = await prisma.specialDate.findMany({ where: { clinicId: c.id } });

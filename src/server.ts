@@ -17,6 +17,7 @@ import { startRenewalJob } from "./reminders/renewal.js";
 import { startBirthdayJob } from "./reminders/birthday.js";
 import { startDispatchRunJob } from "./dispatch/actions.js";
 import { startPackageAlertJob } from "./crm/packages.js";
+import { startWeakAgendaJob } from "./crm/weakAgenda.js";
 import { startNpsJob } from "./reminders/nps.js";
 import { startPlanExpiryJob } from "./reminders/planExpiry.js";
 import { startProfessionalBackfillJob } from "./scheduling/professionalBackfillJob.js";
@@ -385,6 +386,7 @@ const httpServer = app.listen(port, () => {
   startRenewalJob();
   startBirthdayJob();
   startPackageAlertJob(); // avisos de pacote (fonte interna) para a equipe
+  startWeakAgendaJob(); // agenda fraca 48-72h (so clinicas com limite configurado)
   startDispatchRunJob(); // fila persistida de recuperacao de disparos (aba Disparos)
   startFollowUpJob();
   startResumeFlowsJob(); // retomada de avaliacao cancelada / sem fechamento: nascem DESLIGADAS (ResumeFlowConfig)

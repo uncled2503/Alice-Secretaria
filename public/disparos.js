@@ -3,7 +3,7 @@
 (function () {
   "use strict";
 
-  const KIND_LABEL = { confirmacao: "Confirmação", cobranca: "Cobrança", lembrete: "Lembrete", aniversario: "Aniversário", pos: "Pós-procedimento", pre: "Pré-procedimento", renovacao: "Renovação", recontato: "Recontato", retorno_combinado: "Retorno combinado", retomada: "Retomada", campanha: "Campanha" };
+  const KIND_LABEL = { confirmacao: "Confirmação", cobranca: "Cobrança", lembrete: "Lembrete", aniversario: "Aniversário", pos: "Pós-procedimento", pre: "Pré-procedimento", renovacao: "Renovação", recontato: "Recontato", retorno_combinado: "Retorno combinado", retomada: "Retomada", campanha: "Campanha", pesquisa: "Pesquisa", indicacao: "Indicação", aviso_agendamento: "Aviso de agendamento" };
   const VIEWS = [
     { id: "hoje", label: "Hoje" },
     { id: "proximos", label: "Próximos" },

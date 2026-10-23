@@ -96,12 +96,12 @@ dispatchesRouter.put("/policy/:kind", asyncRoute(async (req, res) => {
   const b = req.body ?? {};
   if (b.extendUntil !== undefined && !validHHMM(b.extendUntil)) { res.status(400).json({ error: "Horário limite inválido (use HH:MM)." }); return; }
   const num = (v: unknown) => (v === undefined || v === null || v === "" ? undefined : Number(v));
-  for (const k of ["maxExtendMin", "minLeadMin", "maxAttempts", "retryGapMin", "maxPerRun"]) { const n = num(b[k]); if (n !== undefined && !Number.isFinite(n)) { res.status(400).json({ error: `Valor inválido em ${k}` }); return; } }
+  for (const k of ["maxExtendMin", "minLeadMin", "maxAttempts", "retryGapMin", "maxPerRun", "lateStartHour", "lateEndHour", "stepMinGapMin"]) { const n = num(b[k]); if (n !== undefined && !Number.isFinite(n)) { res.status(400).json({ error: `Valor inválido em ${k}` }); return; } }
   // valores efetivos dentro dos limites seguros: o que gravamos ja e o que vale
-  const eff = effectivePolicy(kind, { extendEnabled: typeof b.extendEnabled === "boolean" ? b.extendEnabled : undefined, extendUntil: b.extendUntil, maxExtendMin: num(b.maxExtendMin), minLeadMin: num(b.minLeadMin), maxAttempts: num(b.maxAttempts), retryGapMin: num(b.retryGapMin), maxPerRun: num(b.maxPerRun) });
-  const data = { extendEnabled: eff.extendEnabled, extendUntil: eff.extendUntil, maxExtendMin: eff.maxExtendMin, minLeadMin: eff.minLeadMin, maxAttempts: eff.maxAttempts, retryGapMin: eff.retryGapMin, maxPerRun: eff.maxPerRun, updatedBy: sc.actor.name };
+  const eff = effectivePolicy(kind, { extendEnabled: typeof b.extendEnabled === "boolean" ? b.extendEnabled : undefined, extendUntil: b.extendUntil, maxExtendMin: num(b.maxExtendMin), minLeadMin: num(b.minLeadMin), maxAttempts: num(b.maxAttempts), retryGapMin: num(b.retryGapMin), maxPerRun: num(b.maxPerRun), lateStartHour: num(b.lateStartHour), lateEndHour: num(b.lateEndHour), stepMinGapMin: num(b.stepMinGapMin) });
+  const data = { extendEnabled: eff.extendEnabled, extendUntil: eff.extendUntil, maxExtendMin: eff.maxExtendMin, minLeadMin: eff.minLeadMin, maxAttempts: eff.maxAttempts, retryGapMin: eff.retryGapMin, maxPerRun: eff.maxPerRun, lateStartHour: eff.lateStartHour, lateEndHour: eff.lateEndHour, stepMinGapMin: eff.stepMinGapMin, updatedBy: sc.actor.name };
   await prisma.dispatchPolicy.upsert({ where: { clinicId_kind: { clinicId: sc.clinicId, kind } }, create: { clinicId: sc.clinicId, kind, ...data }, update: data });
-  await logActivity({ clinicId: sc.clinicId, type: "dispatch_action", area: "automacoes", title: "Política de janela alterada", description: `${kind}: ampliação ${eff.extendEnabled ? `até ${eff.extendUntil} (máx. ${eff.maxExtendMin} min)` : "desligada"}; antecedência mínima ${eff.minLeadMin} min; ${eff.maxAttempts} tentativa(s)`, actorName: sc.actor.name });
+  await logActivity({ clinicId: sc.clinicId, type: "dispatch_action", area: "automacoes", title: "Política de janela alterada", description: `${kind}: ampliação ${eff.extendEnabled ? `até ${eff.extendUntil} (máx. ${eff.maxExtendMin} min)` : "desligada"}; antecedência mínima ${eff.minLeadMin} min; ${eff.maxAttempts} tentativa(s); reposição ${eff.lateStartHour}h–${eff.lateEndHour}h; intervalo entre etapas ${eff.stepMinGapMin} min`, actorName: sc.actor.name });
   res.json({ ok: true, politica: (await loadAllPolicies(sc.clinicId))[kind] });
 }));
 

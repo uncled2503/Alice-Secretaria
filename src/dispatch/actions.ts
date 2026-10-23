@@ -40,7 +40,7 @@ export function parseItemId(id: string): Parsed | null {
   const p = id.split(":");
   if (p[0] === "rd" && p[1]) return { src: "rd", a: p[1] };
   if (p[0] === "bd" && p[1]) return { src: "bd", a: p[1] };
-  if (["rn", "cb", "bc", "ps", "pr", "fu"].includes(p[0]) && p[1]) return { src: "ad", a: p[1] }; // adaptadores: o proprio fluxo controla
+  if (["rn", "cb", "bc", "ps", "pr", "fu", "ac"].includes(p[0]) && p[1]) return { src: "ad", a: p[1] }; // adaptadores: o proprio fluxo controla
   if (p[0] === "ex" && p[1] === "r" && p.length >= 6) return { src: "exr", a: p[2], b: p[3], startsAt: Number(p[4]), day: p.slice(5).join(":") };
   if (p[0] === "ex" && p[1] === "b" && p.length >= 4) return { src: "exb", a: p[2], day: p.slice(3).join(":") };
   return null;

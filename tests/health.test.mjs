@@ -9,9 +9,9 @@ test("/health mostra a revisao do codigo e a ultima migracao aplicada", () => {
   assert.match(src, /finished_at != null && r.rolled_back_at == null/, "ultima migracao = so concluida e nao revertida");
   assert.match(src, /migrationsFailed: migrationStatus.failed/, "migracao falhada exposta, nunca confundida com sucesso");
   const v = fs.readFileSync(new URL("../src/version.ts", import.meta.url), "utf8");
-  assert.match(v, /export const REVISION = "2026-10-(19|20|21|22)/);
+  assert.match(v, /export const REVISION = "2026-10-(19|20|21|22|23)/);
   // a ultima migracao do repositorio e a que o /health deve mostrar depois do deploy
   const dirs = fs.readdirSync(new URL("../prisma/migrations/", import.meta.url)).filter((d) => /^\d{14}_/.test(d)).sort();
   assert.ok(dirs.length > 80);
-  assert.equal(dirs.at(-1), "20261028100000_funil_pacotes_preferencias");
+  assert.equal(dirs.at(-1), "20261030100000_ofertas_parcelamento");
 });

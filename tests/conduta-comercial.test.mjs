@@ -712,7 +712,7 @@ test("registro tecnico da decisao: motivo, queixa, escolha e agenda ficam no log
   assert.ok(linha, "a decisao foi registrada");
   assert.match(linha, /queixa=celulite/);
   assert.match(linha, /agenda=fechada/);
-  assert.match(linha, /revisao=2026-10-(19|20|21|22)/); // a revisao muda a cada lote: o que importa e que a linha leve a revisao
+  assert.match(linha, /revisao=2026-10-(19|20|21|22|23)/); // a revisao muda a cada lote: o que importa e que a linha leve a revisao
   assert.doesNotMatch(linha, /CPF|123\.456|vergonha/, "nada do conteudo da mensagem no log");
 });
 

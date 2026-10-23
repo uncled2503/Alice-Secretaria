@@ -42,7 +42,7 @@ export function unsupportedProductClaims(text: string, approvedText: string, spl
 }
 
 // Pergunta curta e gentil que desfaz a ambiguidade de "refrescancia" (frescor x fragrancia) sem corrigir a cliente.
-export const CLARIFY_FRESHNESS = "Quando você fala em refrescância, você quer dizer a sensação de frescor/gelado na pele ou o perfume/cheiro do produto? Assim eu entendo certinho o que você evita e confirmo com a equipe. 💗";
+export const CLARIFY_FRESHNESS = "Você se refere àquela sensação de frescor/gelado na pele ou ao perfume/cheiro do produto? Assim eu entendo certinho o que você evita e confirmo com a equipe. 💗"; // linguagem natural: a Alice nao repete o termo "refrescancia" (pedido da Lisboa, 22/10)
 export function clarifyProductTerm(term: string): string {
   if (/refresc|gelad|frescor/.test(fold(term))) return CLARIFY_FRESHNESS;
   return `Pode me contar um pouquinho mais sobre o que você quer evitar em relação a ${term}? Assim eu entendo certinho e confirmo com a equipe. 💗`;

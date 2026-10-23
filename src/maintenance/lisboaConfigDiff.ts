@@ -1,5 +1,7 @@
 import { prisma } from "../db/client.js";
-import { effectivePurpose } from "../reminders/policy.js";
+import { planejarPolitica } from "../reminders/confirmationPolicy.js";
+import { prepararDatasEspeciais } from "../crm/specialDates.js";
+import { LISBOA_POLITICA_CONFIRMACOES } from "./lisboaPoliticaConfirmacoes.js";
 
 // ---------------------------------------------------------------------------
 // PREVIA SOMENTE LEITURA: configuracao ATUAL x DESEJADA da Lisboa (checklist mestre, 22/10). Nao altera nada, nao envia nada, nao reimplementa o que ja existe: cada linha diz o estado
@@ -18,20 +20,19 @@ export async function conferirRegrasLisboa(clinicId: string): Promise<{ somenteL
   const linhas: DiffLine[] = [];
   const add = (l: DiffLine) => linhas.push(l);
 
-  // ---- confirmacoes / sabado
-  const rules = await prisma.reminderRule.findMany({ where: { clinicId, active: true } });
-  const mae = rules.filter((r) => !r.parentRuleId);
-  const generica = mae.find((r) => effectivePurpose(r) === "confirmacao" && !r.weekdays && r.dayOffset === 1);
-  add(generica
-    ? { tema: "Confirmação na véspera (8h–9h, por data local)", estado: generica.sendHour === 8 && generica.sendEndHour === 9 ? "conforme" : "diverge", atual: `${hh(generica.sendHour, generica.sendMinute)}–${hh(generica.sendEndHour)} (1 dia antes)`, desejado: "08:00–09:00 do dia anterior", comoAplicar: generica.sendHour === 8 && generica.sendEndHour === 9 ? null : "conferirConfirmacoesLisboa (prévia + aprovação)" }
-    : { tema: "Confirmação na véspera (8h–9h, por data local)", estado: "diverge", atual: "nenhuma regra ativa de confirmação para o dia seguinte", desejado: "08:00–09:00 do dia anterior", comoAplicar: "conferirConfirmacoesLisboa (prévia + aprovação)" });
-  const quarta = mae.find((r) => effectivePurpose(r) === "confirmacao" && r.weekdays === "6" && r.dayOffset === 3);
-  add({ tema: "Sábado: confirmação na quarta (8h–9h)", estado: quarta ? (quarta.sendHour === 8 && quarta.sendEndHour === 9 ? "conforme" : "diverge") : "diverge", atual: quarta ? `${hh(quarta.sendHour)}–${hh(quarta.sendEndHour)}` : "sem regra ativa", desejado: "quarta 08:00–09:00 para atendimentos de sábado", comoAplicar: quarta && quarta.sendHour === 8 && quarta.sendEndHour === 9 ? null : "conferirConfirmacoesLisboa" });
-  const sexta = mae.find((r) => effectivePurpose(r) === "lembrete" && r.weekdays === "6" && r.dayOffset === 1);
-  add({ tema: "Sábado: lembrete na sexta para TODOS (inclusive confirmados)", estado: sexta ? "conforme" : "diverge", atual: sexta ? `lembrete 1 dia antes, ${hh(sexta.sendHour)}–${hh(sexta.sendEndHour)} (horário vem do cadastro; o checklist não define)` : "sem regra de lembrete de sexta para sábado", desejado: "lembrete na sexta para todos os agendados de sábado, sem a antiga condição 'só não confirmados'", comoAplicar: sexta ? null : "conferirConfirmacoesLisboa" });
-  const sabado = mae.find((r) => effectivePurpose(r) === "lembrete" && r.dayOffset === 0 && (!r.weekdays || r.weekdays.includes("6")));
-  add({ tema: "Sábado: lembrete do dia, sem novo pedido de confirmação", estado: sabado ? "conforme" : "diverge", atual: sabado ? `lembrete no dia, ${hh(sabado.sendHour)}–${hh(sabado.sendEndHour)}` : "sem lembrete do dia ativo", desejado: "lembrete no próprio sábado, sem pedir confirmação de novo", comoAplicar: sabado ? null : "conferirConfirmacoesLisboa" });
-  add({ tema: "Reposição de agendado/remarcado depois da janela (mesmo dia)", estado: "conforme", atual: "comportamento do código (isLateCatchUp; entre 8h e 20h com antecedência mínima)", desejado: "catch-up no mesmo dia, sem acumular etapas", comoAplicar: null });
+  // ---- confirmacoes / sabado: a REGRA FINAL (22/10) pelo planejador geral, em modo previa (nada muda)
+  const plano = await planejarPolitica(clinicId, LISBOA_POLITICA_CONFIRMACOES, { dryRun: true });
+  for (const i of plano.itens) {
+    const estado: DiffState = i.acao === "manter" ? "conforme" : i.acao === "pendencia" ? "depende_da_clinica" : "diverge";
+    add({
+      tema: i.etapa ? `Confirmações: ${i.descricao.split(": falta ")[0].slice(0, 140)}` : "Confirmações: regra fora da política",
+      estado,
+      atual: i.de ? JSON.stringify(i.de).slice(0, 220) : i.acao === "criar" ? "não cadastrada" : i.acao === "manter" ? "conforme" : i.descricao.slice(0, 220),
+      desejado: i.para ? JSON.stringify(i.para).slice(0, 220) : i.descricao.slice(0, 220),
+      comoAplicar: estado === "conforme" ? null : estado === "depende_da_clinica" ? "informação da clínica (ver pendências)" : "POST /clinics/lisboa-politica-confirmacoes { aprovado: true } (prévia em GET)",
+    });
+  }
+  add({ tema: "Reposição de agendado/remarcado depois da janela (mesmo dia)", estado: plano.limites.pendente.length ? "depende_da_clinica" : "conforme", atual: `reposição ${plano.limites.atual.lateStartHour}h–${plano.limites.atual.lateEndHour}h, antecedência mínima ${plano.limites.atual.minLeadMin} min, intervalo entre etapas ${plano.limites.atual.stepMinGapMin} min (atendimento de hoje não recebe pedido de "amanhã")`, desejado: "limites aprovados pela clínica (limite noturno e 'muito próximo' não informados)", comoAplicar: plano.limites.pendente.length ? "PUT /dispatches/policy/:kind (lateStartHour, lateEndHour, minLeadMin, stepMinGapMin)" : null });
 
   // ---- pre 48h
   const pre = await prisma.preProcedureRule.findMany({ where: { clinicId, active: true } });
@@ -69,6 +70,14 @@ export async function conferirRegrasLisboa(clinicId: string): Promise<{ somenteL
   add({ tema: "Link do Google (nota positiva)", estado: clinic.googleReviewUrl ? "depende_da_clinica" : "depende_da_clinica", atual: clinic.googleReviewUrl ? "link cadastrado (a confirmação de que é o link correto da Lisboa é da clínica)" : "sem link cadastrado: o fluxo NÃO envia link", desejado: "somente o link correto confirmado pela clínica", comoAplicar: "configuração da clínica" });
   const flows = await prisma.resumeFlowConfig.findMany({ where: { clinicId } });
   add({ tema: "Retomadas (avaliação cancelada / sem fechamento) e convite de indicação", estado: "depende_da_clinica", atual: flows.length ? flows.map((f) => `${f.flow}: ${f.enabled ? "ligada" : "desligada"}${f.message ? "" : " (sem texto aprovado)"}`).join("; ") : "sem configuração", desejado: "conforme configuração aprovada pela clínica (texto, janela, modo)", comoAplicar: "painel/rotas de retomada (nascem desligadas)" });
+  const parc = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { installmentMax: true, installmentMinCents: true, forbiddenSwaps: true } });
+  const trocasOk = /lavieen\s*>\s*carboxi/i.test(parc?.forbiddenSwaps ?? "");
+  add({ tema: "Não trocar Lavieen por carboxiterapia (nem LEDterapia por luz pulsada)", estado: trocasOk ? "conforme" : "diverge", atual: parc?.forbiddenSwaps ?? "nenhuma troca proibida cadastrada", desejado: "Lavieen > carboxiterapia; LEDterapia > luz pulsada", comoAplicar: trocasOk ? null : "POST /clinics/lisboa-trocas-proibidas { aprovado: true }" });
+  const parcOk = parc?.installmentMax === 10 && parc?.installmentMinCents === 10000;
+  add({ tema: "Parcelamento: até 10x sem juros, parcela mínima R$ 100 (limite da oferta só reduz)", estado: parcOk ? "conforme" : "diverge", atual: parc?.installmentMax ? `até ${parc.installmentMax}x, mínimo ${(parc.installmentMinCents ?? 0) / 100}` : "sem política (vale o cadastro de cada procedimento, divisão simples)", desejado: "10x, mínimo R$ 100", comoAplicar: parcOk ? null : "POST /clinics/lisboa-parcelamento { aprovado: true } (prévia em GET)" });
+  const cal = await prepararDatasEspeciais(clinicId, { dryRun: true });
+  const mudar = cal.linhas.filter((l) => l.acao !== "manter");
+  add({ tema: "Calendário 2026 (substitui o anterior; Lavieen 24/11, Remoção 26/11)", estado: mudar.length ? "diverge" : "depende_da_clinica", atual: mudar.length ? mudar.map((l) => `${l.acao}: ${l.name} ${l.startsOn}`).join("; ").slice(0, 400) : "calendário preparado", desejado: "datas do calendário 2026 como rascunho; aprovação só com cadastro completo (validade, condições)", comoAplicar: mudar.length ? "POST /special-dates/prepare { dryRun: false }" : "aprovar cada data em PUT /special-dates/:id" });
   const datas = await prisma.specialDate.count({ where: { clinicId } });
   const aprovadas = await prisma.specialDate.count({ where: { clinicId, status: "aprovada" } });
   add({ tema: "Datas especiais e recesso (sem inventar condição/retorno)", estado: "depende_da_clinica", atual: `${datas} cadastrada(s), ${aprovadas} aprovada(s)`, desejado: "datas do checklist cadastradas como rascunho; aprovadas só com condição/validade informadas pela clínica", comoAplicar: "POST /special-dates/prepare; PUT /special-dates/:id" });

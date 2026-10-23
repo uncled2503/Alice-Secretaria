@@ -119,8 +119,17 @@ export async function adapterItems(clinicId: string, period: Period, tz: string,
 
   // ---- recontato e retomadas (FollowUpDispatch)
   for (const r of await prisma.followUpDispatch.findMany({ where: { clinicId, OR: [{ decidedAt: win }, { updatedAt: win }] }, take: 800 })) {
-    const retomada = r.flow !== "recontato";
-    rows.push({ id: `fu:${r.id}`, kind: retomada ? "retomada" : "recontato", ruleName: retomada ? (r.flow === "avaliacao_cancelada" ? "Retomada: avaliação cancelada" : "Retomada: avaliação sem fechamento") : `Recontato (etapa ${r.step})`, patientId: r.patientId, referenceAt: r.dueAt, sendDay: day(r.decidedAt), state: r.state, detail: [r.layer, r.reason].filter(Boolean).join(": ") || null, attempts: r.attempt, attemptedAt: null, nextAttemptAt: r.reevaluateAt, providerId: null, destination: null, deliveryState: r.state === "sent" ? "accepted" : null, messageText: null });
+    // o MESMO controle guarda recontato, retomadas, pesquisa e convite de indicacao: cada fluxo com o seu nome (antes pesquisa/indicacao apareciam como "retomada")
+    const kind: ItemKind = r.flow === "recontato" ? "recontato" : r.flow === "pesquisa" ? "pesquisa" : r.flow === "indicacao" ? "indicacao" : "retomada";
+    const ruleName = kind === "recontato" ? `Recontato (etapa ${r.step})` : kind === "pesquisa" ? "Pesquisa de satisfação" : kind === "indicacao" ? "Convite de indicação" : r.flow === "avaliacao_cancelada" ? "Retomada: avaliação cancelada" : r.flow === "avaliacao_sem_fechamento" ? "Retomada: avaliação sem fechamento" : `Retomada: ${r.flow}`;
+    rows.push({ id: `fu:${r.id}`, kind, ruleName, patientId: r.patientId, referenceAt: r.dueAt, sendDay: day(r.decidedAt), state: r.state, detail: [r.layer, r.reason].filter(Boolean).join(": ") || null, attempts: r.attempt, attemptedAt: null, nextAttemptAt: r.reevaluateAt, providerId: null, destination: null, deliveryState: r.state === "sent" ? "accepted" : null, messageText: null });
+  }
+
+  // ---- aviso de agendamento criado pelo painel/API (AppointmentConfirmation; o controle nao guarda texto/id do provedor: "nao registrado")
+  for (const r of await prisma.appointmentConfirmation.findMany({ where: { clinicId, OR: [{ updatedAt: win }, { createdAt: win }] }, take: 500 })) {
+    const appt = await prisma.appointment.findUnique({ where: { id: r.appointmentId }, select: { procedure: { select: { name: true } }, professional: { select: { name: true } } } });
+    const state = r.state === "superseded" ? "skipped" : r.state === "retry" ? "deferred" : r.state === "sending" ? "reserved" : r.state;
+    rows.push({ id: `ac:${r.id}`, kind: "aviso_agendamento", ruleName: "Aviso de agendamento (painel/API)", patientId: r.patientId, referenceAt: r.startsAt, sendDay: mkDay(r.finalAt ?? r.attemptedAt ?? r.reservedAt, r.createdAt), state, detail: r.note, attempts: r.attempts, attemptedAt: r.attemptedAt, nextAttemptAt: null, providerId: null, destination: null, deliveryState: r.state === "sent" ? "accepted" : null, messageText: null, procedure: appt?.procedure.name ?? null, professional: appt?.professional?.name ?? null });
   }
 
   const ids = [...new Set(rows.map((r) => r.patientId))];
@@ -129,7 +138,7 @@ export async function adapterItems(clinicId: string, period: Period, tz: string,
   return rows.filter((r) => names.has(r.patientId) && r.sendDay >= period.from && r.sendDay <= period.to).map((r) => toItem(r, names, now));
 }
 
-export const ADAPTER_PREFIXES = ["rn", "cb", "bc", "ps", "pr", "fu"] as const;
+export const ADAPTER_PREFIXES = ["rn", "cb", "bc", "ps", "pr", "fu", "ac"] as const;
 
 // Dia (fuso da clinica) em que a linha do adaptador aparece: o MESMO calculo de adapterItems, para localizar um item pela identidade sem listar nada.
 export async function adapterRowDay(clinicId: string, id: string, tz: string): Promise<string | null> {
@@ -141,6 +150,7 @@ export async function adapterRowDay(clinicId: string, id: string, tz: string): P
   if (prefix === "bc") { const r = await prisma.broadcastRecipient.findFirst({ where: { id: raw, campaign: { clinicId } }, select: { sentAt: true, attemptedAt: true, updatedAt: true, campaign: { select: { scheduledFor: true } } } }); return r ? day(r.sentAt ?? r.attemptedAt ?? r.updatedAt ?? r.campaign.scheduledFor) : null; }
   if (prefix === "ps") { const r = await prisma.postProcedureSent.findFirst({ where: { id: raw, appointment: { clinicId } }, select: { finalAt: true, reservedAt: true, sentAt: true } }); return r ? day(r.finalAt ?? r.reservedAt ?? r.sentAt) : null; }
   if (prefix === "pr") { const r = await prisma.preProcedureSent.findFirst({ where: { id: raw, appointment: { clinicId } }, select: { finalAt: true, reservedAt: true, sentAt: true } }); return r ? day(r.finalAt ?? r.reservedAt ?? r.sentAt) : null; }
+  if (prefix === "ac") { const r = await prisma.appointmentConfirmation.findFirst({ where: { id: raw, clinicId }, select: { finalAt: true, attemptedAt: true, reservedAt: true, createdAt: true } }); return r ? day(r.finalAt ?? r.attemptedAt ?? r.reservedAt ?? r.createdAt) : null; }
   if (prefix === "fu") { const r = await prisma.followUpDispatch.findFirst({ where: { id: raw, clinicId }, select: { decidedAt: true } }); return r ? day(r.decidedAt) : null; }
   return null;
 }

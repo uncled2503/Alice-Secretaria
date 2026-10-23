@@ -86,6 +86,17 @@ export function notOfferedIn(text: string, terms: string[]): string | null {
   return null;
 }
 
+// TROCAS PROIBIDAS (configuracao da empresa): "Lavieen > carboxiterapia; LEDterapia > luz pulsada" = quando a pessoa fala do primeiro, o segundo NAO e oferecido no lugar.
+export interface ForbiddenSwap { asked: string; forbidden: string }
+export function parseForbiddenSwaps(raw: string | null | undefined): ForbiddenSwap[] {
+  return (raw ?? "").split(/[;\n]+/).map((p) => p.split(">").map((s) => s.trim())).filter((p) => p.length === 2 && p[0].length >= 3 && p[1].length >= 3).map(([asked, forbidden]) => ({ asked, forbidden }));
+}
+// PURO: os termos que NAO podem aparecer como oferta nesta resposta (a pessoa falou do servico pedido nas mensagens dela).
+export function swapTermsFor(userTexts: string[], swaps: ForbiddenSwap[]): string[] {
+  const all = userTexts.join(" \n ");
+  return [...new Set(swaps.filter((s) => notOfferedIn(all, [s.asked]) && !notOfferedIn(all, [s.forbidden])).map((s) => s.forbidden))];
+}
+
 // Frase que NEGA o servico ("nao trabalhamos com luz pulsada") nao e oferta: fica.
 const NEGATES_RE = /\bnao (trabalh|temos|tem|oferec|fazemos|faz|realiz|disponibiliz)\w*|\bnao e (um )?(servico|procedimento|tratamento) (que|da)|\bnao faz parte\b|\bnao (utiliz|usamos|usa)\w*/;
 

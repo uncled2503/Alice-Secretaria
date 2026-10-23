@@ -28,13 +28,18 @@ export interface PolicyValues {
   maxAttempts: number;
   retryGapMin: number;
   maxPerRun: number;
+  // Reposicao (agendado/remarcado depois que a janela fechou) so entre lateStartHour e lateEndHour locais (limite noturno) e com minLeadMin de antecedencia ("muito proximo" = nao repoe).
+  lateStartHour: number;
+  lateEndHour: number;
+  // Intervalo minimo entre DUAS etapas para a mesma reserva (qualquer regra): evita reposicao as 16h59 e cobranca as 17h.
+  stepMinGapMin: number;
 }
 
 export const POLICY_DEFAULTS: Record<DispatchKind, PolicyValues> = {
-  confirmacao: { extendEnabled: true, extendUntil: "18:00", maxExtendMin: 360, minLeadMin: 120, maxAttempts: 3, retryGapMin: 10, maxPerRun: 12 },
-  cobranca: { extendEnabled: true, extendUntil: "19:00", maxExtendMin: 120, minLeadMin: 120, maxAttempts: 3, retryGapMin: 10, maxPerRun: 12 },
-  lembrete: { extendEnabled: true, extendUntil: "20:00", maxExtendMin: 240, minLeadMin: 60, maxAttempts: 3, retryGapMin: 10, maxPerRun: 12 },
-  aniversario: { extendEnabled: true, extendUntil: "21:00", maxExtendMin: 60, minLeadMin: 0, maxAttempts: 3, retryGapMin: 15, maxPerRun: 20 },
+  confirmacao: { extendEnabled: true, extendUntil: "18:00", maxExtendMin: 360, minLeadMin: 120, maxAttempts: 3, retryGapMin: 10, maxPerRun: 12, lateStartHour: 8, lateEndHour: 20, stepMinGapMin: 180 },
+  cobranca: { extendEnabled: true, extendUntil: "19:00", maxExtendMin: 120, minLeadMin: 120, maxAttempts: 3, retryGapMin: 10, maxPerRun: 12, lateStartHour: 8, lateEndHour: 20, stepMinGapMin: 180 },
+  lembrete: { extendEnabled: true, extendUntil: "20:00", maxExtendMin: 240, minLeadMin: 60, maxAttempts: 3, retryGapMin: 10, maxPerRun: 12, lateStartHour: 8, lateEndHour: 20, stepMinGapMin: 180 },
+  aniversario: { extendEnabled: true, extendUntil: "21:00", maxExtendMin: 60, minLeadMin: 0, maxAttempts: 3, retryGapMin: 15, maxPerRun: 20, lateStartHour: 8, lateEndHour: 20, stepMinGapMin: 0 },
 };
 
 export function validHHMM(v: unknown): v is string {
@@ -42,7 +47,7 @@ export function validHHMM(v: unknown): v is string {
 }
 
 // PURO: valores efetivos = padrao do tipo + o que a clinica editou, sempre dentro dos limites seguros.
-export function effectivePolicy(kind: DispatchKind, row?: Partial<{ extendEnabled: boolean; extendUntil: string | null; maxExtendMin: number | null; minLeadMin: number | null; maxAttempts: number | null; retryGapMin: number | null; maxPerRun: number | null }> | null): PolicyValues {
+export function effectivePolicy(kind: DispatchKind, row?: Partial<{ extendEnabled: boolean; extendUntil: string | null; maxExtendMin: number | null; minLeadMin: number | null; maxAttempts: number | null; retryGapMin: number | null; maxPerRun: number | null; lateStartHour: number | null; lateEndHour: number | null; stepMinGapMin: number | null }> | null): PolicyValues {
   const d = POLICY_DEFAULTS[kind];
   const until = row?.extendUntil && validHHMM(row.extendUntil) ? row.extendUntil : d.extendUntil;
   const clamp = (v: number | null | undefined, def: number, min: number, max: number) => (typeof v === "number" && Number.isFinite(v) ? Math.min(max, Math.max(min, Math.round(v))) : def);
@@ -54,6 +59,12 @@ export function effectivePolicy(kind: DispatchKind, row?: Partial<{ extendEnable
     maxAttempts: clamp(row?.maxAttempts, d.maxAttempts, 1, 10),
     retryGapMin: clamp(row?.retryGapMin, d.retryGapMin, 5, 120),
     maxPerRun: clamp(row?.maxPerRun, d.maxPerRun, 1, 30),
+    ...(() => {
+      // limite noturno nunca passa do teto duro; inicio sempre antes do fim (senao vale o padrao)
+      const ls = clamp(row?.lateStartHour, d.lateStartHour, 7, HARD_LAST_HOUR - 1), le = clamp(row?.lateEndHour, d.lateEndHour, 8, HARD_LAST_HOUR);
+      return ls < le ? { lateStartHour: ls, lateEndHour: le } : { lateStartHour: d.lateStartHour, lateEndHour: d.lateEndHour };
+    })(),
+    stepMinGapMin: clamp(row?.stepMinGapMin, d.stepMinGapMin, 0, 720),
   };
 }
 
